@@ -18,3 +18,8 @@ if _tools and _os.environ.get("RRBTD6_BUNDLE_CACHE"):
         import unitypy_lowmem  # noqa: F401
     finally:
         _sys.path.remove(_tools)
+    # -I and the embeddable Python ignore the script directory. Exporters share
+    # helpers in this trusted shipped folder; never add the working directory.
+    _assets = _os.path.join(_tools, "assets")
+    if _assets not in _sys.path:
+        _sys.path.insert(0, _assets)

@@ -8,7 +8,8 @@ import json, os, subprocess, sys
 
 game = sys.argv[1]
 for tower in sys.argv[2:]:
-    plan = json.load(open(f"local_extracted/display_plans/{tower}.json"))
+    with open(f"local_extracted/display_plans/{tower}.json", encoding="utf-8") as plan_file:
+        plan = json.load(plan_file)
     root = f"local_extracted/models/{tower}/tiers"
     os.makedirs(root, exist_ok=True)
     index, done, attack_index = {}, {}, {}
@@ -34,10 +35,12 @@ for tower in sys.argv[2:]:
             continue
         bundle_glob = t["bundle"].rsplit("_", 1)[0]
         r = subprocess.run([sys.executable, "tools/assets/export_animated.py", game, out, bundle_glob, t["prefab"]],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
         done[stem] = r.returncode
         print(tower, tier, stem, "ok" if r.returncode == 0 else "FAIL " + (r.stderr.strip().splitlines() or ["?"])[-1][:200],
               flush=True)
+        if r.returncode:
+            raise SystemExit(r.returncode)
     json.dump(index, open(os.path.join(root, "index.json"), "w"), indent=1)
     json.dump(attack_index, open(os.path.join(root, "attack.json"), "w"), indent=1)
     print(tower, "exported", sum(1 for v in done.values() if v == 0), "of", len(done))

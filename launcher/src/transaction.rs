@@ -420,8 +420,8 @@ mod tests {
                 .starts_with("rrbtd6-update-test-")
         );
         assert_eq!(
-            std::env::current_exe().unwrap(),
-            dir.join("rrbtd6-launcher.exe")
+            std::env::current_exe().unwrap().canonicalize().unwrap(),
+            dir.join("rrbtd6-launcher.exe").canonicalize().unwrap()
         );
         install(&dir).unwrap();
         check(&dir, "new", false);

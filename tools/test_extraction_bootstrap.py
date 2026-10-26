@@ -21,12 +21,24 @@ class BootstrapTests(unittest.TestCase):
 
         before = sys.path[:]
         with patch.dict(os.environ, ENV), patch.dict(sys.modules, {"unitypy_lowmem": types.ModuleType("unitypy_lowmem")}), \
-                patch.object(platform, "_wmi", UnresponsiveWmi()), patch.object(platform, "_uname_cache", None):
+                patch.object(platform, "_wmi", UnresponsiveWmi()), patch.object(platform, "_uname_cache", None), \
+                patch.object(sys, "path", sys.path[:]):
             runpy.run_path(str(HOOK))
             self.assertIsNone(platform._wmi)
             self.assertEqual(platform.system(), "Windows")
             self.assertTrue(platform.machine())
             self.assertTrue(platform.win32_ver()[1])
+            self.assertEqual(sys.path[0], str(HOOK.parent / "assets"))
+        self.assertEqual(sys.path, before)
+
+    def test_isolated_helpers_are_available_without_adding_working_directory(self):
+        before = sys.path[:]
+        with patch.dict(os.environ, ENV), patch.dict(sys.modules, {"unitypy_lowmem": types.ModuleType("unitypy_lowmem")}), \
+                patch.object(sys, "path", sys.path[:]), \
+                patch.object(platform, "_wmi", getattr(platform, "_wmi", None), create=True):
+            runpy.run_path(str(HOOK))
+            runpy.run_path(str(HOOK))
+            self.assertEqual(sys.path, [str(HOOK.parent / "assets"), *before])
         self.assertEqual(sys.path, before)
 
     def test_unrelated_python_process_is_untouched(self):

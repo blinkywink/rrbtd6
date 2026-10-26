@@ -26,6 +26,12 @@ FRONTEND_SCENES = ["QuestBrowserUI", "TowerGiftBoxUI", "GameEventsUI", "LinkFrie
                    "CoopQuickMatchUI", "CoopJoinMatchUI", "MonkeySelectUI", "HeroDetailsUI", "KnowledgeMainUI",
                    "KnowledgeSkillTreeUI", "PlaySocialUI", "PowersSelectUI", "AchievementsUI", "StoreUI",
                    "TrophyStoreUI", "LegendsSelectUI", "MailboxUI", "MapSelectUI"]
+CORE_SCENES = {
+    "MainMenuUI": "Assets/UI - New/MainMenuUi.unity",
+    **{name: f"Assets/UI - New/Scenes/{name}.unity" for name in
+       ["DifficultySelectUI", "ModeSelectUI", "SettingsUI", "ExtraSettingsUI", "AccessibilitySettingsUI", "HotkeysUI"]},
+    **{name: f"Assets/UI - New/Scenes/EndGame/{name}.unity" for name in ["VictoryUI", "DefeatUI"]},
+}
 
 
 class Ctx:
@@ -216,9 +222,67 @@ def ingame_ui(c):
 def game_data(c):
     root_index = struct.unpack("<i", (c.out / "game_model/sim_model.bytes").read_bytes()[-4:])[0]
     c.py("tools/assets/build_game_data.py", c.out, "tutorial", root_index)
-    c.py("tools/assets/export_tower_assets.py", c.game, "EngineerMonkey", "HeliPilot", "MonkeyAce", "BeastHandler",
-         "Skywarden", "MonkeySub", "MonkeyBuccaneer", "Mermonkey")
     c.py("tools/assets/export_missing_upgrade_icons.py", c.game)
+
+
+def extended_towers(c):
+    # Include every current tower/hero and all paragon, air-unit and pet displays.
+    # A short hand-maintained list omitted most paragons and all hero models.
+    game = json.loads((c.out / "game/game.json").read_text(encoding="utf-8"))
+    towers = game["tower_tiers"]
+    c.py("tools/assets/export_tower_assets.py", c.game, *towers)
+    heroes = [name for name, definition in towers.items() if definition.get("hero") is not None]
+    if heroes:
+        c.py("tools/assets/export_hero_portraits.py", c.game, *heroes)
+
+
+def core_menus(c):
+    prefabs = c.out / "ui/prefabs"
+    c.py("tools/assets/dump_ui_prefab.py", c.game, prefabs,
+         *[f"scenefile:{path}={name}" for name, path in CORE_SCENES.items()],
+         "Assets/UI - New/Popups/Prefabs/CommonPopup.prefab",
+         "Assets/UI - New/Popups/Prefabs/ParagonConfirmationPopup.prefab",
+         "Assets/UI - New/InGameUi/Prefabs/SandboxBloonsMenu.prefab",
+         "Assets/UI - New/InGameUi/Prefabs/BuffManager.prefab",
+         "Assets/UI - New/InGameUi/Prefabs/GeraldoShop.prefab",
+         "field:SandboxBloonsMenu/BloonMenu.spawnBloonButtonPrefab=SpawnBloonButton")
+    c.py("tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime",
+         "MainMenuUi", *[name for name in CORE_SCENES if name != "MainMenuUI"])
+    c.py("tools/assets/resolve_ui_sprites.py", c.game, c.out, "asset_references_assets_all_*.bundle",
+         *CORE_SCENES, "CommonPopup", "ParagonConfirmationPopup", "SandboxBloonsMenu", "SpawnBloonButton", "BuffManager", "GeraldoShop")
+
+
+def particles(c):
+    game = json.loads((c.out / "game/game.json").read_text(encoding="utf-8"))
+    names = {"UpgradeEffect", "UpgradeEffectTier5", "HeroUpgradeEffect", "HeroUpgradeEffectLv20", "SellEffect"}
+
+    def visit(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == "fx" or key.endswith("_fx"):
+                    effect = item[0] if isinstance(item, list) and item else item
+                    if isinstance(effect, str) and effect:
+                        names.add(effect)
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(game)
+    index = c.containers()
+    paths = []
+    for name in sorted(names):
+        matches = [path for path in index if path.endswith(f"/{name}.prefab")]
+        if len(matches) != 1:
+            raise ValueError(f"Effect {name}: expected one original prefab, found {len(matches)}")
+        paths.append(matches[0])
+    c.py("tools/assets/export_particles.py", c.game, c.out / "effects", *paths)
+    # Separate processes bound UnityPy memory across maps and tower bundles.
+    for map_json in sorted((c.out / "maps").glob("*/map.json")):
+        c.py("tools/assets/export_particles.py", c.game, c.out / "effects", f"scene:{map_json.parent.name}")
+    for tower in game["tower_tiers"]:
+        c.py("tools/assets/export_particles.py", c.game, c.out / "effects", f"tiers:{tower}")
+    c.py("tools/assets/export_particles.py", c.game, c.out / "effects", "projectiles")
 
 
 def audio(c):
@@ -276,7 +340,7 @@ def finish(c):
 
 
 STEPS = [metadata, sim_model, cab_index, catalogs, container_index, rounds_maps, sprites, mapset, tower_models, misc_art, upgrade_art,
-         ingame_ui, game_data, audio, bloon_models, frontend, home, social, finish]
+         ingame_ui, core_menus, game_data, extended_towers, particles, audio, bloon_models, frontend, home, social, finish]
 
 
 def install_hook(root):

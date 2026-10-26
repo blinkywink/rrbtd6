@@ -21,10 +21,11 @@ ICON_DIRS = {"Druid": "DruidMonkey", "DartlingGunner": "DartlingMonkey", "Skywar
 
 
 def run(*args):
-    r = subprocess.run([PY, *args], capture_output=True, text=True)
+    r = subprocess.run([PY, *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     tail = (r.stdout.strip().splitlines() or [""])[-1]
     print(" ".join(a for a in args[:1]), "ok" if r.returncode == 0 else "FAIL", tail[:200],
           (r.stderr.strip().splitlines() or [""])[-1][:200] if r.returncode else "", flush=True)
+    r.check_returncode()
 
 
 run("tools/assets/build_display_plan.py", GAME, *TOWERS)
