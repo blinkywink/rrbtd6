@@ -39,6 +39,7 @@ jobs:
         run: |
           python -I tools/test_extraction_bootstrap.py
           python -I tools/test_package_tools.py
+          python -I tools/test_shader_imports.py
           cargo test --release -p rrbtd6-launcher --locked
 
       - name: Build game and launcher
@@ -49,8 +50,8 @@ jobs:
         shell: bash
         run: |
           # MelonLoader (Apache-2.0) only for its reference assembly; nothing from BTD6 is needed.
-          curl -sSL -o ml.zip https://github.com/LavaGang/MelonLoader/releases/download/v0.7.3/MelonLoader.x64.zip
-          mkdir -p ml && tar -xf ml.zip -C ml
+          curl --fail --location --retry 3 -o ml.zip https://github.com/LavaGang/MelonLoader/releases/download/v0.7.3/MelonLoader.x64.zip
+          python -m zipfile -e ml.zip ml
           dotnet build installer_mod/RRBTD6Installer.csproj -c Release -p:MelonLoaderDir="$PWD/ml" -o installer_out
 
       - name: Package

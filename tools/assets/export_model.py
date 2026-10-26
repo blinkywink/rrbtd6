@@ -17,6 +17,9 @@ import os
 import struct
 import sys
 
+# The launcher uses isolated Python; resolve this script's shader helpers explicitly.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import numpy as np
 import UnityPy
 from UnityPy.helpers import TypeTreeHelper
