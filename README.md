@@ -9,6 +9,20 @@ of Bloons TD 6. Nothing extracted from the game is ever committed or redistribut
 
 Not affiliated with or endorsed by Ninja Kiwi.
 
+## Installing (players)
+
+1. Own Bloons TD 6 on PC and install [MelonLoader 0.7.3](https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3) into it.
+2. Download `RRBTD6Installer.dll` from the [latest release](https://github.com/blinkywink/rrbtd6/releases/latest)
+   and put it in BTD6's `Mods` folder.
+3. Start BTD6. At the main menu it offers to install rrbtd6: pick a folder.
+4. The launcher (`rrbtd6-launcher.exe`, also on your desktop) downloads the game, sets up a private
+   Python, extracts the art and data from your BTD6 install (first run: long, ~25 GB) and starts it.
+   Start rrbtd6 from the launcher from then on: it updates itself and the game every time, and
+   re-extracts after BTD6 updates.
+
+The installer and launcher only contact GitHub, python.org and PyPI. They never contact
+Ninja Kiwi, and never change BTD6, your save or your account.
+
 ## Layout
 
 - `engine/` – simulation

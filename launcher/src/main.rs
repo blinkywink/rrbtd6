@@ -11,6 +11,8 @@
 //!
 //! Only GitHub and python.org / PyPI are contacted, never Ninja Kiwi.
 
+mod transaction;
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -37,6 +39,8 @@ fn pause() {
 
 fn run() -> Result<()> {
     let dir = std::env::current_exe()?.parent().ok_or("no install folder")?.to_path_buf();
+    let _install_lock = transaction::lock(&dir)?;
+    transaction::recover(&dir)?;
     let skip_update = std::env::args().any(|a| a == "--offline");
     let config: serde_json::Value = fs::read_to_string(dir.join("rrbtd6.json")).ok()
         .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
@@ -51,7 +55,7 @@ fn run() -> Result<()> {
             Ok(true) => println!("Updated to the latest build."),
             Ok(false) => println!("Up to date."),
             // Offline or GitHub unreachable: keep playing the installed build if there is one.
-            Err(e) if dir.join("rrbtd6.exe").exists() => println!("Update check skipped: {e}"),
+            Err(e) if dir.join("rrbtd6.exe").exists() && !transaction::pending(&dir) => println!("Update check skipped: {e}"),
             Err(e) => return Err(e),
         }
     }
@@ -70,7 +74,12 @@ fn find_btd6() -> Option<PathBuf> {
 }
 
 fn get(url: &str) -> Result<ureq::Response> {
-    Ok(ureq::get(url).set("User-Agent", USER_AGENT).call()?)
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    let agent = AGENT.get_or_init(|| ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .timeout_read(std::time::Duration::from_secs(60))
+        .timeout_write(std::time::Duration::from_secs(60)).build());
+    Ok(agent.get(url).set("User-Agent", USER_AGENT).call()?)
 }
 
 fn download(url: &str, to: &Path) -> Result<()> {
@@ -85,50 +94,34 @@ fn download(url: &str, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Replace a file that may be running (Windows allows renaming a running exe, not deleting it).
-fn replace(new: &Path, target: &Path) -> Result<()> {
-    if target.exists() {
-        let old = target.with_extension("old");
-        let _ = fs::remove_file(&old);
-        fs::rename(target, &old)?;
-    }
-    fs::rename(new, target)?;
-    Ok(())
-}
-
 /// Installs the latest release when it is newer than version.json. Returns whether it changed.
 fn update(dir: &Path) -> Result<bool> {
     let latest: serde_json::Value = get(&format!("https://api.github.com/repos/{REPO}/releases/latest"))?.into_json()?;
     let assets = latest["assets"].as_array().ok_or("release has no assets")?;
     let asset = |name: &str| assets.iter().find(|a| a["name"] == name).and_then(|a| a["browser_download_url"].as_str());
     let remote: serde_json::Value = get(asset("version.json").ok_or("release has no version.json")?)?.into_json()?;
+    let build = remote["build"].as_u64().ok_or("release version has no valid build number")?;
     let local: serde_json::Value = fs::read_to_string(dir.join("version.json")).ok()
         .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    if local["build"] == remote["build"] && dir.join("rrbtd6.exe").exists() && dir.join("tools").exists() {
+    if local["build"].as_u64() == Some(build) && dir.join("rrbtd6.exe").is_file()
+        && dir.join("tools/extract_all.py").is_file() && dir.join("tools/requirements.txt").is_file() {
         return Ok(false);
     }
     println!("Installing build {}...", remote["build"]);
-    let staging = dir.join("update");
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging)?;
-    download(asset("rrbtd6.exe").ok_or("release has no rrbtd6.exe")?, &staging.join("rrbtd6.exe"))?;
+    let payload = transaction::prepare(dir)?;
+    let staging = transaction::staging(dir);
+    download(asset("rrbtd6.exe").ok_or("release has no rrbtd6.exe")?, &payload.join("rrbtd6.exe"))?;
     download(asset("rrbtd6-tools.zip").ok_or("release has no rrbtd6-tools.zip")?, &staging.join("tools.zip"))?;
     if let Some(url) = asset("rrbtd6-launcher.exe") {
-        download(url, &staging.join("rrbtd6-launcher.exe"))?;
+        download(url, &payload.join("rrbtd6-launcher.exe"))?;
     }
     // Tools: replace the folder wholesale so removed scripts disappear too.
     let tools_new = staging.join("tools_new");
     zip::ZipArchive::new(fs::File::open(staging.join("tools.zip"))?)?.extract(&tools_new)?;
     let extracted_tools = if tools_new.join("tools").exists() { tools_new.join("tools") } else { tools_new.clone() };
-    let _ = fs::remove_dir_all(dir.join("tools"));
-    fs::rename(extracted_tools, dir.join("tools"))?;
-    replace(&staging.join("rrbtd6.exe"), &dir.join("rrbtd6.exe"))?;
-    if staging.join("rrbtd6-launcher.exe").exists() {
-        // Takes effect next start.
-        replace(&staging.join("rrbtd6-launcher.exe"), &std::env::current_exe()?)?;
-    }
-    fs::write(dir.join("version.json"), serde_json::to_string(&remote)?)?;
-    let _ = fs::remove_dir_all(&staging);
+    fs::rename(extracted_tools, payload.join("tools"))?;
+    fs::write(payload.join("version.json"), serde_json::to_string(&remote)?)?;
+    transaction::install(dir)?;
     Ok(true)
 }
 
