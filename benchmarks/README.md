@@ -416,3 +416,47 @@ desktop timing variation remains. Both reports are retained as
 `prediction-round-200-check` and `prediction-round-200-repeat` under
 `local_extracted/`. That repeat used a later verification build with concurrent
 gameplay edits; each A/B pair used one identical binary and frozen inputs.
+
+
+Frame limiter follow-up (2026-10-26): replace per-frame relative waiting with an
+absolute presentation schedule and a private Windows high-resolution waitable
+timer. The old limiter added submission/swap time after each complete frame budget
+and burned CPU spinning for the final wait. Missed deadlines now reset without
+catch-up bursts; cap changes and Unlimited reset the schedule. Render content and
+simulation code are unchanged by this change.
+
+Three alternating same-build pairs, 1600x900, fixed inputs, 120 FPS cap, existing
+selection/upgrade fixture, 480 frames/run with ten warm-up frames excluded:
+
+- Average displayed rate: 109.31 -> 119.86 FPS (+9.6%, cap accuracy).
+- Median run p99: 9.60 -> 9.14 ms.
+- Worst individual frame across captures: 14.97 -> 13.04 ms.
+- Median total process CPU time/run: 3.125 -> 2.750 seconds (12% less).
+- Median peak private commit: 776.7 -> 777.8 MiB (no memory gain).
+
+CPU totals include startup/shutdown and all threads, unlike CPU submission times
+which exclude the limiter. They compare the same 480-frame workload, not steady
+CPU utilization. All 1,407 measured frames per variant had matching population
+traces; no accepted capture overlapped a detected compiler. These results are
+about capped pacing, not a higher maximum rendering throughput.
+
+The uncapped control used round 200 with four degree-20 paragons, three alternating
+pairs, 10,047 measured frames per variant: 622.45 -> 624.50 FPS (+0.33%, effectively
+unchanged), median p99 2.84 -> 2.75 ms. Population traces matched and no accepted
+capture overlapped a compiler. This remains the prototype's generated freeplay
+workload, not a measurement against official BTD6. Desktop/GPU activity was not
+suppressed. A follow-up 60-cap experiment completed three captures around 57/60
+FPS, then Windows commit exhaustion aborted another capture; that incomplete
+comparison is retained but excluded from these aggregates. The 144-cap game test
+was skipped after that failure; isolated limiter tests cover it separately.
+
+Raw accepted data: `local_extracted/pacing-120-ab` and `pacing-uncapped-ab`.
+Measured executable SHA256:
+577af50b6cf18657b3d7ccd48d36d58627ee42de0f92a355b7b85a758756a30b,
+saved as `frame-bench-baselines/frame-pacing.exe`. Four isolated pacer tests cover
+submission compensation, stalls, cap changes/Unlimited and native timer deadlines.
+The full renderer test suite passed: 110 tests, 14 ignored. A separate native-FFI
+check also passed all four pacer tests after aligning the test-only process-handle
+declaration with the existing memory counter. The installed executable matches the
+measured SHA256 above. Its strict selection/upgrade presentation audit recorded
+149 presentations and zero blanks. These readbacks ran separately from timings.

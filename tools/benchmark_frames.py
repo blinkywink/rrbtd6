@@ -161,17 +161,19 @@ def main():
     parser.add_argument('--flood',default='Ceramic:4')
     parser.add_argument('--round',type=int,choices=[98,140,200])
     parser.add_argument('--upgrade-case',action='store_true',help='Select Dart, switch to Super at frame 40, buy range at frame 100; measure demand-load frame 101')
+    parser.add_argument('--fps-cap',type=int,default=None,help='Override the private FPS cap for pacing measurements')
     parser.add_argument('--degree',type=int,default=20)
     parser.add_argument('--baseline-only',action='store_true',help='Repeat current build without cache-off comparisons')
     parser.add_argument('--suite',action='store_true',help='Run rounds 98/140/200 with 1/2/4 paragons')
     parser.add_argument('--trace-loads',action='store_true',help='Log first-use loading work taking at least 2 ms')
-    parser.add_argument('--ab-feature',choices=['text-cache','pose-reuse','sprite-storage','shadow-textures','map-batching','render-storage','static-maps','background-assets','fallback-models','prediction-retirement'],default='text-cache',help='Feature disabled in same-build reference runs')
+    parser.add_argument('--ab-feature',choices=['frame-pacing','text-cache','pose-reuse','sprite-storage','shadow-textures','map-batching','render-storage','static-maps','background-assets','fallback-models','prediction-retirement'],default='text-cache',help='Feature disabled in same-build reference runs')
     parser.add_argument('--same-build-ab',action='store_true',help='Compare feature off/on when running the suite without a previous executable')
     parser.add_argument('--simulation-snapshot',type=Path,help='Reuse a previously frozen simulation-input directory')
     args=parser.parse_args()
     if args.upgrade_case and (args.suite or args.round or args.frames<103 or args.warmup>=100):parser.error('upgrade case requires no suite/round, frames >= 103, warmup < 100')
     if args.warmup<0 or args.frames<=args.warmup+1 or args.pairs<1:
         parser.error('require pairs >= 1 and frames > warmup + 1 >= 1')
+    if args.fps_cap is not None and args.fps_cap<0:parser.error('FPS cap must be nonnegative')
     if not 1<=args.degree<=100:parser.error('degree must be 1 through 100')
     root=Path(__file__).resolve().parents[1]
     exe=args.exe.resolve(); output=args.output.resolve();output.mkdir(parents=True,exist_ok=True)
@@ -184,6 +186,7 @@ def main():
             if args.reference_exe:cmd+=['--reference-exe',str(args.reference_exe.resolve())]
             elif not args.same_build_ab:cmd+=['--baseline-only']
             if args.trace_loads:cmd+=['--trace-loads']
+            if args.fps_cap is not None:cmd+=['--fps-cap',str(args.fps_cap)]
             cmd+=['--ab-feature',args.ab_feature,'--simulation-snapshot',str(snapshot)]
             subprocess.run(cmd,cwd=root,check=True)
             results.append(json.loads((destination/'results.json').read_text()))
@@ -200,6 +203,7 @@ def main():
     settings_data.update(map='tutorial',mode='Medium' if args.round or args.upgrade_case else 'Medium Sandbox')
     settings_data.setdefault('advanced',{}).update(fps_cap=0,vsync=False,show_fps=False)
     if args.upgrade_case:settings_data['advanced']['fps_cap']=120
+    if args.fps_cap is not None:settings_data['advanced']['fps_cap']=args.fps_cap
     runs=[]; raw={}
     game_data=snapshot/'game/game.json'
     data_hash=hashlib.sha256(game_data.read_bytes()).hexdigest()
@@ -229,7 +233,7 @@ def main():
                     env.update(RRBTD6_TOWERS='DartMonkey,SuperMonkey',RRBTD6_PLACE='300,520',RRBTD6_PATHS='',RRBTD6_CASH='1000000',RRBTD6_UPGRADE_CASE='1:40:1:100')
                 if args.trace_loads:env['RRBTD6_TIMING']='1'
                 if not enabled and not args.reference_exe:
-                    feature_env={'prediction-retirement':'RRBTD6_NO_PREDICTIVE_RETIRE','fallback-models':'RRBTD6_KEEP_FALLBACK_MODELS','background-assets':'RRBTD6_NO_BACKGROUND_ASSETS','pose-reuse':'RRBTD6_NO_POSE_REUSE','text-cache':'RRBTD6_NO_TEXT_CACHE','sprite-storage':'RRBTD6_KEEP_SPRITE_DUPLICATES','shadow-textures':'RRBTD6_NO_SHARED_SHADOWS','map-batching':'RRBTD6_NO_MAP_BATCHING','render-storage':'RRBTD6_LEGACY_RENDER_STORAGE','static-maps':'RRBTD6_NO_STATIC_MAP_GPU'}
+                    feature_env={'frame-pacing':'RRBTD6_LEGACY_FRAME_PACING','prediction-retirement':'RRBTD6_NO_PREDICTIVE_RETIRE','fallback-models':'RRBTD6_KEEP_FALLBACK_MODELS','background-assets':'RRBTD6_NO_BACKGROUND_ASSETS','pose-reuse':'RRBTD6_NO_POSE_REUSE','text-cache':'RRBTD6_NO_TEXT_CACHE','sprite-storage':'RRBTD6_KEEP_SPRITE_DUPLICATES','shadow-textures':'RRBTD6_NO_SHARED_SHADOWS','map-batching':'RRBTD6_NO_MAP_BATCHING','render-storage':'RRBTD6_LEGACY_RENDER_STORAGE','static-maps':'RRBTD6_NO_STATIC_MAP_GPU'}
                     env[feature_env[args.ab_feature]]='1'
                 run_exe=exe if enabled or not args.reference_exe else args.reference_exe.resolve()
                 startup=None; flags=0

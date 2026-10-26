@@ -1,6 +1,7 @@
-# Every push to main (tools/publish.sh) builds the Windows game and publishes it as the latest
-# release. The launcher/installer reads releases/latest to update. Code only: the game data is
-# extracted on each player's PC from their own BTD6 install.
+# Every push to main (tools/publish.sh) builds the Windows game, the launcher and the BTD6
+# installer mod, and publishes them as the latest release. The launcher and the mod read
+# releases/latest to install and update. Code only: the game data is extracted on each player's
+# PC from their own BTD6 install.
 name: release
 
 on:
@@ -27,18 +28,28 @@ jobs:
         with:
           key: game
 
-      - name: Build game
+      - name: Build game and launcher
         shell: bash
         env:
           RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo build -p btd6-game --release
+        run: cargo build -p btd6-game -p rrbtd6-launcher --release
+
+      - name: Build installer mod
+        shell: bash
+        run: |
+          # MelonLoader (Apache-2.0) only for its reference assembly; nothing from BTD6 is needed.
+          curl -sSL -o ml.zip https://github.com/LavaGang/MelonLoader/releases/download/v0.7.3/MelonLoader.x64.zip
+          mkdir -p ml && tar -xf ml.zip -C ml
+          dotnet build installer_mod/RRBTD6Installer.csproj -c Release -p:MelonLoaderDir="$PWD/ml" -o installer_out
 
       - name: Package
         shell: bash
         run: |
           mkdir -p dist
           cp target/release/btd6-game.exe dist/rrbtd6.exe
-          tar -a -c -f dist/rrbtd6-tools.zip tools/assets tools/il2cpp tools/sim_model tools/dotnet_meta tools/build_local_assets.sh
+          cp target/release/rrbtd6-launcher.exe dist/rrbtd6-launcher.exe
+          cp installer_out/RRBTD6Installer.dll dist/RRBTD6Installer.dll
+          tar -a -c -f dist/rrbtd6-tools.zip --exclude=tools/mod tools
           printf '{"build":%s,"commit":"%s"}\n' "${{ github.run_number }}" "${{ github.sha }}" > dist/version.json
 
       - name: Publish release
@@ -47,7 +58,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="build-${{ github.run_number }}"
-          gh release create "$tag" dist/rrbtd6.exe dist/rrbtd6-tools.zip dist/version.json \
-            --title "Build ${{ github.run_number }}" \
-            --notes "Automatic build of ${{ github.sha }}. Game data is not included; it is extracted from your own BTD6 install." \
-            --latest
+          notes="Automatic build of ${{ github.sha }}.
+
+          Install: put RRBTD6Installer.dll in your BTD6 Mods folder (MelonLoader 0.7.3) and start BTD6.
+          Game data is not included; it is extracted from your own BTD6 install."
+          gh release create "$tag" dist/rrbtd6.exe dist/rrbtd6-launcher.exe dist/RRBTD6Installer.dll \
+            dist/rrbtd6-tools.zip dist/version.json --title "Build ${{ github.run_number }}" --notes "$notes" --latest

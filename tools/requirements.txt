@@ -1,0 +1,16 @@
+# Python packages the asset extraction (tools/extract_all.py) needs.
+UnityPy==1.25.4
+capstone==5.0.9
+lz4==4.4.5
+numpy==2.5.4
+pillow==13.0.0
+texture2ddecoder==1.0.6
+etcpak==0.9.15
+astc-encoder-py==0.1.12
+brotli==1.2.0
+fmod_toolkit==0.1.3
+pyfmodex==0.7.2
+archspec==0.2.6
+attrs==26.1.0
+fsspec==2026.9.0
+tpk_ar==0.2.4

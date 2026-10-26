@@ -23,13 +23,10 @@ import capstone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "il2cpp"))
 from il2cpp_meta import PE  # noqa: E402
 
-CREATE_ARRAY_SET = 0x181924B30
-CREATE_LIST_SET = 0x181924F40
-CREATE_DICT_SET = 0x181924DE0
-CREATE_RECORDS = 0x181925270
-LINK_ARRAY = 0x1819256C0
-LINK_LIST = 0x181925FC0
-LINK_DICT = 0x181925B40
+# GameModelLoader's generic helpers (CreateArraySet<T>, LinkArray<T>, ...) have no metadata
+# names and move with every game build; resolve_helpers() finds them in Load by structure.
+CREATE_ARRAY_SET = CREATE_LIST_SET = CREATE_DICT_SET = CREATE_RECORDS = None
+LINK_ARRAY = LINK_LIST = LINK_DICT = None
 
 
 class Reader:
@@ -88,6 +85,32 @@ def load_call_sequence(pe, names, load_va):
     return seq
 
 
+def resolve_helpers(calls, names):
+    """Unnamed Load call targets by role, in the order Load uses them.
+
+    Between the first Read_* and the first Set_v_* call: CreateArraySet (interleaved with the
+    Read_a_* readers), CreateListSet, CreateDictSet, CreateRecords. After the last Set_v_*:
+    LinkArray, LinkList, LinkDictionary.
+    """
+    def short(c):
+        return names.get(c, "").split("::")[-1]
+    first_read = next(i for i, c in enumerate(calls) if short(c).startswith("Read_"))
+    first_set = next(i for i, c in enumerate(calls) if short(c).startswith("Set_v_"))
+    last_set = max(i for i, c in enumerate(calls) if short(c).startswith("Set_v_"))
+
+    def unnamed(lo, hi):
+        seen = []
+        for c in calls[lo:hi]:
+            if c not in names and c not in seen:
+                seen.append(c)
+        return seen
+    create = unnamed(first_read - 1, first_set)
+    link = unnamed(last_set + 1, len(calls))
+    if len(create) < 4 or len(link) < 3:
+        raise RuntimeError(f"GameModelLoader.Load layout changed: create={list(map(hex, create))} link={list(map(hex, link))}")
+    return create[:4], link[:3]
+
+
 def main():
     bin_path, names_path, schema_path, blob_path, out_dir = sys.argv[1:6]
     pe = PE(bin_path)
@@ -99,6 +122,9 @@ def main():
     load_va = next(va for va, n in names.items() if n == "GameModelLoader::Load")
     schemas = json.load(open(schema_path))
     calls = load_call_sequence(pe, names, load_va)
+    global CREATE_ARRAY_SET, CREATE_LIST_SET, CREATE_DICT_SET, CREATE_RECORDS, LINK_ARRAY, LINK_LIST, LINK_DICT
+    (CREATE_ARRAY_SET, CREATE_LIST_SET, CREATE_DICT_SET, CREATE_RECORDS), (LINK_ARRAY, LINK_LIST, LINK_DICT) = resolve_helpers(calls, names)
+    print("loader helpers:", *map(hex, (CREATE_ARRAY_SET, CREATE_LIST_SET, CREATE_DICT_SET, CREATE_RECORDS, LINK_ARRAY, LINK_LIST, LINK_DICT)))
 
     r = Reader(open(blob_path, "rb").read())
     m = [None] * r.i32()

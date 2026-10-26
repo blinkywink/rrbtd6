@@ -661,3 +661,21 @@ average FPS is not an uncapped throughput comparison.
 states across all four upgrade-effect families. `RRBTD6_UPGRADE_CASE=1:40:1:100`
 is the AUTOTEST-only fixture (tower index, selection frame, path, purchase frame).
 Verification readbacks are disabled during normal play and timing captures.
+
+
+Capped frames in gameplay, the front end and pause menus now use an absolute
+presentation schedule. Submission/swap time after the limiter counts toward the
+next interval instead of being added to every frame budget. Slow frames reset the
+schedule without a catch-up burst; changing caps or selecting Unlimited resets it
+as well. Windows uses one private high-resolution waitable timer rather than a
+busy spin. Unsupported systems retain the previous sleep/spin fallback. The timer
+handle is released with the pacer; no global timer-resolution setting is changed.
+Simulation steps and render content are unchanged. The loading-task loop keeps its
+existing independent pacing.
+
+`RRBTD6_LEGACY_FRAME_PACING=1` restores the prior limiter for comparisons.
+`tools/benchmark_frames.py --upgrade-case --frames 480 --warmup 10 --pairs 3
+--fps-cap 120 --ab-feature frame-pacing` compares the same executable using private
+preferences. `--fps-cap 0` is the uncapped control. The independent, ignored
+`frame_pacer::tests::benchmark_limiter` models a presentation delay and reports
+limiter timings; it does not measure game rendering speed.

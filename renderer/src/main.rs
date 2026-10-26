@@ -12,6 +12,7 @@ mod data;
 mod game;
 mod load_work;
 mod frame_bench;
+mod frame_pacer;
 mod presentation_check;
 mod round_bench;
 mod coop_game;
@@ -239,8 +240,8 @@ const WINDOW_TITLE: &str = "BTD6 (rrbtd6 prototype)";
 
 /// Ends a frame for the Advanced settings: "Show FPS" puts the frame rate in the window title
 /// (twice a second; see DEVIATIONS.md), and the "FPS Limit" (0: none) sleeps out the rest of the
-/// frame: a coarse sleep, then a short spin for the last millisecond (Windows timer granularity).
-fn pace(frame_t0: std::time::Instant, adv: &advanced::Advanced) {
+/// presentation interval, including submission and swap after this call.
+fn pace(frame_t0: std::time::Instant, adv: &advanced::Advanced, pacer: &mut frame_pacer::FramePacer, legacy: bool) {
     static SHOWN: std::sync::Mutex<(bool, f64)> = std::sync::Mutex::new((false, 0.0));
     if let Ok(mut shown) = SHOWN.lock() {
         let now = get_time();
@@ -253,6 +254,10 @@ fn pace(frame_t0: std::time::Instant, adv: &advanced::Advanced) {
         }
     }
     let cap = adv.fps_cap;
+    if !legacy {
+        pacer.wait(cap, frame_t0);
+        return;
+    }
     if cap == 0 {
         return;
     }
@@ -773,6 +778,8 @@ async fn game_main() {
     front.binds = binds.clone();
     let mut view_rt: Option<(RenderTarget, u32, u32)> = None;
     let mut frame_t0 = std::time::Instant::now();
+    let mut frame_pacer = frame_pacer::FramePacer::default();
+    let legacy_pacing = std::env::var_os("RRBTD6_LEGACY_FRAME_PACING").is_some();
     {
         let (lo, hi, def) = frontend::CURSOR_PX;
         let px = read_settings(&root)["cursor_px"].as_f64().map_or(def, |v| v as f32).clamp(lo, hi);
@@ -1169,7 +1176,7 @@ async fn game_main() {
                     break;
                 }
             }
-            pace(frame_t0, &adv);
+            pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
             next_frame().await;
             frame_t0 = std::time::Instant::now();
             continue;
@@ -1308,7 +1315,7 @@ async fn game_main() {
                     break;
                 }
             }
-            pace(frame_t0, &adv);
+            pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
             next_frame().await;
             frame_t0 = std::time::Instant::now();
             continue;
@@ -2760,7 +2767,7 @@ async fn game_main() {
         }
         let frame_cpu=get_time()-cpu_t0;
         cpu_time += frame_cpu;
-        pace(frame_t0, &adv);
+        pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
         let nf0 = get_time();
         next_frame().await;
         if let Some(c)=frame_capture.as_mut(){c.record(frames,frame_t0.elapsed().as_secs_f64(),frame_cpu,game.bloons.len(),game.projectiles.len(),game.towers.len(),game.round+1,game.round_active,game.towers.iter().filter(|t|t.paragon.is_some()).count());}

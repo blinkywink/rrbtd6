@@ -1,0 +1,12 @@
+[package]
+name = "rrbtd6-launcher"
+description = "Installs, updates and starts rrbtd6: game build from GitHub releases, data from your own BTD6 install"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ureq = { version = "2", features = ["json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+serde_json = "1"
