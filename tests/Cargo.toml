@@ -1,0 +1,10 @@
+[package]
+name = "compat-tests"
+description = "Compares btd6-sim against traces observed in the original game"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+btd6-sim = { path = "../engine" }

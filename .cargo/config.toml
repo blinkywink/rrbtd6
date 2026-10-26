@@ -1,0 +1,3 @@
+[alias]
+# Build and run the playable prototype with the fast-rebuild profile.
+game = "run -p btd6-game --profile game"

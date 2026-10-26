@@ -1,0 +1,3 @@
+{"bench":"movement","bloons":1000,"frames":2000,"ns_per_frame":16558.5,"ns_per_bloon_frame":16.559,"frames_per_sec":60392,"allocs_in_timed_frames":0,"leaked":0}
+{"bench":"movement","bloons":10000,"frames":2000,"ns_per_frame":96200.0,"ns_per_bloon_frame":9.620,"frames_per_sec":10395,"allocs_in_timed_frames":0,"leaked":0}
+{"bench":"movement","bloons":100000,"frames":2000,"ns_per_frame":905615.2,"ns_per_bloon_frame":9.056,"frames_per_sec":1104,"allocs_in_timed_frames":0,"leaked":0}

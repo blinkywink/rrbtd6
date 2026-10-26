@@ -1,0 +1,259 @@
+THINGS THAT LOOK WRONG
+======================
+Write one problem per line under "OPEN". Say what, where, and when it happens if you can
+(tower + upgrade like "Ninja 0-3-0", map, round, what you expected vs what you saw).
+Claude checks this file, fixes what it can and moves each line to "DONE" (with a short note)
+or "CAN'T FIX YET" (with why). A screenshot of the real game next to ours helps a lot.
+
+OPEN
+----
+- Tower models (your list: Beast Handler sticks / headpieces / eyes, Dart 4xx-5xx eyes, Dartling
+  broken, Desperado gun, Druid capes, Mortar 004/005 holes, Ninja 200/500 eyes, Spike Factory 040
+  green, Super Monkey eyes / arms / bodies, Tack Ring of Fire, Wizard eyes, Engineer sentries not
+  aiming). -> Fixed, please check:
+  * Big models lost everything past their first ~5000 triangle corners: the graphics library
+    caps one draw and silently dropped the rest (371 model parts were cut: staffs, guns, arms,
+    whole bodies, headpieces, eye geometry). Every part is now drawn in pieces under the cap.
+  * Wizard and Super Monkey eyelids (named "LOD_1") were always shown: closed eyes.
+  * Dartling guns and gunners, Super Monkey arms, Navarch guns, Mermonkey tentacles and the
+    Village slingshot are separate "attack display" models the game adds on the tower: now
+    exported and drawn, turned to where the tower aims.
+  * Particle effects inside tower models now play on the tower (Ring of Fire / Inferno Ring
+    flames, Alchemist, Banana Farm, ...).
+  * Alchemist 000 and 200 showed the transformed blue monster.
+  * Engineer sentries now turn their gun toward what they shoot.
+  * Heroes were invisible while placing; a second hero could be picked up. Fixed.
+  * Beast Handler top path: the game only blocks a path's first tier when its pet has nowhere
+    to go (fish: water within the handler's range; raptors: track within range); we were
+    blocking the fish path on any map without water anywhere. Now the game's rule.
+  * Super Monkey middle path: the body now faces the middle of both arms' targets (the game's
+    RotateToMiddleOfTargetsModel) and each arm aims at its own target.
+  * Projectiles were one sprite of their prefab (Sun Temple / Sun God shots showed only their
+    orange glow); now every sprite layer with its tint, spin and pulsing (273 projectiles).
+  * Sun Temple / True Sun God bases no longer turn; towers are dragged out of the shop to place
+    them (a tap only selects), and a drop where it can't go cancels.
+  * Bunched-up MOABs: the one furthest along draws over the ones behind it.
+  * Sandbox bloon icons: each bloon's own icon at the game's size (the sprite export had mixed
+    up sprites sharing a name across atlases, e.g. Zebra).
+  * Projectiles play their own particle effects (95: wizard bolts, trails, missile smoke...).
+  * Avatar of Wrath now gets its Wrath damage (from the bloons' RBE on screen, as the game
+    computes it) with its growing glow and stronger-looking bolts.
+  * Selling plays the sell effect; a submerged Sub shows its radar pulse; brewed towers show
+    the Berserker Brew / Acidic Mixture effect.
+  * Sun Temple / True Sun God sacrifices: upgrading to them now consumes the towers in range
+    (no refund; heroes, Paragons and other Super Monkeys are spared) with the game's consume
+    and transformation effects. What each tower class adds follows the game's sacrifice
+    tables: at $10k+ etc. per class: Primary glaives / blades and faster attacks, Military
+    missiles / Spectre planes and damage, Magic arcane / storm blasts / mini Sun Avatar and
+    pierce, Support cash, discounts and buff zones. The 5xx sacrifice adds True Sun God's on
+    top. Magic's wind chance now raises the temple blast's chance to blow bloons back. Not
+    yet: the special Vengeful / Tech Bot sacrifices.
+  * Sun Temple / True Sun God now ask first with the game's "Temple Sacrifice" popup (OK /
+    Cancel). The temple holds fire while it transforms (4 s / 5 s, as the game does).
+  * The temple now plays the game's own transformation animations: when Sun Temple sacrifices
+    its top lifts, the doors slide apart and the monkey head rises out of it (2.9 s; the doors
+    didn't move before: the base's single-bone skinning wasn't exported). True Sun God's own
+    clip (in the game's data) doesn't open the temple: its base is built open and the god
+    appears after the 5 s transformation.
+  * Spectre planes (and Monkey Aces) fly like the game's PathMovement: off their loop they
+    turn at most 360 degrees a second back onto it instead of snapping, they bank into turns,
+    and when launched they take off: small and nose-up, growing to full size over 3.5 s while
+    climbing. The mini Sun Avatar plays its appear / disappear effect; Marine, Phoenix and
+    totem spawn effects were missing too and are now in.
+  Druid capes: the cape is in every Druid model and posed behind the body like the game's; if it
+  still looks missing, a screenshot of the real one would help.
+- Main menu: still to do: loading screens, functional Extras, hero skins / level details,
+  original menu shaders / animations, and remaining sections. Heroes / Monkeys work is in progress.
+- Shop tiles: shouldn't have the cut corners or the glow in the middle. -> Changed (see DONE);
+  if it still looks off, please add a screenshot of the real game's shop.
+
+
+DONE
+----
+- Brief black flash after entering Monkey Meadow and placing a tower: reproduced three blank
+  presentations during a cold Bomb Shooter load. Required gameplay assets now finish before
+  presenting; prepared loads remain incremental. Redundant base models are skipped when tier
+  art is ready, including its placement shadow. Six late-placement/preview checks showed zero blanks.
+- Sounds: every sound clip and music track is now extracted (2,789 clips; before only the
+  153 we had found references for, so 190 of the 300 tower sounds were silent: ability
+  sounds, hero attacks...). Heroes now talk like the original: when placed, on each level
+  (one of their eight lines at random), when you click them, when you leak (at most every
+  40 s), when they see a MOAB / BFB / ZOMG / DDT / BAD for the first time in a round, and
+  when a MOAB-class bloon pops. Banana / crate pickups play their pickup sound.
+  Hits that can't pop now make the game's immune sounds (Lead clank, Purple, Frozen ice,
+  Diamond), from the game's own table and priority. Tiers with their own upgrade fanfare
+  (Sun God, Tech Terror, Dark Knight...) play it; the Rare Quincy figure inflates at round
+  end. The jukebox uses the game's track list and names (the 11 free tracks).
+  Not yet: Trophy Store music tracks you own, boss sounds, hero skins' own voice lines.
+- Towers now keep every animation the game has: idle variants (looking around, scratching),
+  AttackIdle for 2 s after attacking (the game's attackReadyIdleSustain), upgrade
+  animations (Brickell, Churchill; Psi's three aren't mapped yet).
+- Towers and heroes now play the game's own placement animation when placed (the Dart
+  Monkey's "Fall", Banana Farm dropping in, Quincy's fancy landing...): each tower's model
+  carries it, we just weren't exporting it. Not for the Heli Pilot / Monkey Ace pads
+  (their aircraft take off instead) or Rosalia's workshop base, which have none.
+- Your requested differences from the original are listed in DEVIATIONS.md (everything else
+  should match the game):
+  * Store: opening it shows the store blurred and inert under a "Support Ninja Kiwi" popup
+    (your text) with "Take Me to the Webstore" (opens btd6store.ninjakiwi.com) and "Return
+    Home". The same popup comes up from the Monkey Money "+" button, the Knowledge "+" button,
+    the Powers "buy" button and the Trophy Store "buy" button.
+  * Show FPS now puts the frame rate in the window's title bar (updated twice a second)
+    instead of drawing it in the game. The FPS limit now also applies during games (it only
+    applied in menus before).
+  * Settings > Accessibility is now the game's own Accessibility page (Effects Scale, Ambient
+    Map Effects, Stereoscopic, Tower Range Circle style, then its Advanced section: Tower
+    Placement Snapping, Numerical Ability Timers, Cash Spent Tracker, Memory Optimization),
+    followed by a "Graphics & Performance" section with our settings in the same style, each
+    with a description. The original options are saved but don't change the game yet.
+- Geraldo's shop items work in the simulation (Shooty Turret, Jar of Pickles, Sharpening
+  Stone, See Invisibility Potion, Fertilizer, Worn Hero's Cape, Rejuvenating Potion, the
+  track items...), with stock refilling per round and level unlocks. Selecting Geraldo opens
+  his shop (the game's own panel) on the side away from his upgrade menu: click an item to
+  see what it does and take it in hand, then click the map / a tower to use it (Esc or
+  right-click puts it back; the Rejuv Potion is used straight away). Gerry's Fire Hot Sauce
+  puts a fire creature circling the tower you use it on for 5 rounds (10 rounds and stronger
+  from Geraldo level 16). Pet Rabbits sit where you put them (land or track); the 4th one
+  merges them into a Wererabbit. Not done yet: the rabbits wandering about, the Wererabbit
+  leaping between targets (its blasts land on its target from where it stands), and shop
+  items in co-op.
+- Pause Hotkeys / Advanced links now open the real settings pages and return to the same
+  paused game. Fixed the old pause controls showing through behind those pages.
+- Main menu water sampling now restores shoreline foam and shallow-water shading from the
+  original shaders. Grass and palms use their native curves. Six original click animations
+  work: Bomb, Dart fountain, Sub, Ninja, Boomerang, and windmill / Ace fly-through.
+- Tower behaviours we were missing (found by checking every behaviour the game's towers use
+  against what we read): regrow bloons now grow back a layer every 3 s up to the layer they
+  started at (frozen ones don't); towers no longer waste shots on bloons their damage can't
+  hurt where the game filters them (Ice vs Lead, fire vs Purple, Mermonkey vs White...);
+  buffs can't push a weapon past its minimum interval; Dartling / Sub / Buccaneer barrels fire
+  in turn from their own points; Ice shards and Glue splatter now come off popped bloons;
+  Glue / Desperado projectiles spawn their leftovers when they end; the Ice Paragon ignores
+  Lead / frozen immunity; accelerating missiles speed up; Banana Farm's lives-per-round
+  upgrade gives its lives (capped like the game); Sniper's attack speeds up as bloons near
+  the exit. Second batch: Village Grow Blocker stops regrowth in its radius; Village Homeland
+  Defense / Ezili's totem make abilities recharge faster; Monkey City adds 20% income;
+  Banana Farm x-x-5 collects bananas for you; Bomb Shooter's MOAB attack goes for MOABs first;
+  Super Monkey / Engineer shots spread a little like the game; Desperado fires faster at
+  far-away bloons; Carpet of Spikes fires Spike Storm every 15 s; Trample / sword charges /
+  banana peels can hit a bloon again once it has stopped touching them; Elite Sniper's Elite
+  targeting; Total Transformation; Spirit of the Forest; Absolute Zero's brittle pulse; Arctic
+  Wind's frozen water takes land towers; Adora's Ball of Light circles her. Also: 109 tower models (Sniper, Dartling, Buccaneer, Village, Psi, Admirals...)
+  had parts frozen in place because of the same skinning bug as the Sun Temple doors.
+- Freeplay past round 140. -> Read out of the game (FreeplayRoundManager): each game has a
+  random seed (kept with the game, like the real one); every round past 140 shuffles the game's
+  529 freeplay bloon groups with that seed, rolls a budget that grows with the round, and adds
+  each group allowed that round whose difficulty score still fits. Some rounds are set: 163
+  only allows its own giant Ceramic / Lead swarm groups (so it's always that kind of round),
+  and 200 is always 3 Fortified BADs. Round 140 itself is the normal last round.
+- Apopalypse mode. -> Like the game, every round comes from the freeplay bloon groups (the
+  picker above, from round 1) and the next round is sent the moment the last one has sent all
+  its bloons, without waiting; projectiles aren't cleared between rounds. The last round still
+  has to be cleared to win.
+- Late-round bloon scaling (rounds 81+). -> The game's ProgressiveDifficultyManager: MOAB-class
+  health +2% a round from 81, +5% from 101, +15% from 125, +35% from 151, +100% from 251, +150%
+  from 301, +250% from 401, +500% from 501; every bloon's speed +2% a round from 81 with extra
+  jumps at 101 / 151 / 201 / 252. We had none of it.
+- Heroes screen missing skins / wrong background. -> Added the original skin selector for all
+  52 SkinData entries: changing a skin updates its portrait, roster icon, background prefab,
+  tint, title material and description; selections save under hero_skins. The background is
+  the game's PowersPatternGreyBg with its VignetteUI shader math and tiling, replacing the
+  blurred island. Fixed Unity flexible-grid height calculation that clipped the skin column.
+  This covers the UI; in-game skinned models and complete screen transitions remain pending.
+- Reverse mode. -> Bloons now run every track from its end to its start (the map's splitters
+  swap roles, so multi-track maps route correctly too).
+- Water wrong on most maps. -> Map water now uses the game's own shaders: they're translated
+  from the game's compiled shader code when the maps are exported, so they animate exactly
+  like the game (ripple rings, panning water with shadows and caustics, waterfalls, splashes,
+  pools, scrolling conveyor belts, god rays, glass shine): 12 shaders on 214 map parts. Water
+  was drawn flat white or plain before. Maps' own ambient particle effects now play too
+  (bubbles, splashes, drifting leaves, river sparkles...: about 840 effects over 90 maps).
+  Also fixed: Workshop and Ascent showed almost nothing, and Peninsula, Quarry, Cargo, Mesa,
+  Resort and a few others had dark bands at the edges (the wrong object was taken for the
+  terrain, and maps without one were cut off at the placement area's edge).
+- Sandbox mode's in-game panel. -> The shop's bloon button (bottom left of the shop) opens the
+  game's sandbox menu: every bloon type (icons follow the Camo / Regrow / Fortified toggles),
+  Count and Spacing fields, Set Round with its Go button, and Reset Damage / Reset Cooldowns /
+  Destroy Bloons / Destroy Monkeys. The Sandbox hotkeys (Send <bloon>, Clear Bloons, ...) work
+  too once bound in Hotkeys. Not yet: the Powers button and Set Cash / Set Health.
+- Placement effect missing. -> Each tower's own placement effect (CreateEffectOnPlaceModel:
+  PlacementEffect, PlacementEffectLarge, HeroPlacementEffect) now plays where it's placed.
+- Paragons: confirm screen and icons. -> Buying a Paragon opens the game's "Upgrade to Paragon"
+  popup with the invest-more-cash slider (extra cash raises the degree up to the point it stops
+  adding power). The tower panel offers the Paragon on the purple Paragon button with its icon
+  and price; a Paragon shows its name, portrait (purple frame), icon, description and degree.
+  Portrait frames now follow the tower set (primary / military / magic / support / hero).
+- Render scale above 100%. -> Now 20-100%.
+- Advanced settings click-through. -> FPS limit, render scale and anti-aliasing are sliders;
+  the rest are on/off toggles.
+- Cursor size default. -> The cursor is the game's own 64 px hand cursor (Normal; the game's
+  Large is 96 px, X-Large 128 px) with its hotspot. The slider shows % of Normal, snaps to it,
+  and has a tick at the default. (It lives in Hotkeys > Sandbox > Cursor, like the game.)
+- Black bars on maps. -> The map now fills the whole window with the shop panel drawn over its
+  right edge, like the game.
+- Hotkeys menu identical to the original. -> Monkeys / Gameplay / Sandbox columns and the
+  Advanced Hotkeys section like the game's; the cursor size slider replaced the three boxes.
+- Auto start between rounds maybe too slow? -> Ours starts the next round on the very frame
+  the last bloon is gone. The real game is the slower one: it holds auto start for a moment in
+  some round ranges to clean up memory (SimulationGcManagerSettings.autoPlayDelayRoundRanges);
+  we don't need that pause.
+- Main menu like the original. -> The game starts on BTD6's main menu over its 3D island; Play
+  -> map select (Beginner / Intermediate / Advanced / Expert, 6 per page) -> Easy / Medium /
+  Hard -> every mode (Standard, Primary / Military / Magic Only, Deflation, Apopalypse,
+  Reverse, Double HP MOABs, Half Cash, ABR, Impoppable, CHIMPS, Sandbox). Home on the
+  Victory / Game Over screens goes back to it. (79 of 88 maps so far; 9 still need exporting.)
+- Settings menu. -> Gear on the main menu: music / effects / voice / cursor size sliders
+  (saved). Hotkeys and Advanced buttons work.
+- Advanced settings. -> Show FPS, FPS limit (30-360 / unlimited), VSync, render scale 50-200%
+  with sharpening (FSR-style contrast-adaptive sharpening when below 100%), MSAA, texture
+  quality. XeSS itself needs Intel's SDK and DirectX 12, so it isn't possible here; render
+  scale + sharpening is the same idea.
+- Keybinds. -> BTD6's default keys (Q W E R T Y, Z X C V B N M, A S D F G, H J K L, U hero,
+  , . / upgrades, Tab targeting, Backspace sell, 1-0 abilities, Space play), rebindable in
+  Settings > Hotkeys (click a key, press the new one; Restore Defaults). Our debug keys moved
+  to F1-F6.
+- Primary / Military / Magic Only, CHIMPS: other towers shouldn't show. -> They're removed
+  from the shop.
+- Logs leaves flat. -> The leaves' shader (Gradient_3Color) shades each leaf along its length
+  with the material's own midpoint; we were shading whole leaf piles by height. Fixed on every
+  map (31 grass / leaf materials).
+- Bloons drawn on top of the hollow logs. -> The graphics library skipped depth testing for
+  anything that doesn't write depth (bloons, pops, projectiles, outlines). Patched: bloons now
+  go under logs, bridges and tunnels.
+- MOABs stacked look wrong. -> Same bug: each MOAB's outline painted over the MOABs in front of
+  it, so a group became a dark blob. Fixed by the depth patch.
+- Uses ~5 GB of RAM. -> Every tier / damage state loaded its own copy of shared textures (3,377
+  files are only 723 images) and animations were kept at 2.4x their size. Now: startup ~600 MB
+  (was 1.4 GB), a 16-tier tower gallery ~1.1 GB (was 2.5 GB). Big map textures load at half
+  size on screens up to 2048 px wide (looks identical there).
+- Buffs don't show. -> Select a tower: its buffs show above it like the game (village, alch,
+  etc. icons, "x2" when stacked).
+- No upgrade effect. -> The game's upgrade effects now play (normal, tier 5, hero level-up,
+  hero level 20); new particle-effect player, which later effects can use too.
+- Banana farm "+20" text wrong. -> Now the game's CashUp effect: "+$20" in the game's title
+  font, yellow (1, 0.85, 0) with a black outline, popping in and rising for 1 s.
+- Space to speed up / slow down. -> Space now works like the Go button: starts the round, or
+  toggles fast forward during one. Auto start (A, or the pause menu toggle) is now saved.
+- Freeplay option. -> After the mode's last round the game stops (Victory), and freeplay can
+  continue through round 140 (the game's whole round set). Victory screen with the Freeplay
+  button is next (with the menus).
+- Pop effect a bit too big. -> Pops drawn at 0.7x the prefab's size (~1.25x a bloon).
+- Can't-afford towers in the shop look weird. -> Like the game: the tile and portrait use the
+  GrayscaleUI material (80% grey, blue-grey tint) and the price turns red.
+- Shop tiles. -> The shop uses the BigPanels TowerContainer sprites (straight corners, darker
+  "V" at the bottom), per TowerPurchaseButton2D.DetermineBackgroundSprite; we were drawing the
+  upgrade-screen portrait frames (PortraitContainer, cut corners + centre glow).
+- Logs: can't place on some grass squares. -> Map areas have holes; fixed for every map.
+- Towers' eyes are closed. -> All eyelid / blink parts hidden except while blinking.
+- Upgrade icons stretched / wrong / missing. -> Keep their shape; shared names get their own
+  tower's icon; 116 missing icons exported; every upgrade checked by a test.
+- Ability buttons used the upgrade icon. -> They show the ability's own icon.
+
+
+CAN'T FIX YET
+-------------
+- MOAB draw order (first one always on top?). -> Checked the game: every MOAB-class bloon sits
+  at the same height (Path.DistanceToPointInfoBloon) and its shader (NinjaKiwi/BTD6/3DMoab) is
+  a plain depth-tested opaque one, so nearby MOABs should overlap by depth, which is what ours
+  does. Nothing in the game puts the leading one on top that I can find. A screenshot of the real
+  game with MOABs bunched up (sandbox: Count 10, Spacing 0.3) would settle it.

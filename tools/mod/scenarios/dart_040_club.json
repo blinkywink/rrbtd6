@@ -1,0 +1,2 @@
+{"name": "dart_040_club", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "round": 20, "frames": 3600, "ability": 120,
+ "towers": [{"id": "DartMonkey-040", "x": -112.815414, "y": -30.9}, {"id": "DartMonkey", "x": -96.815414, "y": -30.9}, {"id": "DartMonkey-200", "x": -101.50171, "y": -42.213707}, {"id": "DartMonkey-030", "x": -112.815414, "y": -46.9}], "quit": true}

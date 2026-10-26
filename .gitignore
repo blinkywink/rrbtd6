@@ -1,0 +1,11 @@
+/target/
+# Proprietary game data extracted locally for analysis. Never commit or redistribute.
+/local_extracted/
+# Dumps derived from the game's binaries (symbol/type listings). Local only.
+/research/dumps/
+# Third-party repositories cloned for review.
+/tools/external/
+__pycache__/
+/tools/.venv/
+# The one playable build (tools/build_exe.sh).
+/BTD6.exe

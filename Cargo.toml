@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["engine", "tests", "benchmarks", "renderer", "coop"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+publish = false
+
+[profile.release]
+debug = 1
+codegen-units = 1
+lto = "thin"
+
+[profile.bench]
+inherits = "release"
+
+# Fast rebuilds for the playable prototype (`cargo game`): release speed, no LTO, parallel codegen.
+[profile.game]
+inherits = "release"
+debug = 0
+lto = false
+codegen-units = 16
+incremental = true
+
+# miniquad with independent depth test / depth write (see vendor/miniquad/src/graphics/gl.rs).
+[patch.crates-io]
+miniquad = { path = "vendor/miniquad" }

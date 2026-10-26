@@ -1,0 +1,1 @@
+{"name": "dart_paragon_r40", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "cash": 10000000, "towers": [{"id": "DartMonkey-500", "x": -112.815414, "y": -30.9, "upgrades": [{"frame": 60, "path": 3}]}, {"id": "DartMonkey-050", "x": -96.815414, "y": -30.9}, {"id": "DartMonkey-005", "x": -112.815414, "y": -46.9}], "quit": true}

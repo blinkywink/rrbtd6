@@ -1,0 +1,14 @@
+# Paths kept out of the public repository (tools/publish.sh). One git pathspec per line.
+# Ninja Kiwi account, cloud-save and live-event tooling: logs in to / talks to NK services.
+research/account-sync.md
+research/live-event-feeds.md
+tools/assets/cloud_account.py
+tools/assets/cloud_codec.py
+tools/assets/link_account.py
+tools/assets/fetch_live_events.py
+tools/assets/read_account_snapshot.py
+tools/assets/test_account_snapshot.py
+tools/assets/test_cloud_codec.py
+tools/assets/test_link_account.py
+tools/assets/test_live_events.py
+tools/assets/export_account_ui.py
