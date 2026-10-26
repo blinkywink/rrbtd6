@@ -19,8 +19,14 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -28,10 +34,15 @@ jobs:
         with:
           key: game
 
+      - name: Test tooling and updater
+        shell: bash
+        run: |
+          python -I tools/test_extraction_bootstrap.py
+          python -I tools/test_package_tools.py
+          cargo test --release -p rrbtd6-launcher --locked
+
       - name: Build game and launcher
         shell: bash
-        env:
-          RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build -p btd6-game -p rrbtd6-launcher --release
 
       - name: Build installer mod
@@ -49,7 +60,7 @@ jobs:
           cp target/release/btd6-game.exe dist/rrbtd6.exe
           cp target/release/rrbtd6-launcher.exe dist/rrbtd6-launcher.exe
           cp installer_out/RRBTD6Installer.dll dist/RRBTD6Installer.dll
-          tar -a -c -f dist/rrbtd6-tools.zip --exclude=tools/mod tools
+          python -I tools/package_tools.py dist/rrbtd6-tools.zip
           printf '{"build":%s,"commit":"%s"}\n' "${{ github.run_number }}" "${{ github.sha }}" > dist/version.json
 
       - name: Publish release
