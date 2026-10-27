@@ -569,6 +569,9 @@ pub enum EffectKind {
     /// EmitOnPop: `ignore` its model's ignoreSameFrameDegrade, `skip` the behaviour's
     /// ignoringSameFrameDegrade (set by Initialise, cleared by Process and the first PreDegrade).
     PopEmit { proj: Box<Proj>, emission: Box<Emission>, ignore: bool, skip: bool },
+    /// CarryProjectile: the projectiles it made (uids; empty until Attatched emits them), which
+    /// sit where the bloon is and go with the mutator.
+    Carry { proj: Box<Proj>, emission: Box<Emission>, uids: Vec<u64> },
     /// EmitOnDestroy: its projectile where the bloon is destroyed; `dont_copy`: not passed to a
     /// degrade's other children.
     DestroyEmit { proj: Box<Proj>, emission: Box<Emission>, dont_copy: bool },
@@ -1644,6 +1647,8 @@ pub struct Projectile {
     pub hit: HitSet,
     /// A bounce (clearCollidedWith) empties `hit` once this frame's collisions are done.
     pub clear_hits_next: bool,
+    /// A carried projectile's bloon (CarryProjectile), which it never hits; 0: none.
+    pub carrier: u64,
     /// Tiers of the tower that fired it (display only).
     pub tiers: [u8; 3],
     /// Id of the tower that fired it (pop credit).
@@ -8044,6 +8049,14 @@ impl Game {
                     },
                     None => continue,
                 },
+                "carry" => match &e.projectile {
+                    Some(p) => EffectKind::Carry {
+                        proj: p.clone(),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 })),
+                        uids: Vec::new(),
+                    },
+                    None => continue,
+                },
                 "pop_emit" => match &e.projectile {
                     Some(p) => EffectKind::PopEmit {
                         ignore: e.ignore_same_frame,
@@ -8133,6 +8146,77 @@ impl Game {
                 None => b.effects.push(eff),
             }
         }
+        self.attach_carries(i);
+    }
+
+    /// CarryProjectile.Attatched (@0x1000040): its projectiles are made where the bloon is, along
+    /// its rotation, at its height (recording ice_004: an Icicles MOAB's icicle out in the
+    /// collision pass that put the mutator on).
+    fn attach_carries(&mut self, i: usize) {
+        let todo: Vec<(usize, Box<Proj>, Box<Emission>, u64)> = self.bloons[i]
+            .effects
+            .iter()
+            .enumerate()
+            .filter_map(|(k, e)| match &e.kind {
+                EffectKind::Carry { proj, emission, uids } if uids.is_empty() => Some((k, proj.clone(), emission.clone(), e.owner)),
+                _ => None,
+            })
+            .collect();
+        for (k, proj, emission, owner) in todo {
+            let b = &self.bloons[i];
+            let rot = if self.defs[b.kind].rotate_to_follow_path { b.rot } else { 0.0 };
+            let (pos, z, id) = (b.pos, b.height, b.id);
+            let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
+            let start = self.projectiles.len();
+            self.emit_rot = Some(rot);
+            self.emit_z = z;
+            self.emit(pos, 0.0, &emission, &proj, None, tiers, owner);
+            self.emit_z = 0.0;
+            self.emit_rot = None;
+            let mut made = Vec::new();
+            for pr in &mut self.projectiles[start..] {
+                pr.carrier = id;
+                made.push(pr.uid);
+            }
+            if let EffectKind::Carry { uids, .. } = &mut self.bloons[i].effects[k].kind {
+                *uids = made;
+            }
+        }
+    }
+
+    /// CarryProjectile.Process (@0x1000840): each carried projectile is put where its bloon is;
+    /// CarryProjectile.OnDestroy / LayersExhaused: they go with the mutator.
+    fn carry_follow(&mut self, drop: bool) {
+        if !self.projectiles.iter().any(|p| p.carrier != 0) {
+            return;
+        }
+        let mut at: HashMap<u64, ([f32; 2], u64, bool)> = HashMap::new();
+        for b in &self.bloons {
+            for e in &b.effects {
+                if let EffectKind::Carry { uids, .. } = &e.kind {
+                    for &u in uids {
+                        // (Not processed the frame it went on: recording ice_004, the icicle
+                        // stays where the MOAB was hit, then follows it.)
+                        at.insert(u, (b.pos, b.id, e.added == self.sim_elapsed));
+                    }
+                }
+            }
+        }
+        self.projectiles.retain_mut(|pr| {
+            if pr.carrier == 0 {
+                return true;
+            }
+            match at.get(&pr.uid) {
+                Some(&(pos, id, new)) => {
+                    if !drop && !new {
+                        pr.pos = pos;
+                        pr.carrier = id;
+                    }
+                    true
+                }
+                None => false,
+            }
+        });
     }
 
     /// EmitOnPop.PreDegrade (VERIFIED-DISASM @0x100bcd0): its projectiles from where the bloon
@@ -8338,6 +8422,7 @@ impl Game {
                 mirror: self.towers.iter().find(|t| t.id == owner).is_some_and(|t| t.flip),
                 hit: HitSet::default(),
                 clear_hits_next: false,
+                carrier: 0,
                 tiers,
                 owner,
                 target: None,
@@ -8507,6 +8592,7 @@ impl Game {
         let mut exhausted = Vec::new();
         let mut subs = Vec::new();
         let mut contacts = Vec::new();
+        self.carry_follow(true);
         self.grid.build(&self.bloons, lo, hi);
         if self.has_grid_rank {
             let (rank, pre, single) = (&self.path_rank, &self.grid_rank_pre, self.tracks.len() == 1);
@@ -8876,6 +8962,7 @@ impl Game {
                     // INFERRED: a target-less one takes any (ignoreFirstCheck, pierce 1 here).
                     || (pr.spec.only_target && !pr.spec.instant && pr.target.is_some_and(|t| t != b.id))
                     || b.hit_by(&pr.hit)
+                    || pr.carrier == b.id
                     // Projectile.IsCollisionValid (VERIFIED-DISASM @0xcac350): with
                     // canCollisionBeBlockedByMapLos, Map.IsTargetLineClear from the shot to the
                     // bloon (recording bomb_100: a blast misses a Yellow behind the entrance trees).
@@ -9024,18 +9111,27 @@ impl Game {
                     }
                     // HYPOTHESIS P-REMOVEMUT: a key removes effects whose mutator id contains it;
                     // "Ice" also covers freezes and "Glue" glue slows whatever their id.
+                    let had: Vec<String> = if spec.remove_effects.is_empty() { Vec::new() } else { self.bloons[i].effects.iter().map(|e| e.id.clone()).collect() };
                     if !spec.remove_effects.is_empty() {
                         let keys = spec.remove_effects.clone();
                         self.bloons[i].effects.retain(|e| {
                             !keys.iter().any(|k| {
-                                e.id.contains(k.as_str())
+                                k.strip_prefix('=').map_or_else(|| e.id.contains(k.as_str()), |x| e.id == x)
                                     || (k == "Ice" && matches!(e.kind, EffectKind::Freeze))
                                     || (k == "Glue" && matches!(e.kind, EffectKind::Slow { glue: 1.., .. }))
                             })
                         });
                     }
                     if !self.projectiles[p].spec.effects.is_empty() {
-                        let (spec, owner) = (self.projectiles[p].spec.clone(), self.projectiles[p].owner);
+                        let (mut spec, owner) = (self.projectiles[p].spec.clone(), self.projectiles[p].owner);
+                        // RemoveMutatorsFromBloon (pass -50) takes a mutator off by the bloon's
+                        // next Process: an isUnique one the hit puts on again finds it still there
+                        // and isn't added (recording ice_004: a second Cryo blast on an Icicles
+                        // MOAB leaves it without icicles).
+                        let gone: Vec<String> = had.iter().filter(|id| spec.remove_effects.iter().any(|k| k.strip_prefix('=') == Some(id.as_str()))).cloned().collect();
+                        if !gone.is_empty() {
+                            spec.effects.retain(|e| !gone.contains(&e.id));
+                        }
                         self.apply_effects(i, &spec, owner, dmg, false);
                     }
                     // HYPOTHESIS P-LEADGOLD: Lead to Gold pays its flat amount when a hit pops a
@@ -9400,6 +9496,7 @@ impl Game {
                 i += 1;
             }
         }
+        self.carry_follow(false);
         // CreateSoundOnBloonLeak (OnLivesLost): the hero's line, at most every 2400 frames.
         if leak_voice {
             self.hero_voice(|s| &s.leak, "HeroLeak", 2400);

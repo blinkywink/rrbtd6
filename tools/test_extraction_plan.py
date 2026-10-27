@@ -38,6 +38,25 @@ def fixture(root, data):
 
 
 class PlanTests(unittest.TestCase):
+    def test_sprite_atlases_are_exported_once_and_late_animations_are_compacted(self):
+        ctx = Context(Path("fixture"))
+        ctx.root = Path("fixture-install")
+        driver.sprites(ctx)
+        self.assertEqual([call for call in ctx.calls if call[0].endswith("export_sprites.py")],
+                         [("tools/assets/export_sprites.py", "game-fixture", str(ctx.out / "sprites"))])
+        ctx.calls.clear()
+        driver.finish(ctx)
+        self.assertEqual(ctx.calls[0], ("tools/assets/compact_anims.py", str(ctx.out / "models")))
+        self.assertEqual(driver.STEPS[-1], driver.finish)
+        self.assertGreater(driver.STEP_VERSIONS["finish"], 1)
+
+    def test_new_menus_and_daily_chest_hit_volume_are_in_the_launcher_recipe(self):
+        ctx = Context(Path("fixture"))
+        driver.menu_additions(ctx)
+        self.assertTrue(any("DailyRewardUI.unity=DailyRewardUI" in arg for call in ctx.calls for arg in call))
+        self.assertTrue(any("JukeboxTrack" in arg for call in ctx.calls for arg in call))
+        self.assertEqual(ctx.calls[-1][0], "tools/assets/export_home_buttons.py")
+
     def test_whitespace_in_native_prefab_name_indexes_the_exported_directory(self):
         with tempfile.TemporaryDirectory(prefix="rrbtd6-plan-test-") as folder:
             root = Path(folder)
@@ -128,6 +147,71 @@ class PlanTests(unittest.TestCase):
                 patch("subprocess.run", return_value=failed), redirect_stdout(io.StringIO()):
             with self.assertRaises(subprocess.CalledProcessError):
                 runpy.run_path(str(TOOLS / "assets/export_tower_assets.py"), run_name="__main__")
+
+
+class CacheCleanupTests(unittest.TestCase):
+    def test_busy_cache_does_not_turn_successful_extraction_into_failure(self):
+        with tempfile.TemporaryDirectory(prefix="rrbtd6-cache-test-") as folder:
+            root = Path(folder)
+            (root / "_bundle_cache").mkdir()
+            (root / "_bundle_cache/file").write_bytes(b"busy")
+            with patch.object(driver.shutil, "rmtree", side_effect=PermissionError("scanner lock")):
+                self.assertEqual(driver.cleanup_bundle_cache(Context(root)), 0)
+            self.assertEqual((root / "_bundle_cache/file").read_bytes(), b"busy")
+
+    def test_cleanup_removes_only_the_disposable_cache_and_preserves_runtime_and_settings(self):
+        with tempfile.TemporaryDirectory(prefix="rrbtd6-cache-test-") as folder:
+            root = Path(folder)
+            cache = root / "_bundle_cache/bundle"
+            cache.mkdir(parents=True)
+            (cache / "CAB-test").write_bytes(b"disposable")
+            (cache / ".complete").write_bytes(b"")
+            (root / "settings.json").write_text("settings")
+            (root / "runtime.bin").write_bytes(b"keep")
+            ctx = Context(root)
+            self.assertEqual(driver.cleanup_bundle_cache(ctx), len(b"disposable"))
+            self.assertFalse((root / "_bundle_cache").exists())
+            self.assertEqual((root / "settings.json").read_text(), "settings")
+            self.assertEqual((root / "runtime.bin").read_bytes(), b"keep")
+            self.assertEqual(driver.cleanup_bundle_cache(ctx), 0)
+
+    def test_linked_cache_and_nested_link_are_refused_before_deletion(self):
+        with tempfile.TemporaryDirectory(prefix="rrbtd6-cache-test-") as folder:
+            root = Path(folder)
+            cache = root / "_bundle_cache"
+            cache.mkdir()
+            (cache / "keep").write_bytes(b"keep")
+            ctx = Context(root)
+            with patch.object(driver.Path, "is_symlink", return_value=True):
+                self.assertEqual(driver.cleanup_bundle_cache(ctx), 0)
+            self.assertTrue((cache / "keep").exists())
+            original = driver.Path.is_symlink
+            with patch.object(driver.Path, "is_symlink", lambda path: path.name == "keep" or original(path)):
+                self.assertEqual(driver.cleanup_bundle_cache(ctx), 0)
+            self.assertTrue((cache / "keep").exists())
+
+    def test_full_success_cleans_cache_but_partial_failed_and_developer_runs_keep_it(self):
+        def successful(ctx): pass
+        def failure(ctx): raise RuntimeError("export interrupted")
+        for extra, fail, cleans in [([], False, True), (["--only", "successful"], False, False),
+                                     (["--keep-bundle-cache"], False, False), ([], True, False)]:
+            with self.subTest(extra=extra, fail=fail), tempfile.TemporaryDirectory(prefix="rrbtd6-cache-plan-") as folder:
+                root = Path(folder)
+                game = root / "game"
+                game.mkdir()
+                (game / "GameAssembly.dll").write_bytes(b"fixture")
+                steps = [successful, failure] if fail else [successful]
+                with patch.object(sys, "argv", ["extract_all.py", "--game", str(game), "--root", str(root), *extra]), \
+                     patch.object(driver, "install_hook"), patch.object(driver, "fingerprint", return_value="fixture"), \
+                     patch.object(driver, "STEPS", steps), \
+                     patch.object(driver, "STEP_VERSIONS", {step.__name__: 1 for step in steps}), \
+                     patch.object(driver, "cleanup_bundle_cache") as cleanup, redirect_stdout(io.StringIO()):
+                    if fail:
+                        with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                            driver.main()
+                    else:
+                        driver.main()
+                    self.assertEqual(cleanup.called, cleans)
 
 
 if __name__ == "__main__":

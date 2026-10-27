@@ -393,6 +393,14 @@ def main():
                                     "projectile": projectile(deref(df["projectile"]), depth + 1),
                                     "emission": emission(deref(df.get("emission"))),
                                     "dont_copy": bool(sf.get("dontCopy", False))})
+                # CarryProjectileModel (Ice Icicles): the bloon carries its projectile, which
+                # sits where the bloon is and goes with the mutator.
+                if d and d["type"] == "CarryProjectileModel" and depth < 3 and deref(d["f"].get("projectile")):
+                    df = d["f"]
+                    effects.append({"kind": "carry", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
+                                    "layers": sf.get("layers", 1),
+                                    "projectile": projectile(deref(df["projectile"]), depth + 1),
+                                    "emission": emission(deref(df.get("emission")))})
                 if d and d["type"] == "ProjectileOverTimeModel" and depth < 3:
                     df = d["f"]
                     effects.append({"kind": "emit", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
@@ -634,8 +642,11 @@ def main():
                 out["cash_on_pop"] = {"amount": gold["flatCashAmount"], "tag": tag}
         if pb.get("RefreshPierceModel"):
             out["refresh_pierce"] = pb["RefreshPierceModel"][0]["f"]["interval"]
+        # RemoveMutatorsFromBloonModel: by key (contained in the id), and by mutatorIds ("=id",
+        # the whole id: Icicles, the Bloon Solver).
         out["remove_effects"] = [k.strip() for r in pb.get("RemoveMutatorsFromBloonModel", [])
-                                 for k in (r["f"].get("key") or "").split(",") if k.strip()]
+                                 for k in (r["f"].get("key") or "").split(",") if k.strip()] +                                 ["=" + k.strip() for r in pb.get("RemoveMutatorsFromBloonModel", [])
+                                 for k in (r["f"].get("mutatorIds") or "").split(",") if k.strip()]
         if depth < 3 and pb.get("CreateProjectileOnIntervalModel"):
             cf = pb["CreateProjectileOnIntervalModel"][0]["f"]
             out["on_interval"] = {"frames": cf["intervalFrames"], "range": cf.get("range", 0.0),

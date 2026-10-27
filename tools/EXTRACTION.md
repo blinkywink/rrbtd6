@@ -54,3 +54,29 @@ exporters. The separate tier-index repair reuses existing animation bakes rather
 than invalidating/re-exporting the base models and projectiles. The embedded map
 export produced byte-identical map JSON and terrain PNG to the clean-install
 export. Bootstrap/recovery verification is documented in `launcher/README.md`.
+
+## Disk use and setup work
+
+Successful full extraction now removes only `local_extracted/_bundle_cache`,
+the regenerable decompressed UnityFS staging data. Interrupted runs and `--only`
+runs retain it for resumption. Use `--keep-bundle-cache` for repeated exporter
+development. Cleanup validates the resolved output path and refuses symbolic
+links/junctions before deleting anything; runtime assets and settings are kept.
+An unsuccessful cleanup is retried on the next normal full check.
+
+The sprite step exports each atlas once instead of first exporting four gameplay
+atlases and then overwriting those outputs in the all-atlas pass. The final step
+also applies the existing animation compactor to models exported by the later
+startup/home steps. The earlier compaction remains to limit peak setup space.
+No clips or animation frames are removed and no new texture downscaling is added.
+The new `menu_additions` step brings the daily chest and jukebox assets to existing
+installs without invalidating their map/tower bakes.
+
+Local audit (2026-10-27): the working cache contained 5,678,944,899 bytes (5.68 GB),
+which would be reclaimable by successful cleanup; the live development cache was
+left intact. Replaying the removed atlas pass into a separate empty output took
+4.04 s using the installed Python and an existing bundle cache; all 509 resulting
+files matched the development exports byte-for-byte. A copy of one late
+home model compacted from 6,025,344 to 2,510,560 bytes in 0.037 s, preserving its
+clip metadata and mesh parts. These are component checks, not a complete new
+clean-install benchmark or a guaranteed saving on every game version.

@@ -83,6 +83,7 @@ impl Game{
                     EffectKind::Trance{centre,radius,angle,rate}=>{feed!(h,9u8,centre,radius,angle,rate);},EffectKind::Cooldown=>10u8.feed(h),
                     EffectKind::Unarmor{bits}=>{feed!(h,11u8,bits);},
                     EffectKind::Knock{m}=>{feed!(h,12u8,m.to_bits());},
+                    EffectKind::Carry{uids,..}=>{feed!(h,14u8,uids);},
                 }
             }
         }

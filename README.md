@@ -16,7 +16,10 @@ Not affiliated with or endorsed by Ninja Kiwi.
    and put it in BTD6's `Mods` folder.
 3. Start BTD6. At the main menu it offers to install rrbtd6: pick a folder.
 4. The launcher (`rrbtd6-launcher.exe`, also on your desktop) downloads the game, sets up a private
-   Python, extracts the art and data from your BTD6 install (first run: long, ~25 GB) and starts it.
+   Python, extracts the art and data from your BTD6 install and starts it. For the first setup,
+   allow about 35 GB free (excluding BTD6) and set aside an hour or more; some PCs take several
+   hours. These are planning estimates, not measured requirements. Temporary bundle caches
+   are removed after a successful full extraction, so peak setup space exceeds the final size.
    Start rrbtd6 from the launcher from then on: it updates itself and the game every time, and
    re-extracts after BTD6 updates.
 
@@ -30,6 +33,7 @@ Ninja Kiwi, and never change BTD6, your save or your account.
 - `coop/` – peer-to-peer co-op
 - `tools/` – asset extraction from a local BTD6 install, research helpers
 - `research/` – notes on the original game's formats and behaviour
+- `website/` – static rusttd6.com landing page; [Vercel setup](website/README.md)
 
 ## Building (developers)
 
@@ -37,4 +41,4 @@ Ninja Kiwi, and never change BTD6, your save or your account.
 2. Extract the game data from your install: `BTD6_DIR="<BTD6 folder>" sh tools/build_local_assets.sh`
 3. Build and run: `sh tools/build_exe.sh`, then `BTD6.exe`.
 
-A one-click installer (a BTD6 mod that installs and auto-updates the game) is in progress.
+A Windows installer mod and auto-updating launcher are included in the latest releases.

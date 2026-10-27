@@ -13,6 +13,7 @@ import glob
 import hashlib
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -139,7 +140,8 @@ def catalogs(c):
 
 
 def sprites(c):
-    c.py("tools/assets/export_sprites.py", c.game, c.out / "sprites", "Bloons", "MonkeyIcons", "UiBloonIcons", "IngameUi")
+    # The full export includes the gameplay atlases. Exporting those first decoded and
+    # wrote the exact same sprites twice on every fresh installation.
     c.py("tools/assets/export_sprites.py", c.game, c.out / "sprites")
     c.py("tools/assets/export_font.py", c.game, "localization_assets_all", "Btd6FontTitleSDF", "Luckiest Guy", c.out / "fonts/title")
     c.py("tools/assets/export_font.py", c.game, "localization_assets_all", "Btd6FontBodySDF", "Source Sans Pro", c.out / "fonts/body")
@@ -359,7 +361,7 @@ def startup(c):
 def home(c):
     c.py("tools/assets/export_model.py", c.game, c.out / "models/mainmenu", "scene", "ui_scenes_all_",
          "cab:CAB-613509f63417784aa3960cd4dc66a279")
-    for s in ["export_home_animations", "export_home_vegetation", "export_home_interactions", "export_home_buttons"]:
+    for s in ["export_home_animations", "export_home_vegetation", "export_home_interactions"]:
         c.py(f"tools/assets/{s}.py", c.game, c.out)
     c.py("tools/assets/export_home_events.py", c.game, c.out)
 
@@ -369,13 +371,29 @@ def social(c):
     c.py("tools/assets/export_event_ui.py", c.game, c.out)
 
 
+def menu_additions(c):
+    """New menu assets without invalidating already completed map/tower bakes."""
+    c.py("tools/assets/dump_ui_prefab.py", c.game, c.out / "ui/prefabs",
+         "scenefile:Assets/UI - New/Scenes/DailyRewardUI.unity=DailyRewardUI",
+         "scenefile:Assets/UI - New/Scenes/JukeboxUI.unity=JukeboxUI",
+         "field:JukeboxScreen/JukeBoxScreen.trackItemPrefab=JukeboxTrack",
+         "Assets/UI - New/Prefabs/Store/Loot/MediumBaseLootItem.prefab",
+         "Assets/UI - New/Prefabs/Store/Loot/MediumInstaTowerLootItem.prefab")
+    c.py("tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", "DailyRewardUI", "JukeboxUI")
+    c.py("tools/assets/export_menu_chrome.py", c.game, c.out)
+    c.py("tools/assets/export_home_buttons.py", c.game, c.out)
+
+
 def finish(c):
+    # Home/startup models are exported after bloon_models' earlier compaction pass.
+    # Keep that earlier pass to bound peak disk usage; finish compresses late models too.
+    c.py("tools/assets/compact_anims.py", c.out / "models")
     c.py("tools/assets/patch_tmp_gradients.py", c.game, c.root)
     c.py("tools/assets/rebuild_shader_glsl.py", c.out)
 
 
 STEPS = [metadata, sim_model, cab_index, catalogs, container_index, rounds_maps, sprites, mapset, tower_models, misc_art, upgrade_art,
-         ingame_ui, core_menus, game_data, extended_towers, tower_indices, particles, audio, bloon_models, frontend, startup, home, social, finish]
+         ingame_ui, core_menus, game_data, extended_towers, tower_indices, particles, audio, bloon_models, frontend, startup, home, social, menu_additions, finish]
 
 
 def install_hook(root):
@@ -412,6 +430,40 @@ def load_state(path, fp):
 STEP_VERSIONS = {s.__name__: 1 for s in STEPS}
 # startup 2: the splash and initial loading screens' sprites.
 STEP_VERSIONS["startup"] = 3
+STEP_VERSIONS["finish"] = 2
+
+
+def cleanup_bundle_cache(c):
+    """Remove only this install's regenerable decompression cache, after success.
+
+    Preserve caches on interrupted/partial runs. Refuse links/junctions, including
+    nested ones, before removing anything. Never follow a path outside the output.
+    """
+    cache = c.out / "_bundle_cache"
+    if not cache.exists():
+        return 0
+    is_link = lambda path: path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+    base = c.out.resolve()
+    if is_link(c.out) or is_link(cache) or cache.resolve().parent != base or cache.resolve().name != "_bundle_cache":
+        print("== retaining bundle cache: unexpected linked cache path", flush=True)
+        return 0
+    try:
+        size = 0
+        for directory, folders, files in os.walk(cache, followlinks=False):
+            for name in folders + files:
+                entry = Path(directory) / name
+                if is_link(entry):
+                    print("== retaining bundle cache: linked cache entry", flush=True)
+                    return 0
+            for name in files:
+                size += (Path(directory) / name).stat().st_size
+        shutil.rmtree(cache)
+    except OSError as error:
+        # A virus scanner may temporarily hold a cached file. Extraction itself succeeded.
+        print(f"== bundle cache cleanup deferred ({type(error).__name__}); next full run will retry", flush=True)
+        return 0
+    print(f"== removed {size / 1e9:.2f} GB of temporary bundle data", flush=True)
+    return size
 
 
 def fingerprint(c):
@@ -428,6 +480,7 @@ def main():
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]), help="folder holding tools/")
     ap.add_argument("--only", nargs="*", help="run just these steps")
     ap.add_argument("--force", action="store_true", help="ignore recorded progress")
+    ap.add_argument("--keep-bundle-cache", action="store_true", help="retain temporary decompressed bundles for exporter development")
     args = ap.parse_args()
     c = Ctx(args.game, args.root)
     if not (c.game / "GameAssembly.dll").exists():
@@ -454,6 +507,8 @@ def main():
         print(f"== {name}: {time.time() - began:.0f}s", flush=True)
         state["done"][name] = STEP_VERSIONS[name]
         atomic_write(state_file, json.dumps(state))
+    if not args.only and not args.keep_bundle_cache:
+        cleanup_bundle_cache(c)
     print("extraction complete", flush=True)
 
 
