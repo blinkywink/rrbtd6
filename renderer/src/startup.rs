@@ -358,12 +358,14 @@ pub(crate) struct Startup {
     root: std::path::PathBuf,
     version: String,
     player: Option<String>,
+    progress: Option<(usize, &'static str)>,
+    loaded: bool,
 }
 
 impl Startup {
     pub(crate) fn new(root: &Path, version: String, player: Option<String>) -> Self {
         let stage = Scene::load(root, "NinjaKiwiSplashUI", Some("Canvas")).map(|s| Stage::Splash(s, get_time()));
-        let mut s = Self { stage, root: root.to_path_buf(), version, player };
+        let mut s = Self { stage, root: root.to_path_buf(), version, player, progress: None, loaded: false };
         if s.stage.is_none() { s.next_initial(); }
         s
     }
@@ -384,6 +386,55 @@ impl Startup {
 
     fn next_title(&mut self) {
         self.stage = Title::load(&self.root, &self.version, self.player.as_deref()).map(|t| Stage::Title(Box::new(t)));
+    }
+
+    /// Poll real loading work between presentations so the original plane keeps animating.
+    pub(crate) async fn task<F: std::future::Future>(&mut self, hud: &mut Hud, step: usize, label: &'static str, cap: u32, work: F) -> F::Output {
+        let started = std::time::Instant::now();
+        let interval = std::time::Duration::from_secs_f64(1.0 / if cap == 0 { 120 } else { cap.min(120) } as f64);
+        self.progress = Some((step, label));
+        // Play the splash before starting the jobs represented by the loading screen.
+        while matches!(self.stage, Some(Stage::Splash(..))) {
+            let began = std::time::Instant::now();
+            self.draw(hud);
+            let remaining = interval.saturating_sub(began.elapsed());
+            if !remaining.is_zero() { std::thread::sleep(remaining); }
+            next_frame().await;
+        }
+        let mut work = std::pin::pin!(work);
+        let mut result = None;
+        let mut visible_frames = 0;
+        loop {
+            let began = std::time::Instant::now();
+            self.draw(hud);
+            if let Ok(folder) = std::env::var("RRBTD6_STARTUP_PROGRESS_OUT") {
+                let path = std::path::PathBuf::from(folder).join(format!("step-{step}.png"));
+                if !path.exists() { get_screen_data().export_png(path.to_str().unwrap()); }
+            }
+            // The native opening scales the status text from zero. Count the
+            // five requested frames only after the status is fully visible.
+            let visible = match &self.stage {
+                Some(Stage::Initial(scene, began, _)) => get_time() - *began >= scene.clip_length("InitialLoadingScene", "InitialLoadingOpen") as f64,
+                _ => true,
+            };
+            // Present each status before polling: even a cached job can complete immediately.
+            next_frame().await;
+            if visible { visible_frames += 1; }
+            if result.is_none() {
+                if let std::task::Poll::Ready(value) = work.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+                    result = Some(value);
+                }
+            }
+            if visible_frames >= 5 && result.is_some() {
+                if std::env::var_os("RRBTD6_TIMING").is_some() {
+                    eprintln!("startup: step {step}/8 completed ({label}) in {:.1} ms, {visible_frames} visible frames", started.elapsed().as_secs_f64() * 1000.0);
+                }
+                if step == 8 { self.loaded = true; }
+                return result.take().unwrap();
+            }
+            let remaining = interval.saturating_sub(began.elapsed());
+            if !remaining.is_zero() { std::thread::sleep(remaining); }
+        }
     }
 
     /// The title music should play (at this volume factor), or None.
@@ -420,9 +471,13 @@ impl Startup {
                 s.play("LoadingCloudPuff", "LoadingCloudPuff", t, true);
                 s.play("LoadingPlaneSprites", "LoadingPlaneSprites", t, true);
                 s.play("LoadingPlaneSprites", "LoadingPlaneBob", t, true);
+                if let Some((step, label)) = self.progress {
+                    let base = "Canvas/ScreenBoxer/InitialLoadingScreen";
+                    s.node.set_text(&format!("{base}/MainText"), label);
+                    s.node.set_text(&format!("{base}/SubText"), &format!("Step {step} of 8..."));
+                }
                 s.draw(hud);
-                // Everything is already on disk: close right after the open animation and a beat.
-                if closing.is_none() && t >= open + 1.0 { *closing = Some(now); }
+                if closing.is_none() && self.loaded && t >= open { *closing = Some(now); }
                 let close = s.clip_length("InitialLoadingScene", "InitialLoadingClose");
                 if closing.is_some_and(|c| now - c >= close as f64) { self.next_title(); }
             }

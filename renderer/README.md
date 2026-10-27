@@ -679,3 +679,20 @@ existing independent pacing.
 preferences. `--fps-cap 0` is the uncapped control. The independent, ignored
 `frame_pacer::tests::benchmark_limiter` models a presentation delay and reports
 limiter timings; it does not measure game rendering speed.
+
+## Startup loading
+
+The initial plane screen now runs eight real loading jobs before the title: sprite
+decoding, map geometry, the initial tower mesh and animation, pop textures, the
+two cursor textures, and home-world geometry. It draws the original MainText and
+SubText nodes with the native English loading messages and `Step X of 8...`. CPU
+sprite decoding runs on a worker; asset futures yield to the animated loading
+screen. Existing lazy tower/round loading is preserved. The original open/close
+animations play, with no fixed 12-second idle hold after the jobs finish. Each
+step stays visible for at least five presented frames after the text finishes
+opening; slower jobs keep animating until their work completes.
+
+`RRBTD6_STARTUP=1` also forces the front end for an autotest. With
+`RRBTD6_TIMING=1`, each completed startup job is logged. Set
+`RRBTD6_STARTUP_PROGRESS_OUT` to an existing directory to capture each stage's
+first presentation; normal launches perform no screenshot readbacks.

@@ -827,13 +827,17 @@ impl FrontEnd {
         (0..self.list.len()).filter(|&i| self.list[i].0.difficulty == self.tier).collect()
     }
 
-    /// Draws the island behind the menus (MainMenuWorld's camera: perspective, 27 degrees,
-    /// at (0, -510, -726) pitched 19.2 degrees down).
-    async fn draw_world(&mut self) {
+    pub(crate) async fn prepare_home(&mut self) {
         if !self.world_tried {
             self.world_tried = true;
             self.world = crate::render3d::Model::load(&self.root.join("models").join("mainmenu")).await;
         }
+    }
+
+    /// Draws the island behind the menus (MainMenuWorld's camera: perspective, 27 degrees,
+    /// at (0, -510, -726) pitched 19.2 degrees down).
+    async fn draw_world(&mut self) {
+        self.prepare_home().await;
         clear_background(Color::from_rgba(120, 196, 236, 255));
         let Some(w) = &mut self.world else { return };
         self.world_motion.update(&self.root, w);

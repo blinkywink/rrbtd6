@@ -422,6 +422,25 @@ async fn game_main() {
         audio.set_music_volume(audio::DEFAULT_MUSIC * v[0]);
     }
 
+    let mut adv = advanced::Advanced::load(&read_settings(&root));
+    render3d::FULL_TEXTURES.store(adv.full_textures, std::sync::atomic::Ordering::Relaxed);
+    mark("hud");
+    let mut hud = Hud::load(&root, &game).await;
+    let startup_test = std::env::var_os("RRBTD6_STARTUP").is_some();
+    let mut startup = ((std::env::var_os("RRBTD6_FRONT").is_none() && std::env::var_os("RRBTD6_AUTOTEST").is_none() && !adv.skip_startup) || startup_test).then(|| {
+        let version = std::fs::read_to_string(root.join("game_version.json")).ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v["display"].as_str().map(str::to_owned)).unwrap_or_default();
+        startup::Startup::new(&root, version, None)
+    });
+    macro_rules! boot {
+        ($step:expr, $label:expr, $work:expr) => {{
+            if let (Some(screen), Some(h)) = (startup.as_mut(), hud.as_mut()) {
+                screen.task(h, $step, $label, adv.fps_cap, $work).await
+            } else { $work.await }
+        }};
+    }
+
     mark("terrain");
     // Bloon sprites (shared ones once) and shop icons, decoded in parallel.
     let sprites: Vec<Option<String>> = game.defs.iter().map(|d| d.display.first().map(|l| l.png.trim_end_matches(".png").to_string()).or(d.sprite.clone())).collect();
@@ -431,7 +450,8 @@ async fn game_main() {
     let sprite_path = |s: &str| if s.starts_with("bloon_displays/") { root.join(format!("{s}.png")) } else { root.join("sprites").join(format!("{s}.png")) };
     let mut paths: Vec<PathBuf> = uniq.iter().map(|s| sprite_path(s)).collect();
     paths.extend(game.tower_defs.iter().map(|(_, d)| root.join("sprites").join("MonkeyIcons").join(format!("{}.png", d.icon))));
-    let images = render3d::decode_batch(&paths);
+    let decode_paths = paths.clone();
+    let images = boot!(1, "Inflating Bloons...", load_work::spawn(move || render3d::decode_batch(&decode_paths)));
     // Every bloon sprite in one atlas: a crowd of mixed bloons stays one batch in painter's
     // order (separate textures broke it into thousands of draw calls).
     let atlas = render3d::build_atlas(&images[..uniq.len()].iter().map(Option::as_ref).collect::<Vec<_>>());
@@ -467,7 +487,7 @@ async fn game_main() {
     if std::env::var_os("RRBTD6_TIMING").is_some(){eprintln!("sprite-storage: decoded {} MiB, retained {} MiB",decoded_sprite_bytes/1048576,if legacy_sprite_storage{decoded_sprite_bytes/1048576}else{0});}
 
     mark("map model");
-    let mut map_model = render3d::Model::load(&root.join("models").join(format!("map_{map_key}"))).await;
+    let mut map_model = boot!(2, "Trimming the Gardens...", render3d::Model::load(&root.join("models").join(format!("map_{map_key}"))));
     if map_model.is_none() {
         eprintln!("map model for {map_key} failed to load");
     }
@@ -558,7 +578,10 @@ async fn game_main() {
         }};
     }
     if let Some(d) = game.tower_defs.iter().position(|(n, _)| n == "DartMonkey") {
-        ensure_tower!(d);
+        models_loaded[d] = true;
+        let dir = root.join("models").join(&game.tower_defs[d].0);
+        tower_models[d] = boot!(3, "Training Monkeys...", render3d::Model::load(&dir));
+        tower_anims[d] = boot!(4, "Preparing Darts...", anim::AnimModel::load(&dir));
     }
     let dart = game
         .tower_defs
@@ -643,6 +666,7 @@ async fn game_main() {
     let pop_dir = root.join("effects").join("pop");
     mark("pops");
     let pop_meta: Option<serde_json::Value> = std::fs::read_to_string(pop_dir.join("effect.json")).ok().and_then(|s| serde_json::from_str(&s).ok());
+    let pop_frames = boot!(5, "Collecting Bananas...", async {
     let mut pop_frames: Vec<(Texture2D, f32, f32)> = Vec::new();
     if let Some(pm) = &pop_meta {
         for f in pm["frames"].as_array().cloned().unwrap_or_default() {
@@ -651,6 +675,8 @@ async fn game_main() {
             }
         }
     }
+    pop_frames
+    });
     let pop_fps = pop_meta.as_ref().and_then(|m| m["fps"].as_f64()).unwrap_or(24.0) as f32;
     let pop_life = pop_meta.as_ref().and_then(|m| m["lifespan"].as_f64()).unwrap_or(0.17) as f32;
     // TUNED (player report: pops looked too big next to the game's): the prefab's own size
@@ -687,13 +713,12 @@ async fn game_main() {
     let mut proj_fx_live: std::collections::HashSet<u64> = std::collections::HashSet::new();
     /// Tags of projectile effects, apart from tower ids.
     const PROJ_FX_TAG: u64 = 1 << 62;
-    let cursor_up = tex(root.join("ui").join("HandCursor.png")).await;
-    let cursor_down = tex(root.join("ui").join("HandCursorDown.png")).await;
+    let cursor_up = boot!(6, "Waking the Sun God...", tex(root.join("ui").join("HandCursor.png")));
+    let cursor_down = boot!(7, "Summoning Heroes...", tex(root.join("ui").join("HandCursorDown.png")));
     if cursor_up.is_some() && cursor_down.is_some() {
         show_mouse(false);
     }
-    mark("hud");
-    let mut hud = Hud::load(&root, &game).await;
+
     if let (Some(h), Some(v)) = (hud.as_mut(), saved_volumes) {
         h.menus.volumes = v;
     }
@@ -759,6 +784,9 @@ async fn game_main() {
     let mut pause_options_test=if std::env::var_os("RRBTD6_AUTOTEST").is_some(){std::env::var("RRBTD6_PAUSE_OPTIONS").ok()}else{None};
     let mut options_back_test=if std::env::var_os("RRBTD6_AUTOTEST").is_some(){std::env::var("RRBTD6_OPTIONS_BACK_FRAME").ok().and_then(|s|s.parse::<u32>().ok())}else{None};
     let mut front = frontend::FrontEnd::new(&root);
+    if startup.is_some() {
+        boot!(8, "Trimming the Gardens...", front.prepare_home());
+    }
     let front_shot = std::env::var("RRBTD6_FRONT").ok();
     front.screen = match front_shot.as_deref() {
         Some("maps") => frontend::Screen::Maps,
@@ -773,26 +801,15 @@ async fn game_main() {
         Some(name) => frontend::MenuPage::from_name(name).map(frontend::Screen::Menu).unwrap_or(frontend::Screen::Main),
         _ => frontend::Screen::Main,
     };
-    let mut in_front = std::env::var("RRBTD6_AUTOTEST").is_err() || front_shot.is_some();
+    let mut in_front = std::env::var("RRBTD6_AUTOTEST").is_err() || front_shot.is_some() || startup_test;
     if let Some(v) = saved_volumes {
         front.sliders[..3].copy_from_slice(&v);
     }
     // Advanced settings (FPS limit / counter, render scale) and the 3D view's offscreen target.
-    let mut adv = advanced::Advanced::load(&read_settings(&root));
-    render3d::FULL_TEXTURES.store(adv.full_textures, std::sync::atomic::Ordering::Relaxed);
+
     front.adv = adv.clone();
     let mut binds = keybinds::Keybinds::load(&read_settings(&root));
     front.binds = binds.clone();
-    // The original startup sequence (splash, loading, title) before the main menu, unless
-    // Advanced > Skip Startup Screen (DEVIATIONS.md 3) or a test asked for a screen.
-    // (RRBTD6_STARTUP=1 shows it in an autotest, for a startup screenshot.)
-    let startup_test = std::env::var_os("RRBTD6_STARTUP").is_some();
-    let mut startup = ((in_front && front_shot.is_none() && std::env::var_os("RRBTD6_AUTOTEST").is_none() && !adv.skip_startup) || startup_test).then(|| {
-        let version = std::fs::read_to_string(root.join("game_version.json")).ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|v| v["display"].as_str().map(str::to_owned)).unwrap_or_default();
-        startup::Startup::new(&root, version, None)
-    });
     let mut view_rt: Option<(RenderTarget, u32, u32)> = None;
     let mut frame_t0 = std::time::Instant::now();
     let mut frame_pacer = frame_pacer::FramePacer::default();
@@ -1105,6 +1122,7 @@ async fn game_main() {
                     startup = None;
                     audio.set_music_volume(full);
                 }
+                draw_cursor(&cursor_up, &cursor_down);
                 if let (true, Some(path)) = (startup_test, &autotest) {
                     frames += 1;
                     if frames >= std::env::var("RRBTD6_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(420) {

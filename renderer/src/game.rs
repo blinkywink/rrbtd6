@@ -5101,7 +5101,10 @@ impl Game {
         }
         // The pop happened before this frame's movement (Simulation.Simulate checks collisions
         // first): children start from where the parent was then and move at their own speed.
-        let (mut start_dist, mut moved, mult, parent_tm, parent_fresh) = (b.prev_dist, b.dist != b.prev_dist, b.mult, b.track_mult, b.fresh);
+        // (Moved: this frame's movement is done. Before it, a distance change is a push, not a
+        // move; recording boomerang_024: a MOAB Press shot pushes a MOAB back and pops it, and its
+        // first Ceramic moves one step that frame, not two.)
+        let (mut start_dist, mut moved, mult, parent_tm, parent_fresh) = (b.prev_dist, self.phase >= 2 && b.dist != b.prev_dist, b.mult, b.track_mult, b.fresh);
         // A pop in the bloon's own Process after its Move (DamageOverTime): children start from
         // where it is now, the first (the bloon itself) having moved already (recording
         // boomerang_500: the MOAB's DoT pop leaves Ceramics at 213.08 back by 6.675 each).
