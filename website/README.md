@@ -1,8 +1,9 @@
 # rusttd6.com
 
 Buildless static landing page. Uses the project logo from assets/brand/title_logo.png,
-a white/purple palette, and self-hosted Luckiest Guy (Apache 2.0; license in
-public/fonts/LuckiestGuy-LICENSE.txt). No JavaScript, analytics, or extracted game assets.
+a charcoal/purple palette, and self-hosted Luckiest Guy for headings and Inter
+for small text. Font licenses: public/fonts/LuckiestGuy-LICENSE.txt (Apache 2.0)
+and public/fonts/Inter-OFL.txt (SIL OFL). No JavaScript, analytics, or extracted game assets.
 
 ## Vercel
 

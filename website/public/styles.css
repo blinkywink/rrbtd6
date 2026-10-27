@@ -1,39 +1,46 @@
 @font-face {
+  font-family: Inter;
+  src: url("/fonts/Inter.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
   font-family: "Luckiest Guy";
   src: url("/fonts/LuckiestGuy-Regular.ttf") format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
-:root { color: #242438; background: #fff; font-family: "Segoe UI", Arial, sans-serif; font-synthesis: none; }
+:root { color: #f2f0f7; background: #141319; color-scheme: dark; font-family: Inter, Arial, sans-serif; font-synthesis: none; }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100svh; display: flex; flex-direction: column; }
-a { color: #6b35c8; text-underline-offset: 3px; }
-a:focus-visible, summary:focus-visible { outline: 3px solid #8b51eb; outline-offset: 5px; }
-main { width: min(440px, calc(100% - 40px)); margin: auto; padding: 64px 0 35px; text-align: center; }
+a { color: #c3a3ff; text-underline-offset: 3px; }
+a:focus-visible, summary:focus-visible { outline: 3px solid #c3a3ff; outline-offset: 5px; }
+main { width: min(440px, calc(100% - 40px)); margin: auto; padding: 76px 0 44px; text-align: center; }
 h1 { margin: 0 auto 26px; width: min(350px, 100%); line-height: 0; }
 h1 img { display: block; width: 100%; height: auto; }
 .tagline { font-family: "Luckiest Guy", sans-serif; font-size: 29px; font-weight: 400; line-height: 1.2; margin: 0 0 12px; }
-.description { color: #686873; font-size: 15px; line-height: 1.8; margin: 0 0 27px; }
-.download { font-family: "Luckiest Guy", sans-serif; font-size: 25px; line-height: 1; letter-spacing: .025em; display: inline-flex; align-items: center; justify-content: center; gap: 36px; min-height: 58px; width: 246px; max-width: 100%; padding: 18px 24px 13px; background: #7537d5; color: white; border-radius: 8px; text-decoration: none; box-shadow: 0 3px 0 #4d2393; }
-.download:hover { background: #6530bb; }
-.download:active { transform: translateY(2px); box-shadow: 0 1px 0 #4d2393; }
-.download span { font-family: "Segoe UI", sans-serif; font-size: 24px; margin-top: -5px; }
-.platform { color: #777780; font-size: 11px; margin: 15px 0 30px; }
-details { max-width: 380px; margin: 0 auto; border-top: 1px solid #e9e7ed; border-bottom: 1px solid #e9e7ed; text-align: left; }
-summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; padding: 18px 0; font-size: 14px; font-weight: 600; }
+.description { color: #b9b5c3; font-size: 14px; line-height: 1.9; margin: 0 0 32px; }
+.download { font-family: "Luckiest Guy", sans-serif; font-size: 25px; line-height: 1; letter-spacing: .025em; display: inline-flex; align-items: center; justify-content: center; gap: 36px; min-height: 58px; width: 246px; max-width: 100%; padding: 18px 24px 13px; background: #8045dc; color: white; border-radius: 8px; text-decoration: none; box-shadow: 0 3px 0 #572a9e; }
+.download:hover { background: #8d50e9; }
+.download:active { transform: translateY(2px); box-shadow: 0 1px 0 #572a9e; }
+.download span { font-family: Inter, sans-serif; font-size: 24px; margin-top: -5px; }
+.platform { color: #a6a0b1; font-size: 11px; line-height: 1.8; margin: 18px 0 36px; }
+details { max-width: 380px; margin: 0 auto; border-top: 1px solid #302d38; border-bottom: 1px solid #302d38; text-align: left; }
+summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; padding: 18px 0; font-size: 14px; font-weight: 400; }
 summary::-webkit-details-marker { display: none; }
-summary span { color: #777780; font-size: 20px; line-height: 1; }
+summary span { color: #a6a0b1; font-size: 20px; line-height: 1; }
 details[open] summary span { transform: rotate(45deg); }
 ol { margin: 0; padding: 0 0 0 22px; font-size: 13px; line-height: 1.8; }
 li { padding-left: 5px; margin-bottom: 12px; }
 code { font-size: 11px; overflow-wrap: anywhere; }
-.setup-note { color: #777780; font-size: 11px; line-height: 1.7; margin: 15px 0 18px; }
-.development { color: #888890; font-size: 11px; margin: 20px 0 0; }
+.setup-note { color: #a6a0b1; font-size: 11px; line-height: 1.7; margin: 15px 0 18px; }
+.development { color: #a6a0b1; font-size: 11px; margin: 24px 0 0; }
 footer { text-align: center; padding: 0 20px 24px; }
 nav { display: flex; justify-content: center; gap: 25px; }
-nav a { color: #535360; font-size: 12px; text-decoration: none; }
+nav a { color: #c8c2d1; font-size: 12px; text-decoration: none; }
 nav a:hover { text-decoration: underline; }
-footer p { color: #9999a0; font-size: 10px; line-height: 1.6; margin: 17px 0 0; }
-@media (max-width: 520px) { main { padding-top: 45px; } h1 { width: 290px; margin-bottom: 25px; } .tagline { font-size: 26px; } .description { font-size: 13px; } }
+footer p { color: #96909f; font-size: 10px; line-height: 1.6; margin: 17px 0 0; }
+@media (max-width: 520px) { main { padding-top: 52px; } h1 { width: 290px; margin-bottom: 25px; } .tagline { font-size: 26px; } .description { font-size: 13px; } }
 @media (prefers-reduced-motion: reduce) { .download:active { transform: none; } }
