@@ -785,10 +785,16 @@ async fn game_main() {
     let mut options_back_test=if std::env::var_os("RRBTD6_AUTOTEST").is_some(){std::env::var("RRBTD6_OPTIONS_BACK_FRAME").ok().and_then(|s|s.parse::<u32>().ok())}else{None};
     let mut front = frontend::FrontEnd::new(&root);
     if startup.is_some() {
-        let plane = boot!(8, "Trimming the Gardens...", async {
+        let preparation = if std::env::var_os("RRBTD6_NO_TITLE_PRELOAD").is_none() {
+            hud.as_ref().map(|h| h.sprites.prepare(&startup::title_sprites(&root)))
+        } else { None };
+        let (plane, prepared) = boot!(8, "Trimming the Gardens...", async {
             front.prepare_home().await;
-            anim::AnimModel::load(&root.join("models/startup_plane")).await
+            let plane = anim::AnimModel::load(&root.join("models/startup_plane")).await;
+            let prepared = match preparation { Some(work) => work.await, None => Vec::new() };
+            (plane, prepared)
         });
+        if let Some(h) = hud.as_mut() { h.sprites.install_prepared(prepared); }
         if let Some(screen) = startup.as_mut() { screen.set_plane(plane); }
     }
     let front_shot = std::env::var("RRBTD6_FRONT").ok();

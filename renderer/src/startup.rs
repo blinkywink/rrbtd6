@@ -18,6 +18,28 @@ const SKIP_BG: f32 = 0.63;
 pub const MUSIC_FADE: f64 = 2.0;
 const LOGO_PNG: &[u8] = include_bytes!("../../assets/brand/title_logo.png");
 
+/// Only assets used by the title world and its own controls, including those
+/// revealed partway through the opening. Other menu pages remain lazy.
+pub(crate) fn title_sprites(root: &Path) -> Vec<String> {
+    fn visit(node: &Value, path: &str, names: &mut Vec<String>) {
+        let path = if path.is_empty() { node["name"].as_str().unwrap_or("").to_owned() }
+            else { format!("{path}/{}", node["name"].as_str().unwrap_or("")) };
+        for component in node["comps"].as_array().into_iter().flatten() {
+            let world = path.starts_with("TitleScreenBg") && component["type"] == "SpriteRenderer";
+            let ui = path.starts_with(TITLE_UI) && component["type"] == "Image";
+            if world || ui {
+                if let Some(name) = component["sprite"].as_str().filter(|name| *name != "BTD6Logo") { names.push(name.to_owned()); }
+            }
+        }
+        for child in node["children"].as_array().into_iter().flatten() { visit(child, &path, names); }
+    }
+    let data = std::fs::read_to_string(root.join("ui/prefabs/TitleScreenUI.json")).ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok()).unwrap_or_default();
+    let mut names = Vec::new();
+    for child in data["children"].as_array().into_iter().flatten() { visit(child, "", &mut names); }
+    names.sort(); names.dedup(); names
+}
+
 struct Scene {
     node: Node,
     runtime: Value,
@@ -252,6 +274,7 @@ pub(crate) struct Title {
     closing: Option<f64>,
     last: f64,
     plane: Option<(crate::anim::AnimModel, crate::anim::Shaders)>,
+    trace_frames: bool,
 }
 
 impl Title {
@@ -273,7 +296,7 @@ impl Title {
         ui.node.set_active(&format!("{TITLE_UI}/LoadingSpinner"), false);
         let logo = Texture2D::from_file_with_format(LOGO_PNG, Some(ImageFormat::Png));
         logo.set_filter(FilterMode::Linear);
-        Some(Self { ui, world, fov, logo, began: get_time(), skip: None, closing: None, last: get_time(), plane: plane.map(|p| (p, crate::anim::Shaders::new())) })
+        Some(Self { ui, world, fov, logo, began: get_time(), skip: None, closing: None, last: get_time(), plane: plane.map(|p| (p, crate::anim::Shaders::new())), trace_frames: std::env::var_os("RRBTD6_STARTUP_FRAME_TRACE").is_some() })
     }
 
     fn draw_plane(actor: &mut Option<(crate::anim::AnimModel, crate::anim::Shaders)>, began: f64, fov: f32, matrix: Mat4) {
@@ -353,6 +376,7 @@ impl Title {
         self.last = now;
         let (ui_open, bg_open) = (self.ui.clip_length("TitleScreenUi", "TitleScreenUiOpen"), self.ui.clip_length("TitleScreenBg", "TitleScreenBgOpen"));
         let since = (now - self.began) as f32;
+        if self.trace_frames { eprintln!("title-frame: {since:.6} {dt:.6}"); }
         let (ui_t, bg_t) = match self.skip {
             Some((at, u, b)) => (u + (now - at) as f32, b + (now - at) as f32),
             None => (since, since),

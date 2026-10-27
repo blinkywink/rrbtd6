@@ -454,8 +454,56 @@ impl Sprites {
         self.index.contains_key(name)
     }
 
+    /// Own the preparation records so another UI can keep drawing while these
+    /// textures decode/upload. At most four decoded images are in flight.
+    pub fn prepare(&self, names: &[String]) -> std::pin::Pin<Box<dyn std::future::Future<Output=Vec<(String, Option<Sprite>)>>>> {
+        let records: Vec<_> = names.iter().filter(|name| !self.loaded.contains_key(*name))
+            .filter_map(|name| self.index.get(name).map(|record| (name.clone(), record.clone()))).collect();
+        Box::pin(async move {
+            let mut prepared = Vec::with_capacity(records.len());
+            let mut budget = crate::load_work::Budget::new();
+            for chunk in records.chunks(4) {
+                let jobs: Vec<_> = chunk.iter().map(|(_, (path, _, _))| {
+                    let path = path.clone();
+                    crate::load_work::spawn(move || {
+                        let bytes = std::fs::read(path).ok()?;
+                        let key = blake3::hash(&bytes);
+                        let image = Image::from_file_with_format(&bytes, Some(ImageFormat::Png)).ok()?;
+                        Some((key, image))
+                    })
+                }).collect();
+                for ((name, (path, border, ppu)), job) in chunk.iter().zip(jobs) {
+                    let sprite = match job.await {
+                        Some((key, image)) => {
+                            let existing = UI_TEXTURES.with(|cache| cache.borrow().textures.get(&key).and_then(std::rc::Weak::upgrade));
+                            let texture = match existing {
+                                Some(texture) => texture,
+                                None => std::rc::Rc::new(crate::render3d::upload_cooperative(&image, false).await),
+                            };
+                            UI_TEXTURES.with(|cache| {
+                                let mut cache = cache.borrow_mut();
+                                cache.paths.insert(path.clone(), key);
+                                cache.textures.insert(key, std::rc::Rc::downgrade(&texture));
+                            });
+                            Some(Sprite { tex: texture, border: *border, ppu: *ppu })
+                        }
+                        None => None,
+                    };
+                    prepared.push((name.clone(), sprite));
+                    budget.checkpoint().await;
+                }
+            }
+            prepared
+        })
+    }
+
+    pub fn install_prepared(&mut self, sprites: Vec<(String, Option<Sprite>)>) {
+        for (name, sprite) in sprites { self.loaded.entry(name).or_insert(sprite); }
+    }
+
     pub fn get(&mut self, name: &str) -> Option<&Sprite> {
         if !self.loaded.contains_key(name) {
+            if std::env::var_os("RRBTD6_UI_MISS_TRACE").is_some() { eprintln!("ui-lazy-load: {name}"); }
             let s = self.index.get(name).and_then(|(path, border, ppu)| {
                 let tex = shared_ui_texture(path)?;
                 Some(Sprite { tex, border: *border, ppu: *ppu })

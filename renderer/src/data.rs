@@ -714,6 +714,9 @@ pub struct Necro {
 
 #[derive(Deserialize, Clone)]
 pub struct Attack {
+    /// AttackModel name (an upgrade keeps the Attack whose model has the same name).
+    #[serde(default)]
+    pub model_name: String,
     pub range: f32,
     pub camo: bool,
     /// AttackModel has a RotateToTargetModel (the tower turns to face its target).

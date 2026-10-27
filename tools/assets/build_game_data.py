@@ -908,6 +908,8 @@ def main():
                     necro = dict(necro or {}, prince=projectile(deref(em["f"]["alternateProjectile"])),
                                  princePierce=em["f"].get("minPiercePerBloon", 0))
             return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "turn_body": turn_body, "rotate_always": rotate_always, "face_middle": face_middle,
+                    # AttackModel name: Tower.UpdatedModel keeps the Attack of the same name.
+                    "model_name": af.get("_name") or "",
                     "range": af["range"], "camo": camo, "rotate": rotate, "turn_rate": turn_rate,
                     "targets": targets, "weapons": weapons,
                     "prio_camo": prio_camo, "skip_effects": skip_effects, "track_target": track_target, "track_closest": track_closest,

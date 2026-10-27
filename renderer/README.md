@@ -698,3 +698,12 @@ job. Startup extraction regenerates these assets with output version 3.
 `RRBTD6_TIMING=1`, each completed startup job is logged. Set
 `RRBTD6_STARTUP_PROGRESS_OUT` to an existing directory to capture each stage's
 first presentation; normal launches perform no screenshot readbacks.
+
+Title world/control textures are now prepared during startup step 8, before the
+short logo/monkey pop-in. Four CPU decode jobs at most run together, GPU uploads
+yield in bounded slices, and prepared textures enter the existing shared cache.
+This preserves the original pixels, animation curves and playback speed while
+avoiding synchronous PNG decoding at the moment those sprites become visible.
+`RRBTD6_NO_TITLE_PRELOAD=1` retains first-use loading for an A/B reference;
+`RRBTD6_STARTUP_FRAME_TRACE=1` logs title-frame intervals, and
+`RRBTD6_UI_MISS_TRACE=1` identifies remaining first-use sprite loads.

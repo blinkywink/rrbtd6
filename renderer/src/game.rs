@@ -686,7 +686,7 @@ fn circles_hit(q: [f32; 2], qr: f32, b: [f32; 2], rot: f32, circles: &[[f32; 3]]
         return true;
     }
     let a = DEG2RAD * -rot;
-    let (sa, ca) = (a.sin(), a.cos());
+    let (sa, ca) = crt_sin_cos(a);
     circles.iter().any(|c| {
         let (ox, oy) = (ca * c[0] - sa * c[1], ca * c[1] + sa * c[0]);
         let (dx, dy) = (b[0] + ox - q[0], -(b[1] - oy) + q[1]);
@@ -1073,6 +1073,10 @@ pub struct Tower {
     pub paragon: Option<(u32, std::sync::Arc<Tier>)>,
     /// ParagonTower.activeAt (Simulation.time): its attacks stay paused until after it.
     pub paragon_active_at: u64,
+    /// The first frame it is a Paragon: its attacks still act that frame (the pause starts after).
+    pub paragon_first: u64,
+    /// The attack model names it had before it became a Paragon (those Attacks carry on).
+    pub paragon_kept: Vec<String>,
     /// Orbit (Glaive Lord): its circling glaives.
     pub orbit: Option<OrbitState>,
     /// Running ability boosts to its projectiles, with frames left.
@@ -3142,6 +3146,8 @@ impl Game {
             boosts: Vec::new(),
             paragon: None,
             paragon_active_at: 0,
+            paragon_first: 0,
+            paragon_kept: Vec::new(),
             orbit: None,
             temple: None,
             // MonkeyAnimationController.placementConfigs: the monkey drops in (anim.rs).
@@ -3615,6 +3621,8 @@ impl Game {
             boosts: Vec::new(),
             paragon: None,
             paragon_active_at: 0,
+            paragon_first: 0,
+            paragon_kept: Vec::new(),
             orbit: None,
             temple: None,
             show: None,
@@ -4589,14 +4597,17 @@ impl Game {
             let gone: Vec<u64> = all.iter().map(|&o| self.towers[o].id).filter(|&o| o != id).collect();
             self.towers.retain(|o| !gone.contains(&o.id) && !o.sub.as_ref().is_some_and(|s| gone.contains(&s.parent)));
             let t = self.towers.iter().position(|o| o.id == id).unwrap();
+            let kept: Vec<String> = self.tier(t).map(|tr| tr.attacks.iter().map(|a| a.model_name.clone()).collect()).unwrap_or_default();
             let tier = std::sync::Arc::new(self.paragon_tier(&pdef.tier, degree));
             let tw = &mut self.towers[t];
             tw.paragon = Some((degree, tier));
+            tw.paragon_kept = kept;
             // ParagonTower.StartSacrifice (VERIFIED-DISASM @0xd73560): paused, activeAt = time +
             // inactiveDurationFrames on the frame the purchase is processed (the next); Finish
             // un-pauses once time >= activeAt, after that frame's weapons (recording
             // dart_paragon_r40: bought before t 76, first throw at t 197).
             tw.paragon_active_at = self.sim_elapsed + 1 + pdef.inactive_frames;
+            tw.paragon_first = self.sim_elapsed + 1;
             tw.invested += cost;
             let s = self.tier_sounds(t);
             self.sound(&s.upgrade, None);
@@ -5613,7 +5624,7 @@ impl Game {
                     }
                     let hit = if !d.circles.is_empty() {
                         let a = DEG2RAD * -b.rot;
-                        let (sa, ca) = (a.sin(), a.cos());
+                        let (sa, ca) = crt_sin_cos(a);
                         d.circles.iter().any(|c| {
                             let (ox, oy) = (ca * c[0] - sa * c[1], ca * c[1] + sa * c[0]);
                             let bp = at(b);
@@ -6147,7 +6158,7 @@ impl Game {
                 // Vector2.Rotate (VERIFIED-DISASM @0xf64800), in place, game frame.
                 let rot = |v: [f32; 2], deg: f32| {
                     let a = DEG2RAD * -deg;
-                    let (sa, ca) = (a.sin(), a.cos());
+                    let (sa, ca) = crt_sin_cos(a);
                     [ca * v[0] - sa * v[1], ca * v[1] + sa * v[0]]
                 };
                 // (The direction as is, not renormalized; recordings dart_005 / 025 / 205.)
@@ -7126,7 +7137,11 @@ impl Game {
                 }
             }
             let extra: Vec<crate::data::Attack> = self.towers[t].temp.iter().map(|x| x.attack.clone()).collect();
-            let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.sim_elapsed <= self.towers[t].paragon_active_at;
+            let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 
+                // ParagonTower's pause starts after its first frame: an attack with a target in range
+                // then throws once (recordings boomerang_paragon_r63 / r90: at the purchase, then
+                // 120 frames later).
+                || (self.sim_elapsed > self.towers[t].paragon_first && self.sim_elapsed <= self.towers[t].paragon_active_at);
             let waiting: Vec<bool> = self.towers[t].temp.iter().map(|x| x.delay > 0.0).collect();
             let base_weapons: usize = tier.attacks.iter().map(|a| a.weapons.len()).sum();
             let nweap: usize = base_weapons + extra.iter().map(|a| a.weapons.len()).sum::<usize>();
@@ -7176,7 +7191,14 @@ impl Game {
             // midpoint instead of turning with each throw.
             let middle = tier.attacks.iter().any(|a| a.face_middle);
             for (ai, attack) in tier.attacks.iter().chain(extra.iter()).enumerate() {
-                if (paused && ai < tier.attacks.len()) || ai.checked_sub(tier.attacks.len()).is_some_and(|k| waiting.get(k) == Some(&true)) {
+                // (A Paragon's new Attacks are made paused from its first frame and wake with its
+                // Orbit, a frame before the kept ones: recordings boomerang_paragon_r40 (its MOAB
+                // Press waits) and r98 (it throws at 181, the glaives at 182).)
+                let fresh_attack = self.towers[t].paragon.is_some() && self.sim_elapsed < self.towers[t].paragon_active_at
+                    && !self.towers[t].paragon_kept.contains(&attack.model_name);
+                let paused = paused && (self.towers[t].paragon.is_none() || self.towers[t].paragon_kept.contains(&attack.model_name)
+                    || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0);
+                if ((paused || fresh_attack) && ai < tier.attacks.len()) || ai.checked_sub(tier.attacks.len()).is_some_and(|k| waiting.get(k) == Some(&true)) {
                     wi += attack.weapons.len();
                     continue;
                 }
@@ -7354,7 +7376,7 @@ impl Game {
                             .map(|c| match rot {
                                 Some(r) => {
                                     let a = DEG2RAD * -r;
-                                    let (sa, ca) = (a.sin(), a.cos());
+                                    let (sa, ca) = crt_sin_cos(a);
                                     let (ox, oy) = (ca * c[0] - sa * c[1], ca * c[1] + sa * c[0]);
                                     [b.pos[0] + ox, b.pos[1] - oy, c[2], ox, -oy]
                                 }
@@ -7894,7 +7916,7 @@ impl Game {
                                 // (y - z / tan 60), then onto the tower's position.
                                 Some(r) => {
                                     let a = DEG2RAD * -r;
-                                    let (sa, ca) = (a.sin(), a.cos());
+                                    let (sa, ca) = crt_sin_cos(a);
                                     let (ox, oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
                                     // FlipFollowPath.EmitPosition (VERIFIED-DISASM @0xc81b60): thrown
                                     // with the left hand, the base point moves by (0 - 2 ejectX, 0 -
@@ -8968,6 +8990,10 @@ mod tests {
             g.towers[t].flip = true;
         }
         g.round = meta.get("round").and_then(|r| r.parse::<usize>().ok()).unwrap_or(1) - 1;
+        // (Past the mode's last round the game plays on as freeplay: SetRound(89) on Hard.)
+        if g.round >= g.end_round {
+            g.freeplay = true;
+        }
         g.start_round();
         // The game's frame count when the recording starts (its flush every 60 frames keys off it).
         if let (Some(t0), Some((rt0, _, _))) = (first_time, frames.first()) {

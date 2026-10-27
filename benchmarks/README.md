@@ -460,3 +460,23 @@ check also passed all four pacer tests after aligning the test-only process-hand
 declaration with the existing memory counter. The installed executable matches the
 measured SHA256 above. Its strict selection/upgrade presentation audit recorded
 149 presentations and zero blanks. These readbacks ran separately from timings.
+
+## Title intro texture preparation (2026-10-26)
+
+Same game-profile binary, alternating `ref1,opt1,opt2,ref2`; the reference sets
+`RRBTD6_NO_TITLE_PRELOAD=1`. `RRBTD6_STARTUP_FRAME_TRACE=1` records presented
+frame intervals. In the authored logo reveal window (3.2–4.3 s), worst intervals
+were 116.07 / 92.41 ms in the reference and 11.81 / 11.25 ms with preparation.
+The reference decoded/uploaded 32 newly requested sprites during that window;
+preparation left only two unresolved optional variant names, which perform no
+image decode. Original curves and playback speed were unchanged.
+
+The final loading job took 120–121 ms in the reference and 382–470 ms with
+preparation; that work now runs behind the loading animation. A separate check
+at 6 s into the settled title measured 1020.8 MiB private memory in the reference
+and 975.9 MiB with preparation. That single pair is a sanity check, not a memory
+improvement claim. Earlier loading-screen memory samples are not comparable
+because the prepared client already owns the title textures at that point.
+
+Raw traces, captures and the settled-memory sample: `local_extracted/title-preload-ab/`.
+This measures this client's transition stalls, not performance against official BTD6.
