@@ -252,6 +252,12 @@ def core_menus(c):
          *CORE_SCENES, "CommonPopup", "ParagonConfirmationPopup", "SandboxBloonsMenu", "SpawnBloonButton", "BuffManager", "GeraldoShop")
 
 
+def tower_indices(c):
+    """Repair indices on existing installs, reusing all completed animation bakes."""
+    data = json.loads((c.out / "game/game.json").read_text(encoding="utf-8"))
+    c.py("tools/assets/export_tower_tiers.py", c.game, *data["tower_tiers"])
+
+
 def particles(c):
     game = json.loads((c.out / "game/game.json").read_text(encoding="utf-8"))
     names = {"UpgradeEffect", "UpgradeEffectTier5", "HeroUpgradeEffect", "HeroUpgradeEffectLv20", "SellEffect"}
@@ -368,7 +374,7 @@ def finish(c):
 
 
 STEPS = [metadata, sim_model, cab_index, catalogs, container_index, rounds_maps, sprites, mapset, tower_models, misc_art, upgrade_art,
-         ingame_ui, core_menus, game_data, extended_towers, particles, audio, bloon_models, frontend, startup, home, social, finish]
+         ingame_ui, core_menus, game_data, extended_towers, tower_indices, particles, audio, bloon_models, frontend, startup, home, social, finish]
 
 
 def install_hook(root):
@@ -403,7 +409,6 @@ def load_state(path, fp):
 # Raise a step's number when its output must be regenerated for existing installs (a fixed or
 # extended exporter). Other tools changes do not make players re-extract.
 STEP_VERSIONS = {s.__name__: 1 for s in STEPS}
-STEP_VERSIONS["tower_models"] = 2  # Rebuild indices with normalized display names (e.g. Ninja 210).
 # startup 2: the splash and initial loading screens' sprites.
 STEP_VERSIONS["startup"] = 2
 

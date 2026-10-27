@@ -42,7 +42,15 @@ establish that a new BTD6 build is fully supported.
 
 Local verification (2026-10-26): downloaded GitHub build 7 launched its main menu
 using assets extracted into an initially empty test installation, including home
-water and character models. A full extraction with all effect families and the
-social/startup exports is still being checked; a menu screenshot does not establish
-complete gameplay coverage. Embedded Python bootstrap/recovery is documented in
-`launcher/README.md`.
+water and character models; hero selection and an in-game scene also rendered.
+The full 24-step extraction completed, including social/startup menus, particle
+effects and shader rebuilding. All indexed tower model files were present, and
+all 239 translated material entries across 90 map models had shader references.
+The installed game also rendered the splash using this test installation's new
+startup assets. These checks do not establish complete gameplay/visual parity.
+
+Three subsequent extraction checks with embedded Python took 58–64 ms and ran no
+exporters. The separate tier-index repair reuses existing animation bakes rather
+than invalidating/re-exporting the base models and projectiles. The embedded map
+export produced byte-identical map JSON and terrain PNG to the clean-install
+export. Bootstrap/recovery verification is documented in `launcher/README.md`.
