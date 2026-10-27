@@ -73,6 +73,7 @@ struct Press {
 }
 
 pub struct Hud {
+    pub(crate) account_ui:crate::account_ui::AccountUi,
     coop: coop_hud::CoopHud,
     left: Node,
     race_ui:Option<Node>,
@@ -150,6 +151,13 @@ fn hide(n: &mut Node, paths: &[&str]) {
 }
 
 impl Hud {
+    pub(crate) fn draw_account_ui(&mut self) {
+        let mut ui=std::mem::take(&mut self.account_ui);
+        let player=crate::frontend::account_preview::player_name();
+        ui.draw_account(self,player.as_deref());
+        self.account_ui=ui;
+    }
+
     pub async fn load(root: &Path, game: &Game) -> Option<Hud> {
         let mut budget=crate::load_work::Budget::new();
         let dir = root.join("ui").join("prefabs");
@@ -361,6 +369,7 @@ impl Hud {
         let mut race_ui=if game.race.is_some(){Node::load(&dir.join("RaceUi.json"))}else{None};
         if let Some(race)=&mut race_ui{race.rt=right.rt.clone();}
         Some(Hud {
+            account_ui:Default::default(),
             coop,
             left,race_ui,
             right,

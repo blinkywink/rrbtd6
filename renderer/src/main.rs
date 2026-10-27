@@ -27,6 +27,7 @@ mod keybinds;
 mod menus;
 mod render3d;
 mod startup;
+mod account_ui;
 mod static_map;
 mod sandbox;
 mod temple_popup;

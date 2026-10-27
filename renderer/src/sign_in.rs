@@ -2,7 +2,9 @@
 use std::{path::Path, sync::mpsc};
 use serde_json::{json, Value};
 
-pub(super) fn start(root: &Path, code: String) -> mpsc::Receiver<Value> {
+pub(super) fn start(root: &Path, code: String) -> mpsc::Receiver<Value> {run(root,Some(code))}
+pub(super) fn logout(root:&Path)->mpsc::Receiver<Value>{run(root,None)}
+fn run(root:&Path,code:Option<String>)->mpsc::Receiver<Value> {
     let project = crate::frontend::account_preview::helper_project(root);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -13,8 +15,9 @@ pub(super) fn start(root: &Path, code: String) -> mpsc::Receiver<Value> {
             let runtime = if bundled.is_file() { bundled } else { "python".into() };
             let mut command = Command::new(runtime);
             command.current_dir(&project).arg("-I").arg(project.join("tools/assets/sign_in_ui.py"))
-                .env("RRBTD6_NK_ONLINE", "1")
+
                 .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+            if code.is_some(){command.env("RRBTD6_NK_ONLINE","1");}else{command.arg("--logout");}
             #[cfg(windows)] {
                 use std::os::windows::process::CommandExt;
                 command.creation_flags(0x08000000);

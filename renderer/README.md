@@ -720,7 +720,7 @@ exit into an existing directory.
 The title player label polls the same asynchronous cached profile as the home
 menu. TMP font-color animation channels now apply the original name reveal after
 the plane intro (4.5167–4.7667 seconds), including older exports with hashed bindings.
-Clicking the signed-out prompt or current name opens the linking-code screen.
+Clicking the signed-out prompt or current name opens the account panel.
 Typing/paste and Sign in/Enter launch one explicit login on a worker, followed by
 read-only profile downloads. The code travels over child stdin, never argv/logs;
 sessions stay Windows-encrypted. New online login is enabled for that child only,
@@ -728,3 +728,14 @@ so opening the game does not enable background service polling or uploads.
 Back/Escape closes the screen; an in-flight result still updates the cached UI.
 Autotests cannot submit real credentials. `RRBTD6_STARTUP_ACCOUNT=1` with
 `RRBTD6_AUTOTEST` opens the panel after the title animation for visual verification.
+
+Settings > Account and the title account label now share one account panel and
+background job. Signed-in state shows the username and Log out; signed-out state
+shows one code field and Sign in. Back/Escape closes the panel without losing an
+in-flight result. The Settings background is captured once rather than redrawn
+under the modal. Logout removes this client's local sessions/pending code and
+persists a signed-out marker, preventing saved snapshots from restoring login.
+Downloaded progress stays encrypted and untouched. A successful new login clears
+the marker; account-dependent menu trees are rebuilt after an account change.
+`RRBTD6_SETTINGS_ACCOUNT=1` with `RRBTD6_FRONT=settings` and `RRBTD6_AUTOTEST`
+opens the Settings account panel for offline visual checks.

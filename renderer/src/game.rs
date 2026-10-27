@@ -5137,7 +5137,16 @@ impl Game {
             .effects
             .iter()
             .filter(|e| e.layers > 1)
-            .map(|e| Effect { layers: e.layers - 1, ..e.clone() })
+            .map(|e| {
+                let mut e = Effect { layers: e.layers - 1, ..e.clone() };
+                // Bloon.Degrade copies its mutators onto the children afresh: a DamageOverTime's
+                // lastTick starts again now (recording boomerang_paragon_r98: a burn on a BFB
+                // ticks 60 frames after it pops, not on its old beat).
+                if let EffectKind::Dot { tick, .. } = &mut e.kind {
+                    *tick = self.round_clock as f32;
+                }
+                e
+            })
             .collect();
         self.remove_bloon(i);
         self.earn(pop_cash); // P-CASH

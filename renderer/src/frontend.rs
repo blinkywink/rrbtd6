@@ -178,6 +178,7 @@ fn scroll_limit(tree: &Node, viewport: &str, content: &str, scale: f32) -> f32 {
 }
 
 pub struct FrontEnd {
+    account_generation:u64,
     dir: PathBuf,
     pub screen: Screen,
     main: Option<Node>,
@@ -482,6 +483,7 @@ impl FrontEnd {
             .filter(|(_, k)| root.join("maps").join(k).join("map.json").exists())
             .collect();
         Self {
+            account_generation:0,
             dir: root.join("ui").join("prefabs"),
             screen: Screen::Main,
             main: None,
@@ -672,11 +674,12 @@ impl FrontEnd {
                 self.settings = scene(&d.join("SettingsUI.json"));
                 if let Some(m) = self.settings.as_mut() {
                     // Account / platform parts.
-                    for n in ["Panel/Buttons/BackupButton", "Panel/Buttons/LogoutButton",
+                    for n in ["Panel/Buttons/LogoutButton", "Panel/Buttons/BackupButton/BackingDataInfo",
                         "Panel/Buttons/LanguageButton", "Panel/Buttons/Notifications", "ButtonsBottomRight", "UpdateButton",
                         "FrontierGroup", "ScreenSizePanel"] {
                         m.set_active(&format!("{SETTINGS}/{n}"), false);
                     }
+                    m.set_text(&format!("{SETTINGS}/Panel/Buttons/BackupButton/Button/Text"),"Account");
                     m.hide_named(&["Ribbon"]);
                     // SettingsScreen sizes the panel at runtime (the scene's layout alone gives the
                     // slider column no width): the panel spans the Panel's width, sliders fill it.
@@ -897,6 +900,15 @@ impl FrontEnd {
 impl Hud {
     /// Draws the front end; returns a game to start (or quit).
     pub async fn draw_front(&mut self, fe: &mut FrontEnd) -> Option<FrontAction> {
+        self.account_ui.poll();
+        if fe.account_generation!=self.account_ui.generation {
+            fe.account_generation=self.account_ui.generation;
+            fe.main=None;fe.fore=None;fe.maps=None;fe.heroes_ui=None;fe.monkeys=None;fe.pages.clear();
+        }
+        if self.account_ui.is_open() {
+            if let Some(bg)=&self.account_ui.backdrop{bg.draw();}else{clear_background(Color::from_rgba(30,80,110,255));}
+            self.draw_account_ui();return None;
+        }
         if fe.screen == Screen::Loading {
             fe.draw_loading(self);
             return None;
@@ -1547,6 +1559,9 @@ impl Hud {
                 if m_click(fe.settings.as_ref(), &format!("{SETTINGS}/Panel/Buttons/HotkeysButton/Button")) {
                     next = Some(Screen::Hotkeys);
                 }
+                if m_click(fe.settings.as_ref(), &format!("{SETTINGS}/Panel/Buttons/BackupButton/Button")) {
+                    self.account_ui.open(&fe.root);
+                }
                 if m_click(fe.settings.as_ref(), &format!("{SETTINGS}/Panel/Buttons/ProfileButton/Button")) {
                     next = Some(Screen::Menu(MenuPage::Profile));
                 }
@@ -1895,6 +1910,8 @@ impl Hud {
             fe.rebinding = None;
             fe.screen = n;
         }
+        if std::env::var_os("RRBTD6_AUTOTEST").is_some() && fe.screen==Screen::Settings && std::env::var_os("RRBTD6_SETTINGS_ACCOUNT").is_some() && self.account_ui.backdrop.is_none(){self.account_ui.open(&fe.root);}
+        if self.account_ui.is_open() && self.account_ui.backdrop.is_none(){self.account_ui.backdrop=Some(crate::menus::Backdrop::capture_sharp());}
         out
     }
 }
