@@ -9,6 +9,9 @@ use macroquad::prelude::*;
 use serde_json::Value;
 use std::path::Path;
 
+#[path = "sign_in.rs"]
+mod sign_in;
+
 const SPLASH: &str = "NinjaKiwiSplashOpen";
 const TITLE_UI: &str = "Canvas/ScreenBoxer/TitleScreen";
 /// TitleScreen.SkipTitleAnimClicked: Animator.Play(state, 0, normalizedTime).
@@ -277,6 +280,10 @@ pub(crate) struct Title {
     trace_frames: bool,
     root: std::path::PathBuf,
     account: Option<Node>,
+    account_code: String,
+    account_status: String,
+    account_focus: bool,
+    account_job: Option<std::sync::mpsc::Receiver<Value>>,
 }
 
 impl Title {
@@ -298,7 +305,7 @@ impl Title {
         ui.node.set_active(&format!("{TITLE_UI}/LoadingSpinner"), false);
         let logo = Texture2D::from_file_with_format(LOGO_PNG, Some(ImageFormat::Png));
         logo.set_filter(FilterMode::Linear);
-        Some(Self { root: root.to_owned(), account: None, ui, world, fov, logo, began: get_time(), skip: None, closing: None, last: get_time(), plane: plane.map(|p| (p, crate::anim::Shaders::new())), trace_frames: std::env::var_os("RRBTD6_STARTUP_FRAME_TRACE").is_some() })
+        Some(Self { root: root.to_owned(), account: None, account_code: String::new(), account_status: String::new(), account_focus: true, account_job: None, ui, world, fov, logo, began: get_time(), skip: None, closing: None, last: get_time(), plane: plane.map(|p| (p, crate::anim::Shaders::new())), trace_frames: std::env::var_os("RRBTD6_STARTUP_FRAME_TRACE").is_some() })
     }
 
     fn open_account(&mut self) {
@@ -307,32 +314,55 @@ impl Title {
         const BASE:&str="Canvas/LinkAccountScreen/Login/AnimatedObject";
         node.set_active("Canvas/LinkAccountScreen/AccountInfo",false);
         node.set_active("Canvas/LinkAccountScreen/HomeBgBlur",false);
-        for name in ["EmailTitle","PasswordTitle","EmailBox","PasswordBox","PasswordTxtField"] {
-            node.set_active(&format!("{BASE}/{name}"),false);
-        }
-        node.set_text(&format!("{BASE}/Title"),"Sign in");
+        for name in ["PasswordBox","PasswordTxtField"] {node.set_active(&format!("{BASE}/{name}"),false);}
+        node.set_text(&format!("{BASE}/Title"),"Sign in with a linking code");
+        node.set_text(&format!("{BASE}/EmailTitle"),"Linking code");
         node.set_text(&format!("{BASE}/CancelButton/Text"),"Back");
-        node.set_text(&format!("{BASE}/OKButton/Text"),"Load saved account");
+        if let Some(status)=node.find_mut(&format!("{BASE}/PasswordTitle")) {
+            status.rt.pos.x=0.0;status.rt.size.x=-200.0;status.rt.size.y=230.0;
+            if let Some(text)=status.txt.as_mut(){text.wrap=true;text.auto=true;text.max=55.0;text.min=30.0;}
+        }
+        self.account_code.clear();self.account_focus=true;
         self.account=Some(node);
     }
 
     fn draw_account(&mut self,hud:&mut Hud,player:Option<&str>) {
         const BASE:&str="Canvas/LinkAccountScreen/Login/AnimatedObject";
         let node=self.account.as_mut().unwrap();
-        node.set_text(&format!("{BASE}/EmailTxtField"),&player.map(|name|format!("Signed in as {name}")).unwrap_or_else(||
-            if crate::frontend::account_preview::cache_loading(){"Loading saved account...".to_owned()}else{"No saved account found. Online sign-in is currently disabled.".to_owned()}));
-        if let Some(field)=node.find_mut(&format!("{BASE}/EmailTxtField")) {
-            field.rt.pos.x=0.0;field.rt.size.x=-200.0;field.rt.size.y=240.0;
-            if let Some(text)=field.txt.as_mut(){text.wrap=true;}
+        let busy=self.account_job.is_some();
+        if !busy && self.account_focus {
+            while let Some(c)=get_char_pressed(){if c.is_ascii_alphanumeric() || c=='-' {if self.account_code.len()<25{self.account_code.push(c.to_ascii_uppercase());}}}
+            if is_key_pressed(KeyCode::Backspace){self.account_code.pop();}
+            if (is_key_down(KeyCode::LeftControl)||is_key_down(KeyCode::RightControl)) && is_key_pressed(KeyCode::V) {
+                if let Some(text)=macroquad::miniquad::window::clipboard_get(){self.account_code=text.trim().chars().filter(|c|c.is_ascii_alphanumeric()||*c=='-').take(25).map(|c|c.to_ascii_uppercase()).collect();}
+            }
         }
+        let placeholder=if self.account_focus{"Enter code (ABCDE-FGHIJ) |"}else{"Enter code (ABCDE-FGHIJ)"};
+        node.set_text(&format!("{BASE}/EmailTxtField"),if self.account_code.is_empty(){placeholder}else{&self.account_code});
+        let status=if busy {"Signing in and downloading profile...".to_owned()}
+            else if !self.account_status.is_empty(){self.account_status.clone()}
+            else {player.map(|name|format!("Current account: {name}. Enter a fresh linking code to sign in."))
+                .unwrap_or_else(||"Get a linking code in the official game's account settings, then enter it here.".to_owned())};
+        node.set_text(&format!("{BASE}/PasswordTitle"),&status);
+        node.set_text(&format!("{BASE}/OKButton/Text"),if busy{"Signing in..."}else{"Sign in"});
         draw_rectangle(0.0,0.0,screen_width(),screen_height(),Color::new(0.0,0.0,0.0,0.65));
         let scale=Hud::canvas_scale();let canvas=vec2(screen_width()/scale,screen_height()/scale);
         let mut ctx=Ctx{sprites:&mut hud.sprites,fonts:&hud.fonts,scale,canvas_h:canvas.y,clip:None};
         draw_tree(node,R{min:Vec2::ZERO,size:canvas},&mut ctx);
-        if node.clicked(&format!("{BASE}/OKButton")) {
-            crate::frontend::account_preview::retry_cached(&self.root);
+        if is_mouse_button_pressed(MouseButton::Left) {
+            let (x,y)=mouse_position();self.account_focus=node.rect(&format!("{BASE}/EmailBox")).is_some_and(|r|r.contains(vec2(x,y)));
         }
-        if node.clicked(&format!("{BASE}/CancelButton")) || is_key_pressed(KeyCode::Escape) {self.account=None;}
+        if !busy && (node.clicked(&format!("{BASE}/OKButton")) || (self.account_focus && is_key_pressed(KeyCode::Enter))) {
+            if !self.account_code.contains('-') || self.account_code.len()<5 {
+                self.account_status="Enter the full linking code, including its hyphen.".to_owned();
+            } else if std::env::var_os("RRBTD6_AUTOTEST").is_none() {
+                self.account_job=Some(sign_in::start(&self.root,std::mem::take(&mut self.account_code)));
+                self.account_focus=false;
+            }
+        }
+        if node.clicked(&format!("{BASE}/CancelButton")) || is_key_pressed(KeyCode::Escape) {
+            self.account_code.clear();self.account=None;
+        }
     }
 
     fn draw_plane(actor: &mut Option<(crate::anim::AnimModel, crate::anim::Shaders)>, began: f64, fov: f32, matrix: Mat4) {
@@ -432,6 +462,18 @@ impl Title {
             Some(c) => { self.ui.play("TitleScreenUi", "TitleScreenUiClose", (now - c) as f32, false); }
             None => { self.ui.play("TitleScreenUi", "TitleScreenUiOpen", ui_t, false); }
         }
+        if let Some(job)=&self.account_job {
+            let result=match job.try_recv(){
+                Ok(result)=>Some(result),
+                Err(std::sync::mpsc::TryRecvError::Disconnected)=>Some(serde_json::json!({"ok":false,"message":"Sign-in helper stopped. No automatic retry was made."})),
+                Err(std::sync::mpsc::TryRecvError::Empty)=>None,
+            };
+            if let Some(result)=result {
+                self.account_job=None;
+                self.account_status=result["message"].as_str().unwrap_or("Sign-in failed.").to_owned();
+                if result["ok"]==true {crate::frontend::account_preview::signed_in(&self.root,result["preview"].clone());}
+            }
+        }
         crate::frontend::account_preview::ensure(&self.root);
         let player=crate::frontend::account_preview::player_name();
         let info=format!("{TITLE_UI}/PlayerInfo");
@@ -457,7 +499,7 @@ impl Title {
         let opening = ui_t < ui_open || bg_t < bg_open;
         let test_start = std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_STARTUP_PRESS_START").is_some();
         let test_account=std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_STARTUP_ACCOUNT").is_some();
-        if !opening && (self.ui.node.clicked(&format!("{info}/LoginButton/Button")) || test_account) {
+        if !opening && (self.ui.node.clicked(&format!("{info}/LoginButton/Button")) || self.ui.node.clicked(&format!("{info}/PlayerNameTxt")) || test_account) {
             self.open_account();
         } else if (self.ui.node.clicked(&format!("{TITLE_UI}/Start")) || test_start) && !opening {
             // TitleScreen.TransitionToMainMenu (click sound, music fades over 2 s).

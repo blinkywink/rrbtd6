@@ -312,6 +312,9 @@ def main():
                     effects.append({"kind": "dot", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
                                     "layers": sf.get("layers", 1), "damage": df["damage"], "interval": df["interval"],
                                     "immune": df.get("immuneBloonProperties", 0),
+                                    # Mutable.AddMutator: an isUnique mutator the bloon already has
+                                    # is left as it is (no new timer, damage or tick).
+                                    "refresh": not sf.get("isUnique", False),
                                     "distribute": bool(df.get("distributeToChildren", False)),
                                     "distribute_override": bool(df.get("overrideDistributionBlocker", False)),
                                     "only_if_damaged": sf.get("applyOnlyIfDamaged", False),

@@ -118,7 +118,7 @@ def target(owner, pointer, paths):
 
 PROPERTY_NAMES = ["m_AnchoredPosition.x", "m_AnchoredPosition.y", "m_SizeDelta.x", "m_SizeDelta.y",
                   "m_Pivot.x", "m_Pivot.y", "m_AnchorMin.x", "m_AnchorMin.y", "m_AnchorMax.x", "m_AnchorMax.y",
-                  "m_Alpha", "m_IsActive", "m_Enabled", "m_Color.r", "m_Color.g", "m_Color.b", "m_Color.a"]
+                  "m_fontColor.r", "m_fontColor.g", "m_fontColor.b", "m_fontColor.a", "m_Alpha", "m_IsActive", "m_Enabled", "m_Color.r", "m_Color.g", "m_Color.b", "m_Color.a"]
 PROPERTIES = {zlib.crc32(p.encode()): p for p in PROPERTY_NAMES}
 Path(OUT).mkdir(parents=True, exist_ok=True)
 for scene in SCENES:

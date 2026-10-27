@@ -219,7 +219,7 @@ pub fn bind(root: &Path, node: &mut Node) {
     bind_xp(node,&format!("{PLAYER}/XpBar"),&data["rankProgress"]);
 }
 
-fn helper_project(root:&Path)->std::path::PathBuf {
+pub(crate) fn helper_project(root:&Path)->std::path::PathBuf {
     let beside_data=root.parent().unwrap_or(root).to_owned();
     [Some(beside_data.clone()),std::env::current_dir().ok(),Path::new(env!("CARGO_MANIFEST_DIR")).parent().map(Path::to_owned)]
         .into_iter().flatten().find(|p|p.join("tools/assets/cloud_account.py").is_file()).unwrap_or(beside_data)
@@ -430,20 +430,11 @@ mod map_border_tests {
 
 pub(crate) fn player_name()->Option<String>{let state=PREVIEW.get()?.try_lock().ok()?;Some(state.data.as_ref()?["displayName"].as_str()?.trim()).filter(|name|!name.is_empty()).map(str::to_owned)}
 
-pub(crate) fn cache_loading()->bool {
-    PREVIEW.get().and_then(|state|state.try_lock().ok().map(|s|!s.finished)).unwrap_or(true)
-}
-
-/// A user-requested local cache retry. Never refreshes or contacts account services.
-pub(crate) fn retry_cached(root:&Path) {
-    let Ok(mut state)=preview_state(root).try_lock() else{return};
-    poll(&mut state);
-    if !state.finished{return;}
-    let project=helper_project(root);
-    let (tx,rx)=mpsc::channel();
-    state.rx=rx;state.finished=false;
-    std::thread::spawn(move||{
-        if let Some(data)=read_preview(&project,"--preview"){let _=tx.send(Some(data));}
-        let _=tx.send(None);
-    });
+/// Publish a verified login result and invalidate any previous account read in flight.
+pub(crate) fn signed_in(root:&Path,data:serde_json::Value) {
+    if data["readOnly"]!=true || data["uploadsEnabled"]!=false{return;}
+    if let Ok(mut state)=preview_state(root).lock() {
+        let (_,rx)=mpsc::channel();state.rx=rx;state.finished=true;
+        state.data=Some(data);state.bound.clear();
+    }
 }

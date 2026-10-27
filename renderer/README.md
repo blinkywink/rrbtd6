@@ -718,8 +718,13 @@ when `RRBTD6_AUTOTEST` is set. Pair it with `RRBTD6_PRESENTATION_CHECK` and
 exit into an existing directory.
 
 The title player label polls the same asynchronous cached profile as the home
-menu, instead of always displaying the signed-out prompt. Its signed-out button
-opens the LinkAccountUI shell; Load saved account retries only the local encrypted
-preview cache, and Back/Escape returns to the title without starting the game.
-Online login remains disabled. `RRBTD6_STARTUP_ACCOUNT=1` with `RRBTD6_AUTOTEST`
-opens the panel after the title animation for visual verification.
+menu. TMP font-color animation channels now apply the original name reveal after
+the plane intro (4.5167–4.7667 seconds), including older exports with hashed bindings.
+Clicking the signed-out prompt or current name opens the linking-code screen.
+Typing/paste and Sign in/Enter launch one explicit login on a worker, followed by
+read-only profile downloads. The code travels over child stdin, never argv/logs;
+sessions stay Windows-encrypted. New online login is enabled for that child only,
+so opening the game does not enable background service polling or uploads.
+Back/Escape closes the screen; an in-flight result still updates the cached UI.
+Autotests cannot submit real credentials. `RRBTD6_STARTUP_ACCOUNT=1` with
+`RRBTD6_AUTOTEST` opens the panel after the title animation for visual verification.

@@ -1557,6 +1557,8 @@ pub struct Projectile {
     /// Projectile.Target's bloon (the game's): what the weapon aimed at, or a glaive's latest
     /// bounce; sub-projectiles made on exhaust take it (CollideOnlyWithTarget).
     aim: Option<u64>,
+    /// A bouncing glaive has taken a hit bloon as its Target (later hits don't change it).
+    aim_hit: bool,
 }
 
 /// A side attack aimed only at a set point (Cleansing Foam): it has its own button, not a mode.
@@ -6450,6 +6452,7 @@ impl Game {
                 interval_t: 0.0,
                 exhaust_done: 0,
                 aim: None,
+                aim_hit: false,
             });
         }
     }
@@ -7129,13 +7132,14 @@ impl Game {
                     let skip = if c.pass_on_collided { Some(layer) } else { None };
                     contacts.push((bp, heading, c.clone(), pr.tiers, pr.owner, skip));
                 }
-                // INFERRED: a bouncing glaive's Target becomes the bloon it hit (recording
-                // boomerang_500: Glaive Lord's MoabDots take the glaive's last-hit bloon, not its
-                // throw target: one whose hit bloon popped that frame never lands, one whose hit
-                // Zebra lived on hits it next frame). Other shots keep theirs (recording
+                // INFERRED: a bouncing glaive's Target becomes the first bloon it hits (recordings
+                // boomerang_500 / 520 / paragon_r98: its MoabDot never lands when that bloon popped
+                // that frame, and lands on it next frame when it lived, the glaive's later hits
+                // that frame not counting). Other shots keep theirs (recording
                 // boomerang_paragon_r63: a MOAB Press still follows its MOAB after other hits).
-                if pr.spec.retarget.is_some() {
+                if pr.spec.retarget.is_some() && !pr.aim_hit {
                     pr.aim = Some(id);
+                    pr.aim_hit = true;
                 }
                 // RetargetOnContact.Collide (VERIFIED-DISASM @0xcf6ae0): with bounces left, a delayed
                 // one notes the frame (Process retargets delayFrames later), else it retargets now.

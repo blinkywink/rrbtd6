@@ -12,3 +12,6 @@ tools/assets/test_cloud_codec.py
 tools/assets/test_link_account.py
 tools/assets/test_live_events.py
 tools/assets/export_account_ui.py
+
+tools/assets/sign_in_ui.py
+tools/assets/test_sign_in_ui.py

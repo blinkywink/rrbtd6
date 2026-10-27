@@ -389,6 +389,16 @@ pub(crate) fn apply_animation(root: &mut Node, data: &serde_json::Value, control
                     Some("m_SizeDelta.y") => n.rt.size.y = value,
                     Some("m_IsActive") => n.active = value != 0.0,
                     Some("m_Alpha") => n.alpha = value,
+                    // Older local runtime exports leave TMP's m_fontColor channels unnamed.
+                    _ if binding["property"].as_str().is_some_and(|p| p.starts_with("m_fontColor."))
+                        || (binding["type"].as_i64()==Some(114) && binding["attribute"].as_u64()==Some(4185109675)) => {
+                        if let Some(text)=n.txt.as_mut() {
+                            match binding["property"].as_str().and_then(|p|p.rsplit('.').next()) {
+                                Some("r")=>text.color.r=value,Some("g")=>text.color.g=value,
+                                Some("b")=>text.color.b=value,_=>text.color.a=value,
+                            }
+                        }
+                    }
                     Some("m_Color.r" | "m_Color.g" | "m_Color.b" | "m_Color.a") => {
                         let component = binding["property"].as_str().unwrap().rsplit('.').next().unwrap();
                         for color in n.img.as_mut().map(|i| &mut i.color).into_iter().chain(n.txt.as_mut().map(|t| &mut t.color)) {
@@ -1900,6 +1910,22 @@ mod animation_tests {
         assert_eq!(curve_value(&keys, 0.5), Some(0.5));
         assert_eq!(curve_value(&keys, 1.0), Some(5.0));
         assert_eq!(curve_value(&keys, 1.25), Some(5.5));
+    }
+    #[test]
+    fn title_name_obeys_native_tmp_alpha_reveal_in_old_and_new_exports() {
+        let mut node=Node::from_json(&json!({"name":"Scene","children":[{"name":"Name",
+            "comps":[{"type":"TextMeshProUGUI","m_text":"Synthetic","color":[1.0,1.0,1.0,1.0]}]}]}));
+        let mut runtime=json!({"animators":[{"controller":"Title","clips":[{"name":"Open",
+            "start":0.0,"stop":4.8,"bindings":[{"path":"Name","type":114,"attribute":4185109675u64,
+            "property":null,"curves":[[[-3.4e38,0.0,0.0,0.0,0.0],
+                [4.5,0.0,0.0,4.0,0.0],[4.75,0.0,0.0,0.0,1.0]]]}]}]}]});
+        for property in [json!(null),json!("m_fontColor.a")] {
+            runtime["animators"][0]["clips"][0]["bindings"][0]["property"]=property;
+            for (time,alpha) in [(2.0,0.0),(4.5,0.0),(4.625,0.5),(4.8,1.0)] {
+                apply_animation(&mut node,&runtime,"Title","Open",Some(time));
+                assert_eq!(node.find("Name").unwrap().txt.as_ref().unwrap().color.a,alpha);
+            }
+        }
     }
     #[test]
     fn hero_counter_counts_base_appearances_and_skins_with_source_eligibility() {
