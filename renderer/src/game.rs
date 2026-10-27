@@ -1922,6 +1922,9 @@ pub struct Game {
     step_first_id: u64,
     /// Damage being dealt from inside a bloon's Process after its Move (DamageOverTime ticks).
     pop_after_move: bool,
+    /// The projectile loop's position (those up to it have moved this frame); usize::MAX
+    /// outside it.
+    proj_cursor: usize,
     /// The damage being dealt: (distributeToChildren, overrideDistributeBlocker).
     distribute: (bool, bool),
     /// The step's phase (process-list order of things made in it): 0 collisions, 1 towers,
@@ -2380,6 +2383,7 @@ impl Game {
             steps: 0,
             round_clock: 0,
             pop_after_move: false,
+            proj_cursor: usize::MAX,
             distribute: (true, false),
             next_uid: 0,
             active_rbe: 0.0,
@@ -5139,6 +5143,9 @@ impl Game {
         let pp = self.tracks[path as usize].pos(dist);
         self.pops.push(pp);
         let n_kids = if strip { 0 } else { self.child_kinds[kind].len() };
+        if n_kids == 0 {
+            self.bloon_destroyed(parent_id, pp0);
+        }
         // SpawnChildren.CreatedChildren (VERIFIED-DISASM @0x1027440): the first child is the
         // parent itself (it moves on, at its new speed); child k sits k x min(26.7 / count, 8.6)
         // behind (not below 0) and, being new, waits for the next frame to move.
@@ -5546,37 +5553,38 @@ impl Game {
             if self.towers[t].paragon.is_some() != paragons {
                 continue;
             }
-            // (A Paragon's Orbit stays inactive, its glaives unmade, until the Paragon is active:
-            // recording boomerang_paragon_r40, Glaive Dominus's glaives appear 120 frames after
-            // the purchase.)
-            // The Orbit itself (angle, speed) carries on through the upgrade: only its glaives go
-            // (Orbit.SetActive) and are made again by AddProjectiles, all at the tower + (0,
-            // range), moving from the next frame.
+            // A Paragon's Orbit (recordings boomerang_paragon_*, its state logged): on the
+            // purchase frame it turns once more as before, then is inactive (frozen, its glaives
+            // gone) until activeAt; that frame it is active again and AddProjectiles puts the
+            // glaives at the tower + (0, range) without turning; it turns from the next.
             let Some(o) = self.tier(t).and_then(|tr| tr.orbit.clone()) else {
                 self.towers[t].orbit = None;
                 continue;
             };
             let c = self.towers[t].pos;
-            // (It comes back a frame before the attacks resume: recording boomerang_paragon_r40.)
-            if self.towers[t].paragon.is_some() && self.sim_elapsed < self.towers[t].paragon_active_at {
-                if let Some(st) = &mut self.towers[t].orbit {
-                    st.glaives.clear();
+            let mut drop_glaives = false;
+            if self.towers[t].paragon.is_some() {
+                let (first, active_at) = (self.towers[t].paragon_first, self.towers[t].paragon_active_at);
+                if self.sim_elapsed > first && self.sim_elapsed < active_at {
+                    if let Some(st) = &mut self.towers[t].orbit {
+                        st.glaives.clear();
+                    }
+                    continue;
                 }
-                continue;
+                if self.sim_elapsed == active_at {
+                    if let Some(st) = &mut self.towers[t].orbit {
+                        st.glaives = vec![[c[0], c[1] - o.range]; o.count as usize];
+                    }
+                    continue;
+                }
+                drop_glaives = self.sim_elapsed == first;
             }
-            // (Back from inactive: Process turns it this frame, then AddProjectiles places them.)
-            let remade = self.towers[t].orbit.as_ref().is_some_and(|st| st.glaives.is_empty());
             let mut st = self.towers[t].orbit.take().unwrap_or(OrbitState { angle: 0.0, speed: 3.0, seen: None, glaives: Vec::new() });
             let kept = st.seen.and_then(|id| self.bloons.iter().find(|b| b.id == id)).is_some_and(|b| {
                 let (dx, dy) = (b.pos[0] - c[0], b.pos[1] - c[1]);
                 !(1600.0 < dx * dx + dy * dy)
             });
-            if remade && !kept {
-                // (Back from inactive it keeps a bloon it saw before but finds no new one that
-                // frame: recordings boomerang_paragon_r78, a Rainbow 10 away counts from the
-                // next, and r63, its old bloon still counts.)
-                st.seen = None;
-            } else if !kept {
+            if !kept {
                 // (No filter: camo bloons count too; recording boomerang_500, a camo Rainbow.)
                 st.seen = self.closest_target(c, 40.0, |_| true, |b| b.pos).map(|i| self.bloons[i].id);
             }
@@ -5602,10 +5610,35 @@ impl Game {
                     [c[0] + gx, c[1] - gy]
                 })
                 .collect();
-            if remade {
-                st.glaives = vec![[c[0], c[1] - o.range]; o.count as usize];
+            if drop_glaives {
+                st.glaives.clear();
             }
             self.towers[t].orbit = Some(st);
+        }
+    }
+
+    /// The bloon `id` is destroyed (popped with nothing left, or leaked) at `at`.
+    /// ArriveAtTarget.OnBloonDestroyEvent (VERIFIED-DISASM @0xca5870): a shot flying at it takes
+    /// the spot as its Target (SetTarget: from its start, the progress kept, so one already there
+    /// jumps to it; recording boomerang_paragon_r63, a MOAB Press after its Ceramic is gone).
+    fn bloon_destroyed(&mut self, id: u64, at: [f32; 2]) {
+        let (now, cursor) = (self.sim_elapsed, self.proj_cursor);
+        for (q, pr) in self.projectiles.iter_mut().enumerate() {
+            if pr.aim != Some(id) {
+                continue;
+            }
+            let Some((t0, o, target)) = pr.arrive_at.as_mut() else { continue };
+            *target = at;
+            pr.aim = None;
+            // (One that has already moved this frame is placed again from the new Target, as
+            // its Process would: recording boomerang_paragon_r63, the same frame.)
+            if let (true, Some(ar)) = (cursor == usize::MAX || q <= cursor, pr.spec.arrive.as_ref()) {
+                let perc = (((now - *t0) as f32) * (1.0f32 / 60.0) / ar.time).min(1.0);
+                let e = curve_eval(&ar.samples, perc);
+                let np = [o[0] + (at[0] - o[0]) * e, o[1] + (at[1] - o[1]) * e];
+                pr.vel = [np[0] - pr.pos[0], np[1] - pr.pos[1]];
+                pr.pos = np;
+            }
         }
     }
 
@@ -5726,9 +5759,10 @@ impl Game {
                 self.leaked = true;
                 *leak_voice = true;
             }
-            let id = self.bloons[i].id;
+            let (id, at) = (self.bloons[i].id, self.bloons[i].pos);
             self.plist_kill(id);
             self.bloons.swap_remove(i);
+            self.bloon_destroyed(id, at);
             return true;
         }
         false
@@ -6571,6 +6605,7 @@ impl Game {
         let sim_now = self.sim_elapsed;
         let mut due_retargets: Vec<u64> = Vec::new();
         while p < self.projectiles.len() {
+            self.proj_cursor = p;
             // Simulation.Simulate checks collisions before the process list moves anything
             // (VERIFIED by recording: a dart is created, waits a frame, then hits where it and
             // the bloon were when the frame began).
@@ -7094,11 +7129,14 @@ impl Game {
                     let skip = if c.pass_on_collided { Some(layer) } else { None };
                     contacts.push((bp, heading, c.clone(), pr.tiers, pr.owner, skip));
                 }
-                // INFERRED: the projectile's Target becomes the bloon it hit (recording
+                // INFERRED: a bouncing glaive's Target becomes the bloon it hit (recording
                 // boomerang_500: Glaive Lord's MoabDots take the glaive's last-hit bloon, not its
                 // throw target: one whose hit bloon popped that frame never lands, one whose hit
-                // Zebra lived on hits it next frame).
-                pr.aim = Some(id);
+                // Zebra lived on hits it next frame). Other shots keep theirs (recording
+                // boomerang_paragon_r63: a MOAB Press still follows its MOAB after other hits).
+                if pr.spec.retarget.is_some() {
+                    pr.aim = Some(id);
+                }
                 // RetargetOnContact.Collide (VERIFIED-DISASM @0xcf6ae0): with bounces left, a delayed
                 // one notes the frame (Process retargets delayFrames later), else it retargets now.
                 if let (Some(rt), true) = (pr.spec.retarget.clone(), pr.pierce > 0.0) {
@@ -7214,6 +7252,7 @@ impl Game {
                 p += 1;
             }
         }
+        self.proj_cursor = usize::MAX;
         self.grid_on = false;
         self.grid_cand = cand;
         let e = p2.elapsed().as_secs_f64();

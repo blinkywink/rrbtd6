@@ -428,4 +428,22 @@ mod map_border_tests {
     }
 }
 
-pub(super) fn player_name()->Option<String>{let state=PREVIEW.get()?.try_lock().ok()?;Some(state.data.as_ref()?["displayName"].as_str()?.to_owned())}
+pub(crate) fn player_name()->Option<String>{let state=PREVIEW.get()?.try_lock().ok()?;Some(state.data.as_ref()?["displayName"].as_str()?.trim()).filter(|name|!name.is_empty()).map(str::to_owned)}
+
+pub(crate) fn cache_loading()->bool {
+    PREVIEW.get().and_then(|state|state.try_lock().ok().map(|s|!s.finished)).unwrap_or(true)
+}
+
+/// A user-requested local cache retry. Never refreshes or contacts account services.
+pub(crate) fn retry_cached(root:&Path) {
+    let Ok(mut state)=preview_state(root).try_lock() else{return};
+    poll(&mut state);
+    if !state.finished{return;}
+    let project=helper_project(root);
+    let (tx,rx)=mpsc::channel();
+    state.rx=rx;state.finished=false;
+    std::thread::spawn(move||{
+        if let Some(data)=read_preview(&project,"--preview"){let _=tx.send(Some(data));}
+        let _=tx.send(None);
+    });
+}

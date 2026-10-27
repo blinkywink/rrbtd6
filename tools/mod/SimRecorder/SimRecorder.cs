@@ -517,6 +517,18 @@ static class SimulatePatch
                     if (wp == null) continue;
                     w.WriteLine($"W {t.Id.Id} {i++} {wp.lastEmission} {wp.animationStartedAt} {wp.rateFrames} {Recorder.F(wp.missedRate)} {Recorder.F(t.Rotation)} {Recorder.F(t.Position.X)} {Recorder.F(t.Position.Y)}");
                 }
+                // Orbit state (Glaive Lord / Dominus): "O tower currentSpeed angle bloonInRange active".
+                var tb = t.towerBehaviors?.list;
+                if (tb != null)
+                {
+                    for (int k = 0; k < tb.Count; k++)
+                    {
+                        var ob = tb[k]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Orbit>();
+                        if (ob == null) continue;
+                        var bl = ob.bloonInRange;
+                        w.WriteLine($"O {t.Id.Id} {Recorder.F(ob.currentSpeed)} {Recorder.F(ob.angle)} {(bl == null ? -1 : bl.Id.Id)} {(ob.isActive ? 1 : 0)}");
+                    }
+                }
             }
         });
         Part("projectiles", () =>

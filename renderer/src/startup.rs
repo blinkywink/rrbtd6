@@ -275,6 +275,8 @@ pub(crate) struct Title {
     last: f64,
     plane: Option<(crate::anim::AnimModel, crate::anim::Shaders)>,
     trace_frames: bool,
+    root: std::path::PathBuf,
+    account: Option<Node>,
 }
 
 impl Title {
@@ -296,7 +298,41 @@ impl Title {
         ui.node.set_active(&format!("{TITLE_UI}/LoadingSpinner"), false);
         let logo = Texture2D::from_file_with_format(LOGO_PNG, Some(ImageFormat::Png));
         logo.set_filter(FilterMode::Linear);
-        Some(Self { ui, world, fov, logo, began: get_time(), skip: None, closing: None, last: get_time(), plane: plane.map(|p| (p, crate::anim::Shaders::new())), trace_frames: std::env::var_os("RRBTD6_STARTUP_FRAME_TRACE").is_some() })
+        Some(Self { root: root.to_owned(), account: None, ui, world, fov, logo, began: get_time(), skip: None, closing: None, last: get_time(), plane: plane.map(|p| (p, crate::anim::Shaders::new())), trace_frames: std::env::var_os("RRBTD6_STARTUP_FRAME_TRACE").is_some() })
+    }
+
+    fn open_account(&mut self) {
+        let Some(mut node)=Node::load(&self.root.join("ui/prefabs/LinkAccountUI.json")) else{return};
+        for child in &mut node.children {child.rt=Rt::default();}
+        const BASE:&str="Canvas/LinkAccountScreen/Login/AnimatedObject";
+        node.set_active("Canvas/LinkAccountScreen/AccountInfo",false);
+        node.set_active("Canvas/LinkAccountScreen/HomeBgBlur",false);
+        for name in ["EmailTitle","PasswordTitle","EmailBox","PasswordBox","PasswordTxtField"] {
+            node.set_active(&format!("{BASE}/{name}"),false);
+        }
+        node.set_text(&format!("{BASE}/Title"),"Sign in");
+        node.set_text(&format!("{BASE}/CancelButton/Text"),"Back");
+        node.set_text(&format!("{BASE}/OKButton/Text"),"Load saved account");
+        self.account=Some(node);
+    }
+
+    fn draw_account(&mut self,hud:&mut Hud,player:Option<&str>) {
+        const BASE:&str="Canvas/LinkAccountScreen/Login/AnimatedObject";
+        let node=self.account.as_mut().unwrap();
+        node.set_text(&format!("{BASE}/EmailTxtField"),&player.map(|name|format!("Signed in as {name}")).unwrap_or_else(||
+            if crate::frontend::account_preview::cache_loading(){"Loading saved account...".to_owned()}else{"No saved account found. Online sign-in is currently disabled.".to_owned()}));
+        if let Some(field)=node.find_mut(&format!("{BASE}/EmailTxtField")) {
+            field.rt.pos.x=0.0;field.rt.size.x=-200.0;field.rt.size.y=240.0;
+            if let Some(text)=field.txt.as_mut(){text.wrap=true;}
+        }
+        draw_rectangle(0.0,0.0,screen_width(),screen_height(),Color::new(0.0,0.0,0.0,0.65));
+        let scale=Hud::canvas_scale();let canvas=vec2(screen_width()/scale,screen_height()/scale);
+        let mut ctx=Ctx{sprites:&mut hud.sprites,fonts:&hud.fonts,scale,canvas_h:canvas.y,clip:None};
+        draw_tree(node,R{min:Vec2::ZERO,size:canvas},&mut ctx);
+        if node.clicked(&format!("{BASE}/OKButton")) {
+            crate::frontend::account_preview::retry_cached(&self.root);
+        }
+        if node.clicked(&format!("{BASE}/CancelButton")) || is_key_pressed(KeyCode::Escape) {self.account=None;}
     }
 
     fn draw_plane(actor: &mut Option<(crate::anim::AnimModel, crate::anim::Shaders)>, began: f64, fov: f32, matrix: Mat4) {
@@ -396,7 +432,19 @@ impl Title {
             Some(c) => { self.ui.play("TitleScreenUi", "TitleScreenUiClose", (now - c) as f32, false); }
             None => { self.ui.play("TitleScreenUi", "TitleScreenUiOpen", ui_t, false); }
         }
+        crate::frontend::account_preview::ensure(&self.root);
+        let player=crate::frontend::account_preview::player_name();
+        let info=format!("{TITLE_UI}/PlayerInfo");
+        self.ui.node.set_active(&format!("{info}/LoginButton"),player.is_none());
+        self.ui.node.set_active(&format!("{info}/PlayerNameTxt"),player.is_some());
+        self.ui.node.set_text(&format!("{info}/PlayerNameTxt"),player.as_deref().unwrap_or(""));
+        crate::uitree::block_input(self.account.is_some());
         self.ui.draw(hud);
+        crate::uitree::block_input(false);
+        if self.account.is_some() {
+            self.draw_account(hud,player.as_deref());
+            return false;
+        }
         if let Some(c) = self.closing {
             if let Ok(folder) = std::env::var("RRBTD6_STARTUP_TRANSITION_OUT") {
                 for (name, elapsed) in [("begin", 0.0), ("middle", 0.25), ("end", 0.49)] {
@@ -408,7 +456,10 @@ impl Title {
         }
         let opening = ui_t < ui_open || bg_t < bg_open;
         let test_start = std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_STARTUP_PRESS_START").is_some();
-        if (self.ui.node.clicked(&format!("{TITLE_UI}/Start")) || test_start) && !opening {
+        let test_account=std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_STARTUP_ACCOUNT").is_some();
+        if !opening && (self.ui.node.clicked(&format!("{info}/LoginButton/Button")) || test_account) {
+            self.open_account();
+        } else if (self.ui.node.clicked(&format!("{TITLE_UI}/Start")) || test_start) && !opening {
             // TitleScreen.TransitionToMainMenu (click sound, music fades over 2 s).
             self.closing = Some(now);
             if std::env::var_os("RRBTD6_PRESENTATION_CHECK").is_some() { crate::presentation_check::arm(); }

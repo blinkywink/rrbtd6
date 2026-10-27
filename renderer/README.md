@@ -716,3 +716,10 @@ when `RRBTD6_AUTOTEST` is set. Pair it with `RRBTD6_PRESENTATION_CHECK` and
 `RRBTD6_PRESENTATION_STRICT=1` to audit the physical handoff presentations.
 `RRBTD6_STARTUP_TRANSITION_OUT` captures the beginning, middle and end of the
 exit into an existing directory.
+
+The title player label polls the same asynchronous cached profile as the home
+menu, instead of always displaying the signed-out prompt. Its signed-out button
+opens the LinkAccountUI shell; Load saved account retries only the local encrypted
+preview cache, and Back/Escape returns to the title without starting the game.
+Online login remains disabled. `RRBTD6_STARTUP_ACCOUNT=1` with `RRBTD6_AUTOTEST`
+opens the panel after the title animation for visual verification.
