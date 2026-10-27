@@ -17,9 +17,10 @@ Not affiliated with or endorsed by Ninja Kiwi.
 3. Start BTD6. At the main menu it offers to install rrbtd6: pick a folder.
 4. The launcher (`rrbtd6-launcher.exe`, also on your desktop) downloads the game, sets up a private
    Python, extracts the art and data from your BTD6 install and starts it. For the first setup,
-   allow about 35 GB free (excluding BTD6) and set aside an hour or more; some PCs take several
-   hours. These are planning estimates, not measured requirements. Temporary bundle caches
-   are removed after a successful full extraction, so peak setup space exceeds the final size.
+   asset preparation can take a long time and uses more disk space than BTD6's compressed
+   assets. Reliable clean-install time and space requirements are still being measured.
+   Temporary bundle caches are removed after a successful full extraction, so peak setup
+   space exceeds the final size.
    Start rrbtd6 from the launcher from then on: it updates itself and the game every time, and
    re-extracts after BTD6 updates.
 

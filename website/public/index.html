@@ -8,16 +8,28 @@
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header><a class="brand" href="#">RustTD6</a><a href="https://github.com/blinkywink/rrbtd6">GitHub ↗</a></header>
+<header><span class="fan-badge">FAN-MADE · OPEN SOURCE</span><a class="source-button" href="https://github.com/blinkywink/rrbtd6">Source code ↗</a></header>
 <main id="main">
 <section class="intro" aria-labelledby="title">
-<p class="fan">An unofficial fan project</p>
-<h1 id="title"><span>RUST</span>TD6</h1>
+<p class="fan">Unofficial BTD6 client</p>
+<h1 id="title"><span>RUST</span><span>TD<span class="six">6</span></span></h1>
 <p class="subtitle">Bloons TD 6, rebuilt in Rust.</p>
-<p class="description">A new engine for the game you know.<br>Built for high FPS, customization, and modding.</p>
+<p class="description">High FPS. More customization.<br>A new engine, built in Rust.</p>
 <a class="button download" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">Download for Windows <span aria-hidden="true">↓</span></a>
 <p class="release" data-release>Latest GitHub release</p>
 <p class="requires">Requires your own installed copy of BTD6.</p>
+</section>
+<section class="panel setup" id="install" aria-labelledby="setup-title">
+<h2 id="setup-title">Getting started</h2>
+<ol>
+<li><strong>Prepare BTD6</strong><p>Install <a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> in your Windows copy of BTD6, then run the game once.</p></li>
+<li><strong>Add the installer</strong><p>Download <a href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">RRBTD6Installer.dll</a> and put it in BTD6's <code>Mods</code> folder.</p></li>
+<li><strong>Launch BTD6</strong><p>Choose where to install RustTD6. The launcher downloads the client and tools, then prepares assets from your game. Completed steps can resume.</p></li>
+</ol>
+<div class="requirements"><p><strong>Free space</strong>Being measured</p><p><strong>First setup</strong>Varies by PC</p></div>
+<p class="fine">The download is small; preparing local game assets is the large part. We are measuring clean-install size and time. Assets stay on your PC, and setup shows progress.</p>
+<details><summary>Why is it bigger than BTD6?</summary><p>BTD6 stores compressed assets. This prototype currently expands animations and audio into larger files for its own engine. That storage overhead needs more work. Temporary bundle caches are removed after successful setup.</p><p data-client-size>Python and extraction tools download during setup.</p></details>
+<a class="release-link" href="https://github.com/blinkywink/rrbtd6/releases/latest">Release notes &amp; other downloads ↗</a>
 </section>
 <section class="panel about" aria-labelledby="about-title">
 <h2 id="about-title">What's different?</h2>
@@ -27,18 +39,6 @@
 <li><strong>Open source</strong><span>Explore the code and help build it. More mod tooling is planned.</span></li>
 </ul>
 <p class="notice">Still in development. Some gameplay and menus are incomplete. Existing BTD6 mods and official co-op aren't supported.</p>
-</section>
-<section class="panel setup" id="install" aria-labelledby="setup-title">
-<h2 id="setup-title">Getting started</h2>
-<ol>
-<li><strong>Prepare BTD6</strong><p>Install <a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> in your Windows copy of BTD6, then run the game once.</p></li>
-<li><strong>Add the installer</strong><p>Download <a href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">RRBTD6Installer.dll</a> and put it in BTD6's <code>Mods</code> folder.</p></li>
-<li><strong>Launch BTD6</strong><p>Choose where to install RustTD6. The launcher downloads the client and tools, then prepares assets from your game. Completed steps can resume.</p></li>
-</ol>
-<div class="requirements"><p><strong>Free space</strong>Allow about 35 GB</p><p><strong>First setup</strong>Set aside an hour or more</p></div>
-<p class="fine">Planning estimates, excluding BTD6 itself. Slower PCs may take several hours. Assets stay on your PC; game updates may require preparing them again.</p>
-<details><summary>Why does setup need so much space?</summary><p>The client is small. Most space is used by local models, animations, textures, and audio prepared from BTD6. Temporary bundle caches are removed after successful setup.</p><p data-client-size>Python and extraction tools download during setup.</p></details>
-<a class="release-link" href="https://github.com/blinkywink/rrbtd6/releases/latest">Release notes &amp; other downloads ↗</a>
 </section>
 </main>
 <footer><p>RustTD6 is fan-made and not affiliated with or endorsed by Ninja Kiwi.<br>Bloons TD 6 and its characters belong to Ninja Kiwi.</p><a href="https://github.com/blinkywink/rrbtd6/issues">Report a bug</a><span aria-hidden="true"> · </span><a href="https://github.com/blinkywink/rrbtd6">Source code</a></footer>

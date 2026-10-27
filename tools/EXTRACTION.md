@@ -80,3 +80,13 @@ files matched the development exports byte-for-byte. A copy of one late
 home model compacted from 6,025,344 to 2,510,560 bytes in 0.037 s, preserving its
 clip metadata and mesh parts. These are component checks, not a complete new
 clean-install benchmark or a guaranteed saving on every game version.
+
+Follow-up storage audit (2026-10-27): models occupy 19.488 GB in the live
+working directory: 5.731 GB of raw anim.bin, 11.909 GB of anim_q.bin, and
+about 1.85 GB of other model data. Applying the existing 24-to-10-byte
+compactor to remaining raw frames would put that models directory near
+16.145 GB, excluding transient conversion memory/disk needs. Audio is 1.990 GB.
+This is a mixed development directory, not a measured clean installation.
+The website and player README no longer advertise a 35 GB requirement.
+Baked per-vertex animation and decoded WAV storage explain much of the gap
+from the official game's compressed install; cleanup alone will not close it.

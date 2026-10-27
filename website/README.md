@@ -2,7 +2,8 @@
 
 Static landing page for the fan-made RustTD6 project. No framework, dependencies,
 build step, analytics, proprietary game assets, or account integration.
-The illustration is original SVG, not extracted BTD6 artwork.
+The tropical background is original SVG, not extracted BTD6 artwork.
+Lilita One is bundled under the SIL Open Font License (see public/fonts/OFL.txt).
 
 ## Vercel
 
@@ -22,12 +23,11 @@ python -m http.server 4173 --bind 127.0.0.1 --directory website/public
 
 The primary installer URL uses GitHub's `/releases/latest/download/` route;
 it is not pinned to a release. JavaScript only enhances the release label and
-pauses decorative motion. Download links and the native FAQ work without JS.
+displays the client download size. Download links and the native FAQ work without JS.
 If GitHub's API is unavailable or rate limited, the stable link still works.
 
 Installation follows the root README and the current launcher/installer.
-The hour-or-more time and 35 GB free-space figures are conservative planning
-guidance, not measured setup guarantees. They exclude the user's BTD6 install.
-Update those figures after a representative clean-install benchmark. Never
+Clean-install time and disk requirements have not been measured reliably;
+the page says they are being measured rather than presenting an estimate as a requirement. Never
 present live FPS numbers, percentage speedups, or completed mod compatibility
 without supporting measurements/implementation.
