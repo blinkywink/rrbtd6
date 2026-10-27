@@ -959,6 +959,7 @@ impl Hud {
         let mut out = None;
         let mut next = fe.world_motion.take_action().and_then(|a|MenuPage::from_name(&a)).map(Screen::Menu);
         let mut browse = None;
+        let mut open_legends = false;
         let options_can_close=fe.rebinding.is_none();
         // The support popup (see support_popup.rs) leaves the screen behind it inert.
         let support = self.support_open();
@@ -968,7 +969,12 @@ impl Hud {
         match fe.screen {
             Screen::Main => {
                 if let Some(m) = fe.main.as_mut() {
-                    if let Some(page)=home_events::update(&fe.root,m,s){next=Some(Screen::Menu(page));}
+                    // Our main menu toggles (Advanced settings, see DEVIATIONS.md).
+                    m.set_active(&format!("{MAIN}/BottomButtonGroup/Legends"), !fe.adv.hide_legends);
+                    m.set_active(&format!("{MAIN}/Store"), !fe.adv.hide_store);
+                    if fe.adv.hide_events {
+                        m.set_active(&format!("{MAIN}/EventButtonGroup"), false);
+                    } else if let Some(page)=home_events::update(&fe.root,m,s){next=Some(Screen::Menu(page));}
                     if let Some(hero)=fe.selected_hero.as_deref().or_else(||fe.heroes.first().map(|h|h.id.as_str())) {
                         let skin=selected_skin(&fe.hero_data,&fe.hero_skins,hero);
                         m.set_sprite(&format!("{MAIN}/BottomButtonGroup/Heroes/HeroesAnim/Button"),skin["icon"].as_str().and_then(|s|s.strip_suffix(".png")));
@@ -989,6 +995,13 @@ impl Hud {
                     if m.clicked(&format!("{MAIN}/BottomButtonGroup/Monkeys/MonkeysAnim/Button")) {
                         next = Some(Screen::Monkeys);
                     }
+                    // Legends DLC modes aren't supported: a popup over the blurred menu instead.
+                    // RRBTD6_LEGENDS_POPUP opens it once, for screenshots.
+                    static PREVIEW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                    let preview = std::env::var_os("RRBTD6_LEGENDS_POPUP").is_some() && !PREVIEW.swap(true, std::sync::atomic::Ordering::Relaxed);
+                    if !support && (preview || m.clicked(&format!("{MAIN}/BottomButtonGroup/Legends/LegendsAnim/Button"))) {
+                        open_legends = true;
+                    }
                     if m.clicked(&format!("{MAIN}/Settings/Button")) {
                         fe.settings_from = Screen::Main;
                         next = Some(Screen::Settings);
@@ -997,7 +1010,6 @@ impl Hud {
                         ("BottomButtonGroup/Knowledge/KnowledgeAnim/Button", MenuPage::Knowledge),
                         ("BottomButtonGroup/CoOp/CoopAnim/Button", MenuPage::Social),
                         ("BottomButtonGroup/Powers/PowersAnim/Button", MenuPage::Powers),
-                        ("BottomButtonGroup/Legends/LegendsAnim/Button", MenuPage::Legends),
                         ("Achievements/Button", MenuPage::Achievements), ("Store/Button", MenuPage::Store),
                         ("PlayerInfo/PlayerAvatar/Hit", MenuPage::Profile),
                         ("TrophyStore/Button", MenuPage::TrophyStore), ("PlayerInfo/Group/MailboxButton", MenuPage::Mailbox),
@@ -1813,6 +1825,14 @@ impl Hud {
                 account_preview::bind(&fe.root,f);
                 draw_tree(f, full, &mut ctx);
             }
+        }
+        // Every way into the Legends page (home world, menus) shows the not-supported popup.
+        if next == Some(Screen::Menu(MenuPage::Legends)) {
+            next = None;
+            open_legends = true;
+        }
+        if open_legends {
+            self.open_legends();
         }
         if let Some(choice) = self.draw_support(full, canvas.y, s) {
             // The store itself can't be used, so either way it closes.

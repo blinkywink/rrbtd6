@@ -44,6 +44,12 @@ pub struct Advanced {
     /// Always load full-size textures (otherwise 4K map textures are halved on screens up to
     /// 2048 px, where it looks the same).
     pub full_textures: bool,
+    /// Main menu: hide the Legends button (the Legends DLCs aren't supported).
+    pub hide_legends: bool,
+    /// Main menu: hide the Shop button.
+    pub hide_store: bool,
+    /// Main menu: hide the event buttons on the right (teams, contested territory, bosses, races...).
+    pub hide_events: bool,
 }
 
 impl Default for Advanced {
@@ -57,7 +63,8 @@ impl Default for Advanced {
             numerical_timers: false,
             cash_spent: false,
             memory_opt: false,
-            show_fps: false, fps_cap: 0, vsync: true, render_scale: 1.0, sharpen: true, msaa: 4, full_textures: false }
+            show_fps: false, fps_cap: 0, vsync: true, render_scale: 1.0, sharpen: true, msaa: 4, full_textures: false,
+            hide_legends: false, hide_store: false, hide_events: false }
     }
 }
 
@@ -104,6 +111,9 @@ impl Advanced {
                 "Smooths jagged edges. Higher costs more. Applies after a restart."),
             Row::Toggle("Full Resolution Textures", self.full_textures,
                 "Always load full-size map textures. Off halves 4K textures on screens up to 2048 pixels, where they look the same."),
+            Row::Toggle("Hide Legends Button", self.hide_legends, "Hides Legends on the main menu. The Legends DLCs aren't supported."),
+            Row::Toggle("Hide Shop Button", self.hide_store, "Hides the Shop button on the main menu."),
+            Row::Toggle("Hide Event Buttons", self.hide_events, "Hides the event buttons on the right of the main menu."),
         ]
     }
 
@@ -114,6 +124,9 @@ impl Advanced {
             2 => self.vsync = !self.vsync,
             4 => self.sharpen = !self.sharpen,
             6 => self.full_textures = !self.full_textures,
+            7 => self.hide_legends = !self.hide_legends,
+            8 => self.hide_store = !self.hide_store,
+            9 => self.hide_events = !self.hide_events,
             _ => {}
         }
     }

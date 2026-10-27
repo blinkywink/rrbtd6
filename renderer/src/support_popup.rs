@@ -1,6 +1,7 @@
 //! Not in BTD6 (see DEVIATIONS.md): the store and every purchase button show the screen behind
 //! blurred and inert, with a CommonPopup asking players to support Ninja Kiwi through the
-//! official client, offering the official webstore or a way back home.
+//! official client, offering the official webstore or a way back home. The same popup tells
+//! players that the Legends DLC modes are not supported.
 
 use crate::hud::Hud;
 use crate::uitree::{block_input, draw_tree, Ctx, Node, R};
@@ -14,9 +15,20 @@ const OPEN_SECS: f64 = 0.25;
 const CAPTURE_SECS: f64 = 0.4;
 pub const WEBSTORE: &str = "https://btd6store.ninjakiwi.com/";
 const BODY: &str = "Please support ninja kiwi through their official client. They also have an official webstore where you can purchase items.";
+const LEGENDS_BODY: &str = "RustTD6 does not support the Legends DLCs.";
+
+/// Which message the popup shows.
+#[derive(Clone, Copy, PartialEq)]
+pub enum PopupKind {
+    /// Support Ninja Kiwi: webstore or home.
+    Support,
+    /// Legends is not supported: home only.
+    Legends,
+}
 
 pub struct SupportPopup {
     node: Option<Node>,
+    kind: PopupKind,
     opened_at: Option<f64>,
     backdrop: Option<crate::menus::Backdrop>,
 }
@@ -34,8 +46,6 @@ impl SupportPopup {
                 n.set_active(&format!("{LAYOUT}/{p}"), false);
             }
             n.hide_named(&["Jewel"]);
-            n.set_text(&format!("{LAYOUT}/Banner/Title"), "Support Ninja Kiwi");
-            n.set_text(&format!("{LAYOUT}/Body"), BODY);
             if let Some(b) = n.find_mut(&format!("{LAYOUT}/Body")).and_then(|b| b.txt.as_mut()) {
                 b.size = 72.0;
             }
@@ -52,14 +62,38 @@ impl SupportPopup {
             }
             n
         });
-        Self { node, opened_at: None, backdrop: None }
+        let mut popup = Self { node, kind: PopupKind::Support, opened_at: None, backdrop: None };
+        popup.set_kind(PopupKind::Support);
+        popup
+    }
+
+    fn set_kind(&mut self, kind: PopupKind) {
+        self.kind = kind;
+        let Some(n) = self.node.as_mut() else { return };
+        let (title, body) = match kind {
+            PopupKind::Support => ("Support Ninja Kiwi", BODY),
+            PopupKind::Legends => ("Legends", LEGENDS_BODY),
+        };
+        n.set_text(&format!("{LAYOUT}/Banner/Title"), title);
+        n.set_text(&format!("{LAYOUT}/Body"), body);
+        n.set_active(&format!("{LAYOUT}/Buttons/ConfirmButton"), kind == PopupKind::Support);
     }
 }
 
 impl Hud {
     /// Shows the popup (no-op while it's up).
     pub fn open_support(&mut self) {
+        self.open_popup(PopupKind::Support);
+    }
+
+    /// Shows the Legends-not-supported popup over the main menu.
+    pub fn open_legends(&mut self) {
+        self.open_popup(PopupKind::Legends);
+    }
+
+    fn open_popup(&mut self, kind: PopupKind) {
         if self.support.node.is_some() && self.support.opened_at.is_none() {
+            self.support.set_kind(kind);
             self.support.opened_at = Some(get_time());
             self.support.backdrop = None;
         }
@@ -95,7 +129,7 @@ impl Hud {
             return None;
         }
         block_input(false);
-        let choice = if n.clicked(&format!("{LAYOUT}/Buttons/ConfirmButton")) {
+        let choice = if self.support.kind == PopupKind::Support && n.clicked(&format!("{LAYOUT}/Buttons/ConfirmButton")) {
             Some(SupportChoice::Webstore)
         } else if n.clicked(&format!("{LAYOUT}/Buttons/CancelButton")) || is_key_pressed(KeyCode::Escape) {
             Some(SupportChoice::Home)

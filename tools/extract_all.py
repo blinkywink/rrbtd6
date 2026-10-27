@@ -25,7 +25,7 @@ TOWERS = ["DartMonkey", "TackShooter", "BombShooter", "SniperMonkey", "Boomerang
 FRONTEND_SCENES = ["QuestBrowserUI", "TowerGiftBoxUI", "GameEventsUI", "LinkFriendsUI", "TeamsBrowserUI", "PerksUI",
                    "CoopQuickMatchUI", "CoopJoinMatchUI", "MonkeySelectUI", "HeroDetailsUI", "KnowledgeMainUI",
                    "KnowledgeSkillTreeUI", "PlaySocialUI", "PowersSelectUI", "AchievementsUI", "StoreUI",
-                   "TrophyStoreUI", "LegendsSelectUI", "MailboxUI", "MapSelectUI"]
+                   "TrophyStoreUI", "MailboxUI", "MapSelectUI"]
 CORE_SCENES = {
     "MainMenuUI": "Assets/UI - New/MainMenuUi.unity",
     **{name: f"Assets/UI - New/Scenes/{name}.unity" for name in
@@ -308,7 +308,8 @@ def frontend(c):
     c.py("tools/assets/export_rank_info.py", c.game, c.out)
     c.py("tools/assets/sort_heroes.py", c.out)
     c.py("tools/assets/export_power_portraits.py", c.game, c.out)
-    for s in ["export_knowledge_menu", "export_upgrade_xp", "export_legends_menu", "export_social_menu"]:
+    # No Legends menu: the Legends DLC modes aren't supported (DEVIATIONS.md 4).
+    for s in ["export_knowledge_menu", "export_upgrade_xp", "export_social_menu"]:
         c.py(f"tools/assets/{s}.py", c.out)
     c.py("tools/assets/dump_ui_prefab.py", c.game, prefabs,
          "field:StoreScreen/StoreScreen.productButtonSmallPrefab=StoreProductSmall",

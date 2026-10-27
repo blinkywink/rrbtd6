@@ -29,3 +29,44 @@ places the clone is meant to differ, by the owner's request.
 - The Advanced settings menu first lists the original game's advanced settings, then this
   clone's own settings below them.
 - The menu UI should be a bit nicer than a plain list (section headers, consistent spacing).
+- Main menu toggles (all off by default), to clear up space:
+  - **Hide Legends Button** — hides Legends on the main menu.
+  - **Hide Shop Button** — hides the Shop button.
+  - **Hide Event Buttons** — hides the event buttons on the right of the main menu.
+- Planned settings (added once the screens they skip exist):
+  - **Skip Startup Screen** — go straight to the main menu instead of the startup screen.
+  - **Always Use Cloud Save** — skip the "use your local save or your cloud save?" question
+    after pressing Play on the startup screen, and always load the newest cloud save.
+  - **Mods Button** — shows a Mods button on the main menu (see 7).
+
+## 4. No Legends DLC modes
+
+- The two Legends DLC modes (Rogue Legends, Frontier Legends) are not included, and none of
+  their assets are extracted.
+- Clicking Legends on the main menu shows the main menu blurred and inert with a popup like the
+  support one (1):
+
+  > RustTD6 does not support the Legends DLCs.
+
+  with a single **return home** button.
+
+## 5. Account login (planned)
+
+- Logging in to and out of a Ninja Kiwi account from the game's own UI, and the startup
+  screen, as in the original. Not built yet.
+
+## 6. Co-op codes and servers (planned)
+
+- Co-op games hosted by this client use peer-to-peer (iroh) connections, with join codes that
+  look like the official BTD6 codes.
+- Entering a code first looks for an iroh game hosted by this client, then the official BTD6
+  co-op servers, so it can play with both official and RustTD6 clients.
+- Not built yet: connecting to the official co-op servers needs Ninja Kiwi's network protocol.
+
+## 7. Mods (planned)
+
+- An optional **Mods** button on the main menu (Advanced settings) with a set of simple preset
+  mods. The mods themselves are written once the game is complete.
+- In a co-op lobby the host can pick mods for the match; every player on this client gets them
+  applied automatically and sees which are active. Players on the official client are not
+  affected.
