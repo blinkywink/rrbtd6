@@ -539,6 +539,8 @@ pub struct Effect {
     pub keep: bool,
     /// Its lifespan when it went on (Mutable.AddMutator: what a refresh resets it to).
     pub total: f32,
+    /// The frame (sim_elapsed) its behaviour was made: not processed until the next.
+    pub added: u64,
 }
 
 /// BloonManager's mutator ids that Bloon.RemoveAllMutators leaves (IsMutatorIgnoredForRemoval,
@@ -1183,6 +1185,8 @@ pub struct TempAttack {
     pub pauses: bool,
     /// Frames before it starts.
     pub delay: f32,
+    /// ActivateAttack.Activate runs it at the activation (processOnActivate or isOneShot).
+    pub now: bool,
 }
 
 /// One ability button: every tower's copy of the ability `name`.
@@ -2141,8 +2145,8 @@ pub struct Game {
     /// (CreateSoundOnBloonEnterTrack.ResetPlayedBooleans on round start).
     voice_warned: Vec<String>,
     /// EmitOnPopModel shots from bloons that popped: (where, projectile, emission, owner).
-    /// (where, projectile, emission, owner, the bloon's rotation in degrees).
-    pop_emits: Vec<([f32; 2], Box<Proj>, Box<Emission>, u64, f32)>,
+    /// (where, projectile, emission, owner, the bloon's rotation in degrees, its layer).
+    pop_emits: Vec<([f32; 2], Box<Proj>, Box<Emission>, u64, f32, u64)>,
     pub paragon_degree: Option<crate::data::ParagonDegree>,
     /// Difficulty: cost multiplier, sell share, round bonus (base, per round), locked towers,
     /// selling disabled (CHIMPS), and its name.
@@ -3549,7 +3553,7 @@ impl Game {
                 let lead = self.bloons.iter().find(|b| b.id == grabbed[0]).map_or(pos, |b| b.pos);
                 for b in self.bloons.iter_mut().filter(|b| grabbed.contains(&b.id)) {
                     b.effects.retain(|e| e.id != "BeastGrab");
-                    b.effects.push(Effect { kind: EffectKind::Slow { mult: 0.0, glue: 0 }, id: "BeastGrab".into(), frames_left: 2.0, total: 2.0, layers: 1, owner, distribute: (true, false), keep: false });
+                    b.effects.push(Effect { kind: EffectKind::Slow { mult: 0.0, glue: 0 }, id: "BeastGrab".into(), frames_left: 2.0, total: 2.0, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false });
                 }
                 let a = self.towers[t].air.as_mut().unwrap();
                 a.pos = lead;
@@ -4274,7 +4278,7 @@ impl Game {
         // Ability.Activate between frames (input): its ActivateAttackModel attacks act at once,
         // stamped with the frame just simulated (recording ice_050: Absolute Zero's blast is out
         // with the weapon at 120, the frame the ability went on after, and freezes on 121).
-        if !self.in_step && !self.towers[t].temp.is_empty() {
+        if !self.in_step && self.towers[t].temp.iter().any(|x| x.now) {
             // (Towers placed since the last frame have no buffs yet.)
             if self.buffs.len() != self.towers.len() {
                 self.buffs = self.compute_buffs();
@@ -4298,6 +4302,7 @@ impl Game {
                     one_shot: x.one_shot,
                     pauses: x.turn_off_existing,
                     delay: x.delay * FPS,
+                    now: x.one_shot || x.process_on_activate,
                 });
             }
         }
@@ -4360,6 +4365,7 @@ impl Game {
                     id: "MoabBarrage".into(),
                     frames_left: br.lifespan * FPS,
                     total: br.lifespan * FPS,
+                    added: self.sim_elapsed,
                     layers: 1,
                     owner,
                     distribute: (true, false),
@@ -5340,23 +5346,21 @@ impl Game {
         // It emits along the bloon's rotation: 0 for one that doesn't turn with the path
         // (recording ice_520: six shards at -150, -90 ... 150, ArcEmission from 0).
         let rot = if self.defs[kind].rotate_to_follow_path { self.bloons[i].rot } else { 0.0 };
+        let layer = self.bloons[i].layer;
         let b = &mut self.bloons[i];
         let mut pop_emits = Vec::new();
         for e in b.effects.iter_mut().filter(|_| top) {
             if let EffectKind::PopEmit { proj, emission, skip, .. } = &mut e.kind {
                 if !std::mem::take(skip) {
-                    pop_emits.push((pp0, proj.clone(), emission.clone(), e.owner, rot));
+                    pop_emits.push((pp0, proj.clone(), emission.clone(), e.owner, rot, layer));
                 }
             }
         }
         // In the collision pass they come out at once and take part in it (recording ice_520:
         // shards from Reds popped on 2526 hit that frame's new Reds, which emit nothing).
         if self.phase == 0 && self.grid_on {
-            for (pos, proj, emission, owner, rot) in pop_emits {
-                let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
-                self.emit_rot = Some(rot);
-                self.emit(pos, 0.0, &emission, &proj, None, tiers, owner);
-                self.emit_rot = None;
+            for (pos, proj, emission, owner, rot, layer) in pop_emits {
+                self.emit_pop(pos, &proj, &emission, owner, rot, layer);
             }
         } else {
             self.pop_emits.extend(pop_emits);
@@ -6098,8 +6102,10 @@ impl Game {
             // midpoint instead of turning with each throw.
             let middle = tier.attacks.iter().any(|a| a.face_middle);
             for (ai, attack) in tier.attacks.iter().chain(extra.iter()).enumerate() {
-                // At an activation only the ability's attacks act.
-                if only_temp.is_some() && ai < tier.attacks.len() {
+                // At an activation only the ability's attacks act, those ActivateAttack.Activate
+                // (VERIFIED-DISASM @0xe20900) processes then: processOnActivate or isOneShot
+                // (recording glue_040: Glue Strike, neither, throws on the next frame).
+                if only_temp.is_some() && (ai < tier.attacks.len() || !self.towers[t].temp[ai - tier.attacks.len()].now) {
                     wi += attack.weapons.len();
                     continue;
                 }
@@ -7212,6 +7218,7 @@ impl Game {
     /// and emissions are applied by the caller, after the moves).
     #[allow(clippy::type_complexity)]
     fn tick_bloon_effects(&mut self, i: usize, round_clock: i64, dots: &mut Vec<(u64, f32, u32, u64, (bool, bool))>, emits: &mut Vec<([f32; 2], Box<Proj>, u64)>) {
+        let now = self.sim_elapsed;
         let b = &mut self.bloons[i];
         // (Bloons made this frame aren't in the process list yet.)
         if b.fresh {
@@ -7222,6 +7229,12 @@ impl Game {
             let behind = b.effects[..k].iter().any(|x| x.id == b.effects[k].id);
             let e = &mut b.effects[k];
             e.frames_left -= 1.0;
+            // HYPOTHESIS P-NEWBEHAVIOR: a behaviour made this frame (its mutator went on in the
+            // collision pass) isn't processed until the next (recording glue_005: a
+            // triggerImmediate DoT put on at 81 ticks at 82).
+            if e.added == now && matches!(e.kind, EffectKind::Dot { .. } | EffectKind::PopEmit { .. }) {
+                continue;
+            }
             match &mut e.kind {
                 // EmitOnPop.Process (@0x83a5a0): ignoringSameFrameDegrade = false.
                 EffectKind::PopEmit { skip, .. } => *skip = false,
@@ -7703,7 +7716,15 @@ impl Game {
             let kind = match e.kind.as_str() {
                 "slow" => EffectKind::Slow { mult, glue: e.glue },
                 "freeze" => EffectKind::Freeze,
-                "dot" => EffectKind::Dot { damage: e.damage, interval: e.interval * FPS, tick: self.round_clock as f32, immune: e.immune },
+                // DamageOverTime.Initialise (VERIFIED-DISASM @0x1003e50): lastTick = the clock +
+                // initialDelayFrames, or -999999999 with triggerImmediate (recording glue_005: Super
+                // Glue's MOAB DoT deals its 30 the frame after the hit).
+                "dot" => EffectKind::Dot {
+                    damage: e.damage,
+                    interval: e.interval * FPS,
+                    tick: if e.trigger_immediate { -999999999.0 } else { self.round_clock as f32 + (e.initial_delay * FPS).round() },
+                    immune: e.immune,
+                },
                 "brittle" => EffectKind::Brittle { damage: e.damage },
                 // HYPOTHESIS P-TRANCE: the bloon leaves its track spot and circles the tower that
                 // hit it at orbitRadius, entering where it was hit, at its own speed x
@@ -7718,7 +7739,7 @@ impl Game {
                     let f = if has("Moabs") { e.moab_mult } else { e.mult };
                     let r = e.radius.max(1.0);
                     add.push((
-                        Effect { kind: EffectKind::Cooldown, id: format!("{}Cooldown", e.id), frames_left: (lifespan + e.cooldown) * FPS, total: (lifespan + e.cooldown) * FPS, layers: 1, owner, distribute: (true, false), keep: false },
+                        Effect { kind: EffectKind::Cooldown, id: format!("{}Cooldown", e.id), frames_left: (lifespan + e.cooldown) * FPS, total: (lifespan + e.cooldown) * FPS, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false },
                         false,
                     ));
                     EffectKind::Trance {
@@ -7747,7 +7768,7 @@ impl Game {
                 },
                 _ => continue,
             };
-            add.push((Effect { kind, id: e.id.clone(), frames_left: lifespan * FPS, total: lifespan * FPS, layers: e.layers.max(1), owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade }, e.refresh));
+            add.push((Effect { kind, id: e.id.clone(), frames_left: lifespan * FPS, total: lifespan * FPS, added: self.sim_elapsed, layers: e.layers.max(1), owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade }, e.refresh));
         }
         let kind = self.bloons[i].kind;
         add.retain(|(e, _)| !self.bad_immune_to(kind, &e.id));
@@ -7797,6 +7818,20 @@ impl Game {
                 Some(_) => {}
                 None => b.effects.push(eff),
             }
+        }
+    }
+
+    /// EmitOnPop.PreDegrade (VERIFIED-DISASM @0x100bcd0): its projectiles from where the bloon
+    /// popped, along its rotation, each with the popped bloon in collidedWith, so none hits what
+    /// it degraded into (recording glue_005: a MOAB's glue splat passes over its Ceramics).
+    fn emit_pop(&mut self, pos: [f32; 2], proj: &Proj, emission: &Emission, owner: u64, rot: f32, layer: u64) {
+        let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
+        let start = self.projectiles.len();
+        self.emit_rot = Some(rot);
+        self.emit(pos, 0.0, emission, proj, None, tiers, owner);
+        self.emit_rot = None;
+        for pr in &mut self.projectiles[start..] {
+            pr.hit.push(layer);
         }
     }
 
@@ -7970,7 +8005,10 @@ impl Game {
                     let f = spec.lifespan * FPS;
                     if f.is_finite() { (f as f64).round_ties_even() as f32 } else { f }
                 },
-                pierce: spec.pierce,
+                // Projectile.Initialise (VERIFIED-DISASM @0xcac15d): ProjectileModel
+                // .get_CappedPierce (pierce, or maxPierce when that's set and lower), at least 1
+                // (recording glue_020: Corrosive Glue's pierce-4 glob with maxPierce 1 hits once).
+                pierce: if spec.max_pierce > 0.0 && spec.max_pierce <= spec.pierce { spec.max_pierce } else { spec.pierce }.max(1.0),
                 spec: {
                     let mut sp = spec.clone();
                     // SupportRemoveFilterOutTagModel: a buffed tower's shots skip their tag filters.
@@ -8093,11 +8131,8 @@ impl Game {
         }
         let p0 = std::time::Instant::now();
         // EmitOnPopModel: pops after last frame's collision pass (in a bloon's own Process).
-        for (pos, proj, emission, owner, rot) in std::mem::take(&mut self.pop_emits) {
-            let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
-            self.emit_rot = Some(rot);
-            self.emit(pos, 0.0, &emission, &proj, None, tiers, owner);
-            self.emit_rot = None;
+        for (pos, proj, emission, owner, rot, layer) in std::mem::take(&mut self.pop_emits) {
+            self.emit_pop(pos, &proj, &emission, owner, rot, layer);
         }
         self.comanche_defence();
         self.forget_untouched();
@@ -8685,7 +8720,7 @@ impl Game {
                             if !ok || b.effects.iter().any(|e| matches!(e.kind, EffectKind::Knock { .. })) {
                                 continue;
                             }
-                            b.effects.push(Effect { kind: EffectKind::Knock { m }, id: "Knockback".into(), frames_left: (kb.lifespan * FPS).round(), total: (kb.lifespan * FPS).round(), layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
+                            b.effects.push(Effect { kind: EffectKind::Knock { m }, id: "Knockback".into(), frames_left: (kb.lifespan * FPS).round(), total: (kb.lifespan * FPS).round(), added: self.sim_elapsed, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
                             if b.dist != b.prev_dist {
                                 let s = speed_frames(b.model_speed(b.frozen_speed(&self.defs[b.kind], self.defs[b.kind].speed)));
                                 b.dist = (b.prev_dist + s * b.track_mult * 1.0 * b.mult).max(0.0);
@@ -8888,11 +8923,8 @@ impl Game {
         // EmitOnPop.PreDegrade emits at the pop (VERIFIED-DISASM @0x100bcd0; recording ice_520:
         // the shards are out where the bloons popped on that frame), so this pass's pops come out
         // now. INFERRED: before the pass's exhaust projectiles.
-        for (pos, proj, emission, owner, rot) in std::mem::take(&mut self.pop_emits) {
-            let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
-            self.emit_rot = Some(rot);
-            self.emit(pos, 0.0, &emission, &proj, None, tiers, owner);
-            self.emit_rot = None;
+        for (pos, proj, emission, owner, rot, layer) in std::mem::take(&mut self.pop_emits) {
+            self.emit_pop(pos, &proj, &emission, owner, rot, layer);
         }
         self.spawn_exhausted(now.into_iter().map(|(a, b, c, d, e, f, g, _)| (a, b, c, d, e, f, g)).collect());
         let e = p2.elapsed().as_secs_f64();

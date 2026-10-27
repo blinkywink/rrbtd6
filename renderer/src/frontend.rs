@@ -177,6 +177,43 @@ fn scroll_limit(tree: &Node, viewport: &str, content: &str, scale: f32) -> f32 {
     ((content.unclipped_screen.h - view.h) / scale).max(0.0)
 }
 
+const ADV_SECTIONS: [&str;3] = ["Default","Graphics","UI"];
+
+fn advanced_row_section(name:&str)->usize{
+    match name.strip_prefix("Ours").and_then(|v|v.parse::<usize>().ok()){
+        Some(1..=6)=>1,
+        Some(_)=>2,
+        None=>0,
+    }
+}
+
+fn advanced_sections(tree:&mut Node,expanded:[bool;3]){
+    if let Some(content)=tree.find_mut(ACC_CONTENT){
+        for row in &mut content.children{
+            if let Some(i)=row.name.strip_prefix("Section").and_then(|v|v.parse::<usize>().ok()){
+                row.set_active("ToggleButton/OpenIcon",!expanded[i]);
+                row.set_active("ToggleButton/CloseIcon",expanded[i]);
+            }else{
+                row.active=expanded[advanced_row_section(&row.name)];
+            }
+        }
+    }
+}
+
+fn advanced_toggle(tree:&mut Node,path:&str,on:bool){
+    // ToggleOn/ToggleOff endpoints from the original Toggle controller.
+    if let Some(bg)=tree.find_mut(&format!("{path}/Bg")).and_then(|n|n.img.as_mut()){
+        bg.color=if on{Color::from_rgba(129,255,0,255)}else{Color::from_rgba(56,32,15,255)};
+    }
+    if let Some(knob)=tree.find_mut(&format!("{path}/BtnOn")){
+        knob.rt.pos.x=if on{80.0}else{-80.0};
+        if let Some(img)=knob.img.as_mut(){img.color=WHITE;}
+    }
+    if let Some(label)=tree.find_mut(&format!("{path}/TxtOn")).and_then(|n|n.txt.as_mut()){
+        label.color=if on{WHITE}else{Color::from_rgba(205,152,97,255)};
+    }
+}
+
 pub struct FrontEnd {
     account_generation:u64,
     map_group_key:Option<(usize,usize)>,map_group_began:Option<f64>,
@@ -254,6 +291,7 @@ pub struct FrontEnd {
     /// The Trophy Store button's original height (it takes the Shop's slot when that's hidden).
     trophy_store_y: Option<f32>,
     adv_scroll: f32,
+    adv_expanded: [bool; 3],
     hotkeys: Option<Node>,
     pub binds: crate::keybinds::Keybinds,
     /// The hotkey row waiting for a key press.
@@ -566,6 +604,7 @@ impl FrontEnd {
             adv: crate::advanced::Advanced::default(),
             trophy_store_y: None,
             adv_scroll: 0.0,
+            adv_expanded: [false; 3],
             hotkeys: None,
             binds: crate::keybinds::Keybinds::defaults(),
             rebinding: None,
@@ -700,21 +739,23 @@ impl FrontEnd {
                 }
             }
             Screen::Advanced if self.advanced.is_none() => {
-                // The original AccessibilitySettingsUI, then a section of our own settings built
-                // from its rows (see DEVIATIONS.md): the "Advanced" title, Cash Spent Tracker's
-                // toggle-with-description and Effects Scale's slider-with-description.
+                // Preserve the original rows and their paths; section headers use the native
+                // Hotkeys collapsible control, sized to this popup's content width.
                 self.advanced = scene(&d.join("AccessibilitySettingsUI.json"));
+                let header=scene(&d.join("HotkeysUI.json"))
+                    .and_then(|m|m.find(&format!("{HK_CONTENT}/CollapsiblePanel")).cloned());
                 if let Some(m) = self.advanced.as_mut() {
                     if let Some(v) = m.find_mut(ACC_VIEW) {
                         v.clip = true;
                     }
                     let rows = self.adv.rows();
                     if let Some(c) = m.find_mut(ACC_CONTENT) {
+                        // ContentSizeFitter owns the height; do not also stretch it by the
+                        // viewport height, which leaves a false scrollbar when collapsed.
+                        c.rt.amin.y=1.0;c.rt.amax.y=1.0;
                         let tpl = |n: &str| c.children.iter().find(|r| r.name == n).cloned();
                         if let (Some(title), Some(toggle), Some(slider)) = (tpl("AdvancedTitle"), tpl("CashSpent"), tpl("EffectsScale")) {
-                        let mut head = title;
-                        head.name = "OursTitle".into();
-                        let mut extra = vec![head];
+                        let mut extra = Vec::new();
                         for (i, row) in rows.iter().enumerate() {
                             let mut r = if matches!(row, crate::advanced::Row::Slider(..)) {
                                 let mut r = slider.clone();
@@ -736,7 +777,24 @@ impl FrontEnd {
                             r.name = format!("Ours{i}");
                             extra.push(r);
                         }
-                        c.children.extend(extra);
+                        let original=std::mem::take(&mut c.children);
+                        for (section,name) in ADV_SECTIONS.iter().enumerate(){
+                            let mut head=header.clone().unwrap_or_else(||title.clone());
+                            head.name=format!("Section{section}");
+                            head.le_min=vec2(1800.0,160.0);head.le_pref=vec2(2400.0,160.0);
+                            head.le_flex=vec2(1.0,-1.0);head.rt.size=vec2(2400.0,160.0);
+                            head.set_text("Header",name);head.set_text("Title2",name);
+                            // The whole bar toggles, including its label.
+                            head.set_active("ToggleButton/Hit",false);
+                            if let Some(label)=head.find_mut("Header"){
+                                label.rt.amin=vec2(0.0,0.5);label.rt.amax=vec2(1.0,0.5);
+                                label.rt.pos=vec2(80.0,0.0);label.rt.size=vec2(-220.0,150.0);
+                            }
+                            c.children.push(head);
+                            if section==0{c.children.extend(original.iter().cloned());}
+                            else{c.children.extend(extra.iter().filter(|r|advanced_row_section(&r.name)==section).cloned());}
+                        }
+                        advanced_sections(m,[false;3]);
                         }
                     }
                 }
@@ -826,6 +884,7 @@ impl FrontEnd {
 
     pub fn open_game_options(&mut self,screen:Screen,backdrop:crate::menus::Backdrop) {
         self.game_options_root=Some(screen);self.screen=screen;self.back_requested=false;
+        self.motion_screen=None;
         self.backdrop=Some((screen_width() as u32,screen_height() as u32,backdrop));
         self.drag=None;self.rebinding=None;
     }
@@ -854,6 +913,17 @@ impl FrontEnd {
         if self.motion_screen==Some(self.screen){return;}
         self.motion_screen=Some(self.screen);self.motion_began=None;self.motion_pending=true;
         if self.screen==Screen::Maps{self.map_group_key=None;self.map_group_began=None;}
+        if self.screen==Screen::Advanced {
+            self.adv_expanded=[false;3];self.adv_scroll=0.0;self.drag=None;
+            // Screenshot previews never change the saved settings.
+            if std::env::var_os("RRBTD6_AUTOTEST").is_some(){
+                if let Ok(groups)=std::env::var("RRBTD6_ADVANCED_SECTIONS"){
+                    for (i,name) in ADV_SECTIONS.iter().enumerate(){
+                        self.adv_expanded[i]=groups.split(',').any(|v|v.eq_ignore_ascii_case(name));
+                    }
+                }
+            }
+        }
         if self.screen_motions.iter().any(|(s,..)|*s==self.screen){
             if let Some((_,_,buttons,..))=self.screen_motions.iter_mut().find(|(s,..)|*s==self.screen){buttons.reset();}return;
         }
@@ -1687,15 +1757,16 @@ impl Hud {
                         fe.drag = None;
                     }
                     let c = ACC_CONTENT;
-                    // A toggle's knob slides right and lights when on.
-                    fn knob(m: &mut Node, anim: &str, on: bool) {
-                        if let Some(k) = m.find_mut(&format!("{anim}/BtnOn")) {
-                            k.rt.pos.x = if on { 90.0 } else { -90.0 };
-                            if let Some(img) = k.img.as_mut() {
-                                img.color = if on { WHITE } else { Color::new(0.55, 0.55, 0.55, 1.0) };
-                            }
+                    let mut sections_changed=false;
+                    for i in 0..ADV_SECTIONS.len(){
+                        if m.clicked(&format!("{c}/Section{i}")){
+                            fe.adv_expanded[i]=!fe.adv_expanded[i];
+                            fe.drag=None;sections_changed=true;
                         }
                     }
+                    advanced_sections(m,fe.adv_expanded);
+                    // Skip row input on the layout-changing click: its old bounds belong to
+                    // the previous arrangement, and must not receive the same click.
                     // The original's options.
                     m.set_text(&format!("{c}/AccessibilityTitle/Title"), &l("Accessibility", "Accessibility"));
                     for (row, title, desc, slot) in [("EffectsScale/FxSlider", "EffectsScale", "EffectsScaleDescription", 0usize),
@@ -1705,7 +1776,7 @@ impl Hud {
                         let dpath = if slot == 0 { "EffectsScale/FxDescription/Text" } else { "Stereo/StereoDescription/Text" };
                         m.set_text(&format!("{c}/{dpath}"), &l(desc, ""));
                         let sl = format!("{r}/Slider");
-                        if let Some(t) = drag_slider(m, &sl, 40 + slot, &mut fe.drag) {
+                        if let Some(t) = (!sections_changed).then(||drag_slider(m, &sl, 40 + slot, &mut fe.drag)).flatten() {
                             *(if slot == 0 { &mut fe.adv.effects_scale } else { &mut fe.adv.stereo }) = (t * 20.0).round() / 20.0;
                             changed = true;
                         }
@@ -1718,7 +1789,7 @@ impl Hud {
                         let b = format!("{c}/RangeCircles/Textures/OptionsGroup/{name}");
                         m.set_text(&format!("{b}/Text"), &l(key, name));
                         m.set_active(&format!("{b}/SelectedIcon"), fe.adv.range_circle as usize == k);
-                        if m.clicked(&b) {
+                        if !sections_changed && m.clicked(&b) {
                             fe.adv.range_circle = k as u8;
                             changed = true;
                         }
@@ -1730,22 +1801,21 @@ impl Hud {
                         m.set_text(&format!("{anim}/TxtOn"), &l(key, or));
                         let on = [&mut fe.adv.ambient_fx, &mut fe.adv.tower_snapping, &mut fe.adv.numerical_timers, &mut fe.adv.cash_spent];
                         let v = on.into_iter().nth(k).unwrap();
-                        if m.clicked(&format!("{anim}/HitBox")) {
+                        if !sections_changed && m.clicked(&format!("{anim}/HitBox")) {
                             *v = !*v;
                             changed = true;
                         }
-                        knob(m, &anim, *v);
+                        advanced_toggle(m, &anim, *v);
                     }
                     m.set_text(&format!("{c}/CashSpent/Description/Text"), &l("CashSpentTrackerInfo", "Display overall cash spent in-game"));
                     m.set_text(&format!("{c}/ReleaseMemory/ToggleGroup/Anim/TxtOn"), &l("MemoryOptimization", "Memory Optimization"));
                     m.set_text(&format!("{c}/ReleaseMemory/Description/Text"), &l("MemoryOptimizationInfo", ""));
-                    if m.clicked(&format!("{c}/ReleaseMemory/ToggleGroup/Anim/HitBox")) {
+                    if !sections_changed && m.clicked(&format!("{c}/ReleaseMemory/ToggleGroup/Anim/HitBox")) {
                         fe.adv.memory_opt = !fe.adv.memory_opt;
                         changed = true;
                     }
-                    knob(m, &format!("{c}/ReleaseMemory/ToggleGroup/Anim"), fe.adv.memory_opt);
+                    advanced_toggle(m, &format!("{c}/ReleaseMemory/ToggleGroup/Anim"), fe.adv.memory_opt);
                     // Ours.
-                    m.set_text(&format!("{c}/OursTitle/Title2"), "Graphics & Performance");
                     for (i, row) in fe.adv.rows().iter().enumerate() {
                         let r = format!("{c}/Ours{i}");
                         match row {
@@ -1753,18 +1823,16 @@ impl Hud {
                                 let anim = format!("{r}/ToggleGroup/Anim");
                                 m.set_text(&format!("{anim}/TxtOn"), label);
                                 m.set_text(&format!("{r}/Description/Text"), desc);
-                                knob(m, &anim, *on);
-                                if m.clicked(&format!("{anim}/HitBox")) {
-                                    fe.adv.toggle(i);
-                                    changed = true;
-                                }
+                                let clicked=!sections_changed && m.clicked(&format!("{anim}/HitBox"));
+                                if clicked {fe.adv.toggle(i);changed=true;}
+                                advanced_toggle(m,&anim,*on ^ clicked);
                             }
                             // Stepped sliders snap to their stops.
                             crate::advanced::Row::Slider(label, t, value, _, desc) => {
                                 m.set_text(&format!("{r}/FxSlider/Title"), label);
                                 m.set_text(&format!("{r}/FxDescription/Text"), desc);
                                 let sl = format!("{r}/FxSlider/Slider");
-                                if let Some(nt) = drag_slider(m, &sl, 10 + i, &mut fe.drag) {
+                                if let Some(nt) = (!sections_changed).then(||drag_slider(m, &sl, 10 + i, &mut fe.drag)).flatten() {
                                     fe.adv.slide(i, nt);
                                     changed = true;
                                 }
@@ -1788,7 +1856,7 @@ impl Hud {
                         h.rt.amin = vec2(0.0, top - size);
                         h.rt.amax = vec2(1.0, top);
                     }
-                    if m.clicked(&format!("{ACC}/Panel/OkBtn")) {
+                    if !sections_changed && m.clicked(&format!("{ACC}/Panel/OkBtn")) {
                         fe.back_requested = true;
                     }
                     if changed {

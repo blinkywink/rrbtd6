@@ -26,8 +26,9 @@ places the clone is meant to differ, by the owner's request.
 
 ## 3. Advanced settings
 
-- The Advanced settings menu first lists the original game's advanced settings, then this
-  clone's own settings below them.
+- Advanced settings has three collapsible sections, closed whenever the screen opens:
+  **Default** (original settings), **Graphics** (client rendering options), and **UI**
+  (FPS display, menu visibility and startup options).
 - The menu UI should be a bit nicer than a plain list (section headers, consistent spacing).
 - Main menu toggles (all off by default), to clear up space:
   - **Hide Legends Button** — hides Legends on the main menu.

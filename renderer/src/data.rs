@@ -1186,6 +1186,9 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// ProjectileModel.maxPierce: caps the starting pierce when above 0 (get_CappedPierce).
+    #[serde(default)]
+    pub max_pierce: f32,
     /// It has a DamageModel.
     #[serde(default)]
     pub damage_model: bool,
@@ -1570,6 +1573,9 @@ pub struct AmmoSwap {
 pub struct ActivateAttack {
     pub lifespan: f32,
     pub one_shot: bool,
+    /// processOnActivate: the attacks act at the activation itself.
+    #[serde(default)]
+    pub process_on_activate: bool,
     /// turnOffExisting: the tower's own attacks pause meanwhile.
     pub turn_off_existing: bool,
     pub attacks: Vec<Attack>,
@@ -1952,6 +1958,12 @@ pub struct EffectSpec {
     /// BehaviorMutator.dontRemoveOnBloonDegrade: kept when a MOAB-class bloon pops.
     #[serde(default)]
     pub keep_on_degrade: bool,
+    /// DamageOverTimeModel.triggerImmediate: the first tick comes at once.
+    #[serde(default)]
+    pub trigger_immediate: bool,
+    /// DamageOverTimeModel.initialDelay (seconds): the first tick waits this on top.
+    #[serde(default)]
+    pub initial_delay: f32,
     /// FreezeModel.applyAfterDamage: it goes on after the damage, on what the bloon is then.
     #[serde(default)]
     pub after_damage: bool,

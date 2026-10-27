@@ -323,6 +323,8 @@ def main():
                     effects.append({"kind": "dot", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
                                     "layers": sf.get("layers", 1), "damage": df["damage"], "interval": df["interval"],
                                     "immune": df.get("immuneBloonProperties", 0),
+                                    "trigger_immediate": bool(df.get("triggerImmediate", False)),
+                                    "initial_delay": df.get("initialDelay", 0.0),
                                     # Mutable.AddMutator: an isUnique mutator the bloon already has
                                     # is left as it is (no new timer, damage or tick).
                                     "refresh": not sf.get("isUnique", False),
@@ -982,6 +984,7 @@ def main():
                         out["takedown"] = takedown
                 if x["type"] == "ActivateAttackModel" and not takedown:
                     out["activate"].append({"lifespan": xf.get("lifespan", 0.0), "one_shot": bool(xf.get("isOneShot")),
+                                            "process_on_activate": bool(xf.get("processOnActivate")),
                                             "turn_off_existing": bool(xf.get("turnOffExisting")),
                                             "attacks": [parse_attack(a) for a in items(xf.get("attacks")) if a]})
                 # MarkedToPopModel (Desperado): after markingTimeFrames the execution attack fires
