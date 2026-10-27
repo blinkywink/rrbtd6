@@ -47,6 +47,10 @@ jobs:
         shell: bash
         run: cargo build -p btd6-game -p rrbtd6-launcher --release
 
+      - name: Test embedded Python bootstrap
+        shell: bash
+        run: python -I tools/test_launcher_bootstrap.py target/release/rrbtd6-launcher.exe
+
       - name: Build installer mod
         shell: bash
         run: |
