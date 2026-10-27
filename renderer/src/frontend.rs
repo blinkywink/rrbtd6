@@ -834,9 +834,23 @@ impl FrontEnd {
         }
     }
 
+    pub(crate) fn finish_startup(&mut self) {
+        self.screen = Screen::Main;
+        self.ensure();
+        self.main_open_animation = Some(get_time());
+    }
+
+    pub(crate) async fn draw_home_underlay(&mut self) {
+        self.draw_world_with_input(false).await;
+    }
+
     /// Draws the island behind the menus (MainMenuWorld's camera: perspective, 27 degrees,
     /// at (0, -510, -726) pitched 19.2 degrees down).
     async fn draw_world(&mut self) {
+        self.draw_world_with_input(true).await;
+    }
+
+    async fn draw_world_with_input(&mut self, allow_input: bool) {
         self.prepare_home().await;
         clear_background(Color::from_rgba(120, 196, 236, 255));
         let Some(w) = &mut self.world else { return };
@@ -855,7 +869,7 @@ impl FrontEnd {
             z_far: 1300.0,
             ..Default::default()
         });
-        if self.screen==Screen::Main {
+        if self.screen==Screen::Main && allow_input {
             let vp=unsafe {get_internal_gl()}.quad_gl.get_projection_matrix();
             self.world_motion.debug_interact(vp,w);
             if is_mouse_button_pressed(MouseButton::Left) {

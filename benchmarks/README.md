@@ -467,9 +467,9 @@ Same game-profile binary, alternating `ref1,opt1,opt2,ref2`; the reference sets
 `RRBTD6_NO_TITLE_PRELOAD=1`. `RRBTD6_STARTUP_FRAME_TRACE=1` records presented
 frame intervals. In the authored logo reveal window (3.2–4.3 s), worst intervals
 were 116.07 / 92.41 ms in the reference and 11.81 / 11.25 ms with preparation.
-The reference decoded/uploaded 32 newly requested sprites during that window;
-preparation left only two unresolved optional variant names, which perform no
-image decode. Original curves and playback speed were unchanged.
+The reference requested 32 sprites during that window: 30 available images and
+two unresolved optional variant names. Preparation left only the two unresolved
+variant requests, which perform no image decode. Original curves and playback speed were unchanged.
 
 The final loading job took 120–121 ms in the reference and 382–470 ms with
 preparation; that work now runs behind the loading animation. A separate check

@@ -707,3 +707,12 @@ avoiding synchronous PNG decoding at the moment those sprites become visible.
 `RRBTD6_NO_TITLE_PRELOAD=1` retains first-use loading for an A/B reference;
 `RRBTD6_STARTUP_FRAME_TRACE=1` logs title-frame intervals, and
 `RRBTD6_UI_MISS_TRACE=1` identifies remaining first-use sprite loads.
+
+The title exit now composites its original transparent-sky fade over the home
+world. Background input stays disabled during the exit, and the main-menu UI
+opens on the same frame the title finishes instead of presenting an empty
+closing frame. `RRBTD6_STARTUP_PRESS_START=1` automates Start after the intro
+when `RRBTD6_AUTOTEST` is set. Pair it with `RRBTD6_PRESENTATION_CHECK` and
+`RRBTD6_PRESENTATION_STRICT=1` to audit the physical handoff presentations.
+`RRBTD6_STARTUP_TRANSITION_OUT` captures the beginning, middle and end of the
+exit into an existing directory.

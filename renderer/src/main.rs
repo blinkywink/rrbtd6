@@ -1128,23 +1128,26 @@ async fn game_main() {
                     Some(f) => { audio.set_music_volume(full * f); audio.music(get_time()); }
                     None => audio.set_music_volume(0.0),
                 }
+                if st.transitioning_home() { front.draw_home_underlay().await; }
                 if st.draw(h) {
                     startup = None;
                     audio.set_music_volume(full);
-                }
-                draw_cursor(&cursor_up, &cursor_down);
-                if let (true, Some(path)) = (startup_test, &autotest) {
-                    frames += 1;
-                    if frames >= std::env::var("RRBTD6_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(420) {
-                        get_screen_data().export_png(path);
-                        eprintln!("autotest: startup screenshot");
-                        break;
+                    front.finish_startup();
+                } else {
+                    draw_cursor(&cursor_up, &cursor_down);
+                    if let (true, Some(path)) = (startup_test, &autotest) {
+                        frames += 1;
+                        if frames >= std::env::var("RRBTD6_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(420) {
+                            get_screen_data().export_png(path);
+                            eprintln!("autotest: startup screenshot");
+                            break;
+                        }
                     }
+                    pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
+                    next_frame().await;
+                    frame_t0 = std::time::Instant::now();
+                    continue;
                 }
-                pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
-                next_frame().await;
-                frame_t0 = std::time::Instant::now();
-                continue;
             }
             let front_t0=frontend_timing.then(std::time::Instant::now);
             let mut act = None;

@@ -1077,6 +1077,9 @@ pub struct Tower {
     pub paragon_first: u64,
     /// The attack model names it had before it became a Paragon (those Attacks carry on).
     pub paragon_kept: Vec<String>,
+    /// When each of its Attacks (by AttackModel name) was made, as Bloon.born: its place in the
+    /// process list. An upgrade keeps an Attack of the same name; a new one is made then.
+    pub attack_born: HashMap<String, u64>,
     /// Orbit (Glaive Lord): its circling glaives.
     pub orbit: Option<OrbitState>,
     /// Running ability boosts to its projectiles, with frames left.
@@ -3148,6 +3151,7 @@ impl Game {
             paragon_active_at: 0,
             paragon_first: 0,
             paragon_kept: Vec::new(),
+            attack_born: HashMap::new(),
             orbit: None,
             temple: None,
             // MonkeyAnimationController.placementConfigs: the monkey drops in (anim.rs).
@@ -3623,6 +3627,7 @@ impl Game {
             paragon_active_at: 0,
             paragon_first: 0,
             paragon_kept: Vec::new(),
+            attack_born: HashMap::new(),
             orbit: None,
             temple: None,
             show: None,
@@ -5536,8 +5541,11 @@ impl Game {
     /// or 3 without (-0.2 a frame), the angle grows by it (less 360 past 360), and glaive k sits
     /// at the tower + Vector2.Rotate((0, range), 360 / count x k + angle). Orbit.ctor starts the
     /// speed at 3; AddProjectiles makes the glaives when it attaches.
-    fn orbit_step(&mut self) {
+    fn orbit_step(&mut self, paragons: bool) {
         for t in 0..self.towers.len() {
+            if self.towers[t].paragon.is_some() != paragons {
+                continue;
+            }
             // (A Paragon's Orbit stays inactive, its glaives unmade, until the Paragon is active:
             // recording boomerang_paragon_r40, Glaive Dominus's glaives appear 120 frames after
             // the purchase.)
@@ -5563,7 +5571,12 @@ impl Game {
                 let (dx, dy) = (b.pos[0] - c[0], b.pos[1] - c[1]);
                 !(1600.0 < dx * dx + dy * dy)
             });
-            if !kept {
+            if remade && !kept {
+                // (Back from inactive it keeps a bloon it saw before but finds no new one that
+                // frame: recordings boomerang_paragon_r78, a Rainbow 10 away counts from the
+                // next, and r63, its old bloon still counts.)
+                st.seen = None;
+            } else if !kept {
                 // (No filter: camo bloons count too; recording boomerang_500, a camo Rainbow.)
                 st.seen = self.closest_target(c, 40.0, |_| true, |b| b.pos).map(|i| self.bloons[i].id);
             }
@@ -5594,6 +5607,166 @@ impl Game {
             }
             self.towers[t].orbit = Some(st);
         }
+    }
+
+    /// Processes (effects, then move) the bloons made before `stamp` that this frame hasn't yet:
+    /// they come before it in the process list.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn process_bloons_before(&mut self, stamp: u64, early: &mut std::collections::HashSet<u64>, round_clock: i64,
+        dots: &mut Vec<(u64, f32, u32, u64, (bool, bool))>, emits: &mut Vec<([f32; 2], Box<Proj>, u64)>,
+        zones: &[([f32; 2], f32, crate::data::Zone)], shoves: &[([f32; 2], crate::data::MoabShove)], leak_voice: &mut bool) {
+        let mut j = 0;
+        while j < self.bloons.len() {
+            let b = &self.bloons[j];
+            if b.born >= stamp || b.fresh || early.contains(&b.id) {
+                j += 1;
+                continue;
+            }
+            early.insert(b.id);
+            self.tick_bloon_effects(j, round_clock, dots, emits);
+            if !self.move_bloon(j, zones, shoves, leak_voice) {
+                j += 1;
+            }
+        }
+    }
+
+    /// Bloon.Process's move for bloon `i` (speed, track, splitters, rotation, leak); true when
+    /// it leaked and was removed (the next bloon is now at `i`).
+    #[allow(clippy::type_complexity)]
+    fn move_bloon(&mut self, i: usize, zones: &[([f32; 2], f32, crate::data::Zone)], shoves: &[([f32; 2], crate::data::MoabShove)], leak_voice: &mut bool) -> bool {
+        let mut mult = self.bloons[i].speed_mult();
+        if mult > 0.0 && !zones.is_empty() {
+            let d = &self.defs[self.bloons[i].kind];
+            let p = self.bloons[i].pos;
+            for (c, r, z) in zones {
+                let rr = r + d.radius;
+                if (z.camo || !d.is_camo)
+                    && !z.exclude_tags.iter().any(|t| d.tags.contains(t))
+                    && (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) <= rr * rr
+                {
+                    mult = mult.min(z.scale);
+                }
+            }
+        }
+        if !shoves.is_empty() {
+            let d = &self.defs[self.bloons[i].kind];
+            let p = self.bloons[i].pos;
+            for (c, sh) in shoves {
+                let rr = sh.range + d.radius;
+                if (sh.camo || !self.bloons[i].camo(d)) && (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) <= rr * rr {
+                    let has = |t: &str| d.tags.iter().any(|x| x == t);
+                    let cap = if has("Moab") { Some(sh.moab) } else if has("Bfb") { Some(sh.bfb) } else if has("Zomg") { sh.zomg } else { None };
+                    if let Some(cap) = cap {
+                        mult = mult.min(cap);
+                    }
+                }
+            }
+        }
+        let b = &mut self.bloons[i];
+        if let Some(EffectKind::Trance { centre, radius, angle, rate }) = b.effects.iter_mut().map(|e| &mut e.kind).find(|k| matches!(k, EffectKind::Trance { .. })) {
+            *angle += *rate;
+            b.pos = [centre[0] + *radius * angle.cos(), centre[1] + *radius * angle.sin()];
+            return false;
+        }
+        let mut moved = None;
+        if b.fresh {
+            b.fresh = false;
+        } else {
+            b.mult = mult;
+            moved = Some(speed_frames(b.model_speed(self.defs[b.kind].speed)) * b.track_mult * 1.0 * mult);
+            // Bloon.get_TotalSpeedFrames (VERIFIED-DISASM @0xfd7730): speedFrames (speed /
+            // 60) x trackSpeedMultiplier x the spawner's multiplier (1) x behaviours'.
+            b.dist = (b.dist + speed_frames(b.model_speed(self.defs[b.kind].speed)) * b.track_mult * 1.0 * mult).max(0.0);
+            // Bloon.Move keeps a moving bloon from trailing the entrance by more than
+            // 1.25 x its radius; a child made behind it this frame stays put until it moves
+            // (recording dart_400: a Lead's fourth Pink sits at 169.2, then 173.6).
+            if let Some(sd) = self.track_ends.get(b.path as usize).and_then(|e| e.0) {
+                let m = sd - self.defs[b.kind].radius * 1.25;
+                if b.dist <= m {
+                    b.dist = m;
+                }
+            }
+        }
+        // At its track's end, a bloon with an exit splitter goes on to the splitter's next
+        // path (Splitter.Rout: round-robin, counter per splitter), keeping the overflow.
+        loop {
+            let k = b.path as usize;
+            let len = self.tracks[k].length();
+            let (to, s) = &self.track_exit[k];
+            if b.dist < len || to.is_empty() {
+                break;
+            }
+            let r = &mut self.routs[*s];
+            if *r >= to.len() {
+                *r = 0;
+            }
+            let next = to[*r];
+            *r += 1;
+            b.dist -= len;
+            b.base += len;
+            b.path = next as u8;
+        }
+        let tr = &self.tracks[b.path as usize];
+        b.pos = tr.bloon_pos(b.dist);
+        b.track_mult = tr.speed_mult(b.dist);
+        // Bloon.UpdatePositionAlongTrack (VERIFIED-DISASM @0xfd5e80, inlined in Process): a
+        // rotateToFollowPath bloon turns Math.LerpAngle(prevRot, the point's rotation,
+        // TotalSpeedFrames x 0.5) of the way to the path's heading.
+        if let Some(tsf) = moved.filter(|_| self.defs[b.kind].rotate_to_follow_path) {
+            if let Some(r) = self.track_rot.get(b.path as usize).filter(|v| !v.is_empty()).map(|v| v[((b.dist / 0.01).max(0.0) as usize).min(v.len() - 1)]) {
+                b.rot = lerp_angle(b.rot, r, tsf * 0.5);
+            }
+        }
+        // Bloon.Process (VERIFIED-DISASM): it leaks once distance - radius reaches leakDist
+        // (the last point on the map), or at the very end of a track without an exit.
+        let leak_at = self.track_ends.get(b.path as usize).and_then(|e| e.1);
+        if leak_at.is_some_and(|l| b.dist - self.defs[b.kind].radius >= l) || b.dist >= tr.length() {
+            if self.leak_immune <= 0.0 {
+                self.lives -= self.rbe[b.kind] as f64; // P-LEAK
+                self.leaked = true;
+                *leak_voice = true;
+            }
+            let id = self.bloons[i].id;
+            self.plist_kill(id);
+            self.bloons.swap_remove(i);
+            return true;
+        }
+        false
+    }
+
+    /// Bloon.Process's mutator timers and DamageOverTime / emit ticks for bloon `i` (the damage
+    /// and emissions are applied by the caller, after the moves).
+    #[allow(clippy::type_complexity)]
+    fn tick_bloon_effects(&mut self, i: usize, round_clock: i64, dots: &mut Vec<(u64, f32, u32, u64, (bool, bool))>, emits: &mut Vec<([f32; 2], Box<Proj>, u64)>) {
+        let b = &mut self.bloons[i];
+        // (Bloons made this frame aren't in the process list yet.)
+        if b.fresh {
+            return;
+        }
+        for e in &mut b.effects {
+            e.frames_left -= 1.0;
+            match &mut e.kind {
+                // DamageOverTime.CheckTick (VERIFIED-DISASM @0x1003ac0): once the
+                // round clock is intervalFrames past lastTick (Initialise: the clock when it
+                // went on), it ticks and lastTick = now (recording boomerang_500: on at 77,
+                // 100 damage at 137).
+                EffectKind::Dot { damage, interval, tick, immune } => {
+                    if round_clock - *tick as i64 >= (*interval as f64).round_ties_even() as i64 {
+                        *tick = round_clock as f32;
+                        dots.push((b.id, *damage, *immune, e.owner, e.distribute));
+                    }
+                }
+                EffectKind::Emit { interval, tick, proj } => {
+                    *tick += 1.0;
+                    if *tick >= *interval * FPS {
+                        *tick = 0.0;
+                        emits.push((b.pos, proj.clone(), e.owner));
+                    }
+                }
+                _ => {}
+            }
+        }
+        b.effects.retain(|e| e.frames_left > 0.0);
     }
 
     /// BloonManager.GetClosestTarget (VERIFIED-DISASM @0xfe8700): track segments within
@@ -6996,7 +7169,11 @@ impl Game {
                         ex.projectile.pierce += n * pierce;
                         ex.projectile.radius += n * radius;
                     }
-                    exhausted.push((pr.pos, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), pr.grot));
+                    // (Out of pierce, it was exhausted in Projectile.CollideBloon, before this
+                    // frame's move: recording boomerang_paragon_r63, a glaive on a Lead leaves
+                    // its MoabDot where it was.)
+                    let at = if pr.pierce <= 0.0 { pr.prev } else { pr.pos };
+                    exhausted.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), pr.grot));
                 }
             }
             let pr = &self.projectiles[p];
@@ -7019,7 +7196,11 @@ impl Game {
                         ex.projectile.pierce += n * pierce;
                         ex.projectile.radius += n * radius;
                     }
-                    exhausted.push((pr.pos, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), pr.grot));
+                    // (Out of pierce, it was exhausted in Projectile.CollideBloon, before this
+                    // frame's move: recording boomerang_paragon_r63, a glaive on a Lead leaves
+                    // its MoabDot where it was.)
+                    let at = if pr.pierce <= 0.0 { pr.prev } else { pr.pos };
+                    exhausted.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), pr.grot));
                 }
                 // HYPOTHESIS P-TYPEDTOWER: typed sub-towers (Sentry Expert) take turns in
                 // crushing, boom, cold, energy order.
@@ -7043,6 +7224,13 @@ impl Game {
         // made on frame 3181 regrow on 3361).
         self.popped_born_to = self.next_id;
         self.phase = 1;
+        // Bloons processed during the tower phase (they come before a newer Attack in the process
+        // list), with what their Process produced; the rest are processed after the towers.
+        let mut dots = Vec::new();
+        let mut emits = Vec::new();
+        let mut leak_voice = false;
+        let mut early: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let round_clock = self.round_clock;
         let p1 = std::time::Instant::now();
         // Towers.
         self.expire_subs(false);
@@ -7053,7 +7241,7 @@ impl Game {
         self.fly_birds();
         self.update_rage();
         self.buffs = self.compute_buffs();
-        self.orbit_step();
+        self.orbit_step(false);
         let cd_speed: Vec<f32> = (0..self.towers.len())
             .map(|t| self.submerged_scale(self.towers[t].pos, |s| (s.cooldown_scale, s.cooldown_scale_global)))
             .collect();
@@ -7194,6 +7382,14 @@ impl Game {
                 // (A Paragon's new Attacks are made paused from its first frame and wake with its
                 // Orbit, a frame before the kept ones: recordings boomerang_paragon_r40 (its MOAB
                 // Press waits) and r98 (it throws at 181, the glaives at 182).)
+                // Simulation.Simulate runs the process list in creation order: an Attack made after
+                // some bloons (a tower placed or upgraded mid-round) acts after they have been
+                // processed this frame (recording boomerang_paragon_r98: the Paragon's new MOAB
+                // Press aims where a BFB is after this frame's move). Made when it first runs here.
+                if ai < tier.attacks.len() {
+                    let stamp = *self.towers[t].attack_born.entry(attack.model_name.clone()).or_insert(self.sim_elapsed * 4);
+                    self.process_bloons_before(stamp, &mut early, round_clock, &mut dots, &mut emits, &zones, &shoves, &mut leak_voice);
+                }
                 let fresh_attack = self.towers[t].paragon.is_some() && self.sim_elapsed < self.towers[t].paragon_active_at
                     && !self.towers[t].paragon_kept.contains(&attack.model_name);
                 let paused = paused && (self.towers[t].paragon.is_none() || self.towers[t].paragon_kept.contains(&attack.model_name)
@@ -8095,6 +8291,17 @@ impl Game {
                 }
             }
         }
+        // A Paragon's Orbit is made again at the upgrade: in the process list it comes after its
+        // kept Attacks and the bloons then out (recording boomerang_paragon_r78: it loses a bloon
+        // that has just moved past 40).
+        for t in 0..self.towers.len() {
+            if self.towers[t].paragon.is_some() && self.tier(t).is_some_and(|tr| tr.orbit.is_some()) {
+                let first = self.towers[t].paragon_active_at * 4;
+                let stamp = *self.towers[t].attack_born.entry("#orbit".into()).or_insert(first);
+                self.process_bloons_before(stamp, &mut early, round_clock, &mut dots, &mut emits, &zones, &shoves, &mut leak_voice);
+            }
+        }
+        self.orbit_step(true);
         let e = p1.elapsed().as_secs_f64();
         self.prof[1] += e;
         self.prof_max[1] = self.prof_max[1].max(e);
@@ -8104,38 +8311,10 @@ impl Game {
         // Effect timers and damage over time: in Bloon.Process (mutator timers, DamageOverTime), after
         // the frame's collisions and towers, before the bloon moves (recording boomerang_005: a
         // MOAB Press stun with a frame left isn't re-applied by that frame's hit, then runs out).
-        let mut dots = Vec::new();
-        let mut emits = Vec::new();
-        let round_clock = self.round_clock;
-        for b in &mut self.bloons {
-            // (Bloons made this frame aren't in the process list yet.)
-            if b.fresh {
-                continue;
+        for i in 0..self.bloons.len() {
+            if !early.contains(&self.bloons[i].id) {
+                self.tick_bloon_effects(i, round_clock, &mut dots, &mut emits);
             }
-            for e in &mut b.effects {
-                e.frames_left -= 1.0;
-                match &mut e.kind {
-                    // DamageOverTime.CheckTick (VERIFIED-DISASM @0x1003ac0): once the
-                    // round clock is intervalFrames past lastTick (Initialise: the clock when it
-                    // went on), it ticks and lastTick = now (recording boomerang_500: on at 77,
-                    // 100 damage at 137).
-                    EffectKind::Dot { damage, interval, tick, immune } => {
-                        if round_clock - *tick as i64 >= (*interval as f64).round_ties_even() as i64 {
-                            *tick = round_clock as f32;
-                            dots.push((b.id, *damage, *immune, e.owner, e.distribute));
-                        }
-                    }
-                    EffectKind::Emit { interval, tick, proj } => {
-                        *tick += 1.0;
-                        if *tick >= *interval * FPS {
-                            *tick = 0.0;
-                            emits.push((b.pos, proj.clone(), e.owner));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            b.effects.retain(|e| e.frames_left > 0.0);
         }
         let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
         for (pos, proj, owner) in emits {
@@ -8144,106 +8323,9 @@ impl Game {
         }
         self.phase = 2;
         // Movement + leaks.
-        let mut leak_voice = false;
         let mut i = 0;
         while i < self.bloons.len() {
-            let mut mult = self.bloons[i].speed_mult();
-            if mult > 0.0 && !zones.is_empty() {
-                let d = &self.defs[self.bloons[i].kind];
-                let p = self.bloons[i].pos;
-                for (c, r, z) in &zones {
-                    let rr = r + d.radius;
-                    if (z.camo || !d.is_camo)
-                        && !z.exclude_tags.iter().any(|t| d.tags.contains(t))
-                        && (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) <= rr * rr
-                    {
-                        mult = mult.min(z.scale);
-                    }
-                }
-            }
-            if !shoves.is_empty() {
-                let d = &self.defs[self.bloons[i].kind];
-                let p = self.bloons[i].pos;
-                for (c, sh) in &shoves {
-                    let rr = sh.range + d.radius;
-                    if (sh.camo || !self.bloons[i].camo(d)) && (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) <= rr * rr {
-                        let has = |t: &str| d.tags.iter().any(|x| x == t);
-                        let cap = if has("Moab") { Some(sh.moab) } else if has("Bfb") { Some(sh.bfb) } else if has("Zomg") { sh.zomg } else { None };
-                        if let Some(cap) = cap {
-                            mult = mult.min(cap);
-                        }
-                    }
-                }
-            }
-            let b = &mut self.bloons[i];
-            if let Some(EffectKind::Trance { centre, radius, angle, rate }) = b.effects.iter_mut().map(|e| &mut e.kind).find(|k| matches!(k, EffectKind::Trance { .. })) {
-                *angle += *rate;
-                b.pos = [centre[0] + *radius * angle.cos(), centre[1] + *radius * angle.sin()];
-                i += 1;
-                continue;
-            }
-            let mut moved = None;
-            if b.fresh {
-                b.fresh = false;
-            } else {
-                b.mult = mult;
-                moved = Some(speed_frames(b.model_speed(self.defs[b.kind].speed)) * b.track_mult * 1.0 * mult);
-                // Bloon.get_TotalSpeedFrames (VERIFIED-DISASM @0xfd7730): speedFrames (speed /
-                // 60) x trackSpeedMultiplier x the spawner's multiplier (1) x behaviours'.
-                b.dist = (b.dist + speed_frames(b.model_speed(self.defs[b.kind].speed)) * b.track_mult * 1.0 * mult).max(0.0);
-                // Bloon.Move keeps a moving bloon from trailing the entrance by more than
-                // 1.25 x its radius; a child made behind it this frame stays put until it moves
-                // (recording dart_400: a Lead's fourth Pink sits at 169.2, then 173.6).
-                if let Some(sd) = self.track_ends.get(b.path as usize).and_then(|e| e.0) {
-                    let m = sd - self.defs[b.kind].radius * 1.25;
-                    if b.dist <= m {
-                        b.dist = m;
-                    }
-                }
-            }
-            // At its track's end, a bloon with an exit splitter goes on to the splitter's next
-            // path (Splitter.Rout: round-robin, counter per splitter), keeping the overflow.
-            loop {
-                let k = b.path as usize;
-                let len = self.tracks[k].length();
-                let (to, s) = &self.track_exit[k];
-                if b.dist < len || to.is_empty() {
-                    break;
-                }
-                let r = &mut self.routs[*s];
-                if *r >= to.len() {
-                    *r = 0;
-                }
-                let next = to[*r];
-                *r += 1;
-                b.dist -= len;
-                b.base += len;
-                b.path = next as u8;
-            }
-            let tr = &self.tracks[b.path as usize];
-            b.pos = tr.bloon_pos(b.dist);
-            b.track_mult = tr.speed_mult(b.dist);
-            // Bloon.UpdatePositionAlongTrack (VERIFIED-DISASM @0xfd5e80, inlined in Process): a
-            // rotateToFollowPath bloon turns Math.LerpAngle(prevRot, the point's rotation,
-            // TotalSpeedFrames x 0.5) of the way to the path's heading.
-            if let Some(tsf) = moved.filter(|_| self.defs[b.kind].rotate_to_follow_path) {
-                if let Some(r) = self.track_rot.get(b.path as usize).filter(|v| !v.is_empty()).map(|v| v[((b.dist / 0.01).max(0.0) as usize).min(v.len() - 1)]) {
-                    b.rot = lerp_angle(b.rot, r, tsf * 0.5);
-                }
-            }
-            // Bloon.Process (VERIFIED-DISASM): it leaks once distance - radius reaches leakDist
-            // (the last point on the map), or at the very end of a track without an exit.
-            let leak_at = self.track_ends.get(b.path as usize).and_then(|e| e.1);
-            if leak_at.is_some_and(|l| b.dist - self.defs[b.kind].radius >= l) || b.dist >= tr.length() {
-                if self.leak_immune <= 0.0 {
-                    self.lives -= self.rbe[b.kind] as f64; // P-LEAK
-                    self.leaked = true;
-                    leak_voice = true;
-                }
-                let id = self.bloons[i].id;
-                self.plist_kill(id);
-                self.bloons.swap_remove(i);
-            } else {
+            if early.contains(&self.bloons[i].id) || !self.move_bloon(i, &zones, &shoves, &mut leak_voice) {
                 i += 1;
             }
         }

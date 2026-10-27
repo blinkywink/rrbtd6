@@ -390,7 +390,7 @@ impl Title {
         }
         self.world.tick(dt, true);
         set_default_camera();
-        clear_background(BLACK);
+        if self.closing.is_none() { clear_background(BLACK); }
         self.draw_world(hud);
         match self.closing {
             Some(c) => { self.ui.play("TitleScreenUi", "TitleScreenUiClose", (now - c) as f32, false); }
@@ -398,12 +398,20 @@ impl Title {
         }
         self.ui.draw(hud);
         if let Some(c) = self.closing {
+            if let Ok(folder) = std::env::var("RRBTD6_STARTUP_TRANSITION_OUT") {
+                for (name, elapsed) in [("begin", 0.0), ("middle", 0.25), ("end", 0.49)] {
+                    let path = std::path::PathBuf::from(&folder).join(format!("{name}.png"));
+                    if now - c >= elapsed && !path.exists() { get_screen_data().export_png(path.to_str().unwrap()); }
+                }
+            }
             return now - c >= self.ui.clip_length("TitleScreenBg", "TitleScreenBgClose").max(0.25) as f64;
         }
         let opening = ui_t < ui_open || bg_t < bg_open;
-        if self.ui.node.clicked(&format!("{TITLE_UI}/Start")) && !opening {
+        let test_start = std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_STARTUP_PRESS_START").is_some();
+        if (self.ui.node.clicked(&format!("{TITLE_UI}/Start")) || test_start) && !opening {
             // TitleScreen.TransitionToMainMenu (click sound, music fades over 2 s).
             self.closing = Some(now);
+            if std::env::var_os("RRBTD6_PRESENTATION_CHECK").is_some() { crate::presentation_check::arm(); }
         } else if opening && self.ui.node.clicked(&format!("{TITLE_UI}/FullScreenButton")) && self.skip.is_none() {
             self.skip = Some((now, (SKIP_UI * ui_open).max(ui_t), (SKIP_BG * bg_open).max(bg_t)));
         }
@@ -430,6 +438,9 @@ pub(crate) struct Startup {
 }
 
 impl Startup {
+    pub(crate) fn transitioning_home(&self) -> bool {
+        matches!(&self.stage, Some(Stage::Title(title)) if title.closing.is_some())
+    }
     pub(crate) fn new(root: &Path, version: String, player: Option<String>) -> Self {
         let stage = Scene::load(root, "NinjaKiwiSplashUI", Some("Canvas")).map(|s| Stage::Splash(s, get_time()));
         let mut s = Self { stage, root: root.to_path_buf(), version, player, progress: None, loaded: false, plane: None };
