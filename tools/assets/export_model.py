@@ -73,6 +73,16 @@ def resolve(af, pptr):
     if fid == 0:
         return af.objects.get(pid)
     ext = af.externals[fid - 1].path.split("/")[-1]
+    # Scene .sharedAssets are in the bundle already being exported. Prefer it
+    # over the global index: game updates can leave an older bundle with the
+    # same CAB name but different object IDs on disk.
+    for loaded in list(_envs.values()):
+        siblings = [sub for f in loaded.files.values() for sub in getattr(f, "files", {}).values()]
+        if not any(sub is af for sub in siblings):
+            continue
+        for sub in siblings:
+            if getattr(sub, "name", "") == ext and hasattr(sub, "objects"):
+                return sub.objects.get(pid)
     bundle = CAB_INDEX.get(ext)
     if bundle is None:
         return None

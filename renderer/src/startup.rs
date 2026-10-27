@@ -148,6 +148,17 @@ impl World {
         Some(n)
     }
 
+    fn actor_matrix(&self, path: &str) -> Option<Mat4> {
+        if !self.active { return None; }
+        let mut node = self;
+        let mut matrix = Mat4::from_scale_rotation_translation(node.scale, node.rot, node.pos);
+        for name in path.split('/') {
+            node = node.children.iter().find(|c| c.name == name && c.active)?;
+            matrix *= Mat4::from_scale_rotation_translation(node.scale, node.rot, node.pos);
+        }
+        Some(matrix)
+    }
+
     /// CustomAnimationComponent.Update: elapsed += dt / duration * speed; looping wraps (Repeat).
     fn tick(&mut self, dt: f32, parent_active: bool) {
         let active = parent_active && self.active;
@@ -240,10 +251,11 @@ pub(crate) struct Title {
     skip: Option<(f64, f32, f32)>,
     closing: Option<f64>,
     last: f64,
+    plane: Option<(crate::anim::AnimModel, crate::anim::Shaders)>,
 }
 
 impl Title {
-    fn load(root: &Path, version: &str, player: Option<&str>) -> Option<Self> {
+    fn load(root: &Path, version: &str, player: Option<&str>, plane: Option<crate::anim::AnimModel>) -> Option<Self> {
         let mut ui = Scene::load(root, "TitleScreenUI", Some("Canvas"))?;
         let json: Value = serde_json::from_str(&std::fs::read_to_string(root.join("ui/prefabs/TitleScreenUI.json")).ok()?).ok()?;
         let roots = json["children"].as_array()?;
@@ -261,7 +273,28 @@ impl Title {
         ui.node.set_active(&format!("{TITLE_UI}/LoadingSpinner"), false);
         let logo = Texture2D::from_file_with_format(LOGO_PNG, Some(ImageFormat::Png));
         logo.set_filter(FilterMode::Linear);
-        Some(Self { ui, world, fov, logo, began: get_time(), skip: None, closing: None, last: get_time() })
+        Some(Self { ui, world, fov, logo, began: get_time(), skip: None, closing: None, last: get_time(), plane: plane.map(|p| (p, crate::anim::Shaders::new())) })
+    }
+
+    fn draw_plane(actor: &mut Option<(crate::anim::AnimModel, crate::anim::Shaders)>, began: f64, fov: f32, matrix: Mat4) {
+        let Some((plane, shaders)) = actor else { return };
+        let clip = plane.idle_clip();
+        let (mut meshes, mut outlines) = plane.meshes(clip, (get_time() - began) as f32, [0.0; 3], 0.0, 0.7, false, None);
+        let normal_matrix = matrix.inverse().transpose();
+        let flip = |p: Vec3| vec3(p.x, p.y, -p.z);
+        for mesh in meshes.iter_mut().chain(outlines.iter_mut()) {
+            for vertex in &mut mesh.vertices {
+                vertex.position = flip(matrix.transform_point3(flip(vertex.position)));
+                let normal = flip(normal_matrix.transform_vector3(flip(vertex.normal.truncate()))).normalize_or_zero();
+                vertex.normal = normal.extend(vertex.normal.w * matrix.x_axis.truncate().length());
+            }
+        }
+        set_camera(&Camera3D { position: Vec3::ZERO, target: vec3(0.0, 0.0, -1.0), up: Vec3::Y,
+            fovy: fov.to_radians(), aspect: Some(screen_width() / screen_height()),
+            z_near: 0.01, z_far: 2000.0, ..Default::default() });
+        shaders.forward = vec3(0.0, 0.0, -1.0);
+        crate::anim::draw_meshes(shaders, &[&outlines], &[&meshes]);
+        set_default_camera();
     }
 
     fn draw_world(&mut self, hud: &mut Hud) {
@@ -273,7 +306,13 @@ impl Title {
         let (w, h) = (screen_width(), screen_height());
         let f = h * 0.5 / (self.fov.to_radians() * 0.5).tan();
         let project = |p: Vec3| vec2(w * 0.5 + p.x / p.z * f, h * 0.5 - p.y / p.z * f);
+        let actor = self.world.actor_matrix("MonkeyAce");
+        let mut actor_drawn = false;
         for (s, m) in sprites {
+            if !actor_drawn && actor.is_some_and(|a| s.layer != 0 || s.order > 0 || (s.order == 0 && m.w_axis.z <= a.w_axis.z)) {
+                if let Some(a) = actor { Self::draw_plane(&mut self.plane, self.began, self.fov, a); }
+                actor_drawn = true;
+            }
             let logo = s.name == "BTD6Logo";
             let (tex, size) = if logo {
                 // RustTD6's logo at the BTD6 logo's height.
@@ -301,6 +340,9 @@ impl Title {
                 indices: vec![0, 1, 2, 1, 3, 2],
                 texture: Some(tex),
             });
+        }
+        if !actor_drawn {
+            if let Some(a) = actor { Self::draw_plane(&mut self.plane, self.began, self.fov, a); }
         }
     }
 
@@ -360,12 +402,13 @@ pub(crate) struct Startup {
     player: Option<String>,
     progress: Option<(usize, &'static str)>,
     loaded: bool,
+    plane: Option<crate::anim::AnimModel>,
 }
 
 impl Startup {
     pub(crate) fn new(root: &Path, version: String, player: Option<String>) -> Self {
         let stage = Scene::load(root, "NinjaKiwiSplashUI", Some("Canvas")).map(|s| Stage::Splash(s, get_time()));
-        let mut s = Self { stage, root: root.to_path_buf(), version, player, progress: None, loaded: false };
+        let mut s = Self { stage, root: root.to_path_buf(), version, player, progress: None, loaded: false, plane: None };
         if s.stage.is_none() { s.next_initial(); }
         s
     }
@@ -385,8 +428,10 @@ impl Startup {
     }
 
     fn next_title(&mut self) {
-        self.stage = Title::load(&self.root, &self.version, self.player.as_deref()).map(|t| Stage::Title(Box::new(t)));
+        self.stage = Title::load(&self.root, &self.version, self.player.as_deref(), self.plane.take()).map(|t| Stage::Title(Box::new(t)));
     }
+
+    pub(crate) fn set_plane(&mut self, plane: Option<crate::anim::AnimModel>) { self.plane = plane; }
 
     /// Poll real loading work between presentations so the original plane keeps animating.
     pub(crate) async fn task<F: std::future::Future>(&mut self, hud: &mut Hud, step: usize, label: &'static str, cap: u32, work: F) -> F::Output {
@@ -402,8 +447,6 @@ impl Startup {
             next_frame().await;
         }
         let mut work = std::pin::pin!(work);
-        let mut result = None;
-        let mut visible_frames = 0;
         loop {
             let began = std::time::Instant::now();
             self.draw(hud);
@@ -411,26 +454,13 @@ impl Startup {
                 let path = std::path::PathBuf::from(folder).join(format!("step-{step}.png"));
                 if !path.exists() { get_screen_data().export_png(path.to_str().unwrap()); }
             }
-            // The native opening scales the status text from zero. Count the
-            // five requested frames only after the status is fully visible.
-            let visible = match &self.stage {
-                Some(Stage::Initial(scene, began, _)) => get_time() - *began >= scene.clip_length("InitialLoadingScene", "InitialLoadingOpen") as f64,
-                _ => true,
-            };
-            // Present each status before polling: even a cached job can complete immediately.
             next_frame().await;
-            if visible { visible_frames += 1; }
-            if result.is_none() {
-                if let std::task::Poll::Ready(value) = work.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
-                    result = Some(value);
-                }
-            }
-            if visible_frames >= 5 && result.is_some() {
+            if let std::task::Poll::Ready(value) = work.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
                 if std::env::var_os("RRBTD6_TIMING").is_some() {
-                    eprintln!("startup: step {step}/8 completed ({label}) in {:.1} ms, {visible_frames} visible frames", started.elapsed().as_secs_f64() * 1000.0);
+                    eprintln!("startup: step {step}/8 completed ({label}) in {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
                 }
                 if step == 8 { self.loaded = true; }
-                return result.take().unwrap();
+                return value;
             }
             let remaining = interval.saturating_sub(began.elapsed());
             if !remaining.is_zero() { std::thread::sleep(remaining); }

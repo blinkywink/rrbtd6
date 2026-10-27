@@ -841,6 +841,10 @@ def main():
                                 # fireBetweenRounds (weapon clock is Simulation.time, not roundTime),
                                 # startInCooldown / customStartCooldown (Weapon.ApplyStartingCooldown).
                                 "between_rounds": bool(w["f"].get("fireBetweenRounds")),
+                                # FlipFollowPathModel (Boomerang hands): flipTowerDisplayX / Y, the eject
+                                # axes mirrored when thrown with the left hand.
+                                "flip_eject": next(([bool(x["f"].get("flipTowerDisplayX")), bool(x["f"].get("flipTowerDisplayY"))]
+                                                    for x in items(w["f"].get("behaviors")) if x and x["type"] == "FlipFollowPathModel"), None),
                                 "start_cooldown": bool(w["f"].get("startInCooldown")),
                                 "custom_start": w["f"].get("customStartCooldown", 0.0),
                                 "max_subs": max_subs,

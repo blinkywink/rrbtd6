@@ -331,6 +331,7 @@ def frontend(c):
 def startup(c):
     """Splash, initial loading and title screens, account management and the version line."""
     prefabs = c.out / "ui/prefabs"
+    c.py("tools/assets/export_startup_plane.py", c.game, c.out)
     boot = "*_monoscripts_*.bundle;initial_loading_ui_scenes_all_*.bundle;sprite_atlases_assets_all_*.bundle;localization_assets_all_*.bundle;asset_references_assets_all_*.bundle"
     c.py("tools/assets/dump_ui_prefab.py", c.game, prefabs,
          "scenefile:Assets/Main/Scenes/NinjaKiwiSplashUI.unity=NinjaKiwiSplashUI",
@@ -410,7 +411,7 @@ def load_state(path, fp):
 # extended exporter). Other tools changes do not make players re-extract.
 STEP_VERSIONS = {s.__name__: 1 for s in STEPS}
 # startup 2: the splash and initial loading screens' sprites.
-STEP_VERSIONS["startup"] = 2
+STEP_VERSIONS["startup"] = 3
 
 
 def fingerprint(c):

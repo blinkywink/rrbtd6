@@ -66,9 +66,11 @@ Towers:
   bloon within 40, glaives at Vector2.Rotate((0, 20), 120k + angle); OrbitDamage; MoabDot on the
   first hit via CreateProjectileOnExhaustFraction; its DoT (100 every 60 round frames, ticks after
   Move, re-application keeps lastTick); distributeToChildren; UCRT sinf / cosf ported; orbit
-  speed-up sees camo bloons). Left (2 frames of 3600, no effect on bloons): a MoabDot made as its
-  glaive empties the screen goes a frame after it is made, not three. To do: crosspaths, camo,
-  paragon.
+  speed-up sees camo bloons). All 48 crosspaths, Last / Close /
+  Strong, mid-round upgrades, left hand (FlipFollowPath eject) and Glaive Dominus (degree 1,
+  round 40) match. Left (invisible, no effect on bloons): Glaive Lord's MoabDot sometimes lives 1
+  frame instead of 3 (5-2-0 nearly always, 5-0-0 / 5-1-0 rarely); the models are identical and the
+  recorded state doesn't separate the cases yet.
 
 ## Done
 

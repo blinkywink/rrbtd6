@@ -832,6 +832,9 @@ pub struct Weapon {
     /// instead of roundTime (stopped between rounds).
     #[serde(default)]
     pub between_rounds: bool,
+    /// FlipFollowPathModel: (flipTowerDisplayX, flipTowerDisplayY), when the weapon has one.
+    #[serde(default)]
+    pub flip_eject: Option<[bool; 2]>,
     /// WeaponModel.startInCooldown / customStartCooldown (seconds).
     #[serde(default)]
     pub start_cooldown: bool,

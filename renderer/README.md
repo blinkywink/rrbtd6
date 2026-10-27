@@ -688,9 +688,11 @@ two cursor textures, and home-world geometry. It draws the original MainText and
 SubText nodes with the native English loading messages and `Step X of 8...`. CPU
 sprite decoding runs on a worker; asset futures yield to the animated loading
 screen. Existing lazy tower/round loading is preserved. The original open/close
-animations play, with no fixed 12-second idle hold after the jobs finish. Each
-step stays visible for at least five presented frames after the text finishes
-opening; slower jobs keep animating until their work completes.
+animations play, with no fixed idle hold or minimum frame count for a finished
+step. The title intro renders the native 3D Monkey Ace on its exported flight
+path alongside the original bloon/pop timing. Its scripted propeller rotation
+is baked into a small local animation loop and loaded during the final startup
+job. Startup extraction regenerates these assets with output version 3.
 
 `RRBTD6_STARTUP=1` also forces the front end for an autotest. With
 `RRBTD6_TIMING=1`, each completed startup job is logged. Set

@@ -1102,8 +1102,8 @@ pub struct Tower {
     /// reversed (the button waits minFramesSinceReverse, 300 frames, between presses).
     pub air_reverse: bool,
     pub reverse_at: u64,
-    /// FlipFollowPath: throws with the left hand (its path mirrored); HYPOTHESIS P-HAND: the
-    /// right hand is the path as authored.
+    /// FlipFollowPath.isFlipped: throws with the left hand (its path mirrored, the eject point
+    /// moved; recording boomerang_000_left); the right hand is the path as authored.
     pub flip: bool,
     /// Sun Temple / True Sun God: the temple groups its sacrifices earned, and its tier with
     /// them applied.
@@ -5527,11 +5527,26 @@ impl Game {
     /// speed at 3; AddProjectiles makes the glaives when it attaches.
     fn orbit_step(&mut self) {
         for t in 0..self.towers.len() {
+            // (A Paragon's Orbit stays inactive, its glaives unmade, until the Paragon is active:
+            // recording boomerang_paragon_r40, Glaive Dominus's glaives appear 120 frames after
+            // the purchase.)
+            // The Orbit itself (angle, speed) carries on through the upgrade: only its glaives go
+            // (Orbit.SetActive) and are made again by AddProjectiles, all at the tower + (0,
+            // range), moving from the next frame.
             let Some(o) = self.tier(t).and_then(|tr| tr.orbit.clone()) else {
                 self.towers[t].orbit = None;
                 continue;
             };
             let c = self.towers[t].pos;
+            // (It comes back a frame before the attacks resume: recording boomerang_paragon_r40.)
+            if self.towers[t].paragon.is_some() && self.sim_elapsed < self.towers[t].paragon_active_at {
+                if let Some(st) = &mut self.towers[t].orbit {
+                    st.glaives.clear();
+                }
+                continue;
+            }
+            // (Back from inactive: Process turns it this frame, then AddProjectiles places them.)
+            let remade = self.towers[t].orbit.as_ref().is_some_and(|st| st.glaives.is_empty());
             let mut st = self.towers[t].orbit.take().unwrap_or(OrbitState { angle: 0.0, speed: 3.0, seen: None, glaives: Vec::new() });
             let kept = st.seen.and_then(|id| self.bloons.iter().find(|b| b.id == id)).is_some_and(|b| {
                 let (dx, dy) = (b.pos[0] - c[0], b.pos[1] - c[1]);
@@ -5563,6 +5578,9 @@ impl Game {
                     [c[0] + gx, c[1] - gy]
                 })
                 .collect();
+            if remade {
+                st.glaives = vec![[c[0], c[1] - o.range]; o.count as usize];
+            }
             self.towers[t].orbit = Some(st);
         }
     }
@@ -7878,7 +7896,20 @@ impl Game {
                                     let a = DEG2RAD * -r;
                                     let (sa, ca) = (a.sin(), a.cos());
                                     let (ox, oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
-                                    [pos[0] + ox, pos[1] + -(oy - ez / TAN60)]
+                                    // FlipFollowPath.EmitPosition (VERIFIED-DISASM @0xc81b60): thrown
+                                    // with the left hand, the base point moves by (0 - 2 ejectX, 0 -
+                                    // 2 ejectY) on the model's flipped axes, turned with the tower
+                                    // (recording boomerang_000_left: the throw starts 6.94 across).
+                                    let base = match (self.towers[t].flip, weapon.flip_eject) {
+                                        (true, Some([fx, fy])) => {
+                                            let [wx, wy, _] = weapon.eject;
+                                            let (dx, dy) = (if fx { 0.0 - (wx + wx) } else { 0.0 }, if fy { 0.0 - (wy + wy) } else { 0.0 });
+                                            let (gx, gy) = (ca * dx - sa * dy, ca * dy + sa * dx);
+                                            [pos[0] + gx, pos[1] - gy]
+                                        }
+                                        _ => pos,
+                                    };
+                                    [base[0] + ox, base[1] + -(oy - ez / TAN60)]
                                 }
                                 None => [pos[0] + (c * ey - s * ex), pos[1] + ((s * ey + c * ex) + ez / TAN60)],
                             };
@@ -8847,6 +8878,7 @@ mod tests {
         let mut ability_at: Option<usize> = None;
         // SimRecorder's `# camo k` (camo priority on) and `# upgrade k path frame`.
         let mut camos: Vec<usize> = Vec::new();
+        let mut flips: Vec<usize> = Vec::new();
         let mut upgrades: Vec<(usize, usize, usize)> = Vec::new();
         // Per frame (roundTime): bloons (type, distance) and weapons (tower id, index, lastEmission).
         let mut frames: Vec<(i64, Vec<(String, f32)>, Vec<(u64, usize, i64)>)> = Vec::new();
@@ -8872,6 +8904,7 @@ mod tests {
                 Some("#") if f.get(1) == Some(&"target") => targets.push((f[2].parse().unwrap(), f[3].to_string())),
                 Some("#") if f.get(1) == Some(&"ability") => ability_at = f[2].parse().ok(),
                 Some("#") if f.get(1) == Some(&"camo") => camos.push(f[2].parse().unwrap()),
+                Some("#") if f.get(1) == Some(&"flip") => flips.push(f[2].parse().unwrap()),
                 Some("#") if f.get(1) == Some(&"upgrade") => upgrades.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap())),
                 Some("F") => {
                     if first_time.is_none() {
@@ -8929,6 +8962,10 @@ mod tests {
         for k in &camos {
             let t = g.towers.iter().enumerate().filter(|(_, t)| t.sub.is_none()).nth(*k).map(|(i, _)| i).unwrap();
             g.towers[t].camo_prio = true;
+        }
+        for k in &flips {
+            let t = g.towers.iter().enumerate().filter(|(_, t)| t.sub.is_none()).nth(*k).map(|(i, _)| i).unwrap();
+            g.towers[t].flip = true;
         }
         g.round = meta.get("round").and_then(|r| r.parse::<usize>().ok()).unwrap_or(1) - 1;
         g.start_round();

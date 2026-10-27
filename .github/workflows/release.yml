@@ -41,6 +41,7 @@ jobs:
           python -I tools/test_package_tools.py
           python -I tools/test_shader_imports.py
           python -I tools/test_extraction_plan.py
+          python -I tools/test_model_refs.py
           cargo test --release -p rrbtd6-launcher --locked
 
       - name: Build game and launcher

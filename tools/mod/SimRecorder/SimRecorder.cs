@@ -38,6 +38,8 @@ public class TowerSpec
     public string target { get; set; } = "";
     /// Camo priority on (TargetCamo.prioritiseCamo on the tower's attacks).
     public bool camo { get; set; } = false;
+    /// Throws with the left hand (the Boomerang's "UseLeftHand" tower-menu action, FlipFollowPath).
+    public bool flip { get; set; } = false;
     /// Upgrades bought between recorded frames: after frame `frame`, path `path` (0-2); a path
     /// already at tier 5 with the paragon's towers placed buys the paragon.
     public List<UpgradeSpec> upgrades { get; set; } = new();
@@ -234,6 +236,13 @@ public class Recorder : MelonMod
                     }
                     LoggerInstance.Msg($"tower {k} camo priority on {n} suppliers");
                 }
+                // Left hand: the tower menu's theme action, as the hand button sends it.
+                for (int k = 0; k < Sc.towers.Count && k < placed.Count; k++)
+                {
+                    if (!Sc.towers[k].flip) continue;
+                    placed[k].OnTsmThemeAction("UseLeftHand", null);
+                    LoggerInstance.Msg($"tower {k} left hand");
+                }
                 DumpMap(sim);
                 Out = new StreamWriter(Path.Combine(dir, Sc.name + ".rec"), false, new UTF8Encoding(false));
                 Out.WriteLine($"# SimRecorder {Sc.name} map={Sc.map} difficulty={Sc.difficulty} round={Sc.round}");
@@ -244,6 +253,7 @@ public class Recorder : MelonMod
                 for (int k = 0; k < Sc.towers.Count; k++)
                 {
                     if (Sc.towers[k].camo) Out.WriteLine($"# camo {k}");
+                    if (Sc.towers[k].flip) Out.WriteLine($"# flip {k}");
                     foreach (var u in Sc.towers[k].upgrades) Out.WriteLine($"# upgrade {k} {u.path} {u.frame}");
                 }
                 InGame.instance.bridge.SetRound(Sc.round - 1, false);

@@ -785,7 +785,11 @@ async fn game_main() {
     let mut options_back_test=if std::env::var_os("RRBTD6_AUTOTEST").is_some(){std::env::var("RRBTD6_OPTIONS_BACK_FRAME").ok().and_then(|s|s.parse::<u32>().ok())}else{None};
     let mut front = frontend::FrontEnd::new(&root);
     if startup.is_some() {
-        boot!(8, "Trimming the Gardens...", front.prepare_home());
+        let plane = boot!(8, "Trimming the Gardens...", async {
+            front.prepare_home().await;
+            anim::AnimModel::load(&root.join("models/startup_plane")).await
+        });
+        if let Some(screen) = startup.as_mut() { screen.set_plane(plane); }
     }
     let front_shot = std::env::var("RRBTD6_FRONT").ok();
     front.screen = match front_shot.as_deref() {

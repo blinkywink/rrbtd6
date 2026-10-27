@@ -180,6 +180,9 @@ def main():
         tt = tr.read_typetree()
         root = af.objects[tt["m_GameObject"]["m_PathID"]]
         parent_world = em.world_matrix(af, tt["m_Father"]["m_PathID"])
+        if os.environ.get("RRBTD6_ANIM_LOCAL"):
+            # Scene actor driven by an external Animator (e.g. the title plane).
+            parent_world = np.eye(4)
     else:
         pid = next(v["asset"]["m_PathID"] for k, v in ab["m_Container"] if k == PREFAB)
         root = next(o for o in env.objects if o.path_id == pid)
@@ -349,7 +352,26 @@ def main():
 
     hash_of = {v: k for k, v in by_hash.items()}
 
-    def world_mats_fast(pose):
+    spins = {}
+    if os.environ.get("RRBTD6_ANIM_LOCAL"):
+        for tid in order:
+            for ref in T[tid]["go"]["m_Component"]:
+                obj = af.objects.get(ref["component"]["m_PathID"])
+                if obj is None or obj.type.name != "MonoBehaviour":
+                    continue
+                fields = obj.read_typetree()
+                if "rotationAxis" not in fields or not fields.get("isEnabled", 1) or not fields.get("m_Enabled", 1):
+                    continue
+                assert fields["useLocalCoordinates"] and fields["minStartingOffset"] == fields["maxStartingOffset"] == 0
+                target = em.resolve(af, fields["target"])
+                if target is not None and target.type.name == "GameObject":
+                    target = comp(target.read_typetree(), "Transform")
+                if target is not None and target.path_id in T:
+                    axis = np.array([fields["rotationAxis"][a] for a in "xyz"], dtype=np.float64)
+                    axis /= np.linalg.norm(axis)
+                    spins[target.path_id] = (axis, fields["speed"])
+
+    def world_mats_fast(pose, time=0.0):
         W = {}
         for tid in order:
             n = T[tid]
@@ -361,6 +383,10 @@ def main():
                 if 4 in h:
                     q = euler_quat(h[4])
                 s = h.get(3, s)
+            if tid in spins:
+                axis, speed = spins[tid]
+                angle = time * speed * np.pi
+                q = [*(axis * np.sin(angle)), np.cos(angle)]
             m = trs_mat(p, q, s)
             W[tid] = parent_world @ m if n["parent"] is None else W[n["parent"]] @ m
         return W
@@ -511,10 +537,19 @@ def main():
         off = 0
         for c in clips:
             dur = max(c.stop - c.start, 1.0 / FPS)
+            if spins and c.stop == c.start:
+                # Smallest common loop of the native scripted rotations.
+                from fractions import Fraction
+                from math import gcd, lcm
+                from functools import reduce
+                rates = [Fraction(speed).limit_denominator(1000) for _, speed in spins.values() if speed]
+                if rates:
+                    denominator = lcm(*(r.denominator for r in rates))
+                    dur = denominator / reduce(gcd, (abs(int(r * denominator)) for r in rates))
             nframes = max(1, int(round(dur * FPS)) + (0 if c.loop else 1))
             for k in range(nframes):
                 t = c.start + k / FPS
-                W = world_mats_fast(c.pose(t))
+                W = world_mats_fast(c.pose(t), t)
                 cache = {}
                 for r, used in remaps:
                     key = id(r)
