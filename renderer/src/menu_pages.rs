@@ -6,6 +6,7 @@ use crate::uitree::Node;
 use std::path::Path;
 
 pub(super) struct Page {
+    first_presentation:bool,
     pub node: Node,
     pub(super) season_second:Option<u64>,
     buttons:super::button_motion::ButtonMotion,
@@ -144,7 +145,10 @@ impl Page {
         let Some(search)=&mut self.search else {return false};
         let focused=search.focused;search.focused=false;focused
     }
+    pub(super) fn warm(&mut self,sprites:&mut crate::ui::Sprites){if self.first_presentation{super::button_motion::warm_visible(&self.node,sprites);}}
+    pub(super) fn presented(&mut self){if self.first_presentation{self.first_presentation=false;if let Some(animation)=&mut self.animation{animation.began=Some(get_time());}}}
     pub(super) fn reopen(&mut self) {
+        self.first_presentation=true;
         self.buttons.reset();
         if let Some(animation)=&mut self.animation {animation.began=Some(get_time());}
     }
@@ -160,7 +164,7 @@ impl Page {
 
         if let Some(animation)=&mut self.animation {
             if let Some(began)=animation.began {
-                if apply_animation(&mut self.node,&animation.data,animation.controller,animation.clip,Some((get_time()-began) as f32)) {
+                if apply_animation(&mut self.node,&animation.data,animation.controller,animation.clip,Some(if self.first_presentation{0.0}else{(get_time()-began) as f32})) {
                     animation.began=None;
                 }
             }
@@ -1147,7 +1151,7 @@ impl MenuPage {
             let entry=|id:&str|text.split(&format!("<T id=\"{id}\">")).nth(1).and_then(|s|s.split('<').next()).unwrap_or(id).to_owned();
             TrophyState {inventory:false,tab:5,live:None,account:None,cards:Vec::new(),day:entry("day"),days:entry("days"),root:root.to_owned()}
         });
-        let mut page=Page {node,season_second:None,buttons,profile,event,goals,coop,scrolls,trophy_items,trophy_selected:Some(0),trophy,pointer_start:None,pointer_dragged:false,animation,powers,search,knowledge,legends,join_code,social,home_requested:false};
+        let mut page=Page {first_presentation:true,node,season_second:None,buttons,profile,event,goals,coop,scrolls,trophy_items,trophy_selected:Some(0),trophy,pointer_start:None,pointer_dragged:false,animation,powers,search,knowledge,legends,join_code,social,home_requested:false};
         if self==Self::Legends {
             let preview=std::env::var("RRBTD6_LEGENDS_PREVIEW").unwrap_or_default();
             let index=page.legends.as_ref().and_then(|b|b.data["slides"].as_array())
@@ -1204,7 +1208,7 @@ mod catalog_tests {
             {"name":"Trophy2","children":[{"name":"Selected"}]}
         ]});
         for name in TROPHY_GRID.split('/').rev().skip(1) {tree=json!({"name":name,"children":[tree]});}
-        let mut page=Page {season_second:None,node:Node::from_json(&json!({"name":"Scene","children":[tree]})),
+        let mut page=Page {first_presentation:true,season_second:None,node:Node::from_json(&json!({"name":"Scene","children":[tree]})),
             buttons:Default::default(),
             scrolls:Vec::new(),trophy_items:vec![json!({"category":1}),json!({"category":0}),json!({"category":2})],
             profile:None,event:None,goals:None,coop:None,trophy_selected:Some(0),trophy:None,pointer_start:None,pointer_dragged:false,animation:None,powers:None,search:None,knowledge:None,legends:None,join_code:None,social:None,home_requested:false};

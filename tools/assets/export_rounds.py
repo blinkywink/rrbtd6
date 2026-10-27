@@ -1,4 +1,4 @@
-"""Export round sets and income sets from the game_data bundle to JSON.
+"""Export round sets, income sets, game modes and BloonMutatorData from the game_data bundle to JSON.
 
 Usage: tools/.venv/Scripts/python.exe tools/assets/export_rounds.py <game install> <out_dir>
 Output is proprietary game data; keep it in local_extracted/.
@@ -19,7 +19,7 @@ def main():
     aa = os.path.join(game, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWindows64", "Full")
     env = UnityPy.load(glob.glob(os.path.join(aa, "game_data_assets_all_*.bundle"))[0])
     os.makedirs(out, exist_ok=True)
-    rounds, income, modes = {}, {}, {}
+    rounds, income, modes, mutator_data = {}, {}, {}, {}
     for o in env.objects:
         if o.type.name != "MonoBehaviour":
             continue
@@ -31,9 +31,13 @@ def main():
             modes[t["m_Name"]] = [refs[m["rid"]] for m in t["mutatorMods"]]
         elif "thresholds" in t:
             income[t["m_Name"]] = {k: v for k, v in t.items() if k not in ("m_GameObject", "m_Script", "m_Enabled")}
+        elif "badImmunityIds" in t:
+            # GameData.bloonMutatorData: mutators BadImmunity.FilterMutation keeps off a BAD.
+            mutator_data = {k: v for k, v in t.items() if k not in ("m_GameObject", "m_Script", "m_Enabled", "m_Name")}
     json.dump(rounds, open(os.path.join(out, "round_sets.json"), "w"), indent=0)
     json.dump(income, open(os.path.join(out, "income_sets.json"), "w"), indent=0)
     json.dump(modes, open(os.path.join(out, "modes.json"), "w"), indent=1)
+    json.dump(mutator_data, open(os.path.join(out, "bloon_mutator_data.json"), "w"), indent=1)
     print(len(rounds), "round sets;", len(income), "income sets;", sorted(modes))
 
 

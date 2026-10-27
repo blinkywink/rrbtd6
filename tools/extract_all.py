@@ -309,7 +309,7 @@ def frontend(c):
     backgrounds = [k for k in c.containers() if "/Heroes/HeroBackgrounds/" in k and k.endswith(".prefab")]
     c.py("tools/assets/dump_ui_prefab.py", c.game, prefabs, *backgrounds,
          env={"RRBTD6_UI_BUNDLES": "*_monoscripts_*.bundle;asset_references_assets_all_*.bundle"})
-    c.py("tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", "MainMenuUi", "LoadingUI", *FRONTEND_SCENES)
+    c.py("tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", "MainMenuUi", "LoadingUI", *FRONTEND_SCENES, "DifficultySelectUI", "ModeSelectUI", "SettingsUI", "AccessibilitySettingsUI", "HotkeysUI")
     c.py("tools/assets/export_frontend_data.py", c.game, c.out, "--images")
     c.py("tools/assets/export_rank_info.py", c.game, c.out)
     c.py("tools/assets/sort_heroes.py", c.out)

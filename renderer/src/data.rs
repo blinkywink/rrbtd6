@@ -4,6 +4,15 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
+/// GameData.bloonMutatorData: BadImmunity.FilterMutation keeps a mutator off a BAD when its id
+/// starts with one of `bad_immunity_ids` or contains one of `bad_immunity_tags`.
+#[derive(Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BloonMutatorData {
+    pub bad_immunity_ids: Vec<String>,
+    pub bad_immunity_tags: Vec<String>,
+}
+
 #[derive(Deserialize)]
 pub struct GameData {
     /// CollisionGrid.orderedNeighborOffsets: (dx, dy) cell offsets in the order a collision
@@ -19,6 +28,9 @@ pub struct GameData {
     /// Other round sets by name (RoundSetModModel: "AlternateRoundSet").
     #[serde(default)]
     pub round_sets: HashMap<String, Vec<Vec<Group>>>,
+    /// GameData.bloonMutatorData.
+    #[serde(default)]
+    pub bloon_mutator_data: BloonMutatorData,
     /// GameModel.freeplayGroups: rounds past the round set are built from these.
     #[serde(default)]
     pub freeplay: Vec<FreeplayGroup>,
@@ -158,6 +170,18 @@ pub struct BloonDef {
     /// BloonModel.layerNumber (Red 1 ... Ceramic 9, MOABs 10+).
     #[serde(default)]
     pub layer_number: u32,
+    /// BloonModel.isMoab.
+    #[serde(default)]
+    pub is_moab: bool,
+    /// BadImmunityModel (BAD).
+    #[serde(default)]
+    pub bad_immunity: bool,
+    /// Place in GameModel.bloons (ProgressiveDifficultyManager walks the models in this order).
+    #[serde(default)]
+    pub index: u32,
+    /// BloonModel.isFixedMaxHealth (Diamondback segments).
+    #[serde(default)]
+    pub is_fixed_max_health: bool,
     /// GrowModel: regrow bloons turn into `to` every `rate` seconds.
     #[serde(default)]
     pub grow: Option<Grow>,
@@ -1139,6 +1163,9 @@ pub struct Contact {
     /// passOnCollidedWith: the sub-projectiles can't hit the bloon that triggered them.
     #[serde(default)]
     pub pass_on_collided: bool,
+    /// dontCreateAtBloon: made where the shot is instead of on the bloon.
+    #[serde(default)]
+    pub at_shot: bool,
     /// EmitOnDamageModel (Shrapnel Shot): only on hits that deal damage.
     #[serde(default)]
     pub on_damage: bool,
@@ -1182,6 +1209,9 @@ pub struct Proj {
     pub vs_blocker_radius: f32,
     #[serde(default)]
     pub ignore_blockers: bool,
+    /// ProjectileModel.canCollisionBeBlockedByMapLos.
+    #[serde(default)]
+    pub los_blocked: bool,
     pub damage: f32,
     pub immune: u32,
     /// DamageModel.ignoreImmunityDestroy: survives hitting a bloon it can't damage (else that
@@ -1210,9 +1240,12 @@ pub struct Proj {
     /// DisplayModel asset GUID (keys models/projectiles/index.json).
     #[serde(default)]
     pub display: Option<String>,
-    /// The tower has LinkProjectileRadiusToTowerRangeModel: radius = attack range (Ring of Fire).
+    /// The tower has LinkProjectileRadiusToTowerRangeModel: radius = attack range + `link_offset`
+    /// (its projectileRadiusOffset; Ring of Fire 2).
     #[serde(default)]
     pub link_radius: bool,
+    #[serde(default)]
+    pub link_offset: f32,
     /// InstantModel: hits its target bloon (FilterAllExceptTargetModel) the frame it is fired.
     #[serde(default)]
     pub instant: bool,
@@ -1269,9 +1302,10 @@ pub struct Proj {
     /// WindModel: blows bloons back along the track (Distraction).
     #[serde(default)]
     pub wind: Option<Wind>,
-    /// FilterOveridingMutatedTargetModel: hits only bloons with one of these effects.
+    /// FilterOveridingMutatedTargetModel: (mutationOverideOrder, highestPriorityMutationId,
+    /// defaultMutationId).
     #[serde(default)]
-    pub require_effects: Vec<String>,
+    pub override_filter: Option<(Vec<String>, String, String)>,
     /// DamageModifierForCashAmountModel: (multiplier, additive, cash threshold).
     #[serde(default)]
     pub cash_damage: Option<[f32; 3]>,
@@ -1915,6 +1949,18 @@ pub struct EffectSpec {
     pub lifespan: f32,
     /// Layers it lasts through: 1 = only the bloon hit, 2 = also its children, ...
     pub layers: u32,
+    /// BehaviorMutator.dontRemoveOnBloonDegrade: kept when a MOAB-class bloon pops.
+    #[serde(default)]
+    pub keep_on_degrade: bool,
+    /// FreezeModel.applyAfterDamage: it goes on after the damage, on what the bloon is then.
+    #[serde(default)]
+    pub after_damage: bool,
+    /// FreezeModel.bossImmunity: Bads and Minibosses aren't frozen.
+    #[serde(default)]
+    pub boss_immunity: bool,
+    /// EmitOnPopModel.ignoreSameFrameDegrade: no emission for a pop on the frame it went on.
+    #[serde(default)]
+    pub ignore_same_frame: bool,
     #[serde(default)]
     pub glue: u32,
     #[serde(default = "yes")]
@@ -1974,6 +2020,12 @@ pub struct EffectMod {
     pub prevent: bool,
     pub lifespan: f32,
     pub time_mult: f32,
+    /// SlowModifierForTagModel.makeNotTag: it's for bloons without the tag.
+    #[serde(default)]
+    pub not_tag: bool,
+    /// A FreezeModifierForTagsModel (else a SlowModifierForTagModel).
+    #[serde(default)]
+    pub freeze: bool,
 }
 
 /// SlowBloonsZoneModel (Arctic Wind): bloons in the radius move at `scale` speed.
@@ -1983,6 +2035,17 @@ pub struct Zone {
     pub bind: bool,
     pub offset: f32,
     pub scale: f32,
+    /// mutationId: the zone's slow mutator (isUnique: one per id on a bloon).
+    #[serde(default)]
+    pub id: String,
+    /// bloonTag: with one, the zone takes only bloons with all of `tags` (bloonTags), or with
+    /// `inclusive` false only bloons without them (SlowBloonsZone.FilterBloon).
+    #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub inclusive: bool,
     #[serde(default)]
     pub exclude_tags: Vec<String>,
     #[serde(default = "yes")]
@@ -2004,6 +2067,9 @@ pub struct FollowPath {
 pub struct PushBack {
     pub amount: f32,
     pub tag: String,
+    /// PushBackModel.onlyIfDamaged: only bloons the shot's damage can hurt (Bloon.WillDamageBloon).
+    #[serde(default)]
+    pub only_if_damaged: bool,
     /// Per-MOAB-class multipliers, keyed "MOAB", "BFB", "DDT", "ZOMG".
     pub mult: HashMap<String, f32>,
 }

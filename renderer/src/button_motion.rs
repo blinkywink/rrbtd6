@@ -5,12 +5,12 @@ use serde_json::{json,Value};
 
 #[derive(Default)]
 pub(super) struct ButtonMotion {tracks:Vec<Track>}
-struct Track {path:String,data:Value,state:Option<&'static str>,began:f64,complete:bool,down:bool}
+struct Track {controller:String,path:String,data:Value,state:Option<&'static str>,began:f64,complete:bool,down:bool}
 impl ButtonMotion {
     pub fn from_runtime(runtime:&Value)->Self {
         Self {tracks:runtime["animators"].as_array().into_iter().flatten()
-            .filter(|a|a["controller"]=="GlobalButtonAnimation")
-            .filter_map(|a|Some(Track {path:a["path"].as_str()?.to_owned(),data:json!({"animators":[a]}),
+            .filter(|a|matches!(a["controller"].as_str(),Some("GlobalButtonAnimation"|"GlobalButtonHoverAnimation"|"GlobalTabAnimation"|"MapButton")))
+            .filter_map(|a|Some(Track {controller:a["controller"].as_str()?.to_owned(),path:a["path"].as_str()?.to_owned(),data:json!({"animators":[a]}),
                 state:None,began:0.0,complete:false,down:false})).collect()}
     }
     pub fn reset(&mut self){for track in &mut self.tracks{track.state=None;track.down=false;track.complete=false;}}
@@ -31,7 +31,7 @@ impl ButtonMotion {
             let duration=clip.map(|c|c["stop"].as_f64().unwrap_or(0.0)-c["start"].as_f64().unwrap_or(0.0)).unwrap_or(0.0);
             let looping=clip.is_some_and(|c|c["loop"]==true)&&duration>0.0;
             let elapsed=if looping{(now-track.began).rem_euclid(duration)}else{now-track.began};
-            track.complete=super::apply_animation(node,&track.data,"GlobalButtonAnimation",state,Some(elapsed as f32))&&!looping;
+            track.complete=super::apply_animation(node,&track.data,&track.controller,state,Some(elapsed as f32))&&!looping;
         }
     }
 }
@@ -39,6 +39,19 @@ impl ButtonMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_map_and_hover_controllers_use_their_own_press_clips(){
+        for controller in ["GlobalButtonHoverAnimation","GlobalTabAnimation","MapButton"]{
+            let runtime=json!({"animators":[{"path":"Button","controller":controller,"clips":[{
+                "name":"Pressed","start":0.0,"stop":0.0,"bindings":[{"path":"Button","type":4,"attribute":3,
+                "start":[0.9,0.9,1.0],"end":[0.9,0.9,1.0]}]}]}]});
+            let mut node=Node::from_json(&json!({"name":"Scene","active":true,"children":[{"name":"Button","active":true,"comps":[{"type":"Button"}]}]}));
+            node.find_mut("Button").unwrap().screen=Rect::new(0.0,0.0,100.0,100.0);
+            let mut motion=ButtonMotion::from_runtime(&runtime);
+            motion.update_input(&mut node,vec2(50.0,50.0),true,true,0.0);
+            assert_eq!(node.find("Button").unwrap().rt.scale,vec2(0.9,0.9),"{controller}");
+        }
+    }
     #[test]
     fn source_press_pose_is_restored_on_release_without_double_scaling() {
         let clip=|name:&str,scale:f32|json!({"name":name,"start":0,"stop":0,"bindings":[
@@ -54,4 +67,19 @@ mod tests {
         motion.update_input(&mut node,vec2(150.0,150.0),false,false,1.0);
         assert_eq!(node.find("Canvas/Button").unwrap().rt.scale,Vec2::ONE);
     }
+}
+
+/// Prime only visible-content sprites; offscreen opening transforms must not defer
+/// texture decode until the middle of an authored entrance. Cache hits are shared.
+pub(super) fn warm_visible(node:&Node,sprites:&mut crate::ui::Sprites){
+    fn gather(n:&Node,names:&mut std::collections::HashSet<String>,limit:usize){
+        if !n.active || names.len()>=limit{return;}
+        if let Some(name)=n.img.as_ref().and_then(|i|i.sprite.as_ref()){names.insert(name.clone());}
+        // Catalog masks can contain hundreds of offscreen cards. Prime a bounded
+        // first group; scrolling retains normal lazy texture decoding.
+        let limit=if n.clip{limit.min(names.len()+16)}else{limit};
+        for child in &n.children{gather(child,names,limit);if names.len()>=limit{break;}}
+    }
+    let mut names=std::collections::HashSet::new();gather(node,&mut names,64);
+    for name in names{let _=sprites.get(&name);}
 }

@@ -739,3 +739,37 @@ Downloaded progress stays encrypted and untouched. A successful new login clears
 the marker; account-dependent menu trees are rebuilt after an account change.
 `RRBTD6_SETTINGS_ACCOUNT=1` with `RRBTD6_FRONT=settings` and `RRBTD6_AUTOTEST`
 opens the Settings account panel for offline visual checks.
+
+The account card now presents local identity and optional Ninja Kiwi sign-in as
+separate sections. The network notice identifies account downloads as well as
+sign-in and GitHub client updates; it does not promise account safety.
+Local profiles persist in `local_extracted/local-profile.json`, with an atomic
+replacement and backup copy. Names (1–24 characters), installed avatar/banner
+choices, highest completed round and win/loss totals are local-only. Round/end
+saves run off the render thread, and downloaded Ninja Kiwi profiles remain
+separate. Signing out restores the complete local profile instead of an empty
+account object. Mid-game simulation snapshots/resume are not implemented.
+`RRBTD6_LOCAL_PROFILE=1` with `RRBTD6_AUTOTEST` suppresses the encrypted-account
+reader for offline local-profile visual checks without signing the user out.
+
+Native menu motion now includes the map screen and its separate MapGroup card
+sequence, map page/tab Next motion, difficulty/mode selection, Settings,
+Advanced, Hotkeys and monkey-selection groups. Opening clips start their clock
+after the first draw; a bounded group of active-content sprites is primed before that presentation
+so first-use decode is not counted as time already elapsed in the entrance.
+The same first-presentation rule applies to lazily opened pages such as the shop
+and profile. Button feedback now accepts original GlobalButtonHoverAnimation,
+GlobalTabAnimation and MapButton controllers as well as GlobalButtonAnimation.
+Profile Public Stats toggles the selected-stats preview; local stat visibility
+and cosmetics can be saved locally. This does not write cloud profile settings.
+
+Menu entrance priming caps at 64 distinct sprites per screen and 16 per mask,
+so opening a catalog does not decode its full offscreen inventory.
+
+The profile gear opens the shared account editor. Very large imported veteran
+ranks fit inside their original label bounds instead of overlapping the XP bar.
+
+Remaining profile gaps include the stat-category dropdown, named-monkey context
+and live social/accolade sections. This pass restores base profile data, local
+identity/customization, the public-stats preview and native entrance motion; it
+does not claim complete original-game profile coverage.

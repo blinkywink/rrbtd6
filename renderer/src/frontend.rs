@@ -179,6 +179,9 @@ fn scroll_limit(tree: &Node, viewport: &str, content: &str, scale: f32) -> f32 {
 
 pub struct FrontEnd {
     account_generation:u64,
+    map_group_key:Option<(usize,usize)>,map_group_began:Option<f64>,
+    motion_screen:Option<Screen>,motion_began:Option<f64>,motion_pending:bool,
+    screen_motions:Vec<(Screen,serde_json::Value,button_motion::ButtonMotion,&'static str,&'static str)>,
     dir: PathBuf,
     pub screen: Screen,
     main: Option<Node>,
@@ -483,7 +486,7 @@ impl FrontEnd {
             .filter(|(_, k)| root.join("maps").join(k).join("map.json").exists())
             .collect();
         Self {
-            account_generation:0,
+            account_generation:0,map_group_key:None,map_group_began:None,motion_screen:None,motion_began:None,motion_pending:false,screen_motions:Vec::new(),
             dir: root.join("ui").join("prefabs"),
             screen: Screen::Main,
             main: None,
@@ -847,6 +850,30 @@ impl FrontEnd {
         }
     }
 
+    fn prepare_screen_motion(&mut self){
+        if self.motion_screen==Some(self.screen){return;}
+        self.motion_screen=Some(self.screen);self.motion_began=None;self.motion_pending=true;
+        if self.screen==Screen::Maps{self.map_group_key=None;self.map_group_began=None;}
+        if self.screen_motions.iter().any(|(s,..)|*s==self.screen){
+            if let Some((_,_,buttons,..))=self.screen_motions.iter_mut().find(|(s,..)|*s==self.screen){buttons.reset();}return;
+        }
+        let spec=match self.screen{
+            Screen::Maps=>("MapSelectUI","MapSelectScreen","Open"),
+            Screen::Difficulty=>("DifficultySelectUI","DifficultySelectScreen","Open"),
+            Screen::Modes=>("ModeSelectUI","ModeSelectScreen","Open"),
+            Screen::Settings=>("SettingsUI","SettingsAnimation","Open"),
+            Screen::Advanced=>("AccessibilitySettingsUI","PopupWithBgAnim","PopupWithBgOpen"),
+            Screen::Hotkeys=>("HotkeysUI","HotKeysAnimation","Open"),
+            Screen::Monkeys=>("MonkeySelectUI","MonkeySelectAnimation","Open"),
+            _=>{self.motion_pending=false;return;}
+        };
+        if let Some(mut data)=std::fs::read(self.root.join(format!("ui/runtime/{}.json",spec.0))).ok().and_then(|b|serde_json::from_slice::<serde_json::Value>(&b).ok()){
+            let buttons=button_motion::ButtonMotion::from_runtime(&data);
+            if let Some(animators)=data["animators"].as_array_mut(){animators.retain(|a|a["controller"]==spec.1 || (self.screen==Screen::Monkeys && a["controller"]=="MonkeyGroupAnimation") || (self.screen==Screen::Maps && a["controller"]=="MapGroup"));}
+            self.screen_motions.push((self.screen,data,buttons,spec.1,spec.2));
+        }
+    }
+
     pub(crate) fn finish_startup(&mut self) {
         self.screen = Screen::Main;
         self.ensure();
@@ -924,6 +951,7 @@ impl Hud {
             if !fe.net.active()&&!fe.net.error{if let Ok(code)=std::env::var("RRBTD6_COOP_JOIN"){fe.net.join(&fe.root,&code);}}
         }
         fe.ensure();
+        fe.prepare_screen_motion();
         if fe.game_options_root.is_some() {
             clear_background(BLACK);
             if let Some((_,_,bg))=&fe.backdrop {bg.draw();}
@@ -1085,6 +1113,7 @@ impl Hud {
                     let join_text=menu.join_text().map(str::to_owned);
                     let coop_modal=menu.coop_modal_open();
                     let m = &mut menu.node;
+                    if page==MenuPage::Profile && m.clicked("Canvas/PlayerStatsScreen/Stats/Own/SettingsBtn") {self.account_ui.open(&fe.root);}
                     if page==MenuPage::Television {
                         let base="BloonsMonkeyTalesPopup/AnimatedObject/Panel";
                         if m.clicked(&format!("{base}/CloseButtonX")) || m.clicked(&format!("{base}/Buttons/CancelButton")){next=Some(Screen::Main);}
@@ -1819,6 +1848,7 @@ impl Hud {
             }
         }
         if let Some(index) = browse { self.menus.open_upgrades(index); }
+        if let Screen::Menu(page)=fe.screen{if let Some(page)=fe.pages.get_mut(&page){page.warm(&mut self.sprites);}}
         let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h: canvas.y, clip: None };
         let node = match fe.screen {
             Screen::Main => fe.main.as_mut(),
@@ -1848,7 +1878,26 @@ impl Hud {
                 fore.set_active(&format!("{FORE}/CashInfo/DEBUGBtn"),false);
                 fore.set_text(&format!("{FORE}/Heading/Title"),self.menus.loc.get(&panel.heading).map(String::as_str).unwrap_or(&panel.heading));
             }
+            if let Some((_,data,buttons,controller,clip))=fe.screen_motions.iter_mut().find(|(s,..)|*s==fe.screen){
+                if fe.motion_pending{button_motion::warm_visible(n,ctx.sprites);}
+                buttons.update(n);
+                if fe.screen==Screen::Maps && fe.map_group_key!=Some((fe.tier,fe.page)){
+                    if fe.map_group_key.is_some(){button_motion::warm_visible(n,ctx.sprites);fe.map_group_began=Some(get_time());}
+                    fe.map_group_key=Some((fe.tier,fe.page));
+                }
+                if fe.screen==Screen::Maps{if let Some(start)=fe.map_group_began{
+                    if apply_animation(n,data,"MapGroup","Next",Some((get_time()-start) as f32)){fe.map_group_began=None;}
+                }}
+                if fe.motion_pending || fe.motion_began.is_some(){
+                    let t=fe.motion_began.map(|start|(get_time()-start) as f32).unwrap_or(0.0);
+                    let mut complete=apply_animation(n,data,controller,clip,Some(t));
+                    if fe.screen==Screen::Monkeys{complete &= apply_animation(n,data,"MonkeyGroupAnimation","Open",Some(t));}
+                    if fe.screen==Screen::Maps && fe.map_group_began.is_none(){complete &= apply_animation(n,data,"MapGroup","Open",Some(t));}
+                    if complete && !fe.motion_pending{fe.motion_began=None;}
+                }
+            }
             draw_tree(n, full, &mut ctx);
+            if fe.motion_pending{fe.motion_pending=false;fe.motion_began=Some(get_time());}
             // RRBTD6_DUMP_RECTS=<depth>: print the laid-out screen rects (layout debugging).
             if let Some(d) = std::env::var("RRBTD6_DUMP_RECTS").ok().and_then(|v| v.parse::<usize>().ok()) {
                 fn walk(n: &Node, path: &str, depth: usize, max: usize) {
@@ -1864,6 +1913,7 @@ impl Hud {
                 walk(n, "", 0, d);
             }
         }
+            if let Screen::Menu(page)=fe.screen{if let Some(page)=fe.pages.get_mut(&page){page.presented();}}
         // Hotkeys: a tick under the cursor slider at the game's Normal size.
         if let (Screen::Hotkeys, Some(r)) = (fe.screen, fe.cursor_tick) {
             let def = (CURSOR_PX.2 - CURSOR_PX.0) / (CURSOR_PX.1 - CURSOR_PX.0);

@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::path::Path;
 const BASE:&str="Canvas/PlayerStatsScreen";
 pub(super) const MODAL:&str="Canvas/PlayerStatsScreen/SettingsMenu";
-pub(super) struct Browser {catalog:Value,runtime:Value,open:bool,banners:bool,selected:Option<usize>,began:f64}
+pub(super) struct Browser {public_stats:bool,root:std::path::PathBuf,catalog:Value,runtime:Value,open:bool,banners:bool,selected:Option<usize>,began:f64}
 impl Browser {
     pub fn load(root:&Path,node:&mut Node)->Option<Self>{
         let catalog:Value=serde_json::from_str(&std::fs::read_to_string(root.join("ui/runtime/profile_cosmetics.json")).ok()?).ok()?;
@@ -22,7 +22,7 @@ impl Browser {
                 }).collect();
             }
         }
-        let mut browser=Self{catalog,runtime,open:false,banners:false,selected:None,began:0.0};
+        let mut browser=Self{public_stats:false,root:root.to_owned(),catalog,runtime,open:false,banners:false,selected:None,began:0.0};
         if let Ok(tab)=std::env::var("RRBTD6_PROFILE_PICKER"){
             browser.open=true;browser.began=get_time();node.set_active(MODAL,true);browser.tab(node,tab=="banners");
         }
@@ -33,13 +33,21 @@ impl Browser {
         if !self.open{return false;}self.open=false;node.set_active(MODAL,false);true
     }
     pub fn animate(&mut self,node:&mut Node){
+        self.stats_view(node);
         if !self.open{return;}
         super::apply_animation(node,&self.runtime,"PlayerStatsSettings","OpenSettings",Some((get_time()-self.began) as f32));
         self.show_tab(node);
         // Purchases and account writes are not implemented. Do not offer fake actions.
         for name in ["Confirm","Buy","IapBuy","Remove","Quest","GoBtn"]{node.set_active(&format!("{MODAL}/Panel/{name}"),false);}
+        let local=super::account_preview::is_local();
+        node.set_active(&format!("{MODAL}/Panel/Confirm"),local && self.selected.is_some());
         node.set_active(&format!("{MODAL}/Panel/InfoMessage"),true);
-        node.set_text(&format!("{MODAL}/Panel/InfoMessage/Text"),"Local preview only — cloud changes are disabled.");
+        node.set_text(&format!("{MODAL}/Panel/InfoMessage/Text"),if local{"Choose a cosmetic, then confirm to save it locally."}else{"Preview only. Ninja Kiwi account changes are disabled."});
+    }
+    fn stats_view(&self,node:&mut Node){
+        node.set_active(&format!("{BASE}/Stats/OverallStats/PublicStats"),self.public_stats);
+        node.set_active(&format!("{BASE}/Stats/OverallStats/ConfigureStats"),!self.public_stats);
+        node.set_text(&format!("{BASE}/Stats/Own/PublicSwapButton/Text"),if self.public_stats{"All Stats"}else{"Public Stats"});
     }
     fn tab(&mut self,node:&mut Node,banners:bool){
         self.banners=banners;self.selected=None;
@@ -56,11 +64,31 @@ impl Browser {
     }
     pub fn click(&mut self,node:&mut Node,pointer:Vec2)->bool{
         let hit=|node:&Node,path:&str|node.rect(path).is_some_and(|r|r.contains(pointer));
+        if !self.open && hit(node,&format!("{BASE}/Stats/Own/PublicSwapButton")) {
+            self.public_stats=!self.public_stats;self.stats_view(node);return true;
+        }
+        if !self.open && !self.public_stats && super::account_preview::is_local(){
+            let list=format!("{BASE}/Stats/OverallStats/ConfigureStats/PlayerStats/Stats");
+            let clicked=node.find(&list).and_then(|n|n.children.iter().find(|r|hit(node,&format!("{list}/{}/Toggle",r.name)))).map(|n|n.name.trim_start_matches("AccountStat_").to_owned());
+            if let Some(key)=clicked {
+                if crate::local_profile::update(&self.root,|p|{let value=p.visible_stats.entry(key).or_default();*value=!*value;}).is_ok(){super::account_preview::refresh_local(&self.root);}
+                return true;
+            }
+        }
         if !self.open {
             let avatar=hit(node,&format!("{BASE}/Stats/TopInfo/PlayerAvatar/SettingsBtn"));
             let banner=hit(node,&format!("{BASE}/Stats/TopInfo/BannerSettingsBtn"));
             if !avatar&&!banner{return false;}
             self.open=true;self.began=get_time();node.set_active(MODAL,true);self.tab(node,banner);return true;
+        }
+        if super::account_preview::is_local() && hit(node,&format!("{MODAL}/Panel/Confirm")) {
+            let category=if self.banners{"banners"}else{"avatars"};
+            if let Some(icon)=self.selected.and_then(|i|self.catalog[category][i]["icon"].as_str()) {
+                if crate::local_profile::update(&self.root,|p|if self.banners{p.banner=icon.to_owned();}else{p.avatar=icon.to_owned();}).is_ok(){
+                    super::account_preview::refresh_local(&self.root);self.dismiss(node);
+                }
+            }
+            return true;
         }
         if hit(node,&format!("{MODAL}/Panel/Cancel")){self.dismiss(node);return true;}
         for (name,banners) in [("Avatars",false),("Banners",true)]{
@@ -82,7 +110,7 @@ mod tests {
     use super::*;
     #[test]
     fn closing_picker_consumes_back_once_without_leaving_modal_input_capture(){
-        let mut browser=Browser{catalog:Value::Null,runtime:Value::Null,open:true,banners:false,selected:Some(2),began:0.0};
+        let mut browser=Browser{public_stats:false,root:Default::default(),catalog:Value::Null,runtime:Value::Null,open:true,banners:false,selected:Some(2),began:0.0};
         let mut node=Node::from_json(&serde_json::json!({"name":"Scene","children":[{"name":"Canvas","children":[
             {"name":"PlayerStatsScreen","children":[{"name":"SettingsMenu","active":true}]}]}]}));
         assert_eq!(browser.modal(),Some(MODAL));

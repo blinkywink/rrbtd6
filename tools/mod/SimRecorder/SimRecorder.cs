@@ -245,7 +245,7 @@ public class Recorder : MelonMod
                 }
                 DumpMap(sim);
                 Out = new StreamWriter(Path.Combine(dir, Sc.name + ".rec"), false, new UTF8Encoding(false));
-                Out.WriteLine($"# SimRecorder {Sc.name} map={Sc.map} difficulty={Sc.difficulty} round={Sc.round}");
+                Out.WriteLine($"# SimRecorder {Sc.name} map={Sc.map} difficulty={Sc.difficulty} round={Sc.round} mode={Sc.mode}");
                 foreach (var t in Sc.towers) Out.WriteLine($"# tower {t.id} {F(t.x)} {F(t.y)}");
                 for (int k = 0; k < Sc.towers.Count; k++)
                     if (!string.IsNullOrEmpty(Sc.towers[k].target)) Out.WriteLine($"# target {k} {Sc.towers[k].target}");
@@ -526,7 +526,11 @@ static class SimulatePatch
                         var ob = tb[k]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Orbit>();
                         if (ob == null) continue;
                         var bl = ob.bloonInRange;
-                        w.WriteLine($"O {t.Id.Id} {Recorder.F(ob.currentSpeed)} {Recorder.F(ob.angle)} {(bl == null ? -1 : bl.Id.Id)} {(ob.isActive ? 1 : 0)}");
+                        // ... then the tower's Position and the bloon's (x y z each; the keep test is
+                        // their 3D distance).
+                        var tp = t.Position;
+                        var bp = bl == null ? tp : bl.Position;
+                        w.WriteLine($"O {t.Id.Id} {Recorder.F(ob.currentSpeed)} {Recorder.F(ob.angle)} {(bl == null ? -1 : bl.Id.Id)} {(ob.isActive ? 1 : 0)} {Recorder.F(tp.X)} {Recorder.F(tp.Y)} {Recorder.F(tp.Z)} {Recorder.F(bp.X)} {Recorder.F(bp.Y)} {Recorder.F(bp.Z)}");
                     }
                 }
             }
@@ -549,6 +553,14 @@ static class SimulatePatch
                 var p = pr.Position;
                 var ef = pr.emittedFrom;
                 w.WriteLine($"P {pr.Id.Id} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(pr.pierce)} {Recorder.F(pr.EjectRotation)} {Recorder.F(ef.x)} {Recorder.F(ef.y)} {Recorder.F(ef.z)} {Recorder.F(p.Z)} {Recorder.F(pr.VsBlockerRadius)}");
+                // Its Target: "PT projectile bloon(-1 none) valid".
+                try
+                {
+                    var tg = pr.target;
+                    var tb = tg._bloon;
+                    w.WriteLine($"PT {pr.Id.Id} {(tb == null ? -1 : tb.Id.Id)} {(tg.IsValid ? 1 : 0)}");
+                }
+                catch (Exception) { }
             }
         });
     }

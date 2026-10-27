@@ -1,0 +1,1 @@
+{"name": "sniper_000_close", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 10, "towers": [{"id": "SniperMonkey", "x": -112.815414, "y": -30.9, "target": "Close"}]}

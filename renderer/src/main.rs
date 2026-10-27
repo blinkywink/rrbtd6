@@ -28,6 +28,7 @@ mod menus;
 mod render3d;
 mod startup;
 mod account_ui;
+mod local_profile;
 mod static_map;
 mod sandbox;
 mod temple_popup;
@@ -1679,7 +1680,12 @@ async fn game_main() {
         }
         while acc >= 1.0 / FPS {
             let t_step = std::time::Instant::now();
+            let completed_before=game.round;
             game.step();
+            if game.round!=completed_before && !game.sandbox && game.race.is_none() && std::env::var_os("RRBTD6_AUTOTEST").is_none() && frontend::account_preview::is_local() {
+                let profile_root=root.clone();let completed_round=game.round;
+                std::thread::spawn(move||{if local_profile::update(&profile_root,|p|p.highest_round=p.highest_round.max(completed_round)).is_ok(){frontend::account_preview::refresh_local(&profile_root);}});
+            }
             let dt_step = t_step.elapsed().as_secs_f64();
             sim_stats.0 += dt_step;
             sim_stats.1 += 1;
@@ -2661,6 +2667,10 @@ async fn game_main() {
                         *row=serde_json::json!({"bestFrames":best,"lastFrames":race.elapsed,"practiceOnly":true});
                         if let Ok(bytes)=serde_json::to_vec(&results){let _=std::fs::write(path,bytes);}
                     }
+                }
+                if !end_shown && !game.sandbox && game.race.is_none() && std::env::var_os("RRBTD6_AUTOTEST").is_none() && frontend::account_preview::is_local() {
+                    let profile_root=root.clone();let won=game.won;let completed_round=game.round;
+                    std::thread::spawn(move||{if local_profile::update(&profile_root,|p|{if won{p.wins+=1;}else{p.losses+=1;}p.highest_round=p.highest_round.max(completed_round);}).is_ok(){frontend::account_preview::refresh_local(&profile_root);}});
                 }
                 end_shown = true;
                 reviewing = false;

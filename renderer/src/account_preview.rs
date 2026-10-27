@@ -10,7 +10,9 @@ fn preview_state(root: &Path) -> &'static Mutex<Preview> {
     PREVIEW.get_or_init(|| {
         let project = helper_project(root);
         let (tx,rx)=mpsc::channel();
+        let local_test=std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_LOCAL_PROFILE").is_some();
         std::thread::spawn(move || {
+            if local_test{let _=tx.send(None);return;}
             if let Some(data)=read_preview(&project,"--preview"){let _=tx.send(Some(data));}
             // Offline by default: only the cached snapshot is read. Ninja Kiwi blocked the owner's
             // IP after a burst of requests, so live reads need an explicit RRBTD6_NK_ONLINE=1.
@@ -19,7 +21,7 @@ fn preview_state(root: &Path) -> &'static Mutex<Preview> {
             }
             let _=tx.send(None);
         });
-        Mutex::new(Preview {data:None,finished:false,bound:Default::default(),rx})
+        Mutex::new(Preview {data:Some(crate::local_profile::preview(root)),finished:false,bound:Default::default(),rx})
     })
 }
 
@@ -96,20 +98,19 @@ pub fn bind(root: &Path, node: &mut Node) {
         if let Some(avatar)=data["profileArtwork"]["profileAvatar"].as_str().or_else(||data["profile"]["profileAvatar"].as_str()) {
             node.set_sprite(&format!("{STATS}/TopInfo/PlayerAvatar/Icon"),Some(avatar));
         }
-        node.set_active(&format!("{STATS}/TopInfo/EmptyBanner"),false);
-        node.set_active(&format!("{STATS}/TopInfo/CustomBanner"),true);
+        node.set_active(&format!("{STATS}/TopInfo/EmptyBanner"),data["profileArtwork"]["profileBanner"].as_str().is_none_or(str::is_empty));
+        node.set_active(&format!("{STATS}/TopInfo/CustomBanner"),data["profileArtwork"]["profileBanner"].as_str().is_some_and(|s|!s.is_empty()));
         let veteran=data["profile"]["veteranRank"].as_f64().unwrap_or(0.0)>0.0;
         node.set_active(&format!("{STATS}/TopInfo/PlayerRank"),!veteran);
         node.set_active(&format!("{STATS}/TopInfo/VeteranPlayerRank"),veteran);
         node.set_active(&format!("{STATS}/Own"),true);
         node.set_active(&format!("{STATS}/Others"),false);
         node.set_active(&format!("{STATS}/Own/OnlineStatus"),false);
-        node.set_active(&format!("{STATS}/Own/PublicSwapButton"),false);
+        node.set_active(&format!("{STATS}/Own/PublicSwapButton"),true);
         node.set_active(&format!("{STATS}/FollowerCount"),false);
         node.set_active("Canvas/PlayerStatsScreen/JewelBar/ContextSwitch",false);
         node.set_active("Canvas/PlayerStatsScreen/JewelBar/ContextSwitchButton",false);
-        node.set_active(&format!("{STATS}/OverallStats/PublicStats"),false);
-        node.set_active(&format!("{STATS}/OverallStats/ConfigureStats"),true);
+
         node.set_text(&format!("{STATS}/OverallStats/StatCategoryDropdown/Text"),"Overall Stats");
         let medals=format!("{STATS}/Medals/MedalScroll/Viewport/MedalContainer");
         node.set_active(&format!("{medals}/MedalPrefab"),false);
@@ -134,12 +135,13 @@ pub fn bind(root: &Path, node: &mut Node) {
             }
         }
         node.set_active(&format!("{STATS}/Medals/FoundNothingTxt"),data["medals"].as_object().is_some_and(|groups|groups.values().all(|g|g.as_object().is_none_or(|m|m.is_empty()))));
-        node.hide_named(&["SharedStats","FriendCode","OnlineStatus","FollowButton","Accolades"]);
+        node.hide_named(&["FriendCode","OnlineStatus","FollowButton","Accolades"]);
         node.set_text(&format!("{STATS}/TopInfo/PlayerName"),data["displayName"].as_str().unwrap_or(""));
         for (name,key) in [("PlayerRank","rank"),("VeteranPlayerRank","veteranRank")] {
             let base=format!("{STATS}/TopInfo/{name}/XpBar");
             if let Some(rank)=data["profile"][key].as_f64() {
                 node.set_text(&format!("{base}/LvlStar/LvlTxt"),&number(rank));
+                if rank>=1000.0{if let Some(text)=node.find_mut(&format!("{base}/LvlStar/LvlTxt")).and_then(|n|n.txt.as_mut()){text.auto=true;text.min=12.0;text.wrap=false;}}
                 if name=="VeteranPlayerRank" {node.set_active(&format!("{STATS}/TopInfo/{name}"),rank>0.0);}
             }
             let progress=if name=="VeteranPlayerRank"{&data["rankProgress"]["veteran"]}else{&data["rankProgress"]};
@@ -151,7 +153,7 @@ pub fn bind(root: &Path, node: &mut Node) {
                 .or_else(||node.find(&format!("{STATS}/OverallStats/PublicStats/PlayerStats/Stats/PublicStat")).cloned());
             if let (Some(template),Some(list))=(template,node.find_mut(&content)) {
                 list.children.clear();
-                for (key,label) in [("gamesPlayed","Games Played"),("totalTowersPlaced","Monkeys Placed"),
+                for (key,label) in [("gamesPlayed","Games Played"),("gamesLost","Games Lost"),("totalTowersPlaced","Monkeys Placed"),
                     ("bloonsPopped","Bloons Popped"),("camosPopped","Camo Bloons Popped"),
                     ("leadPopped","Lead Bloons Popped"),("purplesPopped","Purple Bloons Popped"),
                     ("regrowPopped","Regrow Bloons Popped"),("ceramicsPopped","Ceramic Bloons Popped"),
@@ -161,7 +163,7 @@ pub fn bind(root: &Path, node: &mut Node) {
                     ("totalAbilitiesActivated","Abilities Used"),("totalPowersActivated","Powers Used"),
                     ("instaMonkeysUsed","Insta Monkeys Used"),("damageDoneToBosses","Damage Done to Bosses")] {
                     let Some(value)=data["stats"][key].as_f64() else {continue};
-                    let mut row=template.clone();row.name=format!("AccountStat{}",list.children.len());row.active=true;
+                    let mut row=template.clone();row.name=format!("AccountStat_{key}");row.active=true;
                     row.set_text("Name",label);row.set_text("Value",&number(value));
                     row.set_active("Toggle/Tick",data["visibleStats"][key]==true);
                     list.children.push(row);
@@ -171,11 +173,18 @@ pub fn bind(root: &Path, node: &mut Node) {
                     ("lifetimeTrophies","Lifetime Trophies"),("goldenBloonsPopped","Golden Bloons Popped"),
                     ("monkeyTeamsWins","Monkey Teams Wins")] {
                     let Some(value)=data["profile"][key].as_f64() else {continue};
-                    let mut row=template.clone();row.name=format!("AccountStat{}",list.children.len());row.active=true;
+                    let mut row=template.clone();row.name=format!("AccountStat_{key}");row.active=true;
                     row.set_text("Name",label);row.set_text("Value",&number(value));
                     row.set_active("Toggle/Tick",data["visibleStats"][key]==true);list.children.push(row);
                 }
             }
+        }
+        if initializing {
+            let rows=node.find(&content).map(|n|n.children.clone()).unwrap_or_default();
+            let visible:Vec<Node>=rows.iter().filter(|r|data["visibleStats"][r.name.trim_start_matches("AccountStat_")]==true).cloned().map(|mut r|{r.set_active("Toggle",false);r}).collect();
+            node.set_active(&format!("{STATS}/OverallStats/SharedStats"),true);
+            node.set_text(&format!("{STATS}/OverallStats/SharedStats"),&format!("Shared {}/{}",visible.len(),rows.len()));
+            if let Some(public)=node.find_mut(&format!("{STATS}/OverallStats/PublicStats/PlayerStats/Stats")){public.children=visible;}
         }
         for (group,path) in [("heroes","HeroContainer/HeroContent"),("towers","TowerContainer/TowerContent")] {
             let content=format!("{STATS}/TopTowers/{path}");
@@ -428,13 +437,15 @@ mod map_border_tests {
     }
 }
 
-pub(crate) fn player_name()->Option<String>{let state=PREVIEW.get()?.try_lock().ok()?;Some(state.data.as_ref()?["displayName"].as_str()?.trim()).filter(|name|!name.is_empty()).map(str::to_owned)}
+pub(crate) fn player_name()->Option<String>{let state=PREVIEW.get()?.try_lock().ok()?;let data=state.data.as_ref()?;if data["localProfile"]==true{return None;}Some(data["displayName"].as_str()?.trim()).filter(|name|!name.is_empty()).map(str::to_owned)}
+pub(crate) fn is_local()->bool{PREVIEW.get().and_then(|s|s.try_lock().ok()).and_then(|s|s.data.as_ref().map(|d|d["localProfile"]==true)).unwrap_or(true)}
+pub(crate) fn refresh_local(root:&Path){if is_local(){if let Ok(mut state)=preview_state(root).lock(){state.data=Some(crate::local_profile::preview(root));state.bound.clear();}}}
 
 /// Publish a verified login result and invalidate any previous account read in flight.
 pub(crate) fn signed_in(root:&Path,data:serde_json::Value) {
     if data["readOnly"]!=true || data["uploadsEnabled"]!=false{return;}
     if let Ok(mut state)=preview_state(root).lock() {
         let (_,rx)=mpsc::channel();state.rx=rx;state.finished=true;
-        state.data=Some(data);state.bound.clear();
+        state.data=Some(if data["displayName"].as_str().is_none_or(str::is_empty){crate::local_profile::preview(root)}else{data});state.bound.clear();
     }
 }

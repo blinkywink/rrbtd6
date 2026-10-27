@@ -5,16 +5,31 @@
 set -e
 GAME="${BTD6:-/c/Program Files/Epic Games/BloonsTD6}"
 UD="$GAME/UserData/SimRecorder"
-OUT="$(cd "$(dirname "$0")/../.." && pwd)/research/dumps/recordings"
+OUT="${OUT:-$(cd "$(dirname "$0")/../.." && pwd)/research/dumps/recordings}"
 # Launched through its store: Steam (app 960090) when GAME is the Steam install, else Epic.
 case "$GAME" in
   *Steam*) URI='steam://rungameid/960090' ;;
   *) URI='com.epicgames.launcher://apps/6a8dfa6e441e4f2f9048a98776c6077d%3A49c4bf5c6fd24259b87d0bcc96b6009f%3A7786b355a13b47a6b3915335117cd0b2?action=launch&silent=true' ;;
 esac
 mkdir -p "$UD" "$OUT"
+# One batch at a time: each launch closes whatever game is running and shares scenario.json, so a
+# second batch would kill the first one's game mid-start ("instant crashes") and delete its
+# scenario. A later batch waits for the lock; one left by a batch that died is taken over.
+LOCK="$UD/.record.lock"
+while ! mkdir "$LOCK" 2>/dev/null; do
+  owner=$(cat "$LOCK/pid" 2>/dev/null || true)
+  if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+    echo "record.sh: taking over the lock of finished batch $owner"
+    rm -rf "$LOCK"
+    continue
+  fi
+  echo "record.sh: another recording batch is running (pid ${owner:-?}); waiting"
+  sleep 10
+done
+echo $$ > "$LOCK/pid"
 # The mod plays scenario.json on every launch: never leave it behind (a normal launch would run a
 # recording and quit), whatever way this script ends.
-trap 'rm -f "$UD/scenario.json"' EXIT INT TERM HUP
+trap 'rm -f "$UD/scenario.json"; rm -rf "$LOCK"' EXIT INT TERM HUP
 # (Process checks through PowerShell: tasklist can hang on this machine.)
 running() { powershell -NoProfile -Command "if (Get-Process BloonsTD6 -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"; }
 kill_game() { powershell -NoProfile -Command "Get-Process BloonsTD6 -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true; }
@@ -40,7 +55,7 @@ for sc in "$@"; do
     sleep 3
   done
   ok=""
-  for i in $(seq 1 200); do
+  for i in $(seq 1 400); do
     [ -n "$started" ] || break
     if grep -q "SimRecorder done" "$GAME/MelonLoader/Latest.log" 2>/dev/null; then ok=1; break; fi
     running || break

@@ -2,6 +2,7 @@
 
 Inputs (local, git-ignored): local_extracted/decoded/named/objects.jsonl,
 local_extracted/decoded/values.json, local_extracted/data/round_sets.json,
+local_extracted/data/bloon_mutator_data.json (optional),
 local_extracted/maps/<key>/map.json, local_extracted/sprites/.
 
 Usage: python -I tools/assets/build_game_data.py <local_extracted dir> <map key> <root GameModel index>
@@ -107,6 +108,9 @@ def main():
     sprites = set(os.path.splitext(f)[0] for f in os.listdir(os.path.join(root, "sprites", "Bloons")))
     icons = set(os.path.splitext(f)[0] for f in os.listdir(os.path.join(root, "sprites", "UiBloonIcons")))
 
+    # GameModel.bloons order: ProgressiveDifficultyManager.ChangeCeramicsAndChildren walks it.
+    game_model = next(r for r in objs.values() if r["type"] == "GameModel")
+    model_index = {b["f"]["id"]: k for k, b in enumerate(items(game_model["f"].get("bloons"))) if b}
     bloons = {}
     for r in objs.values():
         if r["type"] != "BloonModel":
@@ -140,6 +144,10 @@ def main():
             "isMoab": f["isMoab"], "isCamo": f["isCamo"], "leakDamage": f["leakDamage"],
             "bloonProperties": f.get("bloonProperties", 0), "tags": items(f.get("tags")),
             "layerNumber": f["layerNumber"], "children": children,
+            "index": model_index.get(f["id"], len(model_index)),
+            "isFixedMaxHealth": bool(f.get("isFixedMaxHealth", False)),
+            # BadImmunityModel (BAD): no PushBack, and BloonMutatorData's mutators are kept off.
+            "badImmunity": any(b and b["type"] == "BadImmunityModel" for b in items(f.get("behaviors"))),
             # CollisionGroupModel.collisionGroup (MOAB-class): circles (offset x, offset y, radius)
             # in the bloon's own frame, offset y along its heading (Targetting.CanHitMoab).
             "circles": [[c["f"].get("?None@0", 0.0), c["f"].get("offset", 0.0), c["f"].get("radius", 0.0)]
@@ -258,7 +266,7 @@ def main():
             ts = {"speed": rr["speed"], "lifespan": (rr["minRange"] + rr["maxRange"]) / 2 / rr["speed"]}
         filters, exclude_bloons, exclude_tags = [], [], []
         glue_filter, skip_frozen, cant_hit = 0, False, 0
-        out_require_effects = []
+        out_require_effects = None
         for fm in pb.get("ProjectileFilterModel", []):
             for x in items(fm["f"]["filters"]):
                 if x:
@@ -275,9 +283,11 @@ def main():
                         glue_filter = x["f"]["glueLevel"]
                     if x["type"] == "FilterFrozenBloonsModel":
                         skip_frozen = True
-                    # FilterOveridingMutatedTargetModel: only bloons with one of these effects.
+                    # FilterOveridingMutatedTargetModel: [mutationOverideOrder, highest, default]
+                    # (FilterOveridingMutatedTarget.FilterBloon).
                     if x["type"] == "FilterOveridingMutatedTargetModel":
-                        out_require_effects += [m for m in (x["f"].get("highestPriorityMutationId"), x["f"].get("defaultMutationId")) if m]
+                        out_require_effects = [[m for m in items(x["f"].get("mutationOverideOrder")) if isinstance(m, str)],
+                                               x["f"].get("highestPriorityMutationId") or "", x["f"].get("defaultMutationId") or ""]
         # Bloon effects (slow, freeze, damage over time, brittle) and their per-tag modifiers.
         effects, effect_mods = [], []
         for s in pb.get("SlowModel", []) + pb.get("SlowForBloonModel", []):
@@ -288,12 +298,13 @@ def main():
             effects.append({"kind": "slow", "id": sf.get("mutationId") or "", "mult": sf.get("multiplier", 1.0),
                             "lifespan": sf.get("lifespan", 0.0), "layers": sf.get("layers", 1),
                             "glue": sf.get("glueLevel", 0), "refresh": not sf.get("dontRefreshDuration", False),
-                            "tags": tags})
+                            "tags": tags, "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
         for s in pb.get("FreezeModel", []):
             sf = s["f"]
             effects.append({"kind": "freeze", "id": sf.get("mutationId") or "", "mult": sf.get("speed", 0.0),
                             "lifespan": sf.get("lifespan", 0.0), "layers": sf.get("layers", 1),
-                            "moabs": sf.get("canFreezeMoabs", False)})
+                            "moabs": sf.get("canFreezeMoabs", False), "boss_immunity": bool(sf.get("bossImmunity", False)),
+                            "after_damage": bool(sf.get("applyAfterDamage", False))})
         # PsiEffectModel (Psi): the hit bloon is held and takes damagePerTick every tickRate
         # seconds for up to maxDuration. HYPOTHESIS P-PSIHOLD: held = speed 0 meanwhile.
         for s in pb.get("PsiEffectModel", []):
@@ -320,14 +331,18 @@ def main():
                                     "only_if_damaged": sf.get("applyOnlyIfDamaged", False),
                                     "parent": ({"damage": pd["f"].get("damage", 0.0), "immune": pd["f"].get("immuneBloonProperties", 0)}
                                                if (pd := deref(sf.get("parentDamageModel"))) else None),
-                                    "moabs_only": bool(flt and flt["type"] == "FilterMoabModel" and not flt["f"].get("flip"))})
+                                    "moabs_only": bool(flt and flt["type"] == "FilterMoabModel" and not flt["f"].get("flip")),
+                                    # BehaviorMutator.dontRemoveOnBloonDegrade: kept when a MOAB-class
+                                    # bloon pops (Bloon.RemoveAllMutators).
+                                    "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
                 # DesperadoMarkModel (Desperado 0-4-0+): marked bloons take desperadoDamageMultiplier
                 # damage from Desperados and pay popCashMultiplier per pop.
                 if d and d["type"] == "DesperadoMarkModel":
                     df = d["f"]
                     effects.append({"kind": "mark", "id": sf.get("mutationId") or "DesperadoMark", "lifespan": sf.get("lifespan", 0.0),
                                     "layers": sf.get("layers", 1), "mult": df.get("desperadoDamageMultiplier", 1.0),
-                                    "damage": df.get("popCashMultiplier", 1.0)})
+                                    "damage": df.get("popCashMultiplier", 1.0),
+                                    "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
                 # PsiBloonBehaviorModel (Psi): the bloon is held and takes damagePerTick every
                 # tickRate seconds. HYPOTHESIS P-PSIHOLD: held = speed 0 while it lasts.
                 if d and d["type"] == "PsiBloonBehaviorModel":
@@ -345,7 +360,8 @@ def main():
                     effects.append({"kind": "pop_emit", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
                                     "layers": sf.get("layers", 1),
                                     "projectile": projectile(deref(df["projectile"]), depth + 1),
-                                    "emission": emission(deref(df.get("emission")))})
+                                    "emission": emission(deref(df.get("emission"))),
+                                    "ignore_same_frame": bool(df.get("ignoreSameFrameDegrade", False))})
                 if d and d["type"] == "ProjectileOverTimeModel" and depth < 3:
                     df = d["f"]
                     effects.append({"kind": "emit", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
@@ -390,12 +406,13 @@ def main():
             sf = s["f"]
             effect_mods.append({"tags": [sf["tag"]], "id": sf.get("slowId") or "", "mult": sf.get("slowMultiplier", 1.0),
                                 "reset": sf.get("resetToUnmodified", False), "prevent": sf.get("preventMutation", False),
-                                "lifespan": sf.get("lifespanOverride", 0.0), "time_mult": 1.0})
+                                "lifespan": sf.get("lifespanOverride", 0.0), "time_mult": 1.0,
+                                "not_tag": bool(sf.get("makeNotTag", False))})
         for s in pb.get("FreezeModifierForTagsModel", []):
             sf = s["f"]
             effect_mods.append({"tags": [t for t in items(sf.get("tags")) if isinstance(t, str)], "id": sf.get("freezeId") or "",
                                 "mult": 1.0, "reset": False, "prevent": sf.get("preventMutation", False), "lifespan": 0.0,
-                                "time_mult": sf.get("freezeTimeMultiplier", 1.0)})
+                                "time_mult": sf.get("freezeTimeMultiplier", 1.0), "freeze": True})
         path = None
         if pb.get("FollowPathModel"):
             fp = pb["FollowPathModel"][0]["f"]
@@ -422,10 +439,13 @@ def main():
         if pb.get("PushBackModel"):
             pf = pb["PushBackModel"][0]["f"]
             push = {"amount": pf["pushAmount"], "tag": pf.get("tag") or "",
+                    "only_if_damaged": bool(pf.get("onlyIfDamaged", False)),
                     "mult": {k: pf.get("multiplier" + k, 1.0) for k in ("MOAB", "BFB", "DDT", "ZOMG")}}
         out = {
             "pierce": f["pierce"], "max_pierce": f.get("maxPierce", 0.0), "radius": f["radius"],
             "vs_blocker_radius": f.get("vsBlockerRadius", 0.0), "ignore_blockers": f.get("ignoreBlockers", False),
+            # ProjectileModel.canCollisionBeBlockedByMapLos: a hit needs a clear line to the bloon.
+            "los_blocked": bool(f.get("canCollisionBeBlockedByMapLos", False)),
             "damage": dmg.get("damage", 0.0), "immune": dmg.get("immuneBloonProperties", 0),
             # DamageModel.distributeToChildren / overrideDistributeBlocker.
             "distribute": bool(dmg.get("distributeToChildren", True)),
@@ -465,7 +485,7 @@ def main():
             "glue_filter": glue_filter,
             "skip_frozen": skip_frozen,
             "cant_hit": cant_hit,
-            "require_effects": out_require_effects,
+            "override_filter": out_require_effects,
             "effects": effects,
             "effect_mods": effect_mods,
             "path": path,
@@ -588,7 +608,9 @@ def main():
                 cf = cc["f"]
                 out["on_contact"].append({"projectile": projectile(deref(cf["projectile"]), depth + 1),
                                           "emission": emission(deref(cf["emission"])),
-                                          "pass_on_collided": cf.get("passOnCollidedWith", False)})
+                                          "pass_on_collided": cf.get("passOnCollidedWith", False),
+                                          # dontCreateAtBloon: made where the shot is, not on the bloon.
+                                          "at_shot": bool(cf.get("dontCreateAtBloon", False))})
             for cc in pb.get("EmitOnDamageModel", []):
                 cf = cc["f"]
                 out["on_contact"].append({"projectile": projectile(deref(cf["projectile"]), depth + 1),
@@ -861,14 +883,18 @@ def main():
                                 "to_bank": (deref(w["f"]["emission"]) or {}).get("type") == "SendToBankModel"})
             # LinkProjectileRadiusToTowerRangeModel: only its projectileModel (by reference; a
             # model without one links every weapon, as before).
-            links = [b["f"].get("projectileModel") for b in items(f["behaviors"])
-                     if b and b["type"] == "LinkProjectileRadiusToTowerRangeModel"]
+            link_models = [b["f"] for b in items(f["behaviors"])
+                           if b and b["type"] == "LinkProjectileRadiusToTowerRangeModel"]
+            links = [l.get("projectileModel") for l in link_models]
             if links:
                 refs = {l.get("$ref") for l in links if isinstance(l, dict)}
                 for w, wobj in zip(weapons, [w for w in items(af["weapons"]) if w]):
                     pr = wobj["f"]["projectile"]
                     if not refs or (isinstance(pr, dict) and pr.get("$ref") in refs):
                         w["projectile"]["link_radius"] = True
+                        # radius = the tower's range + projectileRadiusOffset.
+                        lm = next((l for l in link_models if not refs or (l.get("projectileModel") or {}).get("$ref") == pr.get("$ref")), link_models[0])
+                        w["projectile"]["link_offset"] = lm.get("projectileRadiusOffset", 0.0)
             prio_camo = any(x and "PrioCamo" in x["type"] for x in items(af["behaviors"]))
             random_position = next(([x["f"]["minRadius"], x["f"]["maxRadius"]] for x in items(af["behaviors"])
                                     if x and x["type"] == "RandomPositionBasicModel"), None)
@@ -1179,7 +1205,9 @@ def main():
                 zf = b["f"]
                 zones.append({"radius": zf["zoneRadius"], "bind": zf.get("bindRadiusToTowerRange", False),
                               "offset": zf.get("radiusOffset", 0.0), "scale": zf.get("speedScale", 1.0),
-                              "tags": ([zf["bloonTag"]] if zf.get("bloonTag") else []) + [t for t in items(zf.get("bloonTags")) if isinstance(t, str)],
+                              "id": zf.get("mutationId") or "",
+                              "tag": zf.get("bloonTag") or "",
+                              "tags": [t for t in items(zf.get("bloonTags")) if isinstance(t, str)],
                               "inclusive": zf.get("inclusive", False),
                               "exclude_tags": [x["f"]["tag"] for x in items(zf.get("filters"))
                                                if x and x["type"] == "FilterOutTagModel"]
@@ -1894,6 +1922,8 @@ def main():
                        json.load(open(os.path.join(root, "data", "round_sets.json"))).items() if k == "AlternateRoundSet"},
         "end_round": medium.get("EndRoundModModel", {}).get("round", len(rounds)),
         "freeplay": freeplay_groups(),
+        # GameData.bloonMutatorData (export_rounds.py): BadImmunity.FilterMutation's lists.
+        "bloon_mutator_data": (json.load(open(md)) if os.path.exists(md := os.path.join(root, "data", "bloon_mutator_data.json")) else {}),
         "shop": shop,
         # Every hero's shop entry (HeroDetailsModel order): the player picks which one the
         # shop's hero slot holds.

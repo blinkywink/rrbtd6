@@ -58,7 +58,7 @@ Towers:
   degree 1 and degree 6 (bought with UpgradeTowerParagon after real upgrades): sacrifice pause
   (inactiveDurationFrames), ChurchillBaseRotation (base turns 0.5 / frame to the turret, 240-frame
   pauses), turret angle on the base, exhaust rings.
-- [ ] Boomerang Monkey: 0-0-0..0-0-5, 0-1-0..0-5-0, 1-0-0..4-0-0 match frame for frame. Verified:
+- [x] Boomerang Monkey: 0-0-0..0-0-5, 0-1-0..0-5-0, 1-0-0..4-0-0 match frame for frame. Verified:
   FollowPath (PathImpl, ease, Vector2.Rotate, x mirrored), ArriveAtTarget curve, ClearHitBloons,
   MOAB Press push/stun, Glaive Ricochet (RetargetOnContact: GetClosestTarget, delay restarted by
   every hit, Target), process-list birth order (degraded bloon keeps its place, Spawner before
@@ -68,9 +68,39 @@ Towers:
   Move, re-application keeps lastTick); distributeToChildren; UCRT sinf / cosf ported; orbit
   speed-up sees camo bloons). All 48 crosspaths, Last / Close /
   Strong, mid-round upgrades, left hand (FlipFollowPath eject) and Glaive Dominus (degree 1,
-  round 40) match. Left (invisible, no effect on bloons): Glaive Lord's MoabDot sometimes lives 1
-  frame instead of 3 (5-2-0 nearly always, 5-0-0 / 5-1-0 rarely); the models are identical and the
-  recorded state doesn't separate the cases yet.
+  round 40) match, and on rounds 63 / 78. Glaive Lord's MoabDot dropped by a tree's edge
+  (MapBlocker, target-only shots too) now matches in 5-0-0 / 5-1-0 / 5-2-0 / left 5-2-0.
+  Glaive Dominus rounds 90 and 98 match on every bloon (Super Ceramics, DoT limiter and
+  OnDestroy tick, MOAB-pop mutator removal, BAD immunity, exhaust and push order, CHIMPS end),
+  and frame for frame in full: a glaive keeps the Target it was thrown at (its MoabDot copies
+  it), and the Orbit's keep test is 3D (MOAB-class bloons ride at 120, others at 20, a popped
+  bloon keeping its height until it moves). All recordings match.
+
+- [ ] Bomb Shooter: 22 of 34 recordings (research/dumps/recordings/pending/bomb) match frame for
+  frame: base with First / Last / Close / Strong, 1-0-0..4-0-0 lines, 3-0-0, 3-2-0, 4-0-0, 4-2-0 with
+  every targeting. Verified: map line of sight blocks blast hits (canCollisionBeBlockedByMapLos),
+  immune hits destroy shots only on Lead / Purple / Frozen, projectile heights against blockers,
+  PushBack onlyIfDamaged, abilities firing at activation (Game::towers_phase). Open: (2) cluster
+  bomblets (0-0-3+) end 1-2 frames early in some directions, cause unknown; (3) frag directions off
+  by float rounding (0-3-2, 5-0-2; no bloon affected).
+
+- [ ] Tack Shooter: 16 of 25 recordings (pending/tack) match: base, every 1-4 tier line with
+  exact ArcEmission directions (degrees from the tower's rotation), Ring of Fire (eject point,
+  radius = range + projectileRadiusOffset). Inferno Ring's meteor now follows the game's
+  TrackTarget (turn after the first move, 5-frame target search, Vector2.AngleBetween /
+  Vector3Boxed.Rotate). Open: abilities (Blade Maelstrom, same as Bomb), the meteor's blast spot
+  (made at the meteor in the game though dontCreateAtBloon is off), 0-3-0 at rt 2754.
+
+- [ ] Ice Monkey: 19 of 25 recordings (pending/ice) match. Verified: FilterOveridingMutatedTarget,
+  Frigid immunities (12), EmitOnPop (ignoreSameFrameDegrade, once per Bloon.Damage), slow zones
+  (bloonTag / inclusive, centre in range, multiplying, one per id), frozen MOAB-class speeds (5 /
+  2.25), SlowMutator / Freeze modifier rules, applyAfterDamage freezes (bloon + its new children),
+  MultiEmission secondary pulses, Mutable.AddMutator refresh (lifespan only when shorter, layer
+  charges reset), abilities at activation. Open: (1) Icicles (0-0-4+, also 0-0-5 / 0-2-5 / 2-0-5):
+  AddBehaviorToBloon chance 0.25 with CarryProjectileModel; needs the game's seeded simulation RNG
+  (BufferedRandom), which the clone doesn't have yet (it uses a stand-in xorshift); (2) 0-4-0 base
+  attack fires at 2014 in the clone, 2020 in the game (after Snowstorm); (3) 5-2-0 shard burst at
+  rt 2528. Spawner bloons join the collision grid on their first move (HYPOTHESIS P-SPAWNGRID).
 
 ## Done
 
