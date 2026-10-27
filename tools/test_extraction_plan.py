@@ -38,6 +38,23 @@ def fixture(root, data):
 
 
 class PlanTests(unittest.TestCase):
+    def test_whitespace_in_native_prefab_name_indexes_the_exported_directory(self):
+        with tempfile.TemporaryDirectory(prefix="rrbtd6-plan-test-") as folder:
+            root = Path(folder)
+            plans = root / "local_extracted/display_plans"
+            plans.mkdir(parents=True)
+            (plans / "FutureTower.json").write_text(json.dumps({"towers": {"210": {
+                "prefab": "Assets/210-FutureTower .prefab", "bundle": "fixture.bundle"}}}))
+            target = root / "local_extracted/models/FutureTower/tiers/210-FutureTower"
+            target.mkdir(parents=True)
+            (target / "meta.json").write_text('{"shadow": []}')
+            (target / "outline.bin").write_bytes(b"fixture")
+            with chdir(root), patch.object(sys, "argv", ["export_tower_tiers.py", "game", "FutureTower"]), \
+                    patch("subprocess.run") as child, redirect_stdout(io.StringIO()):
+                runpy.run_path(str(TOOLS / "assets/export_tower_tiers.py"), run_name="__main__")
+            child.assert_not_called()
+            self.assertEqual(json.loads((target.parent / "index.json").read_text()), {"210": target.name})
+
     def test_interrupted_checkpoint_write_preserves_completed_steps(self):
         with tempfile.TemporaryDirectory(prefix="rrbtd6-plan-test-") as folder:
             path = Path(folder) / "state.json"

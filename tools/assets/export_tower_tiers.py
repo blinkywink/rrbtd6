@@ -17,7 +17,7 @@ for tower in sys.argv[2:]:
     # displays (attack.json: tier -> [{dir, offset, scale}], drawn on the tower at its aim).
     jobs = []
     for tier, t in sorted(plan["towers"].items()):
-        stem = os.path.splitext(os.path.basename(t["prefab"]))[0].replace(" ", "_")
+        stem = os.path.splitext(os.path.basename(t["prefab"]))[0].strip().replace(" ", "_")
         index[tier] = stem
         jobs.append((tier, t))
         for a in t.get("attack_displays", []):
@@ -30,9 +30,11 @@ for tower in sys.argv[2:]:
             continue
         out = os.path.join(root, stem)
         meta = os.path.join(out, "meta.json")
-        if os.path.exists(os.path.join(out, "outline.bin")) and os.path.exists(meta) and "shadow" in json.load(open(meta)):
-            done[stem] = 0
-            continue
+        if os.path.exists(os.path.join(out, "outline.bin")) and os.path.exists(meta):
+            with open(meta, encoding="utf-8") as meta_file:
+                if "shadow" in json.load(meta_file):
+                    done[stem] = 0
+                    continue
         bundle_glob = t["bundle"].rsplit("_", 1)[0]
         r = subprocess.run([sys.executable, "tools/assets/export_animated.py", game, out, bundle_glob, t["prefab"]],
                            capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -41,6 +43,8 @@ for tower in sys.argv[2:]:
               flush=True)
         if r.returncode:
             raise SystemExit(r.returncode)
-    json.dump(index, open(os.path.join(root, "index.json"), "w"), indent=1)
-    json.dump(attack_index, open(os.path.join(root, "attack.json"), "w"), indent=1)
+    with open(os.path.join(root, "index.json"), "w", encoding="utf-8") as index_file:
+        json.dump(index, index_file, indent=1)
+    with open(os.path.join(root, "attack.json"), "w", encoding="utf-8") as attack_file:
+        json.dump(attack_index, attack_file, indent=1)
     print(tower, "exported", sum(1 for v in done.values() if v == 0), "of", len(done))

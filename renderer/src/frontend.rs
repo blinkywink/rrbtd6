@@ -347,7 +347,7 @@ fn apply_pose(root: &mut Node, file: &Path, controller: &str, clip: &str) {
     apply_animation(root, &data, controller, clip, None);
 }
 
-fn curve_value(keys: &serde_json::Value, time: f32) -> Option<f32> {
+pub(crate) fn curve_value(keys: &serde_json::Value, time: f32) -> Option<f32> {
     let key = keys.as_array()?.iter().rev().find(|k| k[0].as_f64().is_some_and(|t| t <= time as f64))?;
     let dt = time - key[0].as_f64()? as f32;
     let a = key[1].as_f64()? as f32;

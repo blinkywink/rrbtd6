@@ -55,6 +55,8 @@ pub struct Advanced {
     pub hide_odyssey: bool,
     pub hide_contested_territory: bool,
     pub hide_social_season: bool,
+    /// Start at the main menu, skipping the splash, loading and title screens.
+    pub skip_startup: bool,
 }
 
 impl Default for Advanced {
@@ -70,7 +72,7 @@ impl Default for Advanced {
             memory_opt: false,
             show_fps: false, fps_cap: 0, vsync: true, render_scale: 1.0, sharpen: true, msaa: 4, full_textures: false,
             hide_legends: false, hide_store: false, hide_race: false, hide_boss: false, hide_boss_rush: false,
-            hide_odyssey: false, hide_contested_territory: false, hide_social_season: false }
+            hide_odyssey: false, hide_contested_territory: false, hide_social_season: false, skip_startup: false }
     }
 }
 
@@ -134,6 +136,7 @@ impl Advanced {
             Row::Toggle("Hide Contested Territory Button", self.hide_contested_territory,
                 "Hides the Contested Territory button on the right of the main menu."),
             Row::Toggle("Hide Social Season Button", self.hide_social_season, "Hides the Social Season button on the right of the main menu."),
+            Row::Toggle("Skip Startup Screen", self.skip_startup, "Go straight to the main menu instead of the startup screen."),
         ]
     }
 
@@ -152,6 +155,7 @@ impl Advanced {
             12 => self.hide_odyssey = !self.hide_odyssey,
             13 => self.hide_contested_territory = !self.hide_contested_territory,
             14 => self.hide_social_season = !self.hide_social_season,
+            15 => self.skip_startup = !self.skip_startup,
             _ => {}
         }
     }

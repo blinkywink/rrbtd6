@@ -339,6 +339,13 @@ def startup(c):
          "TitleScreenUI", "DataConflictUI", "AccountManagementUI", "LinkAccountUI",
          env={"RRBTD6_UI_BUNDLES": "*_monoscripts_*.bundle;initial_loading_ui_scenes_all_*.bundle;ui_scenes_all_*.bundle;asset_references_assets_all_*.bundle"})
     c.py("tools/assets/export_bundle_sprites.py", c.game, c.out / "sprites/_loose", "ui_scenes_all_*.bundle", "TitleBg")
+    # The splash and initial loading screens' sprites live in their own scene bundle.
+    c.py("tools/assets/export_bundle_sprites.py", c.game, c.out / "sprites/_loose", "initial_loading_ui_scenes_all_*.bundle",
+         "NZoA_RGB_Game Sector Logo_WhiteText", "NkLogoKiwiIcon", "NkLogoKiwiText", "NkLogoMask", "NkLogoNinjaText",
+         "NkLogoText0", "NkLogoTextA", "NkLogoTextE", "NkLogoTextM", "NkLogoTextR", "NkLogoTextS", "NkLogoTextW",
+         "NkSheenSquare", "DartpointIconInitialAsset", "GreenBtnLongInitialAsset", "LoadPlane01", "LoadPlaneProp01",
+         "LoadPlaneScarf01", "LoadingCloud", "LoadingCloudPuff", "LoadingSky", "MainBGPanelBlueInitialAsset",
+         "SmallSquareWhiteLoadBar", "TitleBannerCommonInitialAsset", "WhiteSquareGradientLoadBar", "YellowBtnLongInitialAsset")
     c.py("tools/assets/export_game_version.py", c.game, c.root / "research/dumps/methods-all.jsonl", c.out / "game_version.json")
 
 
@@ -396,6 +403,9 @@ def load_state(path, fp):
 # Raise a step's number when its output must be regenerated for existing installs (a fixed or
 # extended exporter). Other tools changes do not make players re-extract.
 STEP_VERSIONS = {s.__name__: 1 for s in STEPS}
+STEP_VERSIONS["tower_models"] = 2  # Rebuild indices with normalized display names (e.g. Ninja 210).
+# startup 2: the splash and initial loading screens' sprites.
+STEP_VERSIONS["startup"] = 2
 
 
 def fingerprint(c):

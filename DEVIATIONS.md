@@ -35,8 +35,9 @@ places the clone is meant to differ, by the owner's request.
   - **Hide Race / Boss / Boss Rush / Odyssey / Contested Territory / Social Season Button** —
     one toggle per event button on the right of the main menu; the remaining buttons move up to
     close the gap.
+- **Skip Startup Screen** (off by default) — go straight to the main menu instead of the Ninja
+  Kiwi splash, loading screen and title screen.
 - Planned settings (added once the screens they skip exist):
-  - **Skip Startup Screen** — go straight to the main menu instead of the startup screen.
   - **Always Use Cloud Save** — skip the "use your local save or your cloud save?" question
     after pressing Play on the startup screen, and always load the newest cloud save.
   - **Mods Button** — shows a Mods button on the main menu (see 7).

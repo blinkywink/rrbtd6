@@ -26,6 +26,7 @@ mod advanced;
 mod keybinds;
 mod menus;
 mod render3d;
+mod startup;
 mod static_map;
 mod sandbox;
 mod temple_popup;
@@ -782,6 +783,16 @@ async fn game_main() {
     front.adv = adv.clone();
     let mut binds = keybinds::Keybinds::load(&read_settings(&root));
     front.binds = binds.clone();
+    // The original startup sequence (splash, loading, title) before the main menu, unless
+    // Advanced > Skip Startup Screen (DEVIATIONS.md 3) or a test asked for a screen.
+    // (RRBTD6_STARTUP=1 shows it in an autotest, for a startup screenshot.)
+    let startup_test = std::env::var_os("RRBTD6_STARTUP").is_some();
+    let mut startup = ((in_front && front_shot.is_none() && std::env::var_os("RRBTD6_AUTOTEST").is_none() && !adv.skip_startup) || startup_test).then(|| {
+        let version = std::fs::read_to_string(root.join("game_version.json")).ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v["display"].as_str().map(str::to_owned)).unwrap_or_default();
+        startup::Startup::new(&root, version, None)
+    });
     let mut view_rt: Option<(RenderTarget, u32, u32)> = None;
     let mut frame_t0 = std::time::Instant::now();
     let mut frame_pacer = frame_pacer::FramePacer::default();
@@ -1082,6 +1093,31 @@ async fn game_main() {
         }
         // Front end: the menus before a game.
         if in_front {
+            if let (Some(st), Some(h)) = (startup.as_mut(), hud.as_mut()) {
+                // Title music only on the title screen, fading out after Start (TitleScreen
+                // .TransitionToMainMenu); the main menu's playlist carries on from there.
+                let full = audio::DEFAULT_MUSIC * front.sliders[0];
+                match st.title_music() {
+                    Some(f) => { audio.set_music_volume(full * f); audio.music(get_time()); }
+                    None => audio.set_music_volume(0.0),
+                }
+                if st.draw(h) {
+                    startup = None;
+                    audio.set_music_volume(full);
+                }
+                if let (true, Some(path)) = (startup_test, &autotest) {
+                    frames += 1;
+                    if frames >= std::env::var("RRBTD6_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(420) {
+                        get_screen_data().export_png(path);
+                        eprintln!("autotest: startup screenshot");
+                        break;
+                    }
+                }
+                pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
+                next_frame().await;
+                frame_t0 = std::time::Instant::now();
+                continue;
+            }
             let front_t0=frontend_timing.then(std::time::Instant::now);
             let mut act = None;
             if options_back_test.is_some_and(|n|frames>=n) {options_back_test=None;front.request_back();}
