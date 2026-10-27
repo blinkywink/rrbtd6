@@ -146,7 +146,7 @@ impl Page {
         let focused=search.focused;search.focused=false;focused
     }
     pub(super) fn warm(&mut self,sprites:&mut crate::ui::Sprites){if self.first_presentation{super::button_motion::warm_visible(&self.node,sprites);}}
-    pub(super) fn presented(&mut self){if self.first_presentation{self.first_presentation=false;if let Some(animation)=&mut self.animation{animation.began=Some(get_time());}}}
+    pub(super) fn presented(&mut self){if let Some(profile)=&mut self.profile{profile.presented();}if self.first_presentation{self.first_presentation=false;if let Some(animation)=&mut self.animation{animation.began=Some(get_time());}}}
     pub(super) fn reopen(&mut self) {
         self.first_presentation=true;
         self.buttons.reset();

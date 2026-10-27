@@ -435,11 +435,17 @@ impl Menus {
 /// On/off toggle look (the toggles' animators slide the knob and tint it).
 fn set_toggle(n: &mut Node, knobs: &[&str], on: bool) {
     for k in knobs {
-        if let Some(knob) = n.find_mut(k) {
-            knob.rt.pos.x = if on { 90.0 } else { -90.0 };
-            if let Some(i) = knob.img.as_mut() {
-                i.color = if on { WHITE } else { Color::new(0.55, 0.55, 0.55, 1.0) };
+        if let Some(base)=k.strip_suffix("/BtnOn"){
+            if let Some(bg)=n.find_mut(&format!("{base}/Bg")).and_then(|n|n.img.as_mut()){
+                bg.color=if on{Color::from_rgba(129,255,0,255)}else{Color::from_rgba(56,32,15,255)};
             }
+            if let Some(text)=n.find_mut(&format!("{base}/TxtOn")).and_then(|n|n.txt.as_mut()){
+                text.color=if on{WHITE}else{Color::from_rgba(205,152,97,255)};
+            }
+        }
+        if let Some(knob) = n.find_mut(k) {
+            knob.rt.pos.x = if on { 80.0 } else { -80.0 };
+            if let Some(i) = knob.img.as_mut() {i.color=WHITE;}
         }
     }
 }

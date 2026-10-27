@@ -334,6 +334,10 @@ def main():
                                     "parent": ({"damage": pd["f"].get("damage", 0.0), "immune": pd["f"].get("immuneBloonProperties", 0)}
                                                if (pd := deref(sf.get("parentDamageModel"))) else None),
                                     "moabs_only": bool(flt and flt["type"] == "FilterMoabModel" and not flt["f"].get("flip")),
+                                    # FilterWithTag.FilterBloon (VERIFIED-DISASM @0xc5fbc0): the
+                                    # tag (moabTag: MOAB-class) passes, or with inclusive fails.
+                                    "tags": ([("!" if flt["f"].get("inclusive") else "") + ("Moabs" if flt["f"].get("moabTag") else flt["f"].get("tag"))]
+                                             if flt and flt["type"] == "FilterWithTagModel" and (flt["f"].get("moabTag") or flt["f"].get("tag")) else []),
                                     # BehaviorMutator.dontRemoveOnBloonDegrade: kept when a MOAB-class
                                     # bloon pops (Bloon.RemoveAllMutators).
                                     "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})

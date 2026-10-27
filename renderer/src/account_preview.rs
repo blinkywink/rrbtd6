@@ -183,7 +183,7 @@ pub fn bind(root: &Path, node: &mut Node) {
             let rows=node.find(&content).map(|n|n.children.clone()).unwrap_or_default();
             let visible:Vec<Node>=rows.iter().filter(|r|data["visibleStats"][r.name.trim_start_matches("AccountStat_")]==true).cloned().map(|mut r|{r.set_active("Toggle",false);r}).collect();
             node.set_active(&format!("{STATS}/OverallStats/SharedStats"),true);
-            node.set_text(&format!("{STATS}/OverallStats/SharedStats"),&format!("Shared {}/{}",visible.len(),rows.len()));
+            node.set_text(&format!("{STATS}/OverallStats/SharedStats"),&format!("Shared {}/7",visible.len()));
             if let Some(public)=node.find_mut(&format!("{STATS}/OverallStats/PublicStats/PlayerStats/Stats")){public.children=visible;}
         }
         for (group,path) in [("heroes","HeroContainer/HeroContent"),("towers","TowerContainer/TowerContent")] {
