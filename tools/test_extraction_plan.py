@@ -38,6 +38,28 @@ def fixture(root, data):
 
 
 class PlanTests(unittest.TestCase):
+    def test_interrupted_checkpoint_write_preserves_completed_steps(self):
+        with tempfile.TemporaryDirectory(prefix="rrbtd6-plan-test-") as folder:
+            path = Path(folder) / "state.json"
+            old = {"fingerprint": "build", "done": {"maps": 1}}
+            driver.atomic_write(path, json.dumps(old))
+            with patch.object(driver.os, "replace", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    driver.atomic_write(path, '{"fingerprint":"build","done":{"maps":1,"towers":1}}')
+            self.assertEqual(driver.load_state(path, "build"), old)
+            driver.atomic_write(path, '{"fingerprint":"build","done":{"maps":1,"towers":1}}')
+            self.assertEqual(driver.load_state(path, "build")["done"], {"maps": 1, "towers": 1})
+
+    def test_legacy_damaged_or_different_build_checkpoint_can_restart(self):
+        with tempfile.TemporaryDirectory(prefix="rrbtd6-plan-test-") as folder:
+            path = Path(folder) / "state.json"
+            empty = {"fingerprint": "new-build", "done": {}}
+            self.assertEqual(driver.load_state(path, "new-build"), empty)
+            for text in ['{"done":', 'null', '[]', '{"fingerprint":"new-build","done":[]}',
+                         '{"fingerprint":"old-build","done":{"maps":1}}']:
+                path.write_text(text)
+                self.assertEqual(driver.load_state(path, "new-build"), empty)
+
     def test_new_towers_and_heroes_automatically_receive_assets(self):
         with tempfile.TemporaryDirectory(prefix="rrbtd6-plan-test-") as folder:
             ctx = fixture(Path(folder), {"tower_tiers": {"FutureTower": {"hero": None}, "FutureHero": {"hero": {}}}})

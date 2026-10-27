@@ -12,13 +12,19 @@ case "$GAME" in
   *) URI='com.epicgames.launcher://apps/6a8dfa6e441e4f2f9048a98776c6077d%3A49c4bf5c6fd24259b87d0bcc96b6009f%3A7786b355a13b47a6b3915335117cd0b2?action=launch&silent=true' ;;
 esac
 mkdir -p "$UD" "$OUT"
+# The mod plays scenario.json on every launch: never leave it behind (a normal launch would run a
+# recording and quit), whatever way this script ends.
+trap 'rm -f "$UD/scenario.json"' EXIT INT TERM HUP
+# (Process checks through PowerShell: tasklist can hang on this machine.)
+running() { powershell -NoProfile -Command "if (Get-Process BloonsTD6 -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"; }
+kill_game() { powershell -NoProfile -Command "Get-Process BloonsTD6 -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true; }
 for sc in "$@"; do
   name=$(basename "$sc" .json)
   cp "$sc" "$UD/scenario.json"
   # The previous run's game must be gone before its log can be removed.
-  tasklist | grep -qi BloonsTD6.exe && taskkill //IM BloonsTD6.exe //F >/dev/null 2>&1 || true
+  kill_game
   for i in $(seq 1 20); do
-    tasklist | grep -qi BloonsTD6.exe || break
+    running || break
     sleep 1
   done
   for i in $(seq 1 20); do
@@ -37,7 +43,7 @@ for sc in "$@"; do
   for i in $(seq 1 200); do
     [ -n "$started" ] || break
     if grep -q "SimRecorder done" "$GAME/MelonLoader/Latest.log" 2>/dev/null; then ok=1; break; fi
-    tasklist | grep -qi BloonsTD6.exe || break
+    running || break
     sleep 3
   done
   result=$(grep "SimRecorder done" "$GAME/MelonLoader/Latest.log" | tail -1)
@@ -50,4 +56,4 @@ for sc in "$@"; do
     grep "SimRecorder" "$GAME/MelonLoader/Latest.log" | tail -5
   fi
 done
-tasklist | grep -qi BloonsTD6.exe && taskkill //IM BloonsTD6.exe //F >/dev/null 2>&1 || true
+kill_game

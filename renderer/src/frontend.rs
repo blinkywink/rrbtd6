@@ -25,7 +25,7 @@ pub(crate) mod account_preview;
 #[path = "event_details.rs"]
 mod event_details;
 #[path = "home_events.rs"]
-mod home_events;
+pub(crate) mod home_events;
 #[path = "profile_browser.rs"]
 mod profile_browser;
 #[path = "button_motion.rs"]
@@ -247,6 +247,8 @@ pub struct FrontEnd {
     drag: Option<usize>,
     advanced: Option<Node>,
     pub adv: crate::advanced::Advanced,
+    /// The Trophy Store button's original height (it takes the Shop's slot when that's hidden).
+    trophy_store_y: Option<f32>,
     adv_scroll: f32,
     hotkeys: Option<Node>,
     pub binds: crate::keybinds::Keybinds,
@@ -547,6 +549,7 @@ impl FrontEnd {
             drag: None,
             advanced: None,
             adv: crate::advanced::Advanced::default(),
+            trophy_store_y: None,
             adv_scroll: 0.0,
             hotkeys: None,
             binds: crate::keybinds::Keybinds::defaults(),
@@ -972,9 +975,13 @@ impl Hud {
                     // Our main menu toggles (Advanced settings, see DEVIATIONS.md).
                     m.set_active(&format!("{MAIN}/BottomButtonGroup/Legends"), !fe.adv.hide_legends);
                     m.set_active(&format!("{MAIN}/Store"), !fe.adv.hide_store);
-                    if fe.adv.hide_events {
-                        m.set_active(&format!("{MAIN}/EventButtonGroup"), false);
-                    } else if let Some(page)=home_events::update(&fe.root,m,s){next=Some(Screen::Menu(page));}
+                    // Without the Shop, the Trophy Store moves up into its slot.
+                    let store_y = m.find(&format!("{MAIN}/Store")).map(|n| n.rt.pos.y);
+                    if let (Some(store_y), Some(trophy)) = (store_y, m.find_mut(&format!("{MAIN}/TrophyStore"))) {
+                        let home = *fe.trophy_store_y.get_or_insert(trophy.rt.pos.y);
+                        trophy.rt.pos.y = if fe.adv.hide_store { store_y } else { home };
+                    }
+                    if let Some(page)=home_events::update(&fe.root,m,s,&fe.adv.hidden_events()){next=Some(Screen::Menu(page));}
                     if let Some(hero)=fe.selected_hero.as_deref().or_else(||fe.heroes.first().map(|h|h.id.as_str())) {
                         let skin=selected_skin(&fe.hero_data,&fe.hero_skins,hero);
                         m.set_sprite(&format!("{MAIN}/BottomButtonGroup/Heroes/HeroesAnim/Button"),skin["icon"].as_str().and_then(|s|s.strip_suffix(".png")));

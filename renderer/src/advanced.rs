@@ -48,8 +48,13 @@ pub struct Advanced {
     pub hide_legends: bool,
     /// Main menu: hide the Shop button.
     pub hide_store: bool,
-    /// Main menu: hide the event buttons on the right (teams, contested territory, bosses, races...).
-    pub hide_events: bool,
+    /// Main menu event buttons on the right, each hidden on its own (the rest close up).
+    pub hide_race: bool,
+    pub hide_boss: bool,
+    pub hide_boss_rush: bool,
+    pub hide_odyssey: bool,
+    pub hide_contested_territory: bool,
+    pub hide_social_season: bool,
 }
 
 impl Default for Advanced {
@@ -64,7 +69,8 @@ impl Default for Advanced {
             cash_spent: false,
             memory_opt: false,
             show_fps: false, fps_cap: 0, vsync: true, render_scale: 1.0, sharpen: true, msaa: 4, full_textures: false,
-            hide_legends: false, hide_store: false, hide_events: false }
+            hide_legends: false, hide_store: false, hide_race: false, hide_boss: false, hide_boss_rush: false,
+            hide_odyssey: false, hide_contested_territory: false, hide_social_season: false }
     }
 }
 
@@ -93,6 +99,14 @@ impl Advanced {
         a
     }
 
+    /// The main menu event kinds turned off.
+    pub fn hidden_events(&self) -> Vec<crate::frontend::home_events::EventKind> {
+        use crate::frontend::home_events::EventKind as K;
+        [(self.hide_race, K::Race), (self.hide_boss, K::Boss), (self.hide_boss_rush, K::BossRush), (self.hide_odyssey, K::Odyssey),
+         (self.hide_contested_territory, K::ContestedTerritory), (self.hide_social_season, K::SocialSeason)]
+            .into_iter().filter(|(on, _)| *on).map(|(_, k)| k).collect()
+    }
+
     pub fn rows(&self) -> Vec<Row> {
         let fps_i = FPS_CAPS.iter().position(|&c| c == self.fps_cap).unwrap_or(FPS_CAPS.len() - 1);
         let msaa_i = MSAA.iter().position(|&c| c == self.msaa).unwrap_or(2);
@@ -112,8 +126,14 @@ impl Advanced {
             Row::Toggle("Full Resolution Textures", self.full_textures,
                 "Always load full-size map textures. Off halves 4K textures on screens up to 2048 pixels, where they look the same."),
             Row::Toggle("Hide Legends Button", self.hide_legends, "Hides Legends on the main menu. The Legends DLCs aren't supported."),
-            Row::Toggle("Hide Shop Button", self.hide_store, "Hides the Shop button on the main menu."),
-            Row::Toggle("Hide Event Buttons", self.hide_events, "Hides the event buttons on the right of the main menu."),
+            Row::Toggle("Hide Shop Button", self.hide_store, "Hides the Shop button on the main menu. The Trophy Store moves up into its place."),
+            Row::Toggle("Hide Race Button", self.hide_race, "Hides the race event button on the right of the main menu."),
+            Row::Toggle("Hide Boss Button", self.hide_boss, "Hides the boss event button on the right of the main menu."),
+            Row::Toggle("Hide Boss Rush Button", self.hide_boss_rush, "Hides the Boss Rush button on the right of the main menu."),
+            Row::Toggle("Hide Odyssey Button", self.hide_odyssey, "Hides the Odyssey button on the right of the main menu."),
+            Row::Toggle("Hide Contested Territory Button", self.hide_contested_territory,
+                "Hides the Contested Territory button on the right of the main menu."),
+            Row::Toggle("Hide Social Season Button", self.hide_social_season, "Hides the Social Season button on the right of the main menu."),
         ]
     }
 
@@ -126,7 +146,12 @@ impl Advanced {
             6 => self.full_textures = !self.full_textures,
             7 => self.hide_legends = !self.hide_legends,
             8 => self.hide_store = !self.hide_store,
-            9 => self.hide_events = !self.hide_events,
+            9 => self.hide_race = !self.hide_race,
+            10 => self.hide_boss = !self.hide_boss,
+            11 => self.hide_boss_rush = !self.hide_boss_rush,
+            12 => self.hide_odyssey = !self.hide_odyssey,
+            13 => self.hide_contested_territory = !self.hide_contested_territory,
+            14 => self.hide_social_season = !self.hide_social_season,
             _ => {}
         }
     }

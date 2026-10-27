@@ -18,6 +18,9 @@ An interrupted step is retried; already complete tier bakes are reused. A BTD6
 binary/metadata change invalidates the steps. Raise `STEP_VERSIONS[name]` when an
 exporter change requires its output to be regenerated; unrelated code updates do
 not force a full extraction. `--only <step> ...` runs selected steps explicitly.
+Checkpoint and interpreter-hook replacements are atomic. Interrupted writes leave
+the prior checkpoint intact; malformed legacy checkpoints restart extraction
+instead of permanently preventing startup.
 Nested tower exporter failures propagate, preventing an incomplete bake from
 being recorded as a successfully completed step.
 
@@ -36,3 +39,10 @@ The bootstrap, package, sibling-import and extraction-plan tests use synthetic
 fixtures and no game files or network. A full fresh extraction and an actual
 startup still need to be tested separately; passing these tests alone does not
 establish that a new BTD6 build is fully supported.
+
+Local verification (2026-10-26): downloaded GitHub build 7 launched its main menu
+using assets extracted into an initially empty test installation, including home
+water and character models. A full extraction with all effect families and the
+social/startup exports is still being checked; a menu screenshot does not establish
+complete gameplay coverage. Embedded Python bootstrap/recovery is documented in
+`launcher/README.md`.

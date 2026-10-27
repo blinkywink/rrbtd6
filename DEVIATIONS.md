@@ -22,7 +22,7 @@ places the clone is meant to differ, by the owner's request.
 ## 2. FPS counter in the window title bar
 
 - The "show FPS" setting shows the frame rate in the window's title bar (e.g.
-  `BTD6 - 144 FPS`), not drawn inside the game.
+  `RustTD6 - 144 FPS`), not drawn inside the game.
 
 ## 3. Advanced settings
 
@@ -31,8 +31,10 @@ places the clone is meant to differ, by the owner's request.
 - The menu UI should be a bit nicer than a plain list (section headers, consistent spacing).
 - Main menu toggles (all off by default), to clear up space:
   - **Hide Legends Button** — hides Legends on the main menu.
-  - **Hide Shop Button** — hides the Shop button.
-  - **Hide Event Buttons** — hides the event buttons on the right of the main menu.
+  - **Hide Shop Button** — hides the Shop button; the Trophy Store moves up into its place.
+  - **Hide Race / Boss / Boss Rush / Odyssey / Contested Territory / Social Season Button** —
+    one toggle per event button on the right of the main menu; the remaining buttons move up to
+    close the gap.
 - Planned settings (added once the screens they skip exist):
   - **Skip Startup Screen** — go straight to the main menu instead of the startup screen.
   - **Always Use Cloud Save** — skip the "use your local save or your cloud save?" question
@@ -70,3 +72,10 @@ places the clone is meant to differ, by the owner's request.
 - In a co-op lobby the host can pick mods for the match; every player on this client gets them
   applied automatically and sees which are active. Players on the official client are not
   affected.
+
+## 8. RustTD6 branding
+
+- The window title is **RustTD6**, and the executable, taskbar and window use RustTD6's own icon
+  (`assets/brand/icon.png`).
+- The title screen shows the **RustTD6** logo (`assets/brand/title_logo.png`) in place of the
+  BTD6 logo, with everything around it (the characters, bloons and background) unchanged.

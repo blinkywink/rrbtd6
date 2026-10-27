@@ -322,6 +322,26 @@ def frontend(c):
     c.py("tools/assets/export_menu_chrome.py", c.game, c.out)
 
 
+def startup(c):
+    """Splash, initial loading and title screens, account management and the version line."""
+    prefabs = c.out / "ui/prefabs"
+    boot = "*_monoscripts_*.bundle;initial_loading_ui_scenes_all_*.bundle;sprite_atlases_assets_all_*.bundle;localization_assets_all_*.bundle;asset_references_assets_all_*.bundle"
+    c.py("tools/assets/dump_ui_prefab.py", c.game, prefabs,
+         "scenefile:Assets/Main/Scenes/NinjaKiwiSplashUI.unity=NinjaKiwiSplashUI",
+         "scenefile:Assets/Main/Scenes/InitialLoadingUI.unity=InitialLoadingUI", env={"RRBTD6_UI_BUNDLES": boot})
+    c.py("tools/assets/dump_ui_prefab.py", c.game, prefabs,
+         "scenefile:Assets/Main/Scenes/TitleScreenUI.unity=TitleScreenUI",
+         "scenefile:Assets/Main/Scenes/DataConflictUI.unity=DataConflictUI",
+         "scenefile:Assets/UI - New/Scenes/AccountManagementUI.unity=AccountManagementUI",
+         "scenefile:Assets/UI - New/Scenes/LinkAccountUI.unity=LinkAccountUI",
+         "Assets/UI - New/Popups/Prefabs/LogoutPopup.prefab")
+    c.py("tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", "NinjaKiwiSplashUI", "InitialLoadingUI",
+         "TitleScreenUI", "DataConflictUI", "AccountManagementUI", "LinkAccountUI",
+         env={"RRBTD6_UI_BUNDLES": "*_monoscripts_*.bundle;initial_loading_ui_scenes_all_*.bundle;ui_scenes_all_*.bundle;asset_references_assets_all_*.bundle"})
+    c.py("tools/assets/export_bundle_sprites.py", c.game, c.out / "sprites/_loose", "ui_scenes_all_*.bundle", "TitleBg")
+    c.py("tools/assets/export_game_version.py", c.game, c.root / "research/dumps/methods-all.jsonl", c.out / "game_version.json")
+
+
 def home(c):
     c.py("tools/assets/export_model.py", c.game, c.out / "models/mainmenu", "scene", "ui_scenes_all_",
          "cab:CAB-613509f63417784aa3960cd4dc66a279")
@@ -341,7 +361,7 @@ def finish(c):
 
 
 STEPS = [metadata, sim_model, cab_index, catalogs, container_index, rounds_maps, sprites, mapset, tower_models, misc_art, upgrade_art,
-         ingame_ui, core_menus, game_data, extended_towers, particles, audio, bloon_models, frontend, home, social, finish]
+         ingame_ui, core_menus, game_data, extended_towers, particles, audio, bloon_models, frontend, startup, home, social, finish]
 
 
 def install_hook(root):
@@ -350,7 +370,27 @@ def install_hook(root):
     target = Path(sysconfig.get_paths()["purelib"]) / "sitecustomize.py"
     source = (root / "tools/sitecustomize.py").read_text(encoding="utf-8")
     if not target.exists() or target.read_text(encoding="utf-8") != source:
-        target.write_text(source, encoding="utf-8")
+        atomic_write(target, source)
+
+
+def atomic_write(path, text):
+    """Keep the previous checkpoint/hook intact until its replacement is complete."""
+    pending = path.with_name(path.name + ".pending")
+    with pending.open("w", encoding="utf-8") as stream:
+        stream.write(text)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(pending, path)
+
+
+def load_state(path, fp):
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+        state = None
+    if not isinstance(state, dict) or state.get("fingerprint") != fp or not isinstance(state.get("done"), dict):
+        return {"fingerprint": fp, "done": {}}
+    return state
 
 
 # Raise a step's number when its output must be regenerated for existing installs (a fixed or
@@ -380,9 +420,7 @@ def main():
     install_hook(c.root)
     state_file = c.out / ".extract_state.json"
     fp = fingerprint(c)
-    state = {} if args.force or not state_file.exists() else json.loads(state_file.read_text())
-    if state.get("fingerprint") != fp or not isinstance(state.get("done"), dict):
-        state = {"fingerprint": fp, "done": {}}
+    state = {"fingerprint": fp, "done": {}} if args.force else load_state(state_file, fp)
     names = [s.__name__ for s in STEPS]
     for n in args.only or []:
         if n not in names:
@@ -399,7 +437,7 @@ def main():
         step(c)
         print(f"== {name}: {time.time() - began:.0f}s", flush=True)
         state["done"][name] = STEP_VERSIONS[name]
-        state_file.write_text(json.dumps(state))
+        atomic_write(state_file, json.dumps(state))
     print("extraction complete", flush=True)
 
 

@@ -134,7 +134,12 @@ fn ensure_python(dir: &Path) -> Result<PathBuf> {
     if python.exists() && fs::read_to_string(&stamp).ok().as_deref() == Some(requirements.as_str()) {
         return Ok(python);
     }
-    if !python.exists() {
+    // A cancelled ZIP extraction can leave python.exe present without its DLLs
+    // or standard library. Probe it before treating the runtime as installed.
+    let runtime_ready = python.exists() && Command::new(&python)
+        .args(["-I", "-c", "import ssl, zipfile, sysconfig"])
+        .output().is_ok_and(|out| out.status.success());
+    if !runtime_ready {
         println!("Setting up Python {PYTHON_VERSION} (first run only)...");
         fs::create_dir_all(&root)?;
         let archive = root.join("python.zip");
@@ -149,18 +154,29 @@ fn ensure_python(dir: &Path) -> Result<PathBuf> {
                 fs::write(&path, text)?;
             }
         }
+    }
+    // get-pip may have been interrupted after the runtime was unpacked. Retry
+    // bootstrap independently instead of getting stuck on 'No module named pip'.
+    let pip_ready = Command::new(&python).args(["-I", "-m", "pip", "--version"])
+        .output().is_ok_and(|out| out.status.success());
+    if !pip_ready {
         let get_pip = root.join("get-pip.py");
         download("https://bootstrap.pypa.io/get-pip.py", &get_pip)?;
         check(Command::new(&python).arg(&get_pip).arg("--no-warn-script-location"))?;
     }
     println!("Installing extraction packages...");
-    check(Command::new(&python).args(["-m", "pip", "install", "--no-warn-script-location", "-r"])
+    // Embeddable Python's ._pth intentionally ignores PYTHONPATH, including
+    // pip's temporary build environment. tpk_ar ships as a source distribution:
+    // give its backend an explicit home instead of relying on build isolation.
+    check(Command::new(&python).args(["-m", "pip", "install", "--no-warn-script-location",
+        "setuptools==80.9.0", "wheel==0.45.1"]))?;
+    check(Command::new(&python).args(["-m", "pip", "install", "--no-warn-script-location", "--no-build-isolation", "-r"])
         .arg(dir.join("tools/requirements.txt")))?;
     fs::write(&stamp, requirements)?;
     Ok(python)
 }
 
-/// tools/extract_all.py skips finished steps and re-runs everything after a game or tools update.
+/// tools/extract_all.py skips finished steps and invalidates them by game fingerprint/output version.
 fn extract(dir: &Path, python: &Path, game: &Path) -> Result<()> {
     println!("Checking game data (the first run extracts it from your BTD6 install; this takes a while)...");
     check(Command::new(python).arg("-I").arg(dir.join("tools/extract_all.py"))

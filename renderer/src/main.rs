@@ -229,6 +229,12 @@ fn conf() -> macroquad::conf::Conf {
         high_dpi: true,
         sample_count: std::env::var("RRBTD6_MSAA").ok().and_then(|v| v.parse().ok()).unwrap_or(adv.msaa.max(1)),
         platform: miniquad::conf::Platform { window_aspect_ratio:Some((16,9)), swap_interval: Some(if adv.vsync { 1 } else { 0 }), ..Default::default() },
+        // RustTD6's own icon (assets/brand; DEVIATIONS.md 8).
+        icon: Some(miniquad::conf::Icon {
+            small: *include_bytes!("../../assets/brand/icon16.rgba"),
+            medium: *include_bytes!("../../assets/brand/icon32.rgba"),
+            big: *include_bytes!("../../assets/brand/icon64.rgba"),
+        }),
         ..Default::default()
     };
     let mut conf:macroquad::conf::Conf=miniquad_conf.into();
@@ -236,7 +242,7 @@ fn conf() -> macroquad::conf::Conf {
     conf
 }
 
-const WINDOW_TITLE: &str = "BTD6 (rrbtd6 prototype)";
+const WINDOW_TITLE: &str = "RustTD6";
 
 /// Ends a frame for the Advanced settings: "Show FPS" puts the frame rate in the window title
 /// (twice a second; see DEVIATIONS.md), and the "FPS Limit" (0: none) sleeps out the rest of the

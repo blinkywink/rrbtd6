@@ -8,7 +8,7 @@ use super::{ScrollDrag,ScrollInput,ScrollState,scroll_limit};
 const BASE:&str="MainMenuCanvas/MainMenu/EventButtonGroup";
 const VIEW:&str="MainMenuCanvas/MainMenu/EventButtonGroup/Viewport";
 const CONTENT:&str="MainMenuCanvas/MainMenu/EventButtonGroup/Viewport/Content";
-struct Events { rx:mpsc::Receiver<Value>, data:Value, keys:Vec<String>,scroll:ScrollState,drag:Option<ScrollDrag>,origin:Option<Vec2>,second:u64 }
+struct Events { rx:mpsc::Receiver<Value>, data:Value, keys:Vec<String>,scroll:ScrollState,drag:Option<ScrollDrag>,origin:Option<Vec2>,second:u64,hidden:Vec<EventKind> }
 static EVENTS:OnceLock<Mutex<Events>>=OnceLock::new();
 
 fn template(row:&Value)->Option<&'static str> {
@@ -24,6 +24,16 @@ fn template(row:&Value)->Option<&'static str> {
         _=>return None,
     })
 }
+/// Event kind, for the main menu toggles in Advanced settings (DEVIATIONS.md 3).
+pub(crate) fn kind(row:&Value)->Option<EventKind> {
+    Some(match row["type"].as_str()? {
+        "raceEvent"=>EventKind::Race,"odysseyEvent"=>EventKind::Odyssey,"bossRush"=>EventKind::BossRush,
+        "ct"|"contestedTerritory"=>EventKind::ContestedTerritory,"socialseason"=>EventKind::SocialSeason,
+        "bossBloon"=>EventKind::Boss,_=>return None,
+    })
+}
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+pub(crate) enum EventKind {Race,Boss,BossRush,Odyssey,ContestedTerritory,SocialSeason}
 fn boss(row:&Value)->Option<&'static str> {
     let name=row["name"].as_str()?;
     ["Bloonarius","Vortex","Lych","Dreadbloon","Phayze","Blastapopoulos","Diamondback"]
@@ -58,20 +68,23 @@ fn state(root:&Path)->&'static Mutex<Events> {
                 std::thread::sleep(std::time::Duration::from_secs(900));
             }
         });
-        Mutex::new(Events {rx,data:Value::Null,keys:Vec::new(),scroll:Default::default(),drag:None,origin:None,second:0})
+        Mutex::new(Events {rx,data:Value::Null,keys:Vec::new(),scroll:Default::default(),drag:None,origin:None,second:0,hidden:Vec::new()})
     })
 }
 
-pub fn update(root:&Path,node:&mut Node,scale:f32)->Option<super::menu_pages::MenuPage> {
+/// `hidden`: event kinds the player turned off; the remaining buttons close up (VerticalLayoutGroup).
+pub fn update(root:&Path,node:&mut Node,scale:f32,hidden:&[EventKind])->Option<super::menu_pages::MenuPage> {
     let state=state(root);
     let Ok(mut state)=state.try_lock() else{return None};
     let update=state.rx.try_iter().last();
     let now=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
     let changed=update.is_some();if let Some(data)=update{state.data=data;}
-    if changed || state.second!=now/1000 {
+    if changed || state.second!=now/1000 || state.hidden.as_slice()!=hidden {
+        state.hidden=hidden.to_vec();
         state.second=now/1000;
         let rows:Vec<_>=state.data["live"]["events"].as_array().into_iter().flatten()
-            .filter(|row|active(row,now)).filter_map(|row|Some((row["id"].as_str()?.to_owned(),template(row)?))).collect();
+            .filter(|row|active(row,now)).filter(|row|kind(row).is_none_or(|k|!hidden.contains(&k)))
+            .filter_map(|row|Some((row["id"].as_str()?.to_owned(),template(row)?))).collect();
         let keys:Vec<_>=rows.iter().map(|(id,_)|id.clone()).collect();
         if keys!=state.keys {
             if let Some(content)=node.find_mut(CONTENT) {

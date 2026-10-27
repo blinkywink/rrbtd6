@@ -28,3 +28,16 @@ swap boundary, a first install, incomplete downloads, commit-marker interruption
 Windows file locks, retried rollback, exclusive launcher ownership and replacement
 of an actual running executable image. They use temporary directories and make no
 network calls. The ignored subprocess fixture is invoked by the running-image test.
+
+First-time Python setup retries a partially unpacked runtime and bootstraps pip
+even if Python was unpacked before an interruption. Source-only dependencies
+build with explicitly installed setuptools/wheel: pip's temporary build isolation
+cannot work with the embedded runtime's `._pth` import rules. The requirements
+stamp is written only after all dependencies install successfully.
+
+Local verification (2026-10-26): started with embedded Python 3.13.1 unpacked but
+no pip, ran the launcher with `--offline`, installed the full shipped requirements
+and imported UnityPy/Pillow/NumPy. The extraction test stub deliberately exited
+73 to prevent game launch; this was a bootstrap test, not a full extraction test.
+A second start reused the dependencies without downloads. The embedded runtime
+also exported a real map and terrain from the local game successfully.

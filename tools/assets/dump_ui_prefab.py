@@ -182,6 +182,12 @@ def component(owner, t, cls):
                 out[k] = "->" + str(v["m_PathID"])
             elif isinstance(v, dict) and set(v) == {"r", "g", "b", "a"}:
                 out[k] = [v["r"], v["g"], v["b"], v["a"]]
+            elif isinstance(v, dict) and set(v) in ({"x", "y"}, {"x", "y", "z"}, {"x", "y", "z", "w"}):
+                out[k] = [v[a] for a in "xyzw" if a in v]
+            elif isinstance(v, dict) and "m_Curve" in v:
+                # AnimationCurve: [time, value, inSlope, outSlope] keys (Hermite), wrap modes.
+                out[k] = {"keys": [[kf["time"], kf["value"], kf["inSlope"], kf["outSlope"]] for kf in v["m_Curve"]],
+                          "pre": v.get("m_PreInfinity"), "post": v.get("m_PostInfinity")}
     return out
 
 
@@ -204,6 +210,27 @@ def node(go_obj):
         elif tn in ("Canvas", "CanvasRenderer"):
             if tn == "Canvas":
                 n["comps"].append({"type": "Canvas"})
+        elif tn == "SpriteRenderer":
+            # World-space 2D sprite (title screen background): sprite metrics for drawing it.
+            t = co.read_typetree()
+            comp = {"type": "SpriteRenderer", "id": co.path_id, "enabled": bool(t.get("m_Enabled", 1)),
+                    "sprite": asset_name(co, t["m_Sprite"]), "color": color(t["m_Color"]),
+                    "order": t.get("m_SortingOrder", 0), "layer": t.get("m_SortingLayerID", 0),
+                    "flip": [bool(t.get("m_FlipX", 0)), bool(t.get("m_FlipY", 0))],
+                    "drawMode": t.get("m_DrawMode", 0), "size": [t["m_Size"]["x"], t["m_Size"]["y"]] if "m_Size" in t else None}
+            sp = resolve(co, t["m_Sprite"])
+            if sp is not None:
+                st = sp.read_typetree()
+                comp["ppu"] = st["m_PixelsToUnits"]
+                comp["pivot"] = [st["m_Pivot"]["x"], st["m_Pivot"]["y"]]
+                comp["rect"] = [st["m_Rect"]["width"], st["m_Rect"]["height"]]
+            n["comps"].append(comp)
+        elif tn == "Camera":
+            t = co.read_typetree()
+            n["comps"].append({"type": "Camera", "id": co.path_id, "orthographic": bool(t.get("orthographic", 0)),
+                               "orthoSize": t.get("orthographic size"), "fov": t.get("field of view"),
+                               "near": t.get("near clip plane"), "far": t.get("far clip plane"),
+                               "background": color(t["m_BackGroundColor"]) if "m_BackGroundColor" in t else None})
         else:
             n["comps"].append({"type": tn, "id": co.path_id})
     if tr_obj is not None:
@@ -217,6 +244,11 @@ def node(go_obj):
             n["rect"] = {"anchor_min": v2(tr["m_AnchorMin"]), "anchor_max": v2(tr["m_AnchorMax"]), "pos": v2(tr["m_AnchoredPosition"]),
                          "size": v2(tr["m_SizeDelta"]), "pivot": v2(tr["m_Pivot"]), "scale": [round(s["x"], 3), round(s["y"], 3)],
                          "rot_z": round(rot_z, 2)}
+        else:
+            # Plain Transform (world-space objects): full local position, rotation and scale.
+            p3 = tr["m_LocalPosition"]
+            n["transform"] = {"pos": [p3["x"], p3["y"], p3["z"]], "rot": [q["x"], q["y"], q["z"], q["w"]],
+                              "scale": [s["x"], s["y"], s["z"]]}
         for ch in tr["m_Children"]:
             cto = resolve(tr_obj, ch)
             if cto is None:
