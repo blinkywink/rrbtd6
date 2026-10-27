@@ -30,6 +30,10 @@ pub(crate) mod home_events;
 mod profile_browser;
 #[path = "jukebox.rs"]
 pub(crate) mod jukebox;
+#[path = "daily_reward.rs"]
+mod daily_reward;
+#[path = "save_warning.rs"]
+mod save_warning;
 #[path = "button_motion.rs"]
 mod button_motion;
 pub use menu_pages::MenuPage;
@@ -266,6 +270,7 @@ pub struct FrontEnd {
     /// MapSelectUI animators by object path (ui/runtime/MapSelectUI.json), each as its own runtime.
     map_animators: std::collections::HashMap<String, serde_json::Value>,
     diff: Option<Node>,
+    save_warning:save_warning::Warning,
     modes: Option<Node>,
     settings: Option<Node>,
     /// Where the settings screen goes back to.
@@ -584,6 +589,7 @@ impl FrontEnd {
                 .map(|d| d["animators"].as_array().into_iter().flatten().filter_map(|a| Some((a["path"].as_str()?.to_owned(),
                     serde_json::json!({"animators":[a]})))).collect()).unwrap_or_default(),
             diff: None,
+            save_warning:Default::default(),
             modes: None,
             settings: None,
             settings_from: Screen::Main,
@@ -1128,7 +1134,7 @@ impl Hud {
         let mut open_legends = false;
         let options_can_close=fe.rebinding.is_none();
         // The support popup (see support_popup.rs) leaves the screen behind it inert.
-        let support = self.support_open();
+        let support = self.support_open()||fe.save_warning.is_open();
         crate::uitree::block_input(support);
         let back = fe.screen != Screen::Main && !support
             && (std::mem::take(&mut fe.back_requested) || is_key_pressed(KeyCode::Escape) || fe.fore.as_ref().is_some_and(|f| f.clicked(&format!("{FORE}/Back/Back"))));
@@ -1194,6 +1200,7 @@ impl Hud {
             Screen::Menu(page) => {
                 let mut back=back;
                 if let Some(menu) = fe.pages.get_mut(&page) {
+                    if page==MenuPage::DailyReward && menu.node.clicked("Canvas/DailyRewardScreen/BgPanel/ImgClose"){back=true;}
                     if let Some(change)=menu.jukebox.as_mut().and_then(|j|j.pending.take()){out=Some(FrontAction::Jukebox(change));}
                     if back && menu.dismiss_search() {back=false;}
                     menu.animate();
@@ -1580,6 +1587,8 @@ impl Hud {
                         m.set_active(&slot, i.is_some());
                         let Some(i) = i else { continue };
                         let (e, _) = &fe.list[i];
+                        m.set_active(&format!("{b}/Continue"),!fe.coop_setup&&account_preview::saved_game(&e.id).is_some());
+                        account_preview::bind_map_friends(m,&format!("{b}/Friend"),&e.id,fe.adv.hide_map_friends,false);
                         m.set_sprite(&format!("{b}/MapMask/MapImage"), e.sprite.as_deref());
                         let name = loc.get(&e.id).cloned().unwrap_or_else(|| crate::spaced(&e.id));
                         m.set_text(&format!("{b}/Text"), &name);
@@ -1643,6 +1652,25 @@ impl Hud {
             }
             Screen::Difficulty => {
                 if let Some(m) = fe.diff.as_mut() {
+                    if let Some((entry,_))=fe.list.get(fe.map){
+                        account_preview::bind_map_friends(m,&format!("{DIFF}/FriendsPanel"),&entry.id,fe.adv.hide_map_friends,true);
+                        m.set_active(&format!("{DIFF}/FriendsButton"),!fe.adv.hide_map_friends);
+                        if m.clicked(&format!("{DIFF}/FriendsButton")){fe.social_from=fe.screen;next=Some(Screen::Menu(MenuPage::Friends));}
+                        let saved=(!fe.coop_setup).then(||account_preview::saved_game(&entry.id)).flatten();
+                        let base=format!("{DIFF}/ContinueSavedGame");
+                        m.set_active(&base,saved.is_some());
+                        if let Some(saved)=saved{
+                            m.set_text(&format!("{base}/Body"),&format!("{} - {}\nRound {}",saved["modeName"].as_str().unwrap_or("Standard"),
+                                saved["mapDifficulty"].as_str().unwrap_or(""),saved["round"].as_u64().unwrap_or(0)));
+                            if m.clicked(&format!("{base}/Continue"))||m.clicked(&format!("{base}/Replay")){
+                                let map=fe.list[fe.map].1.clone();
+                                let difficulty=DIFFICULTIES.iter().position(|&d|Some(d)==saved["mapDifficulty"].as_str()).unwrap_or(1);
+                                let mode=MODE_BUTTONS[difficulty].iter().find(|(id,_)|Some(*id)==saved["modeName"].as_str())
+                                    .map(|(_,mode)|*mode).unwrap_or(DIFFICULTIES[difficulty]);
+                                fe.save_warning.open(&fe.root,map,mode.into(),&saved);
+                            }
+                        }
+                    }
                     for (d, name) in DIFFICULTIES.iter().enumerate() {
                         if m.clicked(&format!("{DIFF}/Difficulties/{name}/Button")) {
                             fe.difficulty = d;
@@ -1951,18 +1979,25 @@ impl Hud {
         if let Some(index) = browse { self.menus.open_upgrades(index); }
         if let Some(fore)=fe.fore.as_mut(){
             for (name,hidden,on) in [("DoubleCashMode",fe.adv.hide_double_cash,fe.adv.double_cash_enabled),
-                ("FastTrackMode",fe.adv.hide_fast_track,fe.adv.fast_track_enabled),
-                ("SocialSeasonPerks",fe.adv.hide_perks,fe.adv.perks_enabled)]{
+                ("FastTrackMode",fe.adv.hide_fast_track,fe.adv.fast_track_enabled)]{
                 let path=format!("{FORE}/ExtraSettings/{name}");
                 fore.set_active(&path,!hidden);fore.set_active(&format!("{path}/Tick"),on);
                 if !hidden && fore.clicked(&path){
-                    match name{"DoubleCashMode"=>fe.adv.double_cash_enabled=!on,"FastTrackMode"=>fe.adv.fast_track_enabled=!on,_=>fe.adv.perks_enabled=!on}
+                    match name{"DoubleCashMode"=>fe.adv.double_cash_enabled=!on,_=>fe.adv.fast_track_enabled=!on}
                     out=Some(FrontAction::Advanced(fe.adv.clone()));
                 }
             }
+            fore.set_active(&format!("{FORE}/ExtraSettings/SocialSeasonPerks"),false);
             if fe.adv.hide_perks{fore.set_active(&format!("{FORE}/PerksButton"),false);}
         }
         if let Screen::Menu(page)=fe.screen{if let Some(page)=fe.pages.get_mut(&page){page.warm(&mut self.sprites);}}
+        if let Some(FrontAction::Play{map,mode})=&out {
+            if let Some((entry,_))=fe.list.iter().find(|(_,key)|key==map){
+                if let Some(saved)=account_preview::saved_game(&entry.id){
+                    if fe.save_warning.open(&fe.root,map.clone(),mode.clone(),&saved){out=None;}
+                }
+            }
+        }
         let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h: canvas.y, clip: None };
         let node = match fe.screen {
             Screen::Main => fe.main.as_mut(),
@@ -2040,6 +2075,18 @@ impl Hud {
                 draw_tree(f, full, &mut ctx);
             }
         }
+        if std::env::var_os("RRBTD6_AUTOTEST").is_some(){
+            static PREVIEW:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+            if let Ok(id)=std::env::var("RRBTD6_SAVE_WARNING"){
+                if let Some(saved)=account_preview::saved_game(&id){
+                    if !PREVIEW.swap(true,std::sync::atomic::Ordering::Relaxed){
+                        fe.save_warning.open(&fe.root,fe.list.get(fe.map).map(|(_,key)|key.clone()).unwrap_or_default(),"Medium".into(),&saved);
+                    }
+                }
+            }
+        }
+        if let Some((map,mode))=fe.save_warning.draw(full,&mut ctx){out=Some(FrontAction::Play{map,mode});}
+        crate::uitree::block_input(support);
         // Every way into the Legends page (home world, menus) shows the not-supported popup.
         if next == Some(Screen::Menu(MenuPage::Legends)) {
             next = None;

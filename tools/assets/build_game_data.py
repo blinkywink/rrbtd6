@@ -10,6 +10,7 @@ Writes <local_extracted>/game/game.json.
 """
 import json
 import re
+import struct
 import math
 import os
 import sys
@@ -293,12 +294,23 @@ def main():
         for s in pb.get("SlowModel", []) + pb.get("SlowForBloonModel", []):
             sf = s["f"]
             tags = []
+            bloon_id, bloon_ids = "", []
             if s["type"] == "SlowForBloonModel":
-                tags = ([sf["bloonTag"]] if sf.get("bloonTag") else []) + [t for t in items(sf.get("bloonTags")) if isinstance(t, str)]
+                # SlowForBloon.Collide (VERIFIED-DISASM @0xcfbf30): the bloon's id must contain
+                # bloonId (one id) or be contained in one of bloonIds (several), and it must have
+                # bloonTag; excluding turns each test round.
+                neg = "!" if sf.get("excluding") else ""
+                tags = [neg + t for t in ([sf["bloonTag"]] if sf.get("bloonTag") else [])]
+                bloon_id = sf.get("bloonId") or ""
+                bloon_ids = [t for t in items(sf.get("bloonIds")) if isinstance(t, str)]
             effects.append({"kind": "slow", "id": sf.get("mutationId") or "", "mult": sf.get("multiplier", 1.0),
                             "lifespan": sf.get("lifespan", 0.0), "layers": sf.get("layers", 1),
                             "glue": sf.get("glueLevel", 0), "refresh": not sf.get("dontRefreshDuration", False),
-                            "tags": tags, "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
+                            "tags": tags, "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False)),
+                            "bloon_id": bloon_id, "bloon_ids": bloon_ids, "excluding": bool(sf.get("excluding")),
+                            # Slow.Collide (VERIFIED-DISASM @0xcfce70): removeMutatorIfNotMatching
+                            # takes off a same-id mutator another SlowModel put on.
+                            "replace": bool(sf.get("removeMutatorIfNotMatching", False))})
         for s in pb.get("FreezeModel", []):
             sf = s["f"]
             effects.append({"kind": "freeze", "id": sf.get("mutationId") or "", "mult": sf.get("speed", 0.0),
@@ -317,6 +329,7 @@ def main():
         for s in pb.get("AddBehaviorToBloonModel", []):
             sf = s["f"]
             flt = deref(sf.get("filter"))
+            n0 = len(effects)
             for d in items(sf.get("behaviors")):
                 if d and d["type"] == "DamageOverTimeModel":
                     df = d["f"]
@@ -385,6 +398,14 @@ def main():
                     effects.append({"kind": "emit", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
                                     "layers": sf.get("layers", 1), "interval": df["interval"],
                                     "projectile": projectile(deref(df["projectileModel"]), depth + 1)})
+            # Projectile.CollideBloon runs the behaviours by collisionPass (the DamageModel's is
+            # 0): a later pass goes on after the damage, on what the bloon is then and the
+            # children it made (recording glue_005: a Super Glue hit that pops a Zebra leaves no
+            # splat, the splat going on the Black and White after; INFERRED: the children get it
+            # whatever cascadeMutators says, a Rainbow's second Zebra's White splats later).
+            if sf.get("collisionPass", -1) >= 1:
+                for e in effects[n0:]:
+                    e["after_damage"] = True
         # RemoveDamageTypeModifierModel (Embrittlement, Relentless Glue): the hit bloon (and
         # `layers` of its children) loses these bloonProperties (Lead 1, Frozen 16) for
         # `lifespan`: sharp shots can pop it.
@@ -461,6 +482,8 @@ def main():
                     "mult": {k: pf.get("multiplier" + k, 1.0) for k in ("MOAB", "BFB", "DDT", "ZOMG")}}
         out = {
             "pierce": f["pierce"], "max_pierce": f.get("maxPierce", 0.0), "radius": f["radius"],
+            # ProjectileModel ctor: checkCollisionIntervalFrames = (int)(interval x 60), truncated.
+            "check_frames": int(struct.unpack("<f", struct.pack("<f", float(f.get("checkCollisionInterval") or 0.0) * 60.0))[0]),
             "vs_blocker_radius": f.get("vsBlockerRadius", 0.0), "ignore_blockers": f.get("ignoreBlockers", False),
             # ProjectileModel.canCollisionBeBlockedByMapLos: a hit needs a clear line to the bloon.
             "los_blocked": bool(f.get("canCollisionBeBlockedByMapLos", False)),

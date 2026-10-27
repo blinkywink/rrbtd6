@@ -1186,6 +1186,9 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// ProjectileModel.checkCollisionIntervalFrames ((int)(checkCollisionInterval x 60)).
+    #[serde(default)]
+    pub check_frames: i32,
     /// ProjectileModel.maxPierce: caps the starting pierce when above 0 (get_CappedPierce).
     #[serde(default)]
     pub max_pierce: f32,
@@ -1967,7 +1970,8 @@ pub struct EffectSpec {
     /// DamageOverTimeModel.initialDelay (seconds): the first tick waits this on top.
     #[serde(default)]
     pub initial_delay: f32,
-    /// FreezeModel.applyAfterDamage: it goes on after the damage, on what the bloon is then.
+    /// FreezeModel.applyAfterDamage, or a collisionPass after the damage's: it goes on after
+    /// the damage, on what the bloon is then.
     #[serde(default)]
     pub after_damage: bool,
     /// AddBehaviorToBloonModel.dontCopy: a degrade's other children don't get it.
@@ -1983,9 +1987,20 @@ pub struct EffectSpec {
     pub glue: u32,
     #[serde(default = "yes")]
     pub refresh: bool,
+    /// SlowModel.removeMutatorIfNotMatching: a same-id slow from another model is replaced.
+    #[serde(default)]
+    pub replace: bool,
     /// SlowForBloonModel: only bloons with one of these tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// SlowForBloonModel.bloonId / bloonIds / excluding: only bloons whose id contains bloonId
+    /// (one id) or is contained in one of bloonIds (several); excluding: all but those.
+    #[serde(default)]
+    pub bloon_id: String,
+    #[serde(default)]
+    pub bloon_ids: Vec<String>,
+    #[serde(default)]
+    pub excluding: bool,
     #[serde(default)]
     pub moabs: bool,
     #[serde(default)]

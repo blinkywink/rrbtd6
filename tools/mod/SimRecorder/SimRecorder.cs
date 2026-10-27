@@ -40,6 +40,9 @@ public class TowerSpec
     public bool camo { get; set; } = false;
     /// Throws with the left hand (the Boomerang's "UseLeftHand" tower-menu action, FlipFollowPath).
     public bool flip { get; set; } = false;
+    /// Target point for TargetSelectedPoint attacks (Mortar, Dartling, Skywarden...): [x, y];
+    /// empty keeps the default. Set again after each upgrade.
+    public List<float> point { get; set; } = new();
     /// Upgrades bought between recorded frames: after frame `frame`, path `path` (0-2); a path
     /// already at tier 5 with the paragon's towers placed buys the paragon.
     public List<UpgradeSpec> upgrades { get; set; } = new();
@@ -70,6 +73,23 @@ public class Scenario
 
 public class Recorder : MelonMod
 {
+    /// TargetSelectedPoint(OrDefault).SetTargetPosition on every point supplier of the tower.
+    public static void SetPoint(Tower tw, TowerSpec spec, int k)
+    {
+        if (spec.point.Count != 2) return;
+        var pos = new Il2CppAssets.Scripts.Simulation.SMath.Vector3(spec.point[0], spec.point[1], 0);
+        var abs = tw.attackBehaviorsInDependants.list;
+        int n = 0;
+        for (int j = 0; j < abs.Count; j++)
+        {
+            var a = abs[j]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.TargetSelectedPoint>();
+            if (a != null) { a.SetTargetPosition(pos, true); n++; continue; }
+            var b = abs[j]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.TargetSelectedPointOrDefault>();
+            if (b != null) { b.SetTargetPosition(pos, true); n++; }
+        }
+        MelonLogger.Msg($"tower {k} point {spec.point[0]},{spec.point[1]} on {n} suppliers");
+    }
+
     internal static Scenario Sc;
     internal static StreamWriter Out;
     internal static int Recorded;
@@ -243,9 +263,14 @@ public class Recorder : MelonMod
                     placed[k].OnTsmThemeAction("UseLeftHand", null);
                     LoggerInstance.Msg($"tower {k} left hand");
                 }
+                for (int k = 0; k < Sc.towers.Count && k < placed.Count; k++)
+                    Recorder.SetPoint(placed[k], Sc.towers[k], k);
                 DumpMap(sim);
                 Out = new StreamWriter(Path.Combine(dir, Sc.name + ".rec"), false, new UTF8Encoding(false));
                 Out.WriteLine($"# SimRecorder {Sc.name} map={Sc.map} difficulty={Sc.difficulty} round={Sc.round} mode={Sc.mode}");
+                // GameModel.randomSeed seeds Simulation.syncedRandom / unsyncedRandom
+                // (Simulation.Initialise: two BufferedRandom(seed)).
+                Out.WriteLine($"# seed {sim.model.randomSeed}");
                 foreach (var t in Sc.towers) Out.WriteLine($"# tower {t.id} {F(t.x)} {F(t.y)}");
                 for (int k = 0; k < Sc.towers.Count; k++)
                     if (!string.IsNullOrEmpty(Sc.towers[k].target)) Out.WriteLine($"# target {k} {Sc.towers[k].target}");
@@ -254,6 +279,7 @@ public class Recorder : MelonMod
                 {
                     if (Sc.towers[k].camo) Out.WriteLine($"# camo {k}");
                     if (Sc.towers[k].flip) Out.WriteLine($"# flip {k}");
+                    if (Sc.towers[k].point.Count == 2) Out.WriteLine($"# point {k} {F(Sc.towers[k].point[0])} {F(Sc.towers[k].point[1])}");
                     foreach (var u in Sc.towers[k].upgrades) Out.WriteLine($"# upgrade {k} {u.path} {u.frame}");
                 }
                 InGame.instance.bridge.SetRound(Sc.round - 1, false);
@@ -467,6 +493,7 @@ static class SimulatePatch
                                 bridge.UpgradeTowerParagon(bridge.GetInputId(), tw.Id, 0, cb);
                             }
                             else bridge.UpgradeTower(bridge.GetInputId(), tw.Id, path, 0, cb);
+                            Recorder.SetPoint(tw, Recorder.Sc.towers[kk], kk);
                             MelonLogger.Msg($"SimRecorder upgrade tower {kk} path {path} at frame {Recorder.Recorded}: {before} -> {tw.towerModel.name} worth {tw.worth}");
                             break;
                         }

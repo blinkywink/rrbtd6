@@ -121,9 +121,11 @@ impl HomeMotion {
             // This is a tutorial prompt, not part of Patch's normal appearance.
             // Only a bound tutorial state should enable it.
             world.hide_subtree("MainMenuWorld/Interactive/PatchQuestMonkeyGroup/TutorialArrow3D");
+            world.hide_subtree("MainMenuWorld/Interactive/DigitalContent");
             let base = root.join("models/mainmenu_anim");
             self.buttons=std::fs::read_to_string(base.join("buttons.json")).ok()
                 .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default();
+            self.buttons.retain(|b|b.action!="tv");
             self.effects=std::fs::read_to_string(base.join("effects.json")).ok()
                 .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default();
             self.effect_times=vec![None;self.effects.len()];

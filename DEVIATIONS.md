@@ -36,8 +36,15 @@ places the clone is meant to differ, by the owner's request.
   - **Hide Race / Boss / Boss Rush / Odyssey / Contested Territory / Social Season Button** —
     one toggle per event button on the right of the main menu; the remaining buttons move up to
     close the gap.
-- **Hide Perks / Double Cash / Fast Track Button** switches the respective client preference
+- **Hide Double Cash / Fast Track Button** switches the respective client preference
   off before hiding its control; unhiding does not switch it back on.
+- **Hide Perks Button** only hides the navigation button; it never disables perks.
+- **Hide Friends' Map Records** hides map badges and the selected map's friends panel.
+- The Bloons TV and its hit volume are removed from the home island at the user's request.
+- Daily chest opening is a session-only preview: the native calendar uses cached server rewards
+  and the profile's shifted daily clock, without crediting loot or writing a claim to an account.
+- Imported official saves show their native markers and a confirmation before a new local game.
+  They cannot be resumed or overwritten yet; the imported snapshot is retained.
 - **Skip Startup Screen** (off by default) — go straight to the main menu instead of the Ninja
   Kiwi splash, loading screen and title screen.
 - Planned settings (added once the screens they skip exist):

@@ -60,7 +60,7 @@ pub struct Advanced {
     pub hide_perks:bool,
     pub hide_double_cash:bool,
     pub hide_fast_track:bool,
-    pub perks_enabled:bool,
+    pub hide_map_friends:bool,
     pub double_cash_enabled:bool,
     pub fast_track_enabled:bool,
 }
@@ -79,7 +79,7 @@ impl Default for Advanced {
             show_fps: false, fps_cap: 0, vsync: true, render_scale: 1.0, sharpen: true, msaa: 4, full_textures: false,
             hide_legends: false, hide_store: false, hide_race: false, hide_boss: false, hide_boss_rush: false,
             hide_odyssey: false, hide_contested_territory: false, hide_social_season: false, skip_startup: false,hide_perks:false,hide_double_cash:false,hide_fast_track:false,
-            perks_enabled:true,double_cash_enabled:false,fast_track_enabled:false }
+            hide_map_friends:false,double_cash_enabled:false,fast_track_enabled:false }
     }
 }
 
@@ -110,7 +110,6 @@ impl Advanced {
     }
 
     pub fn disable_hidden_features(&mut self){
-        if self.hide_perks{self.perks_enabled=false;}
         if self.hide_double_cash{self.double_cash_enabled=false;}
         if self.hide_fast_track{self.fast_track_enabled=false;}
     }
@@ -151,9 +150,10 @@ impl Advanced {
                 "Hides the Contested Territory button on the right of the main menu."),
             Row::Toggle("Hide Social Season Button", self.hide_social_season, "Hides the Social Season button on the right of the main menu."),
             Row::Toggle("Skip Startup Screen", self.skip_startup, "Go straight to the main menu instead of the startup screen."),
-            Row::Toggle("Hide Perks Button",self.hide_perks,"Turns Perks off, then hides the Perks controls."),
+            Row::Toggle("Hide Perks Button",self.hide_perks,"Hides the Perks button. Perks are unchanged."),
             Row::Toggle("Hide Double Cash Button",self.hide_double_cash,"Turns Double Cash off, then hides its control."),
             Row::Toggle("Hide Fast Track Button",self.hide_fast_track,"Turns Fast Track off, then hides its control."),
+            Row::Toggle("Hide Friends' Map Records",self.hide_map_friends,"Hides friends' best-round badges and the map records panel."),
         ]
     }
 
@@ -176,6 +176,7 @@ impl Advanced {
             16 => self.hide_perks=!self.hide_perks,
             17 => self.hide_double_cash=!self.hide_double_cash,
             18 => self.hide_fast_track=!self.hide_fast_track,
+            19 => self.hide_map_friends=!self.hide_map_friends,
             _ => {}
         }
         self.disable_hidden_features();
@@ -197,13 +198,20 @@ impl Advanced {
 mod hidden_features_tests{
     use super::*;
     #[test]
-    fn hiding_each_feature_switches_it_off_and_unhiding_does_not_reenable(){
+    fn hiding_double_cash_and_fast_track_switches_them_off_without_reenabling(){
         let mut a=Advanced::default();
-        a.perks_enabled=true;a.double_cash_enabled=true;a.fast_track_enabled=true;
-        for i in 16..=18{a.toggle(i);}
-        assert!(!a.perks_enabled && !a.double_cash_enabled && !a.fast_track_enabled);
-        for i in 16..=18{a.toggle(i);}
-        assert!(!a.perks_enabled && !a.double_cash_enabled && !a.fast_track_enabled);
+        a.double_cash_enabled=true;a.fast_track_enabled=true;
+        for i in 17..=18{a.toggle(i);}
+        assert!(!a.double_cash_enabled && !a.fast_track_enabled);
+        for i in 17..=18{a.toggle(i);}
+        assert!(!a.double_cash_enabled && !a.fast_track_enabled);
+    }
+    #[test]
+    fn perks_visibility_has_no_feature_switch(){
+        let mut a=Advanced::default();a.double_cash_enabled=true;a.fast_track_enabled=true;
+        a.toggle(16);assert!(a.hide_perks&&a.double_cash_enabled&&a.fast_track_enabled);
+        a.toggle(19);assert!(a.hide_map_friends&&a.hide_perks);
+        a.toggle(16);assert!(!a.hide_perks&&a.hide_map_friends);
     }
     #[test]
     fn loading_old_or_inconsistent_preferences_cannot_enable_hidden_features(){

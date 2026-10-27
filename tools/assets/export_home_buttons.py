@@ -13,7 +13,7 @@ import export_particles as ep
 sys.argv=[sys.argv[0],game,str(root/'models/mainmenu'),'ui_scenes_all_','unused']
 import export_animated as aa
 exported=set()
-routes={'PatchQuestMonkey':'quests','GiftBox':'gift','DigitalContent':'tv','EventMonkey':'events','CoopEventMonkey':'events','QuestMonkey':'events'}
+routes={'PatchQuestMonkey':'quests','GiftBox':'gift','DailyChest':'daily_reward','DigitalContent':'tv','EventMonkey':'events','CoopEventMonkey':'events','QuestMonkey':'events'}
 buttons=[]
 effects=[]
 for obj in af.objects.values():
@@ -66,7 +66,7 @@ for obj in af.objects.values():
         names.append(g['m_Name']);active &=bool(g['m_IsActive']);tid=t['m_Father']['m_PathID']
     path='/'.join(reversed(names))
     if not active or not path.startswith('MainMenuWorld/Interactive/'):continue
-    action=next((routes[n] for n in names if n in routes),None)
+    action=next((routes[n.strip()] for n in names if n.strip() in routes),None)
     if not action:continue
     buttons.append(dict(path=path,action=action,world=em.world_matrix(af,tr.path_id).T.flatten().tolist(),
                         center=[c['m_Center'][a] for a in 'xyz'],size=[c['m_Size'][a] for a in 'xyz']))

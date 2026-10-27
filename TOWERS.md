@@ -102,6 +102,23 @@ Towers:
   attack fires at 2014 in the clone, 2020 in the game (after Snowstorm); (3) 5-2-0 shard burst at
   rt 2528. Spawner bloons join the collision grid on their first move (HYPOTHESIS P-SPAWNGRID).
 
+- [ ] Glue Gunner: 33 of 34 match. Open: glue_upgrades_r30 from rt 970, stacked isUnique DoT
+  copies (two DissolverDot) on a split's second child tick one a frame in the game (968..971);
+  the clone applies only the first copy (HYPOTHESIS P-DOTDEGRADE covers one DoT degrade a frame
+  and splits restarting the other DoTs).
+
+- [ ] Monkey Sub (Logs, harness now loads the recording's map; Logs path from the game's dump):
+  sub_000_last matches. Verified: TrackTarget.Collide (a hit target is dropped and the next picked
+  at once from collision-pass positions), new targets within the whole maxSeekAngle,
+  turnRatePerFrame = turnRate x (1/60) in f32. Open (structural): the clone moves and collides
+  each projectile in turn, the game collides every projectile first and then moves them, so a
+  torpedo can't see a bloon another torpedo kills later in the same pass (sub_000_close rt 695).
+
+- [ ] Game RNG: Simulation.Initialise makes syncedRandom / unsyncedRandom = BufferedRandom(
+  GameModel.randomSeed) (System.Random inside, NextDouble = next x 1/int.MaxValue, one value
+  buffered). SimRecorder now logs `# seed`; the seed's source and draw order still to port
+  (Ice Icicles chance 0.25 and others).
+
 ## Done
 
 - DartMonkey: crit shots use CritMultiplierModel.displayModel (crit arrow) and show "Crit!"

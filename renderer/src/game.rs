@@ -306,6 +306,9 @@ pub struct Bloon {
     /// (HYPOTHESIS P-SPAWNGRID, recording ice_050: a Black spawned at 2547 isn't tried by a
     /// pierce-999 pulse covering the map on 2548).
     pub unplaced: bool,
+    /// The factory object it lives in (see `Game::fact`): a degraded bloon's first child keeps
+    /// its parent's.
+    pub obj: u32,
 }
 
 /// List<T>.Sort(Comparison<T>) as IL2CPP's mscorlib does it (ArraySortHelper.IntrospectiveSort):
@@ -631,7 +634,13 @@ impl Bloon {
     }
 
     pub fn glue(&self) -> u32 {
-        self.effects.iter().map(|e| if let EffectKind::Slow { glue, .. } = e.kind { glue } else { 0 }).max().unwrap_or(0)
+        self.effects
+            .iter()
+            .enumerate()
+            .filter(|(k, e)| !self.effects[..*k].iter().any(|x| x.id == e.id))
+            .map(|(_, e)| if let EffectKind::Slow { glue, .. } = e.kind { glue } else { 0 })
+            .max()
+            .unwrap_or(0)
     }
 
     /// HYPOTHESIS P-SLOW: slows with different ids multiply; a freeze stops the bloon (a
@@ -640,7 +649,13 @@ impl Bloon {
         if self.frozen() && !def.tags.iter().any(|t| t == "Moabs") {
             return 0.0;
         }
-        self.effects.iter().map(|e| if let EffectKind::Slow { mult, .. } = e.kind { mult } else { 1.0 }).product()
+        // (Mutable.ApplyMutation: only the first mutator with an id applies.)
+        self.effects
+            .iter()
+            .enumerate()
+            .filter(|(k, e)| !self.effects[..*k].iter().any(|x| x.id == e.id))
+            .map(|(_, e)| if let EffectKind::Slow { mult, .. } = e.kind { mult } else { 1.0 })
+            .product()
     }
 
     /// FreezeModel.Mutator.Mutate (VERIFIED-DISASM @0x1208f10) on a MOAB-class bloon:
@@ -1407,6 +1422,12 @@ pub struct GameGrid {
     /// Cell and slot of each bloon, by storage index (u32::MAX: none).
     of: Vec<u32>,
     slot: Vec<u32>,
+    /// Places of dead bloons whose objects the factory has pooled since the grid was filled
+    /// (by object, with the cell position): a bloon made from one takes its place.
+    pub ghosts: std::collections::HashMap<u32, ((u32, u32), [f32; 2])>,
+    /// Bucket.largestCellSpan of each cell: (int)(largest radius / 10 + 0.5) of what it was
+    /// filled with (Bucket.Add, VERIFIED-DISASM @0x25a6f20).
+    span: Vec<i32>,
 }
 
 const EMPTY: u32 = u32::MAX;
@@ -1419,7 +1440,7 @@ impl GameGrid {
 
     /// CollisionGrid.Fill: the bloons in the factory's list order (`key`), all but those made
     /// this frame (ids from `new_from`: the spawner and pops run after the grid is filled).
-    fn build(&mut self, bloons: &[Bloon], key: impl Fn(&Bloon) -> u64, new_from: u64) {
+    fn build(&mut self, bloons: &[Bloon], key: impl Fn(&Bloon) -> u64, radius: impl Fn(&Bloon) -> f32, new_from: u64, ghosts: &[(u32, u64, [f32; 2], f32)]) {
         self.w = 40;
         self.h = 33;
         self.cells.resize_with((self.w * self.h) as usize, Vec::new);
@@ -1430,14 +1451,52 @@ impl GameGrid {
         self.slot.clear();
         self.of.resize(bloons.len(), EMPTY);
         self.slot.resize(bloons.len(), EMPTY);
-        let mut idx: Vec<u32> = (0..bloons.len() as u32).filter(|&i| bloons[i as usize].id < new_from && !bloons[i as usize].unplaced).collect();
-        idx.sort_unstable_by_key(|&i| key(&bloons[i as usize]));
+        self.ghosts.clear();
+        self.span.clear();
+        self.span.resize(self.cells.len(), 0);
+        let mut largest = vec![0.0f32; self.cells.len()];
+        // Ghosts are numbered past the bloons.
+        let n = bloons.len() as u32;
+        let mut idx: Vec<u32> = (0..n).filter(|&i| bloons[i as usize].id < new_from && !bloons[i as usize].unplaced).collect();
+        idx.extend((0..ghosts.len() as u32).map(|g| n + g));
+        let k = |i: u32| if i < n { key(&bloons[i as usize]) } else { ghosts[(i - n) as usize].1 };
+        idx.sort_by_key(|&i| k(i));
         for i in idx {
-            let c = self.cell(bloons[i as usize].cell_pos);
+            let (c, r) = if i >= n {
+                let (obj, _, at, r) = ghosts[(i - n) as usize];
+                let c = self.cell(at);
+                self.ghosts.insert(obj, ((c as u32, self.cells[c].len() as u32), at));
+                self.cells[c].push(EMPTY);
+                (c, r)
+            } else {
+                (self.cell(bloons[i as usize].cell_pos), radius(&bloons[i as usize]))
+            };
+            if r > largest[c] {
+                largest[c] = r;
+                self.span[c] = (r / GAME_GRID_CELL + 0.5) as i32;
+            }
+            if i >= n {
+                continue;
+            }
             self.of[i as usize] = c as u32;
             self.slot[i as usize] = self.cells[c].len() as u32;
             self.cells[c].push(i);
         }
+    }
+
+    /// CollisionGrid MoveNext (VERIFIED-DISASM @0x25db980) visits a bucket only if it isn't
+    /// empty (largestCellSpan > 0) and max(dx, dy) of its cell offset from the query's cell,
+    /// less the query's (int)(radius / 10 + 0.5), is at most its largestCellSpan. The max is
+    /// signed: only buckets right of or below the query are cut (recording glue_205_close: a
+    /// glue shot passes a Pink two cells below it, then hits it a cell away).
+    fn visits(&self, q: [f32; 2], radius: f32, at: [f32; 2]) -> bool {
+        if self.span.is_empty() {
+            return true;
+        }
+        let ((qx, qy), (bx, by)) = (grid_cell(q), grid_cell(at));
+        let span = self.span[self.cell(at)];
+        let over = (bx - qx).max(by - qy) - ((radius / GAME_GRID_CELL) as f64 + 0.5) as i32;
+        span > 0 && (over <= 0 || over <= span)
     }
 
     /// Where bloon `i` sits.
@@ -1558,6 +1617,8 @@ impl HitSet {
 pub struct Projectile {
     /// Unique per projectile (display: its particle effects follow it).
     pub uid: u64,
+    /// timeSinceLastCollisionCheck: the frame it last checked for bloons (0 after a hit).
+    pub check_t: u64,
     /// TravelStrait's direction (game frame, as emitted): what TrackTarget turns.
     pub dir: Option<[f32; 2]>,
     /// It has moved once (TrackTarget turns it from then on).
@@ -1844,6 +1905,32 @@ impl Default for Buff {
 }
 
 /// Whether bloon tags `tags` match a DamageModifierForTagModel's tag list.
+/// TrackTarget.GetNewTarget: the closest bloon the shot hasn't hit (camo only if it sees camo)
+/// within `distance` and maxSeekAngle of its heading.
+/// `also`: a layer it has just hit, not in its hits yet.
+fn seek_pick(bloons: &[Bloon], defs: &[BloonDef], pr: &Projectile, sk: &crate::data::Seek, also: Option<u64>) -> Option<(u64, [f32; 2], f32)> {
+    let heading = pr.vel[1].atan2(pr.vel[0]);
+    bloons
+        .iter()
+        .filter(|b| !b.hit_by(&pr.hit) && also.is_none_or(|l| b.layer != l && !b.lineage.as_ref().is_some_and(|x| x.contains(&l))))
+        .filter(|b| pr.camo || !b.camo(&defs[b.kind]))
+        .filter_map(|b| {
+            let q = b.pos;
+            let (dx, dy) = (q[0] - pr.pos[0], q[1] - pr.pos[1]);
+            let dd = dx * dx + dy * dy;
+            let off = angle_diff(dy.atan2(dx), heading).abs().to_degrees();
+            // TrackTarget.IsBloonValid (VERIFIED-DISASM @0xd12ff0): the angle to it within
+            // maxSeekAngle itself (none below 360 checked otherwise; recording sub_000_last, a
+            // torpedo turns 100 degrees to the closest).
+            (dd <= sk.distance * sk.distance && (sk.max_angle >= 360.0 || off <= sk.max_angle)).then_some((b.id, q, dd))
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+}
+
+/// A due DamageOverTime tick: (bloon id, damage, immunities, owner, distribute, mutation id,
+/// its lastTick before this tick).
+type DotTick = (u64, f32, u32, u64, (bool, bool), String, f32);
+
 /// DamageOverTime.DealDamage (VERIFIED-DISASM @0x1003cb0): damage plus each modifier's
 /// additive for the bloon's tags, times every modifier's multiplier (recording glue_500: Bloon
 /// Solver's 1 + 4 on a MOAB).
@@ -2016,6 +2103,22 @@ pub struct Game {
     /// Each path list's length when this frame's tower phase began: where the Spawner's bloons
     /// go in it (the Spawner comes before the towers and bloons in the process list).
     plist_mark: Vec<usize>,
+    /// The bloon factory (Factory<Bloon>): `fact` lists every object made (creation order; a
+    /// dead one until the next flush), `fact_at` an object's place in it, `pool` the flushed
+    /// objects a new bloon takes, last flushed first.
+    fact: Vec<(u32, bool)>,
+    fact_at: Vec<u32>,
+    pool: Vec<u32>,
+    fact_mark: usize,
+    /// Set by a pop for its first child: the parent's object, carried on.
+    spawn_parent_obj: Option<u32>,
+    /// Bloons the collision grid was filled with that died later that frame (object, id, cell
+    /// position, order), and the first id made after the fill.
+    died_after_fill: Vec<(u32, u64, [f32; 2], u64, f32)>,
+    ghosts_src: Vec<(u32, u64, [f32; 2], u64, f32)>,
+    fill_first_id: Option<u64>,
+    /// The cell position of the grid place a new bloon took over from its object's dead bloon.
+    ghost_cell: Option<[f32; 2]>,
     /// On a flush frame, the list places from before it: the collision grid is filled in that
     /// order (recording dart_052: a Blue ahead of a Yellow the flush moved in front of it).
     grid_rank_pre: Option<std::collections::HashMap<u64, u32>>,
@@ -2162,8 +2265,9 @@ pub struct Game {
     /// (CreateSoundOnBloonEnterTrack.ResetPlayedBooleans on round start).
     voice_warned: Vec<String>,
     /// EmitOnPopModel shots from bloons that popped: (where, projectile, emission, owner).
-    /// (where, projectile, emission, owner, the bloon's rotation in degrees, its layer).
-    pop_emits: Vec<([f32; 2], Box<Proj>, Box<Emission>, u64, f32, u64)>,
+    /// (where, projectile, emission, owner, the bloon's rotation in degrees, its layer, its
+    /// height).
+    pop_emits: Vec<([f32; 2], Box<Proj>, Box<Emission>, u64, f32, u64, f32)>,
     pub paragon_degree: Option<crate::data::ParagonDegree>,
     /// Difficulty: cost multiplier, sell share, round bonus (base, per round), locked towers,
     /// selling disabled (CHIMPS), and its name.
@@ -2396,6 +2500,15 @@ impl Game {
             path_lists: Vec::new(),
             path_rank: Default::default(),
             plist_mark: Vec::new(),
+            fact: Vec::new(),
+            fact_at: Vec::new(),
+            pool: Vec::new(),
+            fact_mark: 0,
+            spawn_parent_obj: None,
+            died_after_fill: Vec::new(),
+            ghosts_src: Vec::new(),
+            fill_first_id: None,
+            ghost_cell: None,
             grid_rank_pre: None,
             proj_list: Vec::new(),
             pop_depth: 0,
@@ -2899,6 +3012,73 @@ impl Game {
         }
     }
 
+    /// Factory<Bloon>.Create: the object a new bloon lives in, the last one flushed into the pool
+    /// if any (INFERRED from recording glue_400: a pop on a flush frame makes its third Green in
+    /// a Red's object that died the frame before, and a linger in that Red's grid cell hits it).
+    fn fact_create(&mut self) -> u32 {
+        if let Some(o) = self.spawn_parent_obj.take() {
+            if let Some(&k) = self.fact_at.get(o as usize).filter(|&&k| k != u32::MAX) {
+                self.fact[k as usize].1 = true;
+            }
+            self.died_after_fill.retain(|d| d.0 != o);
+            return o;
+        }
+        let o = self.pool.pop().unwrap_or_else(|| {
+            self.fact_at.push(u32::MAX);
+            (self.fact_at.len() - 1) as u32
+        });
+        self.fact_at[o as usize] = self.fact.len() as u32;
+        self.fact.push((o, true));
+        o
+    }
+
+    /// A bloon destroyed: its object stays listed, dead, until the next flush.
+    fn fact_kill(&mut self, i: usize) {
+        let b = &self.bloons[i];
+        if let Some(&k) = self.fact_at.get(b.obj as usize).filter(|&&k| k != u32::MAX) {
+            self.fact[k as usize].1 = false;
+        }
+        // The collision grid is filled as the bloons start processing: one that was in it and
+        // dies after stays in it.
+        if !self.grid_on && self.fill_first_id.is_some_and(|f| b.id < f) {
+            let at = if b.fresh { b.cell_pos } else { b.prev };
+            self.died_after_fill.push((b.obj, b.id, at, b.order, self.defs[b.kind].radius));
+        }
+    }
+
+    /// Factory.Flush: as the path lists (front to back, each hole taking the last entry), the
+    /// dead objects going into the pool.
+    fn fact_flush(&mut self) {
+        let mut i = 0;
+        while i < self.fact.len() {
+            if self.fact[i].1 {
+                i += 1;
+                continue;
+            }
+            let (o, _) = self.fact.swap_remove(i);
+            self.fact_at[o as usize] = u32::MAX;
+            self.pool.push(o);
+            if let Some(&(m, _)) = self.fact.get(i) {
+                self.fact_at[m as usize] = i as u32;
+            }
+        }
+    }
+
+    /// The Spawner's bloon goes in the factory's list where the frame's process began.
+    fn fact_move_to_mark(&mut self, obj: u32) {
+        let mark = self.fact_mark;
+        if self.fact.last().map(|e| e.0) != Some(obj) || mark >= self.fact.len() - 1 {
+            self.fact_mark = mark.max(self.fact.len());
+            return;
+        }
+        let e = self.fact.pop().unwrap();
+        self.fact.insert(mark, e);
+        for k in mark..self.fact.len() {
+            self.fact_at[self.fact[k].0 as usize] = k as u32;
+        }
+        self.fact_mark = mark + 1;
+    }
+
     /// FactoryFactory.Flush (Simulation.Simulate, every 60 frames; VERIFIED by recording): dead
     /// entries leave the lists, front to back, each hole taking the list's last entry.
     fn plist_flush(&mut self) {
@@ -2937,6 +3117,9 @@ impl Game {
 
     /// Sandbox: every bloon gone (and the round's / sandbox's queued ones).
     pub fn clear_bloons(&mut self) {
+        for e in &mut self.fact {
+            e.1 = false;
+        }
         self.bloons.clear();
         self.path_lists.clear();
         self.path_rank.clear();
@@ -3021,12 +3204,18 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let race_round=self.race_bloon_spawn();
-        self.bloons.push(Bloon { id, kind,race_round, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, fresh: false, prev: pos, prev_dist: dist, mult: 1.0, cell_pos: pos, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false });
+        let obj = self.fact_create();
+        self.bloons.push(Bloon { id, kind,race_round, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, fresh: false, prev: pos, prev_dist: dist, mult: 1.0, cell_pos: pos, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, obj });
         self.plist_add(id, path);
         if self.grid_on {
             self.grid.add(self.bloons.len() - 1, pos);
             if self.has_grid_rank {
                 self.ggrid.push(self.bloons.len() - 1);
+                // An object whose dead bloon the grid still lists takes its place there.
+                if let Some((at, cell)) = self.ggrid.ghosts.remove(&obj) {
+                    self.ggrid.take_place(self.bloons.len() - 1, at);
+                    self.ghost_cell = Some(cell);
+                }
             }
         }
         id
@@ -5367,6 +5556,7 @@ impl Game {
         // if the parent was below its ceiling, else it starts now.
         let parent_grow = (self.defs[kind].layer_number < ceiling).then_some(b.grow_t);
         let parent_cell = b.cell_pos;
+        let parent_obj = b.obj;
         let parent_order = b.order;
         let parent_born = b.born;
         let parent_height = b.height;
@@ -5384,6 +5574,7 @@ impl Game {
         // (recording ice_520: six shards at -150, -90 ... 150, ArcEmission from 0).
         let rot = if self.defs[kind].rotate_to_follow_path { self.bloons[i].rot } else { 0.0 };
         let layer = self.bloons[i].layer;
+        let bz = self.bloons[i].height;
         let destroy: Vec<_> = self.bloons[i]
             .effects
             .iter()
@@ -5397,15 +5588,17 @@ impl Game {
         for e in b.effects.iter_mut().filter(|_| top) {
             if let EffectKind::PopEmit { proj, emission, skip, .. } = &mut e.kind {
                 if !std::mem::take(skip) {
-                    pop_emits.push((pp0, proj.clone(), emission.clone(), e.owner, rot, layer));
+                    pop_emits.push((pp0, proj.clone(), emission.clone(), e.owner, rot, layer, bz));
                 }
             }
         }
         // In the collision pass they come out at once and take part in it (recording ice_520:
         // shards from Reds popped on 2526 hit that frame's new Reds, which emit nothing).
-        if self.phase == 0 && self.grid_on {
-            for (pos, proj, emission, owner, rot, layer) in pop_emits {
-                self.emit_pop(pos, &proj, &emission, owner, rot, layer);
+        // So do a DamageOverTime tick's, in the bloon's Process (recording glue_005: a Super
+        // Glued MOAB's tick pops it and the splat is out that frame).
+        if (self.phase == 0 && self.grid_on) || self.pop_after_move {
+            for (pos, proj, emission, owner, rot, layer, z) in pop_emits {
+                self.emit_pop(pos, &proj, &emission, owner, rot, layer, z);
             }
         } else {
             self.pop_emits.extend(pop_emits);
@@ -5483,9 +5676,13 @@ impl Game {
         if n_kids == 0 {
             self.bloon_destroyed(parent_id, pp0);
             // EmitOnDestroy (recording glue_400: a Liquefied Red the DoT pops leaves a linger).
+            // (At the bloon's Position, its height included: recording glue_400, a linger
+            // beside the entrance trees at z 20 isn't blocked.)
             for (pos, proj, emission, owner) in destroy {
                 let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
+                self.emit_z = bz;
                 self.emit(pos, 0.0, &emission, &proj, None, tiers, owner);
+                self.emit_z = 0.0;
             }
         }
         // SpawnChildren.CreatedChildren (VERIFIED-DISASM @0x1027440): the first child is the
@@ -5497,6 +5694,10 @@ impl Game {
             if let Some(r)=&mut self.race{r.spawn_round=race_round;}
             let d0 = (start_dist - n as f32 * spacing).max(0.0);
             let d1 = if moved && n == 0 { (d0 + speed_frames(self.defs[c].speed) * parent_tm * 1.0 * mult).max(0.0) } else { d0 };
+            if n == 0 {
+                self.spawn_parent_obj = Some(parent_obj);
+            }
+            self.ghost_cell = None;
             let mut id = self.spawn_at(c, d1, path);
             if let Some(ch) = self.bloons.last_mut() {
                 // The first child is the parent object: projectiles that hit it already, and
@@ -5541,7 +5742,8 @@ impl Game {
                 let j = self.bloons.len() - 1;
                 out_children.push(id);
                 if self.grid_on && self.has_grid_rank {
-                    // (The others only join the grid when it's next filled.)
+                    // (The others only join the grid when it's next filled, unless their object's
+                    // dead bloon is still in it: see spawn_at.)
                     if n == 0 {
                         self.ggrid.take_place(j, parent_place);
                     }
@@ -5580,7 +5782,7 @@ impl Game {
                     child.grow_t = t;
                 }
             }
-            child.cell_pos = parent_cell;
+            child.cell_pos = self.ghost_cell.take().unwrap_or(parent_cell);
             // Path.bloonsList (VERIFIED by recording): popped bloons leave by swapping in the last
             // one, new ones are appended, and the first child is the parent object, still in its
             // place.
@@ -5599,21 +5801,6 @@ impl Game {
             let (dist_on, dist_override) = self.distribute;
             if overflow > 0 && dist_on && (self.defs[kind].distribute_damage_to_children || dist_override) {
                 popped += self.damage(j, overflow, out_children);
-            }
-        }
-        for (damage, immune, owner, distribute) in destroy_ticks {
-            let Some(j) = self.bloons.iter().position(|b| b.id == parent_id) else { break };
-            if immune & self.bloons[j].properties(&self.defs[self.bloons[j].kind]) != 0 {
-                continue;
-            }
-            let (tally0, saved) = (self.damage_tally, self.distribute);
-            self.distribute = distribute;
-            let n = self.damage(j, damage.round() as i32, out_children);
-            self.distribute = saved;
-            let dealt = self.damage_tally - tally0;
-            if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
-                tw.pops += n;
-                tw.damage += dealt;
             }
         }
         self.pop_depth -= 1;
@@ -5645,6 +5832,24 @@ impl Game {
                 b.prev = prev;
                 b.prev_dist = d0;
                 b.track_mult = tm;
+            }
+        }
+        // (They come once the degrade has placed its children, each a pop of its own: recording
+        // glue_205, a Corrosive MOAB's tick takes its first Ceramic and the other three stay
+        // spaced as four.)
+        for (damage, immune, owner, distribute) in destroy_ticks {
+            let Some(j) = self.bloons.iter().position(|b| b.id == parent_id) else { break };
+            if immune & self.bloons[j].properties(&self.defs[self.bloons[j].kind]) != 0 {
+                continue;
+            }
+            let (tally0, saved) = (self.damage_tally, self.distribute);
+            self.distribute = distribute;
+            let n = self.damage(j, damage.round() as i32, out_children);
+            self.distribute = saved;
+            let dealt = self.damage_tally - tally0;
+            if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
+                tw.pops += n;
+                tw.damage += dealt;
             }
         }
         popped
@@ -6017,7 +6222,7 @@ impl Game {
     /// `only_temp` the ability attacks of that tower just activated between frames.
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn towers_phase(&mut self, only_temp: Option<usize>, cd_speed: &[f32], early: &mut std::collections::HashSet<u64>, round_clock: i64,
-        dots: &mut Vec<(u64, f32, u32, u64, (bool, bool))>, emits: &mut Vec<([f32; 2], Box<Proj>, u64)>,
+        dots: &mut Vec<DotTick>, emits: &mut Vec<([f32; 2], Box<Proj>, u64)>,
         zones: &[([f32; 2], f32, crate::data::Zone)], shoves: &[([f32; 2], crate::data::MoabShove)], leak_voice: &mut bool) {
         for t in only_temp.map_or_else(|| (0..self.towers.len()).collect::<Vec<_>>(), |t| vec![t]) {
             let buff = self.buffs[t].clone();
@@ -6281,17 +6486,21 @@ impl Game {
                 // (Last: the same with the last bloon and Attack.CompareBracketLast, VERIFIED-DISASM
                 // @0xdcb6f0: segments furthest from the exit first; recording dart_420_last, the
                 // first in list order of two on one segment, not the one further back.)
-                let mut lead: Vec<Option<(usize, f32)>> = vec![None; self.tracks.len()];
-                if mode == TargetMode::First || mode == TargetMode::Last {
+                // (Path.Process -> Path.AddBloon goes through Path.bloonsList, strictly better
+                // only: of two as far along, the first listed leads; recording glue_400, twin
+                // Greens out of one pop, stored the other way round.)
+                let mut lead: Vec<Option<(usize, f32, u32)>> = vec![None; self.tracks.len()];
+                if mode == TargetMode::First || mode == TargetMode::Last || mode == TargetMode::Strong {
                     let last = mode == TargetMode::Last;
                     for (bi, b) in self.bloons.iter().enumerate() {
                         let d = &self.defs[b.kind];
                         if (b.camo(d) && !camo) || (no_moab && d.tags.iter().any(|t| t == "Moabs")) {
                             continue;
                         }
+                        let rank = self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);
                         if let Some(l) = lead.get_mut(b.path as usize) {
-                            if l.is_none_or(|(_, dist)| if last { b.dist < dist } else { b.dist > dist }) {
-                                *l = Some((bi, b.dist));
+                            if l.is_none_or(|(_, dist, r)| if last { b.dist < dist } else { b.dist > dist } || (b.dist == dist && rank < r)) {
+                                *l = Some((bi, b.dist, rank));
                             }
                         }
                     }
@@ -6449,19 +6658,23 @@ impl Game {
                         let until_leak = len - ((b.dist / 7.0).max(0.0) as usize as f64 * 7.0 + 3.5);
                         // TargetStrong.GetTarget (VERIFIED-DISASM @0xe0dfa0): over Attack
                         // .GetVisibleTargets, the first with a strictly higher danger (recording
-                        // boomerang_000_strong: an in-range Blue over a Red further along).
+                        // boomerang_000_strong: an in-range Blue over a Red further along). It
+                        // asks for them as TargetType.First (statics +0x18), so the path's
+                        // leading bloon comes first when in range, then First's order (recordings
+                        // glue_205_strong: of three Ceramics on a segment the one ahead, second
+                        // listed; mix_dart_boomerang_r40: the first listed of a White and a Black).
                         prio * 1e12
-                            + if (attack.prio_camo || self.towers[t].camo_prio) && strong_lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e10 } else { d.danger as f64 * 1e8 - until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
+                            + if (attack.prio_camo || self.towers[t].camo_prio) && strong_lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e10 } else if !(attack.prio_camo || self.towers[t].camo_prio) && lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { d.danger as f64 * 1e8 + 1e4 } else { d.danger as f64 * 1e8 - until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
                     } else if mode == TargetMode::First && seg_in {
                         // (prio is the camo / MOAB priority count: the f32 score near 1e12 can't
                         // order bloons; recording dart_002_camo_r37.)
                         let len = self.tracks[b.path as usize].length() as f64;
                         let until_leak = len - ((b.dist / 7.0).max(0.0) as usize as f64 * 7.0 + 3.5);
-                        prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _)| l == bi) { 1e9 } else { -until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
+                        prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e9 } else { -until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
                     } else if mode == TargetMode::Last && seg_in {
                         let len = self.tracks[b.path as usize].length() as f64;
                         let until_leak = len - ((b.dist / 7.0).max(0.0) as usize as f64 * 7.0 + 3.5);
-                        prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _)| l == bi) { 1e9 } else { until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
+                        prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e9 } else { until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
                     } else {
                         prio * 1e12 + base as f64
                     };
@@ -7129,7 +7342,7 @@ impl Game {
     /// they come before it in the process list.
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn process_bloons_before(&mut self, stamp: u64, early: &mut std::collections::HashSet<u64>, round_clock: i64,
-        dots: &mut Vec<(u64, f32, u32, u64, (bool, bool))>, emits: &mut Vec<([f32; 2], Box<Proj>, u64)>,
+        dots: &mut Vec<DotTick>, emits: &mut Vec<([f32; 2], Box<Proj>, u64)>,
         zones: &[([f32; 2], f32, crate::data::Zone)], shoves: &[([f32; 2], crate::data::MoabShove)], leak_voice: &mut bool) {
         let mut j = 0;
         while j < self.bloons.len() {
@@ -7139,6 +7352,7 @@ impl Game {
                 continue;
             }
             early.insert(b.id);
+            self.fill_first_id.get_or_insert(self.next_id);
             self.tick_bloon_effects(j, round_clock, dots, emits);
             if !self.move_bloon(j, zones, shoves, leak_voice) {
                 j += 1;
@@ -7258,6 +7472,7 @@ impl Game {
             }
             let (id, at) = (self.bloons[i].id, self.bloons[i].pos);
             self.plist_kill(id);
+            self.fact_kill(i);
             self.bloons.swap_remove(i);
             self.bloon_destroyed(id, at);
             return true;
@@ -7268,7 +7483,7 @@ impl Game {
     /// Bloon.Process's mutator timers and DamageOverTime / emit ticks for bloon `i` (the damage
     /// and emissions are applied by the caller, after the moves).
     #[allow(clippy::type_complexity)]
-    fn tick_bloon_effects(&mut self, i: usize, round_clock: i64, dots: &mut Vec<(u64, f32, u32, u64, (bool, bool))>, emits: &mut Vec<([f32; 2], Box<Proj>, u64)>) {
+    fn tick_bloon_effects(&mut self, i: usize, round_clock: i64, dots: &mut Vec<DotTick>, emits: &mut Vec<([f32; 2], Box<Proj>, u64)>) {
         let now = self.sim_elapsed;
         let b = &mut self.bloons[i];
         // (Bloons made this frame aren't in the process list yet.)
@@ -7296,8 +7511,9 @@ impl Game {
                 // 100 damage at 137).
                 EffectKind::Dot { damage, interval, tick, immune, mods } => {
                     if round_clock - *tick as i64 >= (*interval as f64).round_ties_even() as i64 {
+                        let prev = *tick;
                         *tick = round_clock as f32;
-                        dots.push((b.id, dot_damage(*damage, mods, &self.defs[b.kind].tags), *immune, e.owner, e.distribute));
+                        dots.push((b.id, dot_damage(*damage, mods, &self.defs[b.kind].tags), *immune, e.owner, e.distribute, e.id.clone(), prev));
                     }
                 }
                 EffectKind::Emit { interval, tick, proj } => {
@@ -7426,6 +7642,7 @@ impl Game {
     }
 
     fn remove_bloon(&mut self, i: usize) {
+        self.fact_kill(i);
         self.race_bloon_remove(self.bloons[i].race_round);
         self.plist_kill(self.bloons[i].id);
         if self.grid_on {
@@ -7709,6 +7926,13 @@ impl Game {
             if (!e.tags.is_empty() && !e.tags.iter().any(|t| t.strip_prefix('!').map_or_else(|| has(t), |x| !has(x)))) || wont(e) {
                 continue;
             }
+            if !e.bloon_id.is_empty() {
+                let name = self.names[self.bloons[i].kind].as_str();
+                let is = if e.bloon_ids.len() > 1 { e.bloon_ids.iter().any(|x| x.contains(name)) } else { name.contains(e.bloon_id.as_str()) };
+                if is == e.excluding {
+                    continue;
+                }
+            }
             // Freeze.Collide (VERIFIED-DISASM @0xcdcc60): bossImmunity spares Bads and Minibosses.
             if (e.kind == "freeze" && ((!e.moabs && has("Moabs")) || (e.boss_immunity && (has("Bad") || has("Miniboss")))))
                 || (e.moabs_only && !has("Moabs"))
@@ -7795,6 +8019,7 @@ impl Game {
                     add.push((
                         Effect { kind: EffectKind::Cooldown, id: format!("{}Cooldown", e.id), frames_left: (lifespan + e.cooldown) * FPS, total: (lifespan + e.cooldown) * FPS, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false },
                         false,
+                        false,
                     ));
                     EffectKind::Trance {
                         centre: c,
@@ -7830,12 +8055,27 @@ impl Game {
                 },
                 _ => continue,
             };
-            add.push((Effect { kind, id: e.id.clone(), frames_left: lifespan * FPS, total: lifespan * FPS, added: self.sim_elapsed, layers: e.layers.max(1), owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade }, e.refresh));
+            add.push((Effect { kind, id: e.id.clone(), frames_left: lifespan * FPS, total: lifespan * FPS, added: self.sim_elapsed, layers: e.layers.max(1), owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade }, e.refresh, e.replace));
         }
         let kind = self.bloons[i].kind;
-        add.retain(|(e, _)| !self.bad_immune_to(kind, &e.id));
+        add.retain(|(e, _, _)| !self.bad_immune_to(kind, &e.id));
         let b = &mut self.bloons[i];
-        for (eff, refresh) in add {
+        // The same model's mutator: a slow is told by its multiplier, glue level and lifespan.
+        let same_model = |x: &Effect, e: &Effect| match (&x.kind, &e.kind) {
+            (EffectKind::Slow { mult: a, glue: g }, EffectKind::Slow { mult: m, glue: h }) => a == m && g == h && x.total == e.total,
+            _ => true,
+        };
+        for (eff, refresh, replace) in add {
+            // removeMutatorIfNotMatching: one another model put on goes (INFERRED: a model told
+            // by its slow, glue level and lifespan; recording glue_upgrades_r30, Corrosive Glue's
+            // level 2 over the level 1 it was upgraded from, so the glob skips it).
+            if replace {
+                if let Some(k) = b.effects.iter().position(|x| x.id == eff.id) {
+                    if !same_model(&b.effects[k], &eff) {
+                        b.effects.remove(k);
+                    }
+                }
+            }
             match b.effects.iter_mut().find(|x| x.id == eff.id) {
                 // Bloon.AddMutator on a mutator it has: a new lifespan, its behaviours kept (a
                 // DamageOverTime keeps its lastTick: recording boomerang_500, re-dotted at 98 and
@@ -7849,6 +8089,14 @@ impl Game {
                 // (ResetMutatorChargeCountForId; recording ice_100: a Permafrosted Green's Blue
                 // keeps the slow). INFERRED: to the new count (the same model's).
                 Some(x) if refresh => {
+                    // FilterGlueLevel reads the bloon's glue level, which a higher-level glue
+                    // raises though its mutator isn't added (INFERRED: recording
+                    // glue_upgrades_r30, Corrosive Glue over the level 1 put on before the
+                    // upgrade, the glob then skips that Lead; glue_250, Glue Storm's level 1 keeps
+                    // the attack's level 2 going).
+                    if let (EffectKind::Slow { glue, .. }, EffectKind::Slow { glue: g, .. }) = (&mut x.kind, &eff.kind) {
+                        *glue = (*glue).max(*g);
+                    }
                     if x.frames_left < eff.frames_left {
                         x.frames_left = x.total;
                     }
@@ -7890,11 +8138,14 @@ impl Game {
     /// EmitOnPop.PreDegrade (VERIFIED-DISASM @0x100bcd0): its projectiles from where the bloon
     /// popped, along its rotation, each with the popped bloon in collidedWith, so none hits what
     /// it degraded into (recording glue_005: a MOAB's glue splat passes over its Ceramics).
-    fn emit_pop(&mut self, pos: [f32; 2], proj: &Proj, emission: &Emission, owner: u64, rot: f32, layer: u64) {
+    fn emit_pop(&mut self, pos: [f32; 2], proj: &Proj, emission: &Emission, owner: u64, rot: f32, layer: u64, z: f32) {
         let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
         let start = self.projectiles.len();
         self.emit_rot = Some(rot);
+        // At the bloon's height (recording glue_005: a MOAB's splat at z 120).
+        self.emit_z = z;
         self.emit(pos, 0.0, emission, proj, None, tiers, owner);
+        self.emit_z = 0.0;
         self.emit_rot = None;
         for pr in &mut self.projectiles[start..] {
             pr.hit.push(layer);
@@ -8108,6 +8359,7 @@ impl Game {
                 value,
                 cash_base,
                 refresh_t: 0.0,
+                check_t: 0,
                 interval_t: 0.0,
                 exhaust_done: 0,
                 aim: None,
@@ -8129,8 +8381,11 @@ impl Game {
                 self.grid_rank_pre = Some(self.path_rank.iter().map(|(&id, &(_, k))| (id, k)).collect());
             }
             self.plist_flush();
+            self.fact_flush();
             self.proj_flush();
         }
+        self.ghosts_src = std::mem::take(&mut self.died_after_fill);
+        self.fill_first_id = None;
         self.race_step_start();
         // HYPOTHESIS P-ACTIVERBE: a bloon counts its type's RBE less the damage it has taken.
         self.active_rbe = self
@@ -8197,8 +8452,8 @@ impl Game {
         }
         let p0 = std::time::Instant::now();
         // EmitOnPopModel: pops after last frame's collision pass (in a bloon's own Process).
-        for (pos, proj, emission, owner, rot, layer) in std::mem::take(&mut self.pop_emits) {
-            self.emit_pop(pos, &proj, &emission, owner, rot, layer);
+        for (pos, proj, emission, owner, rot, layer, z) in std::mem::take(&mut self.pop_emits) {
+            self.emit_pop(pos, &proj, &emission, owner, rot, layer, z);
         }
         self.comanche_defence();
         self.forget_untouched();
@@ -8259,7 +8514,26 @@ impl Game {
                 Some(pre) => pre.get(&b.id).map_or(u64::MAX, |&k| k as u64),
                 None => rank.get(&b.id).map_or(u64::MAX, |r| r.1 as u64),
             };
-            self.ggrid.build(&self.bloons, |b| if single { key(b) } else { b.order }, self.step_first_id);
+            // Bloons that died after the last fill, their objects pooled by a flush since: still
+            // in the grid, dead, until a new bloon takes the object (recording glue_400).
+            let ghosts: Vec<(u32, u64, [f32; 2], f32)> = self
+                .ghosts_src
+                .iter()
+                .filter(|g| self.fact_at.get(g.0 as usize) == Some(&u32::MAX))
+                .map(|&(o, id, at, order, r)| {
+                    let k = if single {
+                        match pre {
+                            Some(pre) => pre.get(&id).map_or(u64::MAX, |&k| k as u64),
+                            None => rank.get(&id).map_or(u64::MAX, |r| r.1 as u64),
+                        }
+                    } else {
+                        order
+                    };
+                    (o, k, at, r)
+                })
+                .collect();
+            let defs = &self.defs;
+            self.ggrid.build(&self.bloons, |b| if single { key(b) } else { b.order }, |b| defs[b.kind].radius, self.step_first_id, &ghosts);
         }
         self.grid_on = true;
         let mut cand = std::mem::take(&mut self.grid_cand);
@@ -8335,18 +8609,7 @@ impl Game {
                             pr.seek_t = self.sim_elapsed;
                         }
                         if aim.is_none() && sk.new_targets && look {
-                            let best = self
-                                .bloons
-                                .iter()
-                                .filter(|b| !b.hit_by(&pr.hit) && (pr.camo || !b.camo(&self.defs[b.kind])))
-                                .filter_map(|b| {
-                                    let q = b.pos;
-                                    let (dx, dy) = (q[0] - pr.pos[0], q[1] - pr.pos[1]);
-                                    let dd = dx * dx + dy * dy;
-                                    let off = angle_diff(dy.atan2(dx), heading).abs().to_degrees();
-                                    (dd <= sk.distance * sk.distance && off <= sk.max_angle / 2.0).then_some((b.id, q, dd))
-                                })
-                                .min_by(|a, b| a.2.total_cmp(&b.2));
+                            let best = seek_pick(&self.bloons, &self.defs, pr, sk, None);
                             pr.seek = best.map(|x| x.0);
                             aim = best.map(|x| x.1);
                         }
@@ -8366,7 +8629,9 @@ impl Game {
                             } else if a < -std::f32::consts::PI {
                                 a += 2.0 * std::f32::consts::PI;
                             }
-                            let max = sk.turn_rate / FPS;
+                            // turnRatePerFrame = turnRate x (1 / 60) in f32 (360 -> 6.0000005: recording
+                            // sub_000_close, a torpedo's y one float step off at 6.0).
+                            let max = sk.turn_rate * FRAME_TIME;
                             let ang = (RAD2DEG * -a).clamp(-max, max);
                             let r = DEG2RAD * -ang;
                             let (sn, cs) = crt_sin_cos(r);
@@ -8536,7 +8801,22 @@ impl Game {
             // Broad phase: the bloons in grid cells within reach, in storage order (the order
             // a full scan would meet them in).
             cand.clear();
-            if !flying && self.projectiles[p].pierce > 0.0 && self.projectiles[p].wait <= 0.0 {
+            // Projectile.HasValidBloonCollision (VERIFIED-DISASM @0xcabcf0): with
+            // checkCollisionIntervalFrames, bloons are only checked once that many frames have
+            // passed since the last check (recording glue_400: a Liquefier linger, every 19).
+            let checks = {
+                let pr = &mut self.projectiles[p];
+                let f = pr.spec.check_frames;
+                if f > 0 && (self.sim_elapsed as i64 - pr.check_t as i64) < f as i64 {
+                    false
+                } else {
+                    if f > 0 {
+                        pr.check_t = self.sim_elapsed;
+                    }
+                    true
+                }
+            };
+            if checks && !flying && self.projectiles[p].pierce > 0.0 && self.projectiles[p].wait <= 0.0 {
                 let pr = &self.projectiles[p];
                 // Positions from the frame's start: allow for this frame's movement.
                 let at = if pr.spec.instant || (pr.target.is_some() && !pr.spec.only_target) { pr.pos } else { pr.prev };
@@ -8587,6 +8867,7 @@ impl Game {
                 let rr = pr.spec.radius + d.radius;
                 let bcell = if pr.spec.instant || (pr.target.is_some() && !pr.spec.only_target) { b.pos } else { b.cell_pos };
                 if !grid_hit(pp, pr.spec.radius, bp, bcell, d.radius)
+                    || (self.has_grid_rank && !self.ggrid.visits(pp, pr.spec.radius, bcell))
                     || !circles_hit(pp, pr.spec.radius, bp, b.rot, &d.circles)
                     || (pr.spec.instant && pr.target.is_some_and(|t| t != b.id))
                     // CollideOnlyWithTarget.FilterCollision (VERIFIED-DISASM @0xcbb6e0): only its
@@ -8691,6 +8972,32 @@ impl Game {
                     }
                 }
                 kids.clear();
+                // CreateProjectileOnContact.Collide runs in the collision pass, before the hit's
+                // damage and its pops (recording glue_025: a glob's Glue Splatter splat comes
+                // before the splat its popped Pink leaves, and pops the Reds first).
+                if self.projectiles[p].spec.on_contact.iter().any(|c| !c.on_damage && !c.on_pop) {
+                    let pr = &self.projectiles[p];
+                    let heading = if pr.spec.instant && pr.target.is_some() { (bp[1] - pr.origin[1]).atan2(bp[0] - pr.origin[0]) } else { pr.vel[1].atan2(pr.vel[0]) };
+                    let now: Vec<_> = pr
+                        .spec
+                        .on_contact
+                        .iter()
+                        .filter(|c| !c.on_damage && !c.on_pop)
+                        .map(|c| (if c.at_shot { pp } else { bp }, c.clone(), c.pass_on_collided.then_some(layer)))
+                        .collect();
+                    let (tiers, owner) = (pr.tiers, pr.owner);
+                    for (at, c, skip) in now {
+                        let start = self.projectiles.len();
+                        self.emit_z = hit_z;
+                        self.emit(at, heading, &c.emission, &c.projectile, None, tiers, owner);
+                        self.emit_z = 0.0;
+                        if let Some(id) = skip {
+                            for pr in &mut self.projectiles[start..] {
+                                pr.hit.push(id);
+                            }
+                        }
+                    }
+                }
                 if let Some(at) = crit_text {
                     self.hit_texts.push(at);
                 }
@@ -8838,10 +9145,31 @@ impl Game {
                     let names = self.projectiles[p].spec.hit_sounds.clone();
                     self.sound(&names, None);
                 }
+                // Projectile.ClearTarget (TrackTarget.Collide below) looks for the next target at
+                // once, from where the shot and the bloons are in the collision pass (recording
+                // sub_000_last: the closest from there, not after this frame's moves).
+                let repick = {
+                    let pr = &self.projectiles[p];
+                    (pr.seek == Some(id) && pr.spec.seek.as_ref().is_some_and(|s| s.new_targets))
+                        .then(|| pr.spec.seek.as_ref().and_then(|sk| seek_pick(&self.bloons, &self.defs, pr, sk, Some(layer))).map(|x| x.0))
+                };
                 let pr = &mut self.projectiles[p];
                 // CollideBloon adds the layer it hit; what that layer became carries it in its
                 // lineage.
                 pr.hit.push(layer);
+                // CollideBloon: timeSinceLastCollisionCheck = 0.
+                pr.check_t = 0;
+                // TrackTarget.Collide (VERIFIED-DISASM @0xd128d0): hitting its own target, it
+                // looks again at once (lastTargetSearchElapsed = 0) and, with trackNewTargets,
+                // drops it (recording sub_000_close: a torpedo turns to the next bloon after
+                // hitting its first).
+                if pr.seek == Some(id) {
+                    pr.seek_t = 0;
+                    if let Some(pick) = repick {
+                        pr.seek = pick;
+                        pr.seek_t = self.sim_elapsed;
+                    }
+                }
                 pr.pierce -= pr.spec.pierce_cost;
                 let heading = if pr.spec.instant && pr.target.is_some() {
                     self.tracers.push((pr.origin, bp));
@@ -8852,7 +9180,7 @@ impl Game {
                     pr.vel[1].atan2(pr.vel[0])
                 };
                 for c in &pr.spec.on_contact { // P-CONTACT
-                    if (c.on_damage && immune) || (c.on_pop && popped_now == 0) {
+                    if (c.on_damage && immune) || (c.on_pop && popped_now == 0) || (!c.on_damage && !c.on_pop) {
                         continue;
                     }
                     let skip = if c.pass_on_collided { Some(layer) } else { None };
@@ -8890,6 +9218,14 @@ impl Game {
             // edge lives 1 frame instead of 3).
             let pr = &self.projectiles[p];
             if !pr.spec.ignore_blockers && pr.spec.blocker_rebound.is_none() && !pr.spec.instant && (pr.target.is_none() || pr.spec.only_target) && pr.pierce > 0.0 && pr.frames_left > 0.0 && self.blocker_hit(pr.prev, pr.spec.vs_blocker_radius, pr.z) {
+                // Projectile.CollideMap first: CreateProjectileOnContact.CollideMap (VERIFIED-DISASM
+                // @0xcc1150) makes its projectile where the shot is (recording glue_500: a Bloon
+                // Solver glob into the map's edge leaves its splat there).
+                let pr = &self.projectiles[p];
+                let heading = pr.vel[1].atan2(pr.vel[0]);
+                for c in pr.spec.on_contact.iter().filter(|c| !c.on_damage && !c.on_pop) {
+                    contacts.push((pr.prev, heading, c.clone(), pr.tiers, pr.owner, None, pr.z));
+                }
                 self.projectiles[p].frames_left = 0.0;
             }
             // HYPOTHESIS P-ACIDPOOL: a splash that expires without hitting anything becomes a pool
@@ -8989,8 +9325,8 @@ impl Game {
         // EmitOnPop.PreDegrade emits at the pop (VERIFIED-DISASM @0x100bcd0; recording ice_520:
         // the shards are out where the bloons popped on that frame), so this pass's pops come out
         // now. INFERRED: before the pass's exhaust projectiles.
-        for (pos, proj, emission, owner, rot, layer) in std::mem::take(&mut self.pop_emits) {
-            self.emit_pop(pos, &proj, &emission, owner, rot, layer);
+        for (pos, proj, emission, owner, rot, layer, z) in std::mem::take(&mut self.pop_emits) {
+            self.emit_pop(pos, &proj, &emission, owner, rot, layer, z);
         }
         self.spawn_exhausted(now.into_iter().map(|(a, b, c, d, e, f, g, _)| (a, b, c, d, e, f, g)).collect());
         let e = p2.elapsed().as_secs_f64();
@@ -9001,6 +9337,7 @@ impl Game {
         // made on frame 3181 regrow on 3361).
         self.popped_born_to = self.next_id;
         self.plist_mark = self.path_lists.iter().map(Vec::len).collect();
+        self.fact_mark = self.fact.len();
         self.phase = 1;
         // Bloons processed during the tower phase (they come before a newer Attack in the process
         // list), with what their Process produced; the rest are processed after the towers.
@@ -9044,6 +9381,7 @@ impl Game {
         // Effect timers and damage over time: in Bloon.Process (mutator timers, DamageOverTime), after
         // the frame's collisions and towers, before the bloon moves (recording boomerang_005: a
         // MOAB Press stun with a frame left isn't re-applied by that frame's hit, then runs out).
+        self.fill_first_id.get_or_insert(self.next_id);
         for i in 0..self.bloons.len() {
             if !early.contains(&self.bloons[i].id) {
                 self.tick_bloon_effects(i, round_clock, &mut dots, &mut emits);
@@ -9083,16 +9421,47 @@ impl Game {
         let order: std::collections::HashMap<u64, u64> = self.bloons.iter().map(|b| (b.id, b.order)).collect();
         let mut dots = dots;
         dots.sort_by_key(|d| order.get(&d.0).copied().unwrap_or(u64::MAX));
-        for (id, damage, immune, owner, distribute) in dots {
+        // HYPOTHESIS P-DOTDEGRADE: once a DoT tick degrades a bloon its behaviours are made
+        // again and don't run until the next frame: another DoT due now waits (its lastTick kept)
+        // and ticks then (recording glue_upgrades_r30, a Dissolved Pink's due ticks pop a layer a
+        // frame, 969..972).
+        let mut degraded: Vec<u64> = Vec::new();
+        for (id, damage, immune, owner, distribute, eid, prev) in dots {
+            if degraded.contains(&id) {
+                if let Some(e) = self.bloons.iter_mut().find(|b| b.id == id).and_then(|b| b.effects.iter_mut().find(|e| e.id == eid)) {
+                    if let EffectKind::Dot { tick, .. } = &mut e.kind {
+                        *tick = prev;
+                    }
+                }
+                continue;
+            }
             let Some(i) = self.bloons.iter().position(|b| b.id == id) else { continue };
             if immune & self.bloons[i].properties(&self.defs[self.bloons[i].kind]) != 0 {
                 continue;
             }
+            let kind0 = self.bloons[i].kind;
             let tally0 = self.damage_tally;
             self.pop_after_move = true;
             self.distribute = distribute;
+            let kids0 = kids.len();
             let n = self.damage(i, damage.round() as i32, &mut kids);
             (self.pop_after_move, self.distribute) = (false, (true, false));
+            // HYPOTHESIS P-DOTDEGRADE: a DoT tick that splits the bloon into more than one child
+            // starts its other DamageOverTime behaviours over (lastTick = now): recording
+            // glue_upgrades_r30, a Black's Corrosive Glue DoT never ticks after Bloon Dissolver's
+            // splits it, while its second Pink's (a copy) still does.
+            let clock = self.round_clock as f32;
+            let split = kids.len() - kids0 > 1;
+            if self.bloons.iter().find(|b| b.id == id).is_some_and(|b| b.kind != kind0) {
+                degraded.push(id);
+            }
+            if let Some(b) = self.bloons.iter_mut().find(|b| b.id == id).filter(|b| b.kind != kind0 && split) {
+                for e in &mut b.effects {
+                    if let EffectKind::Dot { tick, .. } = &mut e.kind {
+                        *tick = tick.max(clock);
+                    }
+                }
+            }
             let self_tally_dealt = self.damage_tally - tally0;
             if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
                 tw.pops += n;
@@ -9162,6 +9531,9 @@ impl Game {
             // added this frame (recording glue_250: a round's Black listed before a Pink a
             // Corrosive Glue tick popped out the same frame).
             self.plist_move_to_mark(id, path);
+            if let Some(o) = self.bloons.last().map(|b| b.obj) {
+                self.fact_move_to_mark(o);
+            }
             // SetMaxHealthOfBloonBehavior.OnBloonSpawned: a bloon of the mod's id spawned in
             // its round gets maxHealth = (int)(maxHealth x healthMultiplier), that layer only.
             if let Some(h) = self.health_mods.iter().find(|h| h.round == self.round + 1 && h.bloon == self.names[k]) {
@@ -9226,6 +9598,7 @@ impl Game {
             // The round's end flushes the factories too (VERIFIED by recording: Path.bloonsList
             // drops its dead entries that frame).
             self.plist_flush();
+            self.fact_flush();
             // Simulation.RoundEnd -> DistributeXpToHeroes(GetXpForRound(completed round index)).
             let xp = Self::xp_for_round(self.round as i32);
             for t in 0..self.towers.len() {
@@ -9805,6 +10178,11 @@ mod tests {
         }
         let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../local_extracted/game/game.json");
         let mut d: crate::data::GameData = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        // Another map than the exported one (water towers on Logs): its own map.json.
+        if let Some(m) = meta.get("map").filter(|m| !m.eq_ignore_ascii_case("Tutorial")) {
+            let mp = format!("{}/../local_extracted/maps/{}/map.json", env!("CARGO_MANIFEST_DIR"), m.to_lowercase());
+            d.map = serde_json::from_str(&std::fs::read_to_string(&mp).unwrap_or_else(|_| panic!("map {mp}"))).unwrap();
+        }
         let (diff, mode) = (meta.get("difficulty").cloned().unwrap_or("Medium".into()), meta.get("mode").cloned().unwrap_or("Standard".into()));
         d.mode = match mode.as_str() {
             "Clicks" => "CHIMPS".into(),

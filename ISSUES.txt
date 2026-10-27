@@ -7,9 +7,15 @@ or "CAN'T FIX YET" (with why). A screenshot of the real game next to ours helps 
 
 OPEN
 ----
-- Double Cash / Fast Track / Perks: foreground toggles now save client preferences, and the
-  new UI hide options switch those preferences off first. Gameplay effects still need native
+- Double Cash / Fast Track: foreground toggles save client preferences, and their
+  UI hide options switch those preferences off first. Gameplay effects still need native
   implementation / validation; these controls do not upload changes to the official account.
+- Daily chest: native calendar, cached server 50-day reward cycle, saved reward index, daily reset,
+  and session-only opening preview wired. No reward credit, persistent claim or cloud upload yet.
+- Saved games: imported saves now show map markers, native Continue details and a confirmation
+  before a fresh local run. Resuming/saving full runs and actual overwrite are still missing.
+- Profile category dropdown: now opens, selects Overall / Main Game / Rogue / Frontier,
+  and filters cached basic counters. Legends-specific rows and per-category public sharing still need work.
 - Friends: platform-share icon overlap fixed, missing-code controls hidden. Downloading the
   actual friends list / friend code and sending requests are still not wired.
 - Jukebox: native screen, free tracks and local playlist/playback controls wired. Owned Trophy
@@ -77,6 +83,8 @@ OPEN
 
 DONE
 ----
+- Removed the home island's Bloons TV and its click target by request.
+- Perks is a navigation button without a checkbox; Hide Perks Button only hides it.
 - Profile avatar/banner tabs were transparent: keep their solid blue background under the
   selected highlight, as the original prefab does.
 - Veteran rank replaces the base rank on home; on Profile it uses the normal rank position.

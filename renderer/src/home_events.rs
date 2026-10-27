@@ -175,6 +175,15 @@ pub(super) fn tower_unlock_goals(root:&Path)->std::collections::HashMap<String,f
     state.data["live"]["response"]["body"]["settings"]["settings"]["towerUnlocks"].as_object().into_iter().flatten()
         .filter_map(|(k,v)|Some((k.clone(),v["pops"].as_f64()?))).collect()
 }
+/// Reuses the background events cache; no parsing or network request on the UI thread.
+pub(super) fn daily_rewards(root:&Path)->Option<(Vec<String>,i64)> {
+    let mut state=state(root).try_lock().ok()?;
+    if let Some(data)=state.rx.try_iter().last(){state.data=data;}
+    let settings=&state.data["live"]["response"]["body"]["settings"];
+    let rewards=settings["gameEvents"]["dailyRewards"].as_array()?.iter().filter_map(|v|v.as_str().map(str::to_owned)).collect::<Vec<_>>();
+    if rewards.is_empty(){return None;}
+    Some((rewards,settings["settings"]["dailyResetUTCOffset"].as_i64()?*3600))
+}
 
 pub(super) fn trophy_live(root:&Path)->Option<Value> {
     let mut state=state(root).try_lock().ok()?;

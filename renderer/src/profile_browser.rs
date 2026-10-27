@@ -4,8 +4,11 @@ use macroquad::prelude::*;
 use serde_json::Value;
 use std::path::Path;
 const BASE:&str="Canvas/PlayerStatsScreen";
+const DROPDOWN:&str="Canvas/PlayerStatsScreen/Stats/OverallStats/StatCategoryDropdown";
+const OPTIONS:&str="Canvas/StatsCategoryOptions";
+const CATEGORIES:[&str;4]=["Overall Stats","Main Game","Rogue","Frontier"];
 pub(super) const MODAL:&str="Canvas/PlayerStatsScreen/SettingsMenu";
-pub(super) struct Browser {public_stats:bool,root:std::path::PathBuf,catalog:Value,runtime:Value,open:bool,banners:bool,selected:Option<usize>,began:Option<f64>,closing:bool,equipped:[Option<String>;2],overall:Option<(Vec<Node>,Vec<Node>,String)>,named:Option<usize>,pub stats_changed:bool}
+pub(super) struct Browser {category:usize,dropdown:bool,public_stats:bool,root:std::path::PathBuf,catalog:Value,runtime:Value,open:bool,banners:bool,selected:Option<usize>,began:Option<f64>,closing:bool,equipped:[Option<String>;2],overall:Option<(Vec<Node>,Vec<Node>,String)>,named:Option<usize>,pub stats_changed:bool}
 impl Browser {
     pub fn load(root:&Path,node:&mut Node)->Option<Self>{
         let catalog:Value=serde_json::from_str(&std::fs::read_to_string(root.join("ui/runtime/profile_cosmetics.json")).ok()?).ok()?;
@@ -22,19 +25,28 @@ impl Browser {
                 }).collect();
             }
         }
-        let mut browser=Self{public_stats:false,root:root.to_owned(),catalog,runtime,open:false,banners:false,selected:None,began:None,closing:false,equipped:[None,None],overall:None,named:None,stats_changed:false};
+        let mut browser=Self{category:0,dropdown:false,public_stats:false,root:root.to_owned(),catalog,runtime,open:false,banners:false,selected:None,began:None,closing:false,equipped:[None,None],overall:None,named:None,stats_changed:false};
         if let Ok(tab)=std::env::var("RRBTD6_PROFILE_PICKER"){
             browser.open=true;node.set_active(MODAL,true);browser.tab(node,tab=="banners");
         }
         Some(browser)
     }
-    pub fn modal(&self)->Option<&'static str>{self.open.then_some(MODAL)}
+    pub fn modal(&self)->Option<&'static str>{if self.dropdown{Some(OPTIONS)}else{self.open.then_some(MODAL)}}
     pub fn dismiss(&mut self,node:&mut Node)->bool{
+        if self.dropdown{self.dropdown=false;node.set_active(OPTIONS,false);return true;}
         if !self.open{return false;}
         if !self.closing{self.closing=true;self.began=None;}
         node.set_active(MODAL,true);true
     }
     pub fn animate(&mut self,node:&mut Node){
+        if self.dropdown{self.position_categories(node);}
+        if self.overall.is_none()&&node.find(&format!("{BASE}/Stats/OverallStats/ConfigureStats/PlayerStats/Stats"))
+            .is_some_and(|n|n.children.iter().any(|r|r.name.starts_with("AccountStat_"))){
+            if let Some(category)=std::env::var("RRBTD6_PROFILE_CATEGORY").ok().and_then(|v|v.parse::<usize>().ok()).filter(|&i|i<4){
+                self.select_category(node,category);
+                if std::env::var_os("RRBTD6_PROFILE_DROPDOWN").is_some(){self.open_categories(node);}
+            }
+        }
         self.stats_view(node);
         if !self.open{return;}
         self.sync_equipped(node);
@@ -96,6 +108,8 @@ impl Browser {
         node.set_active(&format!("{MODAL}/Panel/Container/ScrollBanner"),banners);
     }
     fn select_named(&mut self,node:&mut Node,index:usize){
+        self.category=0;
+        node.set_active(&format!("{BASE}/Stats/OverallStats/SharedStats"),true);
         let base=format!("{BASE}/Stats/OverallStats");
         let private=format!("{base}/ConfigureStats/PlayerStats/Stats");
         let public=format!("{base}/PublicStats/PlayerStats/Stats");
@@ -133,8 +147,63 @@ impl Browser {
         }
         self.stats_changed=true;
     }
+    fn open_categories(&mut self,node:&mut Node){
+        let Some(rect)=node.rect(DROPDOWN)else{return;};
+        let Some(mut options)=node.find(&format!("{DROPDOWN}/Template")).cloned()else{return;};
+        let Some(template)=options.find("Viewport/Content/Item").cloned()else{return;};
+        options.name="StatsCategoryOptions".into();options.active=true;
+        options.rt.amin=vec2(0.0,1.0);options.rt.amax=options.rt.amin;options.rt.pivot=vec2(0.0,1.0);
+        let scale=crate::hud::Hud::canvas_scale();
+        options.rt.pos=vec2(rect.x/scale,-(rect.y+rect.h)/scale);options.rt.size=vec2(rect.w/scale,480.0);
+        // TMP_Dropdown instantiates its template on the root canvas, above scroll masks.
+        // The two unresolved Unity built-in sprites are solid UI surfaces.
+        if let Some(img)=options.img.as_mut(){img.sprite=None;}
+        if let Some(view)=options.find_mut("Viewport"){view.img=None;view.clip=true;}
+        if let Some(content)=options.find_mut("Viewport/Content"){
+            content.rt.size.y=480.0;
+            content.children=CATEGORIES.iter().enumerate().map(|(i,label)|{
+                let mut row=template.clone();row.name=format!("Option{i}");row.active=true;row.rt.pos.y=-(i as f32)*120.0;
+                row.set_text("Item Label",label);row.set_active("Item Selected",i==self.category);row
+            }).collect();
+        }
+        if let Some(canvas)=node.find_mut("Canvas"){
+            canvas.children.retain(|n|n.name!="StatsCategoryOptions");canvas.children.push(options);self.dropdown=true;
+        }
+    }
+    fn position_categories(&self,node:&mut Node){
+        let Some(rect)=node.rect(DROPDOWN)else{return;};
+        let scale=crate::hud::Hud::canvas_scale();
+        if let Some(options)=node.find_mut(OPTIONS){
+            options.rt.pos=vec2(rect.x/scale,-(rect.y+rect.h)/scale);
+            options.rt.size.x=rect.w/scale;
+        }
+    }
+    fn select_category(&mut self,node:&mut Node,index:usize){
+        self.select_named(node,0);self.category=index;
+        if index==0{return;}
+        let values=super::account_preview::stats_category(CATEGORIES[index]).unwrap_or_default();
+        let Some((all,visible,_))=&self.overall else{return;};
+        for (path,source) in [("ConfigureStats",all),("PublicStats",visible)]{
+            let rows=source.iter().filter_map(|row|{
+                let key=row.name.strip_prefix("AccountStat_")?;let value=values[key].as_f64()?;
+                let mut row=row.clone();row.set_text("Value",&super::account_preview::number(value));
+                // Per-category public selections are not writable yet.
+                row.set_active("Toggle",false);Some(row)
+            }).collect();
+            if let Some(list)=node.find_mut(&format!("{BASE}/Stats/OverallStats/{path}/PlayerStats/Stats")){list.children=rows;}
+        }
+        node.set_active(&format!("{BASE}/Stats/OverallStats/SharedStats"),false);
+        node.set_text(&format!("{DROPDOWN}/Text"),CATEGORIES[index]);self.stats_changed=true;
+    }
     pub fn click(&mut self,node:&mut Node,pointer:Vec2)->bool{
         if self.closing{return true;}
+        if self.dropdown{
+            let picked=(0..4).find(|i|node.rect(&format!("{OPTIONS}/Viewport/Content/Option{i}")).is_some_and(|r|r.contains(pointer)));
+            self.dropdown=false;node.set_active(OPTIONS,false);
+            if let Some(i)=picked{self.select_category(node,i);}
+            return true;
+        }
+        if !self.open && node.rect(DROPDOWN).is_some_and(|r|r.contains(pointer)){self.open_categories(node);return true;}
         let hit=|node:&Node,path:&str|node.rect(path).is_some_and(|r|r.contains(pointer));
         if !self.open{
             let path=format!("{BASE}/Stats/NamedMonkeysMenu/OptionScroll/Content");
@@ -206,7 +275,7 @@ mod tests {
     use super::*;
     #[test]
     fn closing_picker_keeps_modal_input_capture_during_native_close_animation(){
-        let mut browser=Browser{public_stats:false,root:Default::default(),catalog:Value::Null,runtime:Value::Null,open:true,banners:false,selected:Some(2),began:None,closing:false,equipped:[None,None],overall:None,named:None,stats_changed:false};
+        let mut browser=Browser{category:0,dropdown:false,public_stats:false,root:Default::default(),catalog:Value::Null,runtime:Value::Null,open:true,banners:false,selected:Some(2),began:None,closing:false,equipped:[None,None],overall:None,named:None,stats_changed:false};
         let mut node=Node::from_json(&serde_json::json!({"name":"Scene","children":[{"name":"Canvas","children":[
             {"name":"PlayerStatsScreen","children":[{"name":"SettingsMenu","active":true}]}]}]}));
         assert_eq!(browser.modal(),Some(MODAL));

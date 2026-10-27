@@ -146,4 +146,10 @@ $PY tools/assets/dump_ui_prefab.py "$GAME" local_extracted/ui/prefabs \
   "scenefile:Assets/UI - New/Scenes/JukeboxUI.unity=JukeboxUI" \
   "field:JukeboxScreen/JukeBoxScreen.trackItemPrefab=JukeboxTrack"
 $PY tools/assets/export_ui_runtime.py "$GAME" local_extracted/ui/runtime JukeboxUI
+# Daily chest calendar and the LootThemes theme-2 reward items.
+$PY tools/assets/dump_ui_prefab.py "$GAME" local_extracted/ui/prefabs \
+  "scenefile:Assets/UI - New/Scenes/DailyRewardUI.unity=DailyRewardUI" \
+  "Assets/UI - New/Prefabs/Store/Loot/MediumBaseLootItem.prefab" \
+  "Assets/UI - New/Prefabs/Store/Loot/MediumInstaTowerLootItem.prefab"
+$PY tools/assets/export_ui_runtime.py "$GAME" local_extracted/ui/runtime DailyRewardUI
 $PY tools/assets/export_menu_chrome.py "$GAME" local_extracted

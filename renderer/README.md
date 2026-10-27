@@ -769,7 +769,34 @@ so opening a catalog does not decode its full offscreen inventory.
 The profile gear opens the shared account editor. Very large imported veteran
 ranks fit inside their original label bounds instead of overlapping the XP bar.
 
-Remaining profile gaps include the stat-category dropdown, named-monkey context
+Remaining profile gaps include Legends-specific category rows, named-monkey context
 and live social/accolade sections. This pass restores base profile data, local
 identity/customization, the public-stats preview and native entrance motion; it
 does not claim complete original-game profile coverage.
+
+
+Daily chest/menu pass: the home chest has its exported native collider and opens
+DailyRewardUI with the native DailyRewardsAnimation opening, spinning selected
+reward and TickDropAC claim preview. LootThemes theme 2 uses MediumBaseLootItem.
+The five-card calendar reads the server cache's reward cycle and reset offset,
+and the account's dailyRewardIndex / nextDailyRewardDateTime. The date is on the
+game's shifted daily clock (UTC minus the reset offset), not the PC's timezone.
+Opening today's reward previews the next reset in this menu session only. No
+currency, powers or Instas are awarded and no profile/cloud claim is written.
+The Bloons TV mesh subtree and its click volume are removed by user request.
+
+The profile dropdown uses its native TMP template on the root canvas, consumes
+outside clicks/Escape and resets the stats scroll on selection. Main Game,
+Rogue and Frontier show their separately imported basic counters. Legends-only
+rows and category-specific public sharing remain incomplete.
+
+Imported savedMaps metadata drives MapButton.Continue and ContinueGamePanel.
+Starting fresh shows a CommonPopup and retains the imported official save;
+full simulation restore and real local-save overwrite are not implemented.
+Friends' map records have bindings for the native badge/panel and a hide option
+under Advanced > UI, but the service adapter has not supplied actual records.
+Missing records stay hidden rather than showing the prefab's sample scores.
+
+The extracted Maps entrance has six staggered scale channels (MapGroup.Open,
+0.7 s); it does not contain horizontal position channels for those six tiles.
+This confirms the clip used, not complete parity with every native transition.

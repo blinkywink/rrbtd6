@@ -264,6 +264,48 @@ pub(super) fn named_monkey(index:usize)->Option<serde_json::Value>{
     let state=PREVIEW.get()?.try_lock().ok()?;
     state.data.as_ref()?["namedMonkeys"].as_array()?.get(index).cloned()
 }
+pub(super) fn daily_reward()->Option<(u64,String,serde_json::Value)>{
+    let state=PREVIEW.get()?.try_lock().ok()?;let data=state.data.as_ref()?;
+    Some((data["profile"]["dailyRewardIndex"].as_u64().unwrap_or(0),
+        data["profile"]["nextDailyRewardDateTime"].as_str().unwrap_or("").to_owned(),
+        serde_json::json!([data["localProfile"],data["displayName"],data["downloadedAt"]])))
+}
+pub(super) fn stats_category(category:&str)->Option<serde_json::Value>{
+    let state=PREVIEW.get()?.try_lock().ok()?;let data=state.data.as_ref()?;
+    if category=="Main Game"&&data["localProfile"]==true{return Some(data["stats"].clone());}
+    data["statsCategories"].get(category).cloned()
+}
+pub(super) fn saved_game(map:&str)->Option<serde_json::Value>{
+    let state=PREVIEW.get()?.try_lock().ok()?;let data=state.data.as_ref()?;
+    data["savedGames"].as_array()?.iter().find(|v|v["map"].as_str()==Some(map)).cloned()
+}
+/// Bind only real cached friend records; never show the scene's sample avatar/round 85.
+/// The friends service adapter has not yet supplied this optional section.
+pub(super) fn bind_map_friends(node:&mut Node,path:&str,map:&str,hidden:bool,details:bool){
+    let state=PREVIEW.get().and_then(|s|s.try_lock().ok());
+    let records=state.as_ref().and_then(|s|s.data.as_ref())
+        .and_then(|d|d["friends"]["mapRecords"][map].as_array());
+    let mut records:Vec<_>=records.into_iter().flatten()
+        .filter(|r|r["round"].as_u64().is_some_and(|n|n>0)&&r["displayName"].as_str().is_some()&&r["avatar"].as_str().is_some())
+        .collect();
+    records.sort_by_key(|r|std::cmp::Reverse(r["round"].as_u64().unwrap_or(0)));
+    node.set_active(path,!hidden&&!records.is_empty());
+    if hidden||records.is_empty(){return;}
+    let bind=|node:&mut Node,path:&str,record:&serde_json::Value,index:usize|{
+        node.set_sprite(&format!("{path}/Mask/Icon"),record["avatar"].as_str());
+        node.set_text(&format!("{path}/Difficulty/BestRound"),&record["round"].as_u64().unwrap_or(0).to_string());
+        node.set_text(&format!("{path}/Username"),&format!("{}. {}",index+1,record["displayName"].as_str().unwrap_or("")));
+        let medal=match record["difficulty"].as_str(){Some("Easy")=>Some("MedalBronze"),Some("Medium")=>Some("MedalSilver"),Some("Hard")=>Some("MedalGold"),_=>None};
+        node.set_sprite(&format!("{path}/Difficulty"),medal);
+    };
+    if details{
+        for i in 0..5{
+            let row=format!("{path}/{}",if i==0{"FriendRank".into()}else{format!("FriendRank ({i})")});
+            node.set_active(&row,records.get(i).is_some());
+            if let Some(record)=records.get(i){bind(node,&row,record,i);}
+        }
+    }else{bind(node,path,records[0],0);}
+}
 
 pub(crate) fn helper_project(root:&Path)->std::path::PathBuf {
     let beside_data=root.parent().unwrap_or(root).to_owned();

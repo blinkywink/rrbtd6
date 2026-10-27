@@ -196,3 +196,14 @@ Environment, metadata dump, `sim_model` located, Rust workspace, first benchmark
 | `benchmarks/` | `sim-bench` and `results/` |
 | `tools/` | `dotnet_meta`, `unityfs`, `il2cpp/`, `data_export/`, `sim_model/` and `assets/` (forked session). `external/` is git-ignored. |
 | `local_extracted/` | Proprietary extracted data, **git-ignored, never commit** |
+
+
+2026-10-27 menu pass: the daily chest collider now opens the native reward
+calendar. It reads the cached server cycle/reset offset and saved reward index,
+previews a claim with the native tick animation, and counts down to the next
+reset without crediting rewards or writing claims. Removed the home TV and its
+hit target. Perks is hide-only, without a foreground toggle. Profile category
+selection, imported-save markers/details and a fresh-game confirmation are wired;
+full save restore/overwrite, friends downloads and Legends-specific stat rows
+remain open in ISSUES.txt. Validation: 121 Rust tests and 21 offline Python tests;
+screenshots cover reward availability/opening, home TV removal and save markers.
