@@ -1,12 +1,3 @@
-// A static-first page. The download always works, even without JavaScript or GitHub's API.
-const motionButton = document.querySelector('.motion-toggle');
-motionButton?.addEventListener('click', () => {
-  const paused = document.body.classList.toggle('motion-paused');
-  motionButton.setAttribute('aria-pressed', String(paused));
-  motionButton.setAttribute('aria-label', paused ? 'Resume decorative animation' : 'Pause decorative animation');
-  motionButton.firstElementChild.textContent = paused ? '▷' : 'Ⅱ';
-});
-
 // Optional release metadata; never replace the stable /releases/latest/download link.
 async function releaseInfo() {
   const label = document.querySelector('[data-release]');
