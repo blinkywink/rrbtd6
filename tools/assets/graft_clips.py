@@ -17,6 +17,10 @@ import json
 import os
 import sys
 
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pack_anims import read_bytes
+
 import numpy as np
 
 QT = [("p", "<u2", 3), ("n", "i1", 3), ("pad", "i1")]
@@ -25,7 +29,7 @@ QT = [("p", "<u2", 3), ("n", "i1", 3), ("pad", "i1")]
 def load_target(d):
     meta = json.load(open(os.path.join(d, "meta.json")))
     n = meta["vertex_count"]
-    q = np.fromfile(os.path.join(d, "anim_q.bin"), dtype=QT).reshape(-1, n)
+    q = np.frombuffer(read_bytes(Path(d) / "anim_q.bin"), dtype=QT).reshape(-1, n)
     lo, hi = np.array(meta["quant"]["min"]), np.array(meta["quant"]["max"])
     span = np.where(hi - lo > 1e-9, hi - lo, 1.0)
     pos = lo + q["p"].astype(np.float64) / 65535.0 * span
@@ -65,7 +69,7 @@ def main():
     n = meta["vertex_count"]
     if smeta["vertex_count"] != n:
         sys.exit(f"vertex counts differ: {n} vs {smeta['vertex_count']}")
-    sdata = np.fromfile(os.path.join(src, "anim.bin"), dtype=np.float32).reshape(-1, n, 6).astype(np.float64)
+    sdata = np.frombuffer(read_bytes(Path(src) / "anim.bin"), dtype=np.float32).reshape(-1, n, 6).astype(np.float64)
     t_idle = meta["anims"][idle_index(meta["anims"])]
     s_idle = smeta["anims"][idle_index(smeta["anims"])]
     base_t, base_s = frames[t_idle["offset"]], sdata[s_idle["offset"]]

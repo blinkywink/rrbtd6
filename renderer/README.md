@@ -800,3 +800,9 @@ Missing records stay hidden rather than showing the prefab's sample scores.
 The extracted Maps entrance has six staggered scale channels (MapGroup.Open,
 0.7 s); it does not contain horizontal position channels for those six tiles.
 This confirms the clip used, not complete parity with every native transition.
+
+Animation disk storage: the current client reads verified lossless .bin.z files
+as well as legacy unpacked animations. Decompression runs during model staging;
+frame sampling is unchanged. tools/assets/pack_anims.py migrates existing models
+and the launcher performs this at extraction finish step v3. See tools/EXTRACTION.md
+for measured size savings, load-time costs and old-client compatibility.

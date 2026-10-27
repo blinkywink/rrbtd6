@@ -215,6 +215,7 @@ name = "btd6-game"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "flate2",
  "macroquad",
  "rrbtd6-coop",
  "serde",

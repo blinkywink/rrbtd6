@@ -7,6 +7,7 @@
 //! gear button / Esc = pause screen, Esc = cancel placement, V = toggle 3D / 2D view.
 
 mod anim;
+mod animation_storage;
 mod audio;
 mod data;
 mod game;

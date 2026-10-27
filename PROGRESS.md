@@ -207,3 +207,13 @@ selection, imported-save markers/details and a fresh-game confirmation are wired
 full save restore/overwrite, friends downloads and Legends-specific stat rows
 remain open in ISSUES.txt. Validation: 121 Rust tests and 21 offline Python tests;
 screenshots cover reward availability/opening, home TV removal and save markers.
+
+2026-10-27 storage pass: added verified lossless animation packing and backwards
+compatible streaming reads. Local models 19.488 -> 9.939 GB (49% smaller),
+9.549 GB reclaimed; animation payloads 54.13% smaller. Every frame/normal byte
+is preserved. New installs pack at finish step v3; existing unpacked exports
+remain readable. General model staging now uses the CPU worker and cooperative
+uploads. Synchronous demand callers can still wait on an unprepared model.
+123 Rust tests, 29 offline tooling checks, four exact prefetch GPU comparisons,
+and packed gameplay/home smoke checks passed. Claude's engine/simulation changes
+and recorder scenarios were left untouched. See tools/EXTRACTION.md for limits.

@@ -56,7 +56,7 @@ for i in range(0, len(todo), CHUNK):
         print("chunk failed:", (r.stderr.strip().splitlines() or ["?"])[-1][:300], flush=True)
     for t, _, _ in chunk:
         s = staged(t)
-        if not os.path.exists(os.path.join(s, "meta.json")) or not os.path.exists(os.path.join(s, "anim_q.bin")):
+        if not os.path.exists(os.path.join(s, "meta.json")) or not any(os.path.exists(os.path.join(s, name)) for name in ("anim_q.bin", "anim_q.bin.z")):
             continue
         old = t.replace("local_extracted/models/", OLD + "/", 1)
         os.makedirs(os.path.dirname(old), exist_ok=True)

@@ -153,3 +153,6 @@ $PY tools/assets/dump_ui_prefab.py "$GAME" local_extracted/ui/prefabs \
   "Assets/UI - New/Prefabs/Store/Loot/MediumInstaTowerLootItem.prefab"
 $PY tools/assets/export_ui_runtime.py "$GAME" local_extracted/ui/runtime DailyRewardUI
 $PY tools/assets/export_menu_chrome.py "$GAME" local_extracted
+
+# Lossless storage, read by the current client (preserves every baked frame).
+$PY tools/assets/pack_anims.py local_extracted/models

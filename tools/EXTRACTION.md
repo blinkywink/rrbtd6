@@ -90,3 +90,49 @@ This is a mixed development directory, not a measured clean installation.
 The website and player README no longer advertise a 35 GB requirement.
 Baked per-vertex animation and decoded WAV storage explain much of the gap
 from the official game's compressed install; cleanup alone will not close it.
+
+## Lossless animation storage
+
+The final extraction step now runs `tools/assets/pack_anims.py` after the existing
+quantization pass. It streams each anim.bin / anim_q.bin through zlib level 1,
+verifies the full decompressed payload against the source hash and size, and
+atomically installs a .bin.z file before removing the uncompressed copy. Files
+that do not shrink stay unpacked. A changed source aborts migration. A failure
+keeps the source intact and does not record the extraction step as complete.
+No animation frames, metadata, textures, geometry, or simulation data are changed.
+Up to four streaming workers pack separate files concurrently, bounding temporary
+RAM instead of loading whole animations during setup. --workers 1 is available
+when competing with other work.
+
+The current client accepts both layouts. Fresh unpacked developer exports take
+precedence over older packed files. Packing requires the updated client; older
+clients do not understand .bin.z. The launcher installs its matching client and
+tools before extraction. `--keep-original` is available for developer comparisons.
+Grafting tools also accept packed source/target animations. Every normal model
+load stages disk reads/decompression in a worker, then yields through texture
+uploads; compression adds no work to per-frame sampling. Synchronous demand
+callers can still wait for an unprepared asset; background staging does not
+guarantee zero load latency.
+
+Runtime validation checks decoded length against clip/vertex metadata, checksum,
+stream completion and trailing data. Input is streamed through a 1 MiB buffer
+instead of retaining the entire compressed file beside the decoded animation.
+Synthetic coverage: tools/test_animation_storage.py and the renderer's
+animation_storage tests. All game data remains local and ignored by Git.
+
+Local migration measurement (2026-10-27): 1,843 animation sources; 1,841 packed
+and two kept unpacked because compression would increase size. Animations went
+from 17.640 GB to 8.091 GB (54.13% smaller), and the whole models folder from
+19.488 GB to 9.939 GB (49.00% smaller), reclaiming 9.549 GB. This excludes audio,
+UI, maps, staging caches and development benchmarks; it is not total install size.
+Every packed source was verified before removal; no original animation precision
+was reduced by this migration. The launcher keeps using its prior quantization
+pass for new exports, followed by this lossless pass.
+
+The real Python-packed 60.594 MB Pat Fusty fixture occupies 20.034 MB and decodes
+with the Rust streaming reader in 98.58 ms average across ten exact comparisons
+(on this PC, warm input). This measures load-time CPU work, not an FPS gain.
+Runtime checks: 123 Rust tests passed / 15 ignored, 29 offline tooling checks
+passed (including six new storage checks), and four exact GPU comparisons for
+background-prefetched versus directly loaded MOAB/BAD models. Gameplay and the
+home menu were smoke-tested with the migrated local assets. BTD6.exe was rebuilt.

@@ -408,7 +408,9 @@ fn decode(path: &Path) -> Option<Image> {
 
 impl AnimModel {
     pub async fn load(dir: &Path) -> Option<Self> {
-        Some(Self::from_staged(Self::stage(dir)?))
+        let path = dir.to_owned();
+        let staged = crate::load_work::spawn(move || Self::stage(&path)).await?;
+        Some(Self::from_staged_cooperative(staged).await)
     }
 
     /// Uploads a staged model's textures (mipmapped, as `load` always did).
@@ -466,10 +468,12 @@ impl AnimModel {
             };
             Some((v("min")?, v("max")?))
         });
-        let ab = match quant {
-            Some(_) => std::fs::read(dir.join("anim_q.bin")).ok()?,
-            None => std::fs::read(dir.join("anim.bin")).ok()?,
-        };
+        let stride = if quant.is_some() { 10 } else { 24 };
+        let frame_count = anims.iter().try_fold(0u64, |end, a| {
+            Some(end.max(a["offset"].as_u64()?.checked_add(a["frames"].as_u64()?)?))
+        })?;
+        let expected = frame_count.checked_mul(meta["vertex_count"].as_u64()?)?.checked_mul(stride)?;
+        let ab = crate::animation_storage::read(dir, if quant.is_some() { "anim_q.bin" } else { "anim.bin" }, expected).ok()?;
         let ob = std::fs::read(dir.join("outline.bin")).unwrap_or_default();
         let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         let nverts = meta["vertex_count"].as_u64()? as usize;
@@ -980,7 +984,7 @@ pub async fn verify_prefetch(root:&Path){
             let path=root.join(format!("{tier}-Desperado"));
             let meta:serde_json::Value=serde_json::from_slice(&std::fs::read(path.join("meta.json")).unwrap()).unwrap();
             let bounds=|key:&str|[0,1,2].map(|i|meta["quant"][key][i].as_f64().unwrap() as f32);
-            shared_frames(&std::fs::read(path.join("anim_q.bin")).unwrap(),Some((bounds("min"),bounds("max"))))
+            shared_frames(&crate::animation_storage::read(&path,"anim_q.bin",meta["anims"].as_array().unwrap().iter().map(|a|a["offset"].as_u64().unwrap()+a["frames"].as_u64().unwrap()).max().unwrap()*meta["vertex_count"].as_u64().unwrap()*10).unwrap(),Some((bounds("min"),bounds("max"))))
         }).collect();
         assert!(frames.iter().all(|f|std::sync::Arc::ptr_eq(&frames[0],f)));
         let bytes=frames[0].q.len()*std::mem::size_of::<QVert>();
