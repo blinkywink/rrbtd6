@@ -103,6 +103,9 @@ pub fn bind(root: &Path, node: &mut Node) {
         let veteran=data["profile"]["veteranRank"].as_f64().unwrap_or(0.0)>0.0;
         node.set_active(&format!("{STATS}/TopInfo/PlayerRank"),!veteran);
         node.set_active(&format!("{STATS}/TopInfo/VeteranPlayerRank"),veteran);
+        if let Some(position)=node.find(&format!("{STATS}/TopInfo/PlayerRank")).map(|n|n.rt.pos){
+            if let Some(rank)=node.find_mut(&format!("{STATS}/TopInfo/VeteranPlayerRank")){rank.rt.pos=position;}
+        }
         node.set_active(&format!("{STATS}/Own"),true);
         node.set_active(&format!("{STATS}/Others"),false);
         node.set_active(&format!("{STATS}/Own/OnlineStatus"),false);
@@ -111,7 +114,7 @@ pub fn bind(root: &Path, node: &mut Node) {
         node.set_active("Canvas/PlayerStatsScreen/JewelBar/ContextSwitch",false);
         node.set_active("Canvas/PlayerStatsScreen/JewelBar/ContextSwitchButton",false);
 
-        node.set_text(&format!("{STATS}/OverallStats/StatCategoryDropdown/Text"),"Overall Stats");
+        if initializing{node.set_text(&format!("{STATS}/OverallStats/StatCategoryDropdown/Text"),"Overall Stats");}
         let medals=format!("{STATS}/Medals/MedalScroll/Viewport/MedalContainer");
         node.set_active(&format!("{medals}/MedalPrefab"),false);
         if initializing {
@@ -202,8 +205,7 @@ pub fn bind(root: &Path, node: &mut Node) {
             }
         }
         node.set_active(&format!("{STATS}/TopTowers/HeroContainer/FoundNothingTxt"),data["top"]["heroes"].as_array().is_some_and(|a|a.is_empty()));
-        // Edit controls require a separate local overlay and are intentionally inactive.
-        for name in ["NamedMonkeysMenu"] {node.hide_named(&[name]);}
+        bind_named_monkeys(node,data,initializing);
         return;
     }
     const PLAYER: &str = "MainMenuCanvas/MainMenu/PlayerInfo";
@@ -222,10 +224,45 @@ pub fn bind(root: &Path, node: &mut Node) {
     if let Some(name) = data["displayName"].as_str() {
         node.set_text(&format!("{PLAYER}/Name"), name);
     }
-    if let Some(rank) = data["profile"]["rank"].as_f64() {
-        node.set_text(&format!("{PLAYER}/LvlTxt"), &format!("{rank:.0}"));
+    let veteran=data["profile"]["veteranRank"].as_f64().unwrap_or(0.0)>0.0;
+    let rank=&data["profile"][if veteran{"veteranRank"}else{"rank"}];
+    if let Some(rank)=rank.as_f64(){
+        node.set_text(&format!("{PLAYER}/LvlTxt"),&number(rank));
+        if let Some(text)=node.find_mut(&format!("{PLAYER}/LvlTxt")).and_then(|n|n.txt.as_mut()){
+            text.auto=true;text.min=12.0;text.wrap=false;
+        }
     }
-    bind_xp(node,&format!("{PLAYER}/XpBar"),&data["rankProgress"]);
+    for (path,normal,vet) in [("LvlStar","LvlHolder","VeteranLvlHolder"),
+        ("XpBar","BarfillContainer","BarfillVeteranContainer"),("XpBar/Mask/InnerBar","BarfillBlue","BarfillPurple")]{
+        node.set_sprite(&format!("{PLAYER}/{path}"),Some(if veteran{vet}else{normal}));
+    }
+    bind_xp(node,&format!("{PLAYER}/XpBar"),if veteran{&data["rankProgress"]["veteran"]}else{&data["rankProgress"]});
+}
+
+const NAMED:&str="Canvas/PlayerStatsScreen/Stats/NamedMonkeysMenu";
+fn bind_named_monkeys(node:&mut Node,data:&serde_json::Value,initializing:bool){
+    let items=data["namedMonkeys"].as_array();
+    node.set_active(NAMED,items.is_some_and(|v|!v.is_empty()));
+    if !initializing{return;}
+    node.set_active(&format!("{NAMED}/OpenPurchaseNamedMonkeysBtn"),false);
+    node.set_active(&format!("{NAMED}/RenameMonkeyBtn"),false);
+    node.set_text(&format!("{NAMED}/Banner/Label"),"Named Monkeys");
+    let path=format!("{NAMED}/OptionScroll/Content");
+    if let Some(list)=node.find_mut(&path){
+        let Some(template)=list.children.first().cloned() else{return;};
+        list.children.clear();
+        for (i,item) in std::iter::once(None).chain(items.into_iter().flatten().map(Some)).enumerate(){
+            let mut row=template.clone();row.name=format!("Named{i}");row.active=true;
+            row.set_text("NamedMonkeyPanel/Text",item.and_then(|v|v["name"].as_str()).unwrap_or("All"));
+            row.set_sprite("NamedMonkeyPanel/Container/Icon",Some(item.and_then(|v|v["icon"].as_str()).unwrap_or("StatsIconAll")));
+            row.set_active("NamedMonkeyPanel/Selected",i==0);
+            list.children.push(row);
+        }
+    }
+}
+pub(super) fn named_monkey(index:usize)->Option<serde_json::Value>{
+    let state=PREVIEW.get()?.try_lock().ok()?;
+    state.data.as_ref()?["namedMonkeys"].as_array()?.get(index).cloned()
 }
 
 pub(crate) fn helper_project(root:&Path)->std::path::PathBuf {

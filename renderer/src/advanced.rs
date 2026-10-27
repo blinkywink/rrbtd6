@@ -57,6 +57,12 @@ pub struct Advanced {
     pub hide_social_season: bool,
     /// Start at the main menu, skipping the splash, loading and title screens.
     pub skip_startup: bool,
+    pub hide_perks:bool,
+    pub hide_double_cash:bool,
+    pub hide_fast_track:bool,
+    pub perks_enabled:bool,
+    pub double_cash_enabled:bool,
+    pub fast_track_enabled:bool,
 }
 
 impl Default for Advanced {
@@ -72,7 +78,8 @@ impl Default for Advanced {
             memory_opt: false,
             show_fps: false, fps_cap: 0, vsync: true, render_scale: 1.0, sharpen: true, msaa: 4, full_textures: false,
             hide_legends: false, hide_store: false, hide_race: false, hide_boss: false, hide_boss_rush: false,
-            hide_odyssey: false, hide_contested_territory: false, hide_social_season: false, skip_startup: false }
+            hide_odyssey: false, hide_contested_territory: false, hide_social_season: false, skip_startup: false,hide_perks:false,hide_double_cash:false,hide_fast_track:false,
+            perks_enabled:true,double_cash_enabled:false,fast_track_enabled:false }
     }
 }
 
@@ -98,7 +105,14 @@ impl Advanced {
         a.effects_scale = a.effects_scale.clamp(0.0, 1.0);
         a.stereo = a.stereo.clamp(0.0, 1.0);
         a.range_circle = a.range_circle.min(3);
+        a.disable_hidden_features();
         a
+    }
+
+    pub fn disable_hidden_features(&mut self){
+        if self.hide_perks{self.perks_enabled=false;}
+        if self.hide_double_cash{self.double_cash_enabled=false;}
+        if self.hide_fast_track{self.fast_track_enabled=false;}
     }
 
     /// The main menu event kinds turned off.
@@ -137,6 +151,9 @@ impl Advanced {
                 "Hides the Contested Territory button on the right of the main menu."),
             Row::Toggle("Hide Social Season Button", self.hide_social_season, "Hides the Social Season button on the right of the main menu."),
             Row::Toggle("Skip Startup Screen", self.skip_startup, "Go straight to the main menu instead of the startup screen."),
+            Row::Toggle("Hide Perks Button",self.hide_perks,"Turns Perks off, then hides the Perks controls."),
+            Row::Toggle("Hide Double Cash Button",self.hide_double_cash,"Turns Double Cash off, then hides its control."),
+            Row::Toggle("Hide Fast Track Button",self.hide_fast_track,"Turns Fast Track off, then hides its control."),
         ]
     }
 
@@ -156,8 +173,12 @@ impl Advanced {
             13 => self.hide_contested_territory = !self.hide_contested_territory,
             14 => self.hide_social_season = !self.hide_social_season,
             15 => self.skip_startup = !self.skip_startup,
+            16 => self.hide_perks=!self.hide_perks,
+            17 => self.hide_double_cash=!self.hide_double_cash,
+            18 => self.hide_fast_track=!self.hide_fast_track,
             _ => {}
         }
+        self.disable_hidden_features();
     }
 
     /// Slider row `i` moved to `t` (0..=1).
@@ -169,5 +190,24 @@ impl Advanced {
             5 => self.msaa = MSAA[stop_of(t, MSAA.len())],
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod hidden_features_tests{
+    use super::*;
+    #[test]
+    fn hiding_each_feature_switches_it_off_and_unhiding_does_not_reenable(){
+        let mut a=Advanced::default();
+        a.perks_enabled=true;a.double_cash_enabled=true;a.fast_track_enabled=true;
+        for i in 16..=18{a.toggle(i);}
+        assert!(!a.perks_enabled && !a.double_cash_enabled && !a.fast_track_enabled);
+        for i in 16..=18{a.toggle(i);}
+        assert!(!a.perks_enabled && !a.double_cash_enabled && !a.fast_track_enabled);
+    }
+    #[test]
+    fn loading_old_or_inconsistent_preferences_cannot_enable_hidden_features(){
+        let a=Advanced::load(&serde_json::json!({"advanced":{"hide_double_cash":true,"double_cash_enabled":true}}));
+        assert!(a.hide_double_cash);assert!(!a.double_cash_enabled);
     }
 }

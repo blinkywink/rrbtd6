@@ -1958,6 +1958,9 @@ pub struct EffectSpec {
     /// BehaviorMutator.dontRemoveOnBloonDegrade: kept when a MOAB-class bloon pops.
     #[serde(default)]
     pub keep_on_degrade: bool,
+    /// DamageOverTimeModel.damageModifierModels (DamageModifierForTag).
+    #[serde(default)]
+    pub tag_mods: Vec<TagMod>,
     /// DamageOverTimeModel.triggerImmediate: the first tick comes at once.
     #[serde(default)]
     pub trigger_immediate: bool,
@@ -1967,6 +1970,9 @@ pub struct EffectSpec {
     /// FreezeModel.applyAfterDamage: it goes on after the damage, on what the bloon is then.
     #[serde(default)]
     pub after_damage: bool,
+    /// AddBehaviorToBloonModel.dontCopy: a degrade's other children don't get it.
+    #[serde(default)]
+    pub dont_copy: bool,
     /// FreezeModel.bossImmunity: Bads and Minibosses aren't frozen.
     #[serde(default)]
     pub boss_immunity: bool,

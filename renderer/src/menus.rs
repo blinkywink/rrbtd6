@@ -166,7 +166,7 @@ fn box_blur(src: &[[f32; 3]], w: usize, h: usize, r: usize, horizontal: bool) ->
 }
 
 /// English.xml `<T id="..">text</T>` entries.
-fn load_loc(path: &Path) -> HashMap<String, String> {
+pub(crate) fn load_loc(path: &Path) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let Ok(s) = std::fs::read_to_string(path) else { return out };
     for part in s.split("<T id=\"").skip(1) {

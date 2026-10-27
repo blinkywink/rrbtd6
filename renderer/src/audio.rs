@@ -33,11 +33,10 @@ fn playlist(root: &std::path::Path) -> Vec<(String, String)> {
         .filter(|t| t["jukebox"] == true && t["free"] == true)
         .filter_map(|t| Some((t["id"].as_str()?.to_string(), t["loc"].as_str().unwrap_or("").to_string())))
         .collect();
-    if list.is_empty() {
-        FALLBACK_PLAYLIST.iter().map(|s| (s.to_string(), String::new())).collect()
-    } else {
-        list
-    }
+    let list=if list.is_empty(){FALLBACK_PLAYLIST.iter().map(|s|(s.to_string(),String::new())).collect()}else{list};
+    let settings:serde_json::Value=std::fs::read(root.join("settings.json")).ok().and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if let Some(ids)=settings["jukebox"].as_array(){ids.iter().filter_map(|id|list.iter().find(|(name,_)|id.as_str()==Some(name)).cloned()).collect()}
+    else{list}
 }
 pub const FAMILY_LIMIT: usize = 3;
 const FAMILY_GAP: f64 = 3.0 / 60.0;
@@ -61,6 +60,8 @@ pub struct Audio {
     all: Vec<f64>,
     music: Option<(usize, Clip, f64)>,
     playlist: Vec<(String, String)>,
+    music_enabled:bool,
+    requested_track:Option<usize>,
     pub sfx_volume: f32,
     pub music_volume: f32,
     /// Jukebox: repeat the current track / pick the next track at random.
@@ -107,7 +108,7 @@ impl Audio {
             playing: HashMap::new(),
             all: Vec::new(),
             music: None,
-            playlist: playlist(root),
+            playlist: playlist(root),music_enabled:true,requested_track:None,
             sfx_volume: DEFAULT_SFX,
             music_volume: DEFAULT_MUSIC,
             loop_track: false,
@@ -150,7 +151,7 @@ impl Audio {
 
     /// Keeps the playlist going: the next track starts when the current one ends.
     pub fn music(&mut self, now: f64) {
-        if self.music_volume <= 0.0 {
+        if self.music_volume <= 0.0 || !self.music_enabled || self.playlist.is_empty() {
             if let Some((_, c, _)) = self.music.take() {
                 stop_sound(&c.sound);
             }
@@ -162,7 +163,7 @@ impl Audio {
             Some((i, _, end)) if now >= *end => {
                 if self.loop_track {
                     *i
-                } else if self.shuffle {
+                } else if self.shuffle && n>1 {
                     // Any other track (time-seeded; display only, not the game's RNG).
                     (i + 1 + (now * 1000.0) as usize % (n - 1)) % n
                 } else {
@@ -170,7 +171,7 @@ impl Audio {
                 }
             }
             Some(_) => return,
-            None => 0,
+            None => self.requested_track.take().unwrap_or(0).min(n-1),
         };
         self.skip = 0;
         if let Some((_, c, _)) = self.music.take() {
@@ -187,6 +188,15 @@ impl Audio {
     pub fn stats(&self) -> (usize, usize, Option<&str>) {
         let ok = self.clips.values().filter(|c| c.is_some()).count();
         (ok, self.clips.len() - ok, self.track())
+    }
+
+    pub fn set_jukebox(&mut self,change:&crate::frontend::jukebox::Change){
+        let same_track=self.track().is_some_and(|id|change.tracks.get(change.selected).is_some_and(|(next,_)|next==id));
+        if !same_track || !change.playing{
+            if let Some((_,clip,_))=self.music.take(){stop_sound(&clip.sound);}
+        }else if let Some((index,_,_))=self.music.as_mut(){*index=change.selected;}
+        self.playlist=change.tracks.clone();self.music_enabled=change.playing;
+        self.requested_track=Some(change.selected);self.skip=0;
     }
 
     /// Jukebox previous / next.

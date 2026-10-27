@@ -787,11 +787,10 @@ async fn game_main() {
     let mut options_back_test=if std::env::var_os("RRBTD6_AUTOTEST").is_some(){std::env::var("RRBTD6_OPTIONS_BACK_FRAME").ok().and_then(|s|s.parse::<u32>().ok())}else{None};
     let mut front = frontend::FrontEnd::new(&root);
     if startup.is_some() {
-        let preparation = if std::env::var_os("RRBTD6_NO_TITLE_PRELOAD").is_none() {
-            hud.as_ref().map(|h| h.sprites.prepare(&startup::title_sprites(&root)))
-        } else { None };
+        let mut names=boot!(8,"Trimming the Gardens...",front.prepare_home_entry());
+        if std::env::var_os("RRBTD6_NO_TITLE_PRELOAD").is_none(){names.extend(startup::title_sprites(&root));}
+        let preparation=hud.as_ref().map(|h|h.sprites.prepare(&names));
         let (plane, prepared) = boot!(8, "Trimming the Gardens...", async {
-            front.prepare_home().await;
             let plane = anim::AnimModel::load(&root.join("models/startup_plane")).await;
             let prepared = match preparation { Some(work) => work.await, None => Vec::new() };
             (plane, prepared)
@@ -1225,6 +1224,10 @@ async fn game_main() {
                         h.menus.volumes = v;
                     }
                     save_settings(&root, v);
+                }
+                Some(frontend::FrontAction::Jukebox(change))=>{
+                    save_setting(&root,"jukebox",serde_json::json!(change.tracks.iter().map(|(id,_)|id).collect::<Vec<_>>()));
+                    audio.set_jukebox(&change);
                 }
                 Some(frontend::FrontAction::Advanced(a)) => {
                     adv = a;

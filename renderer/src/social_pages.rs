@@ -35,6 +35,8 @@ impl SocialPage {
         }).collect();
         // Toggle.graphic ("Off" slash) is shown only while isOn; both scene toggles start off.
         if file=="LinkFriendsUI" {
+            node.set_active(&format!("{FRIEND_CODE}/CopyBtn/IosShareImg"),false);
+            node.set_active(&format!("{FRIEND_CODE}/CopyBtn/AndroidShareImg"),false);
             for toggle in [format!("{FRIEND_REQUESTS}/Off"),format!("{FRIEND_CODE}/HideCodeToggle/Off")] {node.set_active(&toggle,false);}
         }
         let mut page=Self {config,runtime,modal:None,motion:None,fields,friends:None,file:file.to_owned()};
@@ -91,6 +93,9 @@ impl SocialPage {
         let Some((show,requests,code,stamp))=super::account_preview::friends_profile() else {return};
         if self.friends==Some(stamp) {return;}
         self.friends=Some(stamp);
+        let show=show && !code.is_empty();
+        node.set_active(&format!("{FRIEND_CODE}/CopyBtn"),!code.is_empty());
+        node.set_active(&format!("{FRIEND_CODE}/HideCodeToggle"),!code.is_empty());
         node.set_active(&format!("{FRIEND_CODE}/FriendCodeGroup"),show);
         node.set_active(&format!("{FRIEND_CODE}/FriendCodeHidden"),!show);
         node.set_active(&format!("{FRIEND_REQUESTS}/Off"),requests);

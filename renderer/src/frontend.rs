@@ -28,6 +28,8 @@ mod event_details;
 pub(crate) mod home_events;
 #[path = "profile_browser.rs"]
 mod profile_browser;
+#[path = "jukebox.rs"]
+pub(crate) mod jukebox;
 #[path = "button_motion.rs"]
 mod button_motion;
 pub use menu_pages::MenuPage;
@@ -96,6 +98,7 @@ pub enum FrontAction {
     Coop(rrbtd6_coop::MatchStart),
     Race(serde_json::Value),
     Quit,
+    Jukebox(jukebox::Change),
     ReturnToPause,
     SelectHero(String),
     SelectSkin { hero: String, skin: String },
@@ -909,9 +912,31 @@ impl FrontEnd {
         }
     }
 
+    pub(crate) async fn prepare_home_entry(&mut self)->Vec<String>{
+        self.ensure();
+        self.prepare_home().await;
+        if let Some(world)=self.world.as_mut(){
+            while self.world_motion.preparing(){
+                self.world_motion.update(&self.root,world);
+                if self.world_motion.preparing(){next_frame().await;}
+            }
+        }
+        fn visit(n:&Node,names:&mut Vec<String>){
+            if !n.active{return;}
+            if let Some(name)=n.img.as_ref().filter(|i|i.enabled).and_then(|i|i.sprite.as_ref()){names.push(name.clone());}
+            for child in &n.children{visit(child,names);}
+        }
+        let mut names=Vec::new();
+        if let Some(node)=&self.main{visit(node,&mut names);}
+        if let Some(node)=&self.fore{visit(node,&mut names);}
+        names.sort();names.dedup();names
+    }
+
     fn prepare_screen_motion(&mut self){
         if self.motion_screen==Some(self.screen){return;}
+        let map_entrance=self.motion_screen.is_none() || self.motion_screen==Some(Screen::Main) || self.motion_screen==Some(Screen::Menu(MenuPage::Social));
         self.motion_screen=Some(self.screen);self.motion_began=None;self.motion_pending=true;
+        if self.screen==Screen::Maps && !map_entrance{self.motion_pending=false;}
         if self.screen==Screen::Maps{self.map_group_key=None;self.map_group_began=None;}
         if self.screen==Screen::Advanced {
             self.adv_expanded=[false;3];self.adv_scroll=0.0;self.drag=None;
@@ -1169,6 +1194,7 @@ impl Hud {
             Screen::Menu(page) => {
                 let mut back=back;
                 if let Some(menu) = fe.pages.get_mut(&page) {
+                    if let Some(change)=menu.jukebox.as_mut().and_then(|j|j.pending.take()){out=Some(FrontAction::Jukebox(change));}
                     if back && menu.dismiss_search() {back=false;}
                     menu.animate();
                     menu.update_scroll(ScrollInput { pointer:mouse_position().into(),pressed:!support&&is_mouse_button_pressed(MouseButton::Left),
@@ -1300,6 +1326,7 @@ impl Hud {
                     MenuPage::KnowledgeTree=>Screen::Menu(MenuPage::Knowledge),
                     MenuPage::CoopLobby|MenuPage::QuickMatch|MenuPage::JoinMatch|MenuPage::Teams=>Screen::Menu(MenuPage::Social),
                     MenuPage::Friends|MenuPage::Perks=>fe.social_from,
+                    MenuPage::Jukebox=>Screen::Settings,
                     p if p.event_spec().is_some()=>Screen::Menu(p.event_parent()),
                     _=>Screen::Main,
                 }); }
@@ -1598,14 +1625,17 @@ impl Hud {
                     let (_, wheel) = mouse_wheel();
                     let right = m.clicked(&format!("{MAPS}/PageRightBtn/Button")) || is_key_pressed(KeyCode::Right) || wheel < 0.0;
                     let left = m.clicked(&format!("{MAPS}/PageLeftBtn/Button")) || is_key_pressed(KeyCode::Left) || wheel > 0.0;
-                    if right && fe.page + 1 < pages {
-                        fe.page += 1;
+                    if right{
+                        if fe.page+1<pages{fe.page+=1;}
+                        else if fe.tier+1<TIERS.len(){fe.tier+=1;fe.page=0;}
+                    }else if left{
+                        if fe.page>0{fe.page-=1;}
+                        else if fe.tier>0{
+                            fe.tier-=1;fe.page=fe.list.iter().filter(|(map,_)|map.difficulty as usize==fe.tier).count().div_ceil(6).saturating_sub(1);
+                        }
                     }
-                    if left && fe.page > 0 {
-                        fe.page -= 1;
-                    }
-                    m.set_active(&format!("{MAPS}/PageRightBtn"), fe.page + 1 < pages);
-                    m.set_active(&format!("{MAPS}/PageLeftBtn"), fe.page > 0);
+                    m.set_active(&format!("{MAPS}/PageRightBtn"),fe.page+1<pages || fe.tier+1<TIERS.len());
+                    m.set_active(&format!("{MAPS}/PageLeftBtn"),fe.page>0 || fe.tier>0);
                 }
                 if back {
                     next = Some(if fe.coop_setup{Screen::Menu(MenuPage::Social)}else{Screen::Main});
@@ -1625,6 +1655,9 @@ impl Hud {
                 }
             }
             Screen::Settings => {
+                if m_click(fe.settings.as_ref(),&format!("{SETTINGS}/Panel/MainPanel/MainSettings/Jukebox/JukeboxButton")){
+                    next=Some(Screen::Menu(MenuPage::Jukebox));
+                }
                 if let Some(m) = fe.settings.as_mut() {
                     // Sliders: press on one and drag (UnityEngine.UI.Slider, left to right).
                     let (mx, _) = mouse_position();
@@ -1916,6 +1949,19 @@ impl Hud {
             }
         }
         if let Some(index) = browse { self.menus.open_upgrades(index); }
+        if let Some(fore)=fe.fore.as_mut(){
+            for (name,hidden,on) in [("DoubleCashMode",fe.adv.hide_double_cash,fe.adv.double_cash_enabled),
+                ("FastTrackMode",fe.adv.hide_fast_track,fe.adv.fast_track_enabled),
+                ("SocialSeasonPerks",fe.adv.hide_perks,fe.adv.perks_enabled)]{
+                let path=format!("{FORE}/ExtraSettings/{name}");
+                fore.set_active(&path,!hidden);fore.set_active(&format!("{path}/Tick"),on);
+                if !hidden && fore.clicked(&path){
+                    match name{"DoubleCashMode"=>fe.adv.double_cash_enabled=!on,"FastTrackMode"=>fe.adv.fast_track_enabled=!on,_=>fe.adv.perks_enabled=!on}
+                    out=Some(FrontAction::Advanced(fe.adv.clone()));
+                }
+            }
+            if fe.adv.hide_perks{fore.set_active(&format!("{FORE}/PerksButton"),false);}
+        }
         if let Screen::Menu(page)=fe.screen{if let Some(page)=fe.pages.get_mut(&page){page.warm(&mut self.sprites);}}
         let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h: canvas.y, clip: None };
         let node = match fe.screen {
@@ -1940,7 +1986,7 @@ impl Hud {
                 for (path,on) in [("CashInfo",panel.money),("CashInfo/MoreBtn",panel.buy_money),
                     ("Knowledge",panel.knowledge),("Knowledge/MorePointsBtn",panel.buy_knowledge),
                     ("Back",panel.back),("ChangeHeroButton",panel.change_hero),("Friends",panel.friends),
-                    ("ExtraSettings",panel.extras),("PerksButton",panel.perks),("Heading",!panel.heading.is_empty())] {
+                    ("ExtraSettings",panel.extras),("PerksButton",panel.perks && !fe.adv.hide_perks),("Heading",!panel.heading.is_empty())] {
                     fore.set_active(&format!("{FORE}/{path}"),on);
                 }
                 fore.set_active(&format!("{FORE}/CashInfo/DEBUGBtn"),false);
@@ -1950,7 +1996,7 @@ impl Hud {
                 if fe.motion_pending{button_motion::warm_visible(n,ctx.sprites);}
                 buttons.update(n);
                 if fe.screen==Screen::Maps && fe.map_group_key!=Some((fe.tier,fe.page)){
-                    if fe.map_group_key.is_some(){button_motion::warm_visible(n,ctx.sprites);fe.map_group_began=Some(get_time());}
+                    if fe.map_group_key.is_some(){button_motion::warm_visible(n,ctx.sprites);}
                     fe.map_group_key=Some((fe.tier,fe.page));
                 }
                 if fe.screen==Screen::Maps{if let Some(start)=fe.map_group_began{

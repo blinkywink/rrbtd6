@@ -140,3 +140,10 @@ $PY tools/assets/export_bloon_models.py "$GAME"
 echo "== shrink baked animations (idle + attack clips, quantized)"
 $PY tools/assets/compact_anims.py local_extracted/models
 echo "== done. Play with: cargo run -p btd6-game --release"
+
+# Native music browser and its external track row.
+$PY tools/assets/dump_ui_prefab.py "$GAME" local_extracted/ui/prefabs \
+  "scenefile:Assets/UI - New/Scenes/JukeboxUI.unity=JukeboxUI" \
+  "field:JukeboxScreen/JukeBoxScreen.trackItemPrefab=JukeboxTrack"
+$PY tools/assets/export_ui_runtime.py "$GAME" local_extracted/ui/runtime JukeboxUI
+$PY tools/assets/export_menu_chrome.py "$GAME" local_extracted

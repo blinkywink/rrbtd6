@@ -36,6 +36,8 @@ places the clone is meant to differ, by the owner's request.
   - **Hide Race / Boss / Boss Rush / Odyssey / Contested Territory / Social Season Button** —
     one toggle per event button on the right of the main menu; the remaining buttons move up to
     close the gap.
+- **Hide Perks / Double Cash / Fast Track Button** switches the respective client preference
+  off before hiding its control; unhiding does not switch it back on.
 - **Skip Startup Screen** (off by default) — go straight to the main menu instead of the Ninja
   Kiwi splash, loading screen and title screen.
 - Planned settings (added once the screens they skip exist):

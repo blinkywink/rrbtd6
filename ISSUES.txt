@@ -7,6 +7,13 @@ or "CAN'T FIX YET" (with why). A screenshot of the real game next to ours helps 
 
 OPEN
 ----
+- Double Cash / Fast Track / Perks: foreground toggles now save client preferences, and the
+  new UI hide options switch those preferences off first. Gameplay effects still need native
+  implementation / validation; these controls do not upload changes to the official account.
+- Friends: platform-share icon overlap fixed, missing-code controls hidden. Downloading the
+  actual friends list / friend code and sending requests are still not wired.
+- Jukebox: native screen, free tracks and local playlist/playback controls wired. Owned Trophy
+  Store music, playlist reorder and exact preview/resume behavior still need work.
 - Tower models (your list: Beast Handler sticks / headpieces / eyes, Dart 4xx-5xx eyes, Dartling
   broken, Desperado gun, Druid capes, Mortar 004/005 holes, Ninja 200/500 eyes, Spike Factory 040
   green, Super Monkey eyes / arms / bodies, Tack Ring of Fire, Wizard eyes, Engineer sentries not
@@ -70,6 +77,15 @@ OPEN
 
 DONE
 ----
+- Profile avatar/banner tabs were transparent: keep their solid blue background under the
+  selected highlight, as the original prefab does.
+- Veteran rank replaces the base rank on home; on Profile it uses the normal rank position.
+- Profile now lists the downloaded monkey names in the native sidebar; selecting one shows
+  its lifetime counters, and All restores the overall stats.
+- Map arrows now cross difficulty categories. Paging no longer starts the group animation;
+  the native entrance is used when opening Maps from home/social.
+- Start-to-home: menu art and animated island models now prepare during initial loading.
+  One local first-menu CPU check: max 27.1 ms before, 8.3 ms after (not a total FPS benchmark).
 - Brief black flash after entering Monkey Meadow and placing a tower: reproduced three blank
   presentations during a cold Bomb Shooter load. Required gameplay assets now finish before
   presenting; prepared loads remain incremental. Redundant base models are skipped when tier

@@ -111,6 +111,10 @@ pub(super) struct HomeMotion {
     vegetation:Vec<SkinClip>,
 }
 impl HomeMotion {
+    pub(super) fn preparing(&self)->bool{
+        !self.started || !self.pending.is_empty() || self.vegetation_pending.is_some()
+            || self.triggers.iter().any(|t|t.pending.is_some())
+    }
     pub(super) fn update(&mut self, root: &Path, world: &mut Model) {
         if !self.started {
             self.started = true;

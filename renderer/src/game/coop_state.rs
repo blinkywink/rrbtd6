@@ -75,9 +75,9 @@ impl Game{
                 feed!(h,e.id,e.frames_left,e.layers,e.owner);
                 match &e.kind{
                     EffectKind::Slow{mult,glue}=>{feed!(h,0u8,mult,glue);},EffectKind::Freeze=>1u8.feed(h),
-                    EffectKind::Dot{damage,interval,tick,immune}=>{feed!(h,2u8,damage,interval,tick,immune);},
+                    EffectKind::Dot{damage,interval,tick,immune,..}=>{feed!(h,2u8,damage,interval,tick,immune);},
                     EffectKind::Brittle{damage}=>{feed!(h,3u8,damage);},
-                    EffectKind::Emit{interval,tick,..}=>{feed!(h,4u8,interval,tick);},EffectKind::PopEmit{..}=>5u8.feed(h),
+                    EffectKind::Emit{interval,tick,..}=>{feed!(h,4u8,interval,tick);},EffectKind::PopEmit{..}=>5u8.feed(h),EffectKind::DestroyEmit{..}=>13u8.feed(h),
                     EffectKind::Mark{damage_mult,cash_mult}=>{feed!(h,6u8,damage_mult,cash_mult);},EffectKind::Strip=>7u8.feed(h),
                     EffectKind::Worth{per_tier}=>{feed!(h,8u8,per_tier);},
                     EffectKind::Trance{centre,radius,angle,rate}=>{feed!(h,9u8,centre,radius,angle,rate);},EffectKind::Cooldown=>10u8.feed(h),

@@ -324,6 +324,8 @@ def main():
                                     "layers": sf.get("layers", 1), "damage": df["damage"], "interval": df["interval"],
                                     "immune": df.get("immuneBloonProperties", 0),
                                     "trigger_immediate": bool(df.get("triggerImmediate", False)),
+                                    "tag_mods": [tag_mod(m) for m in items(df.get("damageModifierModels"))
+                                                 if m and m["type"] == "DamageModifierForTagModel"],
                                     "initial_delay": df.get("initialDelay", 0.0),
                                     # Mutable.AddMutator: an isUnique mutator the bloon already has
                                     # is left as it is (no new timer, damage or tick).
@@ -368,6 +370,16 @@ def main():
                                     "projectile": projectile(deref(df["projectile"]), depth + 1),
                                     "emission": emission(deref(df.get("emission"))),
                                     "ignore_same_frame": bool(df.get("ignoreSameFrameDegrade", False))})
+                # EmitOnDestroyModel on a bloon (Glue Liquefier's linger): when the bloon is
+                # destroyed its projectile comes out there. dontCopy: degrading, only the bloon
+                # itself (the first child) keeps it.
+                if d and d["type"] == "EmitOnDestroyModel" and depth < 3 and deref(d["f"].get("projectile")):
+                    df = d["f"]
+                    effects.append({"kind": "destroy_emit", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
+                                    "layers": sf.get("layers", 1),
+                                    "projectile": projectile(deref(df["projectile"]), depth + 1),
+                                    "emission": emission(deref(df.get("emission"))),
+                                    "dont_copy": bool(sf.get("dontCopy", False))})
                 if d and d["type"] == "ProjectileOverTimeModel" and depth < 3:
                     df = d["f"]
                     effects.append({"kind": "emit", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),

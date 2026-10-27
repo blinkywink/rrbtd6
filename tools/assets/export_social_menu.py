@@ -19,6 +19,8 @@ for file,kind in [('LinkFriendsUI','LinkFriendsScreen'),('TeamsBrowserUI','Teams
         for button,panel in pairs:config['tabs'].append({'button':ref(button),'panel':ref(panel),'highlight':ref(button)+'/BgSelected'})
         for i,tab in enumerate(config['tabs']):active(tab['panel'],i==0);active(tab['highlight'],i==0)
     if file=='LinkFriendsUI':
+        active('Canvas/LinkFriends/Container/TopBar/FriendCodePanal/CopyBtn/IosShareImg',False)
+        active('Canvas/LinkFriends/Container/TopBar/FriendCodePanal/CopyBtn/AndroidShareImg',False)
         tabs([('friendsToggle','friendsTab'),('requestsToggle','requestsTab')])
         for tab,key in zip(config['tabs'],('FriendScreenFriendText','FriendScreenRequestText')):
             tab['text']=[{'path':ref('foundNothingText'),'text':loc[key]}]
