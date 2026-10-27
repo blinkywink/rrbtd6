@@ -1,45 +1,37 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#0875c5"><meta name="description" content="RustTD6 is a fan-made Bloons TD 6 engine in Rust. Download the Windows client and get started with your own copy of BTD6.">
-<title>RustTD6 · Fan-made BTD6 client</title>
-<link rel="canonical" href="https://rusttd6.com/"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#ffffff">
+<meta name="description" content="RustTD6 is a free, fan-made BTD6 client rebuilt in Rust. Download the Windows installer. Requires your own copy of Bloons TD 6.">
+<title>RustTD6 — Fan-made BTD6 client</title>
+<link rel="canonical" href="https://rusttd6.com/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/fonts/LuckiestGuy-Regular.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
-<header><span class="fan-badge">FAN-MADE · OPEN SOURCE</span><a class="source-button" href="https://github.com/blinkywink/rrbtd6">Source code ↗</a></header>
-<main id="main">
-<section class="intro" aria-labelledby="title">
-<p class="fan">Unofficial BTD6 client</p>
-<h1 id="title"><span>RUST</span><span>TD<span class="six">6</span></span></h1>
-<p class="subtitle">Bloons TD 6, rebuilt in Rust.</p>
-<p class="description">High FPS. More customization.<br>A new engine, built in Rust.</p>
-<a class="button download" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">Download for Windows <span aria-hidden="true">↓</span></a>
-<p class="release" data-release>Latest GitHub release</p>
-<p class="requires">Requires your own installed copy of BTD6.</p>
-</section>
-<section class="panel setup" id="install" aria-labelledby="setup-title">
-<h2 id="setup-title">Getting started</h2>
+<main>
+<h1><img src="/logo.png" alt="RustTD6" width="1514" height="872"></h1>
+<p class="tagline">BTD6. Rebuilt in Rust.</p>
+<p class="description">A free, fan-made client.<br>Uncapped FPS. Customizable UI. Open source.</p>
+<a class="download" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">Download <span aria-hidden="true">↓</span></a>
+<p class="platform">Windows · Requires your own copy of BTD6</p>
+<details>
+<summary>How to install <span aria-hidden="true">+</span></summary>
 <ol>
-<li><strong>Prepare BTD6</strong><p>Install <a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> in your Windows copy of BTD6, then run the game once.</p></li>
-<li><strong>Add the installer</strong><p>Download <a href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">RRBTD6Installer.dll</a> and put it in BTD6's <code>Mods</code> folder.</p></li>
-<li><strong>Launch BTD6</strong><p>Choose where to install RustTD6. The launcher downloads the client and tools, then prepares assets from your game. Completed steps can resume.</p></li>
+<li>Install <a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> in BTD6. Run it once.</li>
+<li>Put the downloaded <code>RRBTD6Installer.dll</code> in BTD6's <code>Mods</code> folder.</li>
+<li>Open BTD6 and choose an install folder. The launcher handles the rest.</li>
 </ol>
-<div class="requirements"><p><strong>Free space</strong>Being measured</p><p><strong>First setup</strong>Varies by PC</p></div>
-<p class="fine">The download is small; preparing local game assets is the large part. We are measuring clean-install size and time. Assets stay on your PC, and setup shows progress.</p>
-<details><summary>Why is it bigger than BTD6?</summary><p>BTD6 stores compressed assets. This prototype currently expands animations and audio into larger files for its own engine. That storage overhead needs more work. Temporary bundle caches are removed after successful setup.</p><p data-client-size>Python and extraction tools download during setup.</p></details>
-<a class="release-link" href="https://github.com/blinkywink/rrbtd6/releases/latest">Release notes &amp; other downloads ↗</a>
-</section>
-<section class="panel about" aria-labelledby="about-title">
-<h2 id="about-title">What's different?</h2>
-<ul class="features">
-<li><strong>Performance</strong><span>Uncapped FPS, less memory use, and ongoing work on frame spikes.</span></li>
-<li><strong>Make it yours</strong><span>Graphics options, custom hotkeys, and UI settings.</span></li>
-<li><strong>Open source</strong><span>Explore the code and help build it. More mod tooling is planned.</span></li>
-</ul>
-<p class="notice">Still in development. Some gameplay and menus are incomplete. Existing BTD6 mods and official co-op aren't supported.</p>
-</section>
+<p class="setup-note">First setup prepares assets from your game. Time and storage vary; clean-install measurements are pending.</p>
+</details>
+<p class="development">In development. Some features are unfinished.</p>
 </main>
-<footer><p>RustTD6 is fan-made and not affiliated with or endorsed by Ninja Kiwi.<br>Bloons TD 6 and its characters belong to Ninja Kiwi.</p><a href="https://github.com/blinkywink/rrbtd6/issues">Report a bug</a><span aria-hidden="true"> · </span><a href="https://github.com/blinkywink/rrbtd6">Source code</a></footer>
-</body></html>
+<footer>
+<nav aria-label="Project links"><a href="https://github.com/blinkywink/rrbtd6">GitHub</a><a href="https://github.com/blinkywink/rrbtd6/releases/latest">Releases</a></nav>
+<p>Unofficial fan project. Not affiliated with Ninja Kiwi.</p>
+</footer>
+</body>
+</html>
