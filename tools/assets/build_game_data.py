@@ -102,6 +102,18 @@ def main():
         n = keyed.get(guid or "") or shifted.get(guid or "") or prefabs.get(guid or "") or ""
         return n[:-len(".prefab")] if n.endswith(".prefab") else None
 
+    def fx_list(behaviors, *kinds):
+        """[effect prefab name, scale] of each behaviour of these types: its effectModel's
+        assetId (EffectModel) as a particle effect under local_extracted/effects."""
+        out = []
+        for b in behaviors:
+            if b and any(b["type"] == k or b["type"].endswith("_" + k) for k in kinds):
+                em = deref(b["f"].get("effectModel"))
+                name = prefab_name(em["f"].get("assetId")) if em else None
+                if name:
+                    out.append([name, em["f"].get("scale", 1.0) or 1.0])
+        return out
+
     def model3d(guid):
         n = prefab_name(guid) or ""
         return n if "3D" in n else None
@@ -549,6 +561,19 @@ def main():
             "on_exhaust": [],
             "on_contact": [],
             "instant": bool(pb.get("InstantModel")),
+            # Effects (visual only): CreateEffectOnContactModel at each hit, CreateEffectOnExhausted /
+            # ExhaustFraction when its pierce runs out, CreateEffectOnExpireModel when it goes.
+            "contact_fx": fx_list(items(f["behaviors"]), "CreateEffectOnContactModel"),
+            "exhaust_fx": fx_list(items(f["behaviors"]), "CreateEffectOnExhaustedModel", "CreateEffectOnExhaustFractionModel"),
+            "expire_fx": fx_list(items(f["behaviors"]), "CreateEffectOnExpireModel"),
+            # CreateLightningEffectModel (Druid lightning): a bolt (one of displayPaths, display GUIDs)
+            # drawn along each jump for lifeSpan seconds (visual only).
+            "bolts": next(({"displays": [d for d in (deref(x["f"].get("displayPaths")) or []) if isinstance(d, str)],
+                            "life": x["f"].get("lifeSpan", 0.3)}
+                           for x in items(f["behaviors"]) if x and x["type"] == "CreateLightningEffectModel"), None),
+            # InstantModel.destroyIfInvalid / dontFollowTarget.
+            "instant_destroy": bool(pb.get("InstantModel") and pb["InstantModel"][0]["f"].get("destroyIfInvalid")),
+            "instant_once": bool(pb.get("InstantModel") and pb["InstantModel"][0]["f"].get("dontFollowTarget")),
             "retarget": None,
             "hit_sounds": behavior_sounds(items(f["behaviors"]), "CreateSoundOnProjectileCollisionModel", SOUND_KEYS),
             "expire_sounds": behavior_sounds(items(f["behaviors"]), "CreateSoundOnProjectileExpireModel", SOUND_KEYS),
@@ -695,7 +720,8 @@ def main():
             # CreateProjectileOnExpireModel (First Strike's strike): spawned where it expires; a
             # target-only one inherits the expiring projectile's target.
             out["on_exhaust"] += [{"projectile": projectile(deref(ce["f"]["projectile"]), depth + 1),
-                                   "emission": emission(deref(ce["f"].get("emission"))), "expire": True}
+                                   "emission": emission(deref(ce["f"].get("emission"))), "expire": True,
+                                   "use_target": bool(ce["f"].get("useTargetPosition"))}
                                   for ce in pb.get("CreateProjectileOnExpireModel", []) if deref(ce["f"].get("projectile"))]
             # DestroyWhenCollidingWithModel (DanDMonke's net trap): after collisionCount contacts
             # it goes, firing subProjectile (as pierce running out).
@@ -745,6 +771,16 @@ def main():
         return out
 
     def emission(e):
+        out = emission_kind(e)
+        # EmissionRotationOffProjectileDirectionModel (Airburst Darts): from a projectile, the
+        # shots turn off its direction.
+        if e is not None:
+            rd = next((x["f"] for x in items(e["f"].get("behaviors")) if x and x["type"] == "EmissionRotationOffProjectileDirectionModel"), None)
+            if rd is not None:
+                out["dir_off"] = [rd.get("startingOffset", 0.0), rd.get("angleInBetween", 0.0), 1.0 if rd.get("alwaysCentre") else 0.0]
+        return out
+
+    def emission_kind(e):
         if e is None:
             return {"kind": "Single", "count": 1}
         f = e["f"]
@@ -928,6 +964,18 @@ def main():
                                 "custom_start": w["f"].get("customStartCooldown", 0.0),
                                 "max_subs": max_subs,
                                 "eject": [w["f"].get("ejectX", 0.0), w["f"].get("ejectY", 0.0), w["f"].get("ejectZ", 0.0)],
+                                # EjectEffectModel / AlternatingEjectEffectModel: the muzzle effect at
+                                # the eject point on each throw (visual only).
+                                "eject_fx": fx_list(items(w["f"].get("behaviors")), "EjectEffectModel", "AlternatingEjectEffectModel", "EjectEffectWithOffsetsModel"),
+                                # LineEffectModel (Ray of Doom): the beam display (lineDisplayPath, a
+                                # projectile-style display GUID) tiled every lineDisplayLength from the
+                                # eject point, to the map's edge when isLineDisplayEndless; effects at
+                                # its start and end (visual only).
+                                "line_fx": next(({"beam": (deref(x["f"].get("lineDisplayPath")) or {}).get("f", {}).get("assetPath"),
+                                                  "len": x["f"].get("lineDisplayLength", 0.0), "endless": bool(x["f"].get("isLineDisplayEndless")),
+                                                  "start": prefab_name((deref(x["f"].get("effectAtStart")) or {}).get("f", {}).get("assetId")),
+                                                  "end": prefab_name((deref(x["f"].get("effectAtEnd")) or {}).get("f", {}).get("assetId"))}
+                                                 for x in items(w["f"].get("behaviors")) if x and x["type"] == "LineEffectModel"), None),
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
                                 "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit,
@@ -1606,6 +1654,8 @@ def main():
                 # PreEmptiveStrikeLauncherModel (Sub x-5-x): a strike at each MOAB-class bloon.
                 "preempt": next((projectile(deref(b["f"]["projectileModel"])) for b in items(tobj["f"]["behaviors"])
                                  if b and b["type"] == "PreEmptiveStrikeLauncherModel" and deref(b["f"].get("projectileModel"))), None),
+                "preempt_offset": next(([b["f"].get("throwOffsetX", 0.0), b["f"].get("throwOffsetY", 0.0), b["f"].get("throwOffsetZ", 0.0)]
+                                        for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "PreEmptiveStrikeLauncherModel"), [0.0, 0.0, 0.0]),
                 # PlacementAreaTypeRangeBuffModel (Mermonkey): range x this when placed on water.
                 # ChurchillBaseRotationModel (Apex Plasma Master): the base turns to the turret.
                 "base_rotation": any(b and b["type"] == "ChurchillBaseRotationModel" for b in items(tobj["f"]["behaviors"])),

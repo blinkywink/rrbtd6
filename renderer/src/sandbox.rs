@@ -1,6 +1,8 @@
 //! Sandbox mode's in-game bloon menu (SandboxBloonsMenu prefab, opened with the shop's
 //! ToggleBloons button): a button per bloon type, camo / regrow / fortified toggles, Count and
 //! Spacing fields, Set Round, and destroy bloons / monkeys and reset cooldowns / damage.
+//! It slides in and out with its SandBoxSlideOut animator (BloonMenu.Show / Hide), and stays
+//! slid out while the upgrade menu is open over it (BloonMenu.hideExternal).
 
 use crate::hud::{Action, Hud};
 use crate::uitree::{draw_tree, Ctx, Node, R};
@@ -10,9 +12,10 @@ use std::path::Path;
 const MENU: &str = "SandboxContainer/Layout";
 const LIST: &str = "SandboxContainer/Layout/BloonsScroll/Viewport/BloonList";
 /// The bloon buttons, in the game's order (BloonMenu: base types; the toggles add variants).
-pub const BLOONS: [&str; 17] = [
+/// TestBloon / TestBloonMoab (999999 / 100000000 health, no leak damage) close the list.
+pub const BLOONS: [&str; 19] = [
     "Red", "Blue", "Green", "Yellow", "Pink", "Black", "White", "Purple", "Lead", "Zebra", "Rainbow", "Ceramic",
-    "Moab", "Bfb", "Zomg", "Ddt", "Bad",
+    "Moab", "Bfb", "Zomg", "Ddt", "Bad", "TestBloon", "TestBloonMoab",
 ];
 
 /// What the menu asks the game to do.
@@ -58,6 +61,10 @@ pub struct SandboxUi {
     round: String,
     /// The text field being typed into.
     editing: Option<Field>,
+    /// SandboxBloonsMenu's animators (ui/runtime), paths relative to the menu.
+    runtime: serde_json::Value,
+    /// Seconds into SandboxSlideOutOpen: 0 slid out, SLIDE in; it runs back to hide.
+    slide: f32,
     scroll: f32,
     /// The variant toggles the button icons were last set for.
     icons_for: Option<(bool, bool, bool)>,
@@ -77,6 +84,12 @@ fn bloon_icon(game: &crate::game::Game, name: &str, camo: bool, regrow: bool, fo
 impl SandboxUi {
     pub fn load(prefabs: &Path) -> Self {
         let mut menu = Node::load(&prefabs.join("SandboxBloonsMenu.json"));
+        // The prefab export names bindings from the menu itself; Node paths start below it.
+        let runtime = prefabs.parent().map(|ui| ui.join("runtime/SandboxBloonsMenu.json"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|text| text.replace("\"path\": \"SandboxBloonsMenu/", "\"path\": \""))
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
         let button = Node::load(&prefabs.join("SpawnBloonButton.json"));
         if let Some(m) = menu.as_mut() {
             // "Place crosspaths" and the variants list aren't part of the plain sandbox menu.
@@ -108,6 +121,8 @@ impl SandboxUi {
             spacing: "1".into(),
             round: "1".into(),
             editing: None,
+            runtime,
+            slide: 0.0,
             scroll: 0.0,
             icons_for: None,
         }
@@ -141,14 +156,30 @@ fn field_path(f: Field) -> &'static str {
 }
 
 impl Hud {
-    /// The sandbox bloon menu over the shop; returns the game actions clicked.
-    pub fn draw_sandbox(&mut self, game: &crate::game::Game, full: R, canvas_h: f32, s: f32, out: &mut Vec<Action>) {
+    /// The sandbox bloon menu over the shop; returns the game actions clicked. `hide`: the
+    /// upgrade menu is open on its side.
+    pub fn draw_sandbox(&mut self, game: &crate::game::Game, full: R, canvas_h: f32, s: f32, hide: bool, out: &mut Vec<Action>) {
         let ui = &mut self.sandbox;
-        if !ui.open {
+        // BloonMenu.Update: shown while toggled on and not hidden by another menu; the Open clip
+        // runs forward to show and back to hide.
+        let shown = ui.open && !hide;
+        let slide_len = ui.runtime["animators"].as_array().into_iter().flatten()
+            .filter(|a| a["controller"] == "SandBoxSlideOut")
+            .flat_map(|a| a["clips"].as_array().into_iter().flatten())
+            .find(|c| c["name"] == "SandboxSlideOutOpen")
+            .map_or(0.0, |c| (c["stop"].as_f64().unwrap_or(0.0) - c["start"].as_f64().unwrap_or(0.0)) as f32);
+        let dt = get_frame_time().min(0.1);
+        ui.slide = if slide_len <= 0.0 { if shown { 1.0 } else { 0.0 } } else if shown { (ui.slide + dt).min(slide_len) } else { (ui.slide - dt).max(0.0) };
+        if !shown {
             ui.editing = None;
+        }
+        if !shown && ui.slide <= 0.0 {
             return;
         }
         let Some(m) = ui.menu.as_mut() else { return };
+        if slide_len > 0.0 {
+            crate::frontend::apply_animation(m, &ui.runtime, "SandBoxSlideOut", "SandboxSlideOutOpen", Some(ui.slide));
+        }
         // Text fields: click to edit, type digits (and "." for spacing), Enter / click away ends.
         let clicked_field = [Field::Count, Field::Spacing, Field::Round].into_iter().find(|&f| m.clicked(field_path(f)));
         if is_mouse_button_pressed(MouseButton::Left) {
@@ -211,6 +242,14 @@ impl Hud {
             }
         }
         let mut acts = Vec::new();
+        if !shown {
+            // Sliding out: drawn, not used.
+            let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h, clip: None };
+            if let Some(m) = self.sandbox.menu.as_mut() {
+                draw_tree(m, full, &mut ctx);
+            }
+            return;
+        }
         for name in BLOONS {
             if m.clicked(&format!("{LIST}/{name}")) {
                 acts.push(SandboxAction::Spawn { bloon: name.into(), camo: ui.camo, regrow: ui.regrow, fortified: ui.fortified, count, spacing });
@@ -229,11 +268,15 @@ impl Hud {
                 acts.push(a);
             }
         }
-        // ScrollRect: the wheel over the list scrolls it.
-        let over = m.rect("SandboxContainer/Layout/BloonsScroll").is_some_and(|r| r.contains(mouse_position().into()));
+        // ScrollRect BloonsScroll: m_ScrollSensitivity 100 canvas units per wheel notch (miniquad
+        // reports 120 per notch), over a 3-column grid of 180-unit cells.
+        let view = m.rect("SandboxContainer/Layout/BloonsScroll");
+        let over = view.is_some_and(|r| r.contains(mouse_position().into()));
         let (_, wheel) = mouse_wheel();
         if over && wheel != 0.0 {
-            ui.scroll = (ui.scroll - wheel.signum() * 180.0).clamp(0.0, 900.0);
+            let content = BLOONS.len().div_ceil(3) as f32 * 180.0;
+            let max = view.map_or(0.0, |r| (content - r.h / s).max(0.0));
+            ui.scroll = (ui.scroll - wheel / 120.0 * 100.0).clamp(0.0, max);
         }
         if let Some(l) = m.find_mut(LIST) {
             l.rt.pos.y = ui.scroll;
@@ -248,6 +291,7 @@ impl Hud {
     /// Screen rect of the open sandbox menu (map clicks under it are ignored).
     pub fn sandbox_blocks(&self, p: Vec2) -> bool {
         self.sandbox.open
+            && self.sandbox.slide > 0.0
             && self.sandbox.menu.as_ref().is_some_and(|m| {
                 ["SandboxContainer", "Mask"].iter().any(|n| m.rect(n).is_some_and(|r| r.contains(p)))
             })

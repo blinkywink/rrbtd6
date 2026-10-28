@@ -824,3 +824,15 @@ mixer thread. Two decode jobs and one next-track buffer bound preparation.
 Cold SFX can still wait on first use, and decoded playback PCM is unchanged in
 size. Local audio: 1.990 -> 0.845 GB, every source sample verified before removing
 the WAV. Build/install the new executable before migrating older local assets.
+
+
+Finish v8 also supports lossless .bin.wz animation streams. The native client
+checks exact decoded bytes and accepts only smaller candidates with measured
+decode-time wins; other models retain their old format. Worker staging expands
+the stream once, with unchanged playback buffers and frame sampling. See
+tools/EXTRACTION.md for the 2026-10-28 measurements and compatibility limits.
+
+Sandbox Bloons now clears tower selection when opening, matching the native
+BloonMenu.Show -> InputManager.SelectedSelectionDisabled handoff. A panel hidden
+behind a right-hand upgrade menu reopens on its button instead of toggling closed.
+RRBTD6_SANDBOX_TOGGLE_FRAME exercises the same handoff during an autotest.

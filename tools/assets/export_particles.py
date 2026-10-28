@@ -365,8 +365,13 @@ def export(prefab):
         export_tiers(prefab[6:])
         return
     bundle = INDEX[prefab]
-    env = UnityPy.load(*[os.path.join(AA, bundle)] + glob.glob(os.path.join(AA, "*_monoscripts_*.bundle")))
-    obj = next(v for k, v in env.container.items() if k == prefab)
+    # One bundle loaded at a time, kept for the next prefab from it (the prefabs are sorted by
+    # bundle below; asset_references_assets_all is ~900 MB and takes seconds to load).
+    if bundle not in _ENVS:
+        _ENVS.clear()
+        _ENVS[bundle] = UnityPy.load(*[os.path.join(AA, bundle)] + glob.glob(os.path.join(AA, "*_monoscripts_*.bundle")))
+    env = _ENVS[bundle]
+    obj = env.container[prefab] if prefab in env.container else next(v for k, v in env.container.items() if k == prefab)
     root = obj.read()
     name = os.path.splitext(os.path.basename(prefab))[0]
     export_root(env, root, name, None, prefab)
@@ -408,5 +413,11 @@ def export_root(env, root, name, root_tr=None, prefab=None):
     return len([n for n in systems if "system" in n])
 
 
-for p in PREFABS:
-    export(p)
+_ENVS = {}
+# "@file": one prefab path per line.
+PREFABS = [l.strip() for p in PREFABS for l in (open(p[1:]) if p.startswith("@") else [p]) if l.strip()]
+for p in sorted(PREFABS, key=lambda p: (INDEX.get(p, ""), p)):
+    try:
+        export(p)
+    except Exception as e:  # one broken prefab must not stop the rest
+        print(p, "-> FAIL", type(e).__name__, e, flush=True)

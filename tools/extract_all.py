@@ -250,6 +250,9 @@ def core_menus(c):
          "field:SandboxBloonsMenu/BloonMenu.spawnBloonButtonPrefab=SpawnBloonButton")
     c.py("tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime",
          "MainMenuUi", *[name for name in CORE_SCENES if name != "MainMenuUI"])
+    # The sandbox bloon menu's slide in / out (SandBoxSlideOut).
+    c.py("tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime",
+         "prefab:Assets/UI - New/InGameUi/Prefabs/SandboxBloonsMenu.prefab=SandboxBloonsMenu")
     c.py("tools/assets/resolve_ui_sprites.py", c.game, c.out, "asset_references_assets_all_*.bundle",
          *CORE_SCENES, "CommonPopup", "ParagonConfirmationPopup", "SandboxBloonsMenu", "SpawnBloonButton", "BuffManager", "GeraldoShop")
 
@@ -394,13 +397,21 @@ def finish(c):
     c.py("tools/assets/compact_anims.py", c.out / "models")
     c.py("tools/assets/pack_anims.py", c.out / "models")
     c.py("tools/assets/delta_anims.py", c.out / "models")
+    # Installs packed before exports used zlib level 6: recompress (verified, lossless).
+    c.py("tools/assets/repack_anims.py", c.out / "models")
+    c.py("tools/assets/word_anims.py", c.out / "models", "--root", c.root)
     c.py("tools/assets/patch_tmp_gradients.py", c.game, c.root)
     c.py("tools/assets/rebuild_shader_glsl.py", c.out)
     c.py("tools/assets/share_model_textures.py", c.out / "models")
 
 
+def dedupe(c):
+    """Byte-identical runtime assets stored once (hard links; paths and bytes unchanged)."""
+    c.py("tools/assets/link_duplicates.py", c.out)
+
+
 STEPS = [metadata, sim_model, cab_index, catalogs, container_index, rounds_maps, sprites, mapset, tower_models, misc_art, upgrade_art,
-         ingame_ui, core_menus, game_data, extended_towers, tower_indices, particles, audio, bloon_models, frontend, startup, home, social, menu_additions, finish]
+         ingame_ui, core_menus, game_data, extended_towers, tower_indices, particles, audio, bloon_models, frontend, startup, home, social, menu_additions, finish, dedupe]
 
 
 def install_hook(root):
@@ -435,11 +446,15 @@ def load_state(path, fp):
 # Raise a step's number when its output must be regenerated for existing installs (a fixed or
 # extended exporter). Other tools changes do not make players re-extract.
 STEP_VERSIONS = {s.__name__: 1 for s in STEPS}
+# core_menus 2: the sandbox menu's slide animation (ui/runtime/SandboxBloonsMenu.json).
+STEP_VERSIONS["core_menus"] = 2
 # startup 2: the splash and initial loading screens' sprites.
 # startup 4: the title screen's BTD6Logo and the game's window icon.
 STEP_VERSIONS["startup"] = 4
-STEP_VERSIONS["finish"] = 6
+# finish 7: animations repacked at zlib level 6.
+STEP_VERSIONS["finish"] = 8
 STEP_VERSIONS["audio"] = 2
+STEP_VERSIONS["dedupe"] = 1
 
 
 def cleanup_bundle_cache(c):
@@ -503,6 +518,7 @@ def main():
     for n in args.only or []:
         if n not in names:
             sys.exit(f"unknown step {n}; steps: {', '.join(names)}")
+    split = False
     for step in STEPS:
         name = step.__name__
         if args.only and name not in args.only:
@@ -510,6 +526,13 @@ def main():
         if not args.only and state["done"].get(name) == STEP_VERSIONS[name]:
             print(f"== {name}: done", flush=True)
             continue
+        if name != "dedupe" and not split:
+            # Exporters overwrite files in place: if an earlier run linked duplicates, give them
+            # their own copies first (dedupe links them again at the end).
+            if state["done"].pop("dedupe", None) is not None:
+                c.py("tools/assets/link_duplicates.py", "--split", c.out)
+                atomic_write(state_file, json.dumps(state))
+            split = True
         print(f"== {name}", flush=True)
         began = time.time()
         step(c)

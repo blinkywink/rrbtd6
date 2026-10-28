@@ -34,7 +34,7 @@ impl Game{
         }else if let Some(pa)=&ability.place_at{
             let Some(p)=point else{return false;};if target.is_some(){return false;}
             let (tiers,owner)=(self.towers[t].tiers,self.towers[t].id);
-            let single=Emission{kind:"Single".into(),count:1,angle:0.0,spread:0.0,offset_start:0.0,target_spread:0.0,markers:Vec::new(),secondary:None,random_angle:0.0,offset:0.0};
+            let single=Emission{kind:"Single".into(),count:1,angle:0.0,spread:0.0,offset_start:0.0,target_spread:0.0,markers:Vec::new(),secondary:None,random_angle:0.0,offset:0.0,dir_off:None};
             let first=self.projectiles.len();self.emit(p,0.0,&single,&pa.projectile,None,tiers,owner);
             for pr in &mut self.projectiles[first..]{pr.pos=p;pr.vel=[0.0;2];pr.wait=pa.delay*FPS;}
         }else if let Some(ds)=&ability.darkshift{

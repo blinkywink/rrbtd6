@@ -51,6 +51,15 @@ def frames(source, stride):
 
 
 def restored_frames(path):
+    path = Path(path)
+    if not path.exists() and path.suffix == ".dz":
+        path = path.with_suffix(".wz")
+    if path.suffix == ".wz":
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from word_anims import restored_frames as read_word_frames
+        yield from read_word_frames(path)
+        return
     with Path(path).open("rb") as f:
         header = f.read(16)
     if len(header) != 16 or header[:8] != MAGIC:
@@ -93,7 +102,7 @@ def pack(path, keep_original=False):
     try:
         digest = hashlib.blake2b()
         seen = 0
-        encoder = zlib.compressobj(1)
+        encoder = zlib.compressobj(6)
         previous = np.zeros(stride, dtype=np.uint8)
         with tempfile.NamedTemporaryFile(dir=path.parent, prefix=target.name + ".", suffix=".pending", delete=False) as out:
             pending = Path(out.name)

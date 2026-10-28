@@ -873,6 +873,8 @@ pub struct WeaponState {
     /// Target's offset from its bloon (Targetting.CanHitMoab: the collision circle a MOAB was
     /// seen by); the throw leaves towards the bloon's position plus it.
     pub aim_off: [f32; 2],
+    /// Which of the MOAB's collision circles that was (its shots steer at it).
+    pub aim_circle: Option<u8>,
     pub rate_frames: i64,
     pub missed: f32,
     /// Weapon.bonusDamageCarryover (ApplyExtraDamagePrecision): what a weapon faster than 1/120 s
@@ -888,6 +890,9 @@ pub struct WeaponState {
     necro: f32,
     /// EmissionsPerRoundFilterModel: throws this round.
     pub round_shots: u32,
+    /// Its throws (EmissionWithOffsets takes its markers in turn per weapon: recording sub_052,
+    /// a Sub's twin guns keep their order through its Ballistic Missile's launches).
+    pub emits: u32,
     /// CritMultiplier: (current, nextCritAt); (0, 0) until the weapon has a crit.
     pub crit: (u32, u32),
 }
@@ -901,6 +906,8 @@ impl WeaponState {
             aim_at: [0.0; 2],
             aim_id: 0,
             aim_off: [0.0; 2],
+            aim_circle: None,
+            emits: 0,
             rate_frames: 1,
             missed: 0.0,
             dmg_carry: 0.0,
@@ -1681,6 +1688,14 @@ pub struct Projectile {
     pub age: f32,
     /// Seeking projectiles: the bloon they steer towards.
     seek: Option<u64>,
+    /// Its Target's collision-circle offset (a MOAB seen by Targetting.CanHitMoab), as it was
+    /// when targeted: Target.Position is the bloon's plus it (recording sub_004: a dart steers
+    /// at a MOAB's front circle as the MOAB was turned when the Sub took aim).
+    seek_off: Option<[f32; 2]>,
+    /// Instant.positionSet.
+    instant_set: bool,
+    /// Where its last lightning jump ended (visual).
+    bolt_from: Option<[f32; 2]>,
     /// Arrive-and-stay projectiles (caltrops): frames until they reach their spot and stop.
     moving: f32,
     /// ArriveAtTarget: (startFrame, origPos, targetPos).
@@ -1910,6 +1925,17 @@ impl Default for Buff {
 }
 
 /// Whether bloon tags `tags` match a DamageModifierForTagModel's tag list.
+impl Projectile {
+    /// Vector3Boxed.get_Rotation of its direction (game degrees, as `grot`): the direction it
+    /// steers by, else where it moves.
+    fn dir_rot(&self) -> f32 {
+        match self.dir {
+            Some(d) => RAD2DEG * crt_atan2(d[0], d[1]),
+            None => RAD2DEG * crt_atan2(self.vel[0], -self.vel[1]),
+        }
+    }
+}
+
 /// A due DamageOverTime tick: (bloon id, damage, immunities, owner, distribute, mutation id,
 /// its lastTick before this tick).
 type DotTick = (u64, f32, u32, u64, (bool, bool), String, f32);
@@ -2076,6 +2102,8 @@ pub struct Game {
     /// The firing tower's rotation (the game's degrees) for the shots `emit` is making, when the
     /// game's own direction math applies.
     emit_rot: Option<f32>,
+    /// The emitting projectile's direction as a rotation (EmissionRotationOffProjectileDirection).
+    emit_dir_rot: Option<f32>,
     /// Height for the projectiles `emit` makes (Projectile.z).
     emit_z: f32,
     /// Path.bloonsList per path: bloon ids and whether they're still alive, in the game's order
@@ -2207,6 +2235,9 @@ pub struct Game {
     round_frame: u32,
     /// Sandbox spawns waiting: (step they come out on, bloon type), by `steps`.
     sandbox_queue: Vec<(u64, usize)>,
+    /// Spawner.bloonsOutsideOfTrack: MOAB-class bloons the round sent that aren't on the map yet
+    /// (Tower.OnBloonEnterTrack when they are).
+    outside_track: Vec<u64>,
     /// Simulation steps since the game began.
     steps: u64,
     /// Simulation.roundTime: frames that ran while a round was on or bloons were out (normal
@@ -2234,6 +2265,10 @@ pub struct Game {
     pub bursts: Vec<Burst>,
     /// Instant hits since last drained, from muzzle or previous bloon to the bloon hit (display only).
     pub tracers: Vec<([f32; 2], [f32; 2])>,
+    /// Line shots with a LineEffectModel this frame (visual): from, to, the beam.
+    pub beams: Vec<([f32; 2], [f32; 2], crate::data::LineFx)>,
+    /// Lightning jumps this frame (visual): from, to, the bolts, the shot's uid.
+    pub bolts: Vec<([f32; 2], [f32; 2], crate::data::Bolts, u64)>,
     /// Cash collected since last drained: where and how much (display only).
     pub cash_pops: Vec<([f32; 2], f64)>,
     /// ShowTextOnHit texts this frame (the renderer draws "Crit!" there).
@@ -2479,6 +2514,7 @@ impl Game {
             grid_on: false,
             grid_cand: Vec::new(),
             emit_rot: None,
+            emit_dir_rot: None,
             emit_z: 0.0,
             path_lists: Vec::new(),
             path_rank: Default::default(),
@@ -2609,6 +2645,7 @@ impl Game {
             round_active: false,
             round_frame: 0,
             sandbox_queue: Vec::new(),
+            outside_track: Vec::new(),
             steps: 0,
             round_clock: 0,
             pop_after_move: false,
@@ -2627,6 +2664,8 @@ impl Game {
             pops: Vec::new(),
             bursts: Vec::new(),
             tracers: Vec::new(),
+            beams: Vec::new(),
+            bolts: Vec::new(),
             hit_texts: Vec::new(),
             cash_pops: Vec::new(),
             upgrade_fx: Vec::new(),
@@ -3108,6 +3147,7 @@ impl Game {
         self.path_rank.clear();
         self.pending.clear();
         self.sandbox_queue.clear();
+        self.outside_track.clear();
         if self.grid_on {
             self.grid = Default::default();
         }
@@ -3342,12 +3382,116 @@ impl Game {
     /// Map.IsTargetLineClear (VERIFIED-DISASM @0xf7aec0, Area.Intersects @0xf67e40,
     /// Polygon.Intersects @0xeaada0): the line from `from` (height `from_z`) to `to` crosses no
     /// edge of an active blocker area taller than `from_z` (outline, then holes).
+    /// CollisionGroupData.precalculatedOffset of bloon `b`'s collision circle `ci`, as the
+    /// attack targeting has it: turned by the bloon's rotation (game frame, y flipped here), or
+    /// along the track where the path gives none.
+    fn circle_off(&self, b: &Bloon, ci: usize) -> [f32; 2] {
+        let c = self.defs[b.kind].circles[ci];
+        match self.path_rot(b.path, 0.0).map(|_| b.rot) {
+            Some(r) => {
+                let (sa, ca) = crt_sin_cos(DEG2RAD * -r);
+                let (ox, oy) = (ca * c[0] - sa * c[1], ca * c[1] + sa * c[0]);
+                [ox, -oy]
+            }
+            None => {
+                let tr = &self.tracks[b.path as usize];
+                let (a, z) = (tr.pos((b.dist - 0.5).max(0.0)), tr.pos(b.dist + 0.5));
+                let l = (z[0] - a[0]).hypot(z[1] - a[1]).max(1e-6);
+                let fwd = [(z[0] - a[0]) / l, (z[1] - a[1]) / l];
+                [fwd[0] * c[1] - fwd[1] * c[0], fwd[1] * c[1] + fwd[0] * c[0]]
+            }
+        }
+    }
+
+    /// TrackTarget.Process (VERIFIED-DISASM @0xd13290) for every seeking projectile made before
+    /// this frame, after it and the bloons have moved (the process list has the bloons before
+    /// the projectiles, and TravelStrait before TrackTarget): the direction it sets is the next
+    /// frame's move (recording sub_010: a dart turns towards a Red another dart pops in the next
+    /// frame's collisions). On a look (5 frames after the last, or at once after it hits its
+    /// target: TrackTarget.Collide) it drops a target that is no longer IsBloonValid (recording
+    /// sub_001: a dart's Black goes behind a log), then with trackNewTargets finds a new one if
+    /// it has none (or always, with constantlyAquireNewTarget); with a target it turns towards
+    /// it (CalculateDirection). Between looks a gone target means flying straight (recording
+    /// tack_500: a meteor whose MOAB popped).
+    fn track_targets(&mut self) {
+        let now = self.sim_elapsed * 4;
+        for p in 0..self.projectiles.len() {
+            let pr = &self.projectiles[p];
+            let Some(sk) = pr.spec.seek.as_ref() else { continue };
+            if pr.spec.path.is_some() || pr.born >= now {
+                continue;
+            }
+            let look = (self.sim_elapsed.saturating_sub(pr.seek_t) >= 5 || pr.dir.is_none()).then(|| {
+                let keep = pr.seek.filter(|&id| self.bloons.iter().find(|b| b.id == id).is_some_and(|b| self.seek_valid(pr, sk, b, None)));
+                let pick = (sk.new_targets && (keep.is_none() || sk.constantly)).then(|| self.seek_pick(pr, sk, None, 0.0));
+                (keep, pick)
+            });
+            let pr = &mut self.projectiles[p];
+            let sk = pr.spec.seek.clone().unwrap();
+            if let Some((keep, pick)) = look {
+                pr.seek_t = self.sim_elapsed;
+                if keep.is_none() {
+                    pr.seek = None;
+                    pr.seek_off = None;
+                }
+                if let Some(best) = pick {
+                    pr.seek = best.map(|x| x.0);
+                    let off = best.and_then(|(id, ci)| ci.zip(self.bloons.iter().find(|b| b.id == id))).map(|(ci, b)| self.circle_off(b, ci as usize));
+                    self.projectiles[p].seek_off = off;
+                }
+            }
+            // Target.Position: the bloon's, plus its collision circle's offset.
+            let off = self.projectiles[p].seek_off.unwrap_or([0.0; 2]);
+            let q = self.projectiles[p].seek.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]);
+            let pr = &mut self.projectiles[p];
+            let heading = pr.vel[1].atan2(pr.vel[0]);
+            if let (Some(q), Some(d), false, true) = (q, pr.dir, pr.spec.speed == 0.0, pr.seek_moved) {
+                // TrackTarget.CalculateDirection (VERIFIED-DISASM @0xd127b0), game frame:
+                // Vector2.AngleBetween(direction, target - position) (@0xf64060: the
+                // atan2f difference wrapped into -pi..pi, negated, in degrees), clamped
+                // to turnRatePerFrame, and the direction turned by it
+                // (Vector3Boxed.Rotate @0xf654a0); TravelStrait then moves it at its
+                // speed (recording tack_500: Inferno Ring's meteor).
+                // (Not on its first move: recording tack_500, the meteor's first step
+                // is straight along its launch direction.)
+                let t = [q[0] - pr.pos[0], -(q[1] - pr.pos[1])];
+                let mut a = crt_atan2(t[1], t[0]) - crt_atan2(d[1], d[0]);
+                if a > std::f32::consts::PI {
+                    a += -2.0 * std::f32::consts::PI;
+                } else if a < -std::f32::consts::PI {
+                    a += 2.0 * std::f32::consts::PI;
+                }
+                // turnRatePerFrame = turnRate x (1 / 60) in f32 (360 -> 6.0000005: recording
+                // sub_000_close, a torpedo's y one float step off at 6.0).
+                let max = sk.turn_rate * FRAME_TIME;
+                let ang = (RAD2DEG * -a).clamp(-max, max);
+                let r = DEG2RAD * -ang;
+                let (sn, cs) = crt_sin_cos(r);
+                let nd = [cs * d[0] - sn * d[1], cs * d[1] + sn * d[0]];
+                pr.dir = Some(nd);
+                let sf = pr.spec.speed * FRAME_TIME;
+                pr.vel = [nd[0] * sf, -nd[1] * sf];
+                pr.grot = None;
+            } else if let (Some(q), None) = (q, pr.dir) {
+                let max = (sk.turn_rate / FPS).to_radians();
+                let h = heading + angle_diff((q[1] - pr.pos[1]).atan2(q[0] - pr.pos[0]), heading).clamp(-max, max);
+                let sp = pr.vel[0].hypot(pr.vel[1]);
+                pr.vel = [h.cos() * sp, h.sin() * sp];
+                pr.grot = None;
+            }
+        }
+    }
+
     /// TrackTarget.GetNewTarget's range: `distance`, or with useLifetimeAsDistance the way it has
     /// left to fly ((lifespanFrames - age) / lifespanFrames x lifespanFrames x speedFrames).
-    fn seek_range(&self, pr: &Projectile, sk: &crate::data::Seek) -> f32 {
+    /// `ahead`: frames of the frame's age not counted in `pr.age` yet (the age counts the frame
+    /// being processed; recordings sub_010, a dart with 6 frames to fly passes up a Pink 16.8
+    /// away, and one with 9 takes a Green 24.8 away as it hits its target).
+    fn seek_range(&self, pr: &Projectile, sk: &crate::data::Seek, ahead: f32) -> f32 {
         if sk.lifetime {
             let lf = (pr.spec.lifespan * FPS).round_ties_even();
-            (lf - pr.age) / lf * (lf * (pr.spec.speed * FRAME_TIME))
+            let age = pr.age + ahead;
+            (lf - age) / lf * (lf * (pr.spec.speed * FRAME_TIME))
         } else {
             sk.distance
         }
@@ -3357,18 +3501,13 @@ impl Game {
     /// within maxSeekAngle of its heading unless that is 360 or more (recording sub_000_last, a
     /// torpedo turns 100 degrees), and the line to it clear unless the shot ignores blockers.
     /// `also`: a layer it has just hit, not in its hits yet.
-    fn seek_valid(&self, pr: &Projectile, sk: &crate::data::Seek, b: &Bloon, range: f32, also: Option<u64>) -> bool {
+    fn seek_valid(&self, pr: &Projectile, sk: &crate::data::Seek, b: &Bloon, also: Option<u64>) -> bool {
         let d = &self.defs[b.kind];
         if b.hit_by(&pr.hit) || also.is_some_and(|l| b.layer == l || b.lineage.as_ref().is_some_and(|x| x.contains(&l))) || (!pr.camo && b.camo(d)) {
             return false;
         }
         let (dx, dy) = (b.pos[0] - pr.pos[0], b.pos[1] - pr.pos[1]);
         if sk.max_angle < 360.0 && angle_diff(dy.atan2(dx), pr.vel[1].atan2(pr.vel[0])).abs().to_degrees() > sk.max_angle {
-            return false;
-        }
-        // STAND-IN: Targetting.CanHitMoab for MOAB-class bloons as a collision circle within
-        // the range.
-        if !d.circles.is_empty() && !d.circles.iter().any(|c| dx.hypot(dy) - c[1].hypot(c[0]) < range + c[2]) {
             return false;
         }
         pr.spec.ignore_blockers || self.line_clear(pr.pos, 0.0, b.pos)
@@ -3381,11 +3520,29 @@ impl Game {
     /// first strictly nearer than the best so far that holds a bloon it may take gives the first
     /// such bloon in Path.bloonsList order (recording sub_001: a Black on a nearer segment over a
     /// nearer Black on a further one), of those `seek_valid`.
-    fn seek_pick(&self, pr: &Projectile, sk: &crate::data::Seek, also: Option<u64>) -> Option<(u64, [f32; 2])> {
-        let range = self.seek_range(pr, sk);
+    fn seek_pick(&self, pr: &Projectile, sk: &crate::data::Seek, also: Option<u64>, ahead: f32) -> Option<(u64, Option<u8>)> {
+        let range = self.seek_range(pr, sk, ahead);
         let reach = range + if pr.spec.exclude_tags.iter().any(|t| t == "Moabs") { 0.0 } else { 40.0 };
-        let valid = |b: &Bloon| self.seek_valid(pr, sk, b, range, also);
-        let mut best: Option<(f32, u64, [f32; 2])> = None;
+        // A segment is in range when its point is within range + 2 (PathSegment.IsInRange): its
+        // bloons can be taken as they are; on one only within the reach, MOAB-class ones by
+        // Targetting.CanHitMoab: the first collision circle within range + its radius, which the
+        // Target then carries (STAND-IN: without CanHitMoab's line-of-sight test).
+        let valid = |b: &Bloon, near: bool| -> Option<Option<u8>> {
+            let d = &self.defs[b.kind];
+            let circle = if near {
+                None
+            } else if d.is_moab {
+                Some((0..d.circles.len()).find(|&ci| {
+                    let o = self.circle_off(b, ci);
+                    let c = [b.pos[0] + o[0] - pr.pos[0], b.pos[1] + o[1] - pr.pos[1]];
+                    c[0] * c[0] + c[1] * c[1] < (range + d.circles[ci][2]) * (range + d.circles[ci][2])
+                })? as u8)
+            } else {
+                return None;
+            };
+            self.seek_valid(pr, sk, b, also).then_some(circle)
+        };
+        let mut best: Option<(f32, u64, Option<u8>)> = None;
         for (pi, sg) in self.track_segs.iter().enumerate() {
             for (k, q) in sg.iter().enumerate() {
                 if !self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false) {
@@ -3395,8 +3552,12 @@ impl Game {
                 if dd > reach * reach || best.is_some_and(|b| dd.sqrt() >= b.0) {
                     continue;
                 }
-                if let Some(b) = self.bloons.iter().find(|b| b.path as usize == pi && (b.dist / 7.0).max(0.0) as usize == k && valid(b)) {
-                    best = Some((dd.sqrt(), b.id, b.pos));
+                let near = dd <= (range + 2.0) * (range + 2.0);
+                // (Path.Process files the bloons on their segments before they move: at the
+                // frame's end the lists still have them where the frame began, recording sub_010,
+                // a dart passing up a Black that has just moved onto a nearer segment.)
+                if let Some((b, circle)) = self.bloons.iter().filter(|b| b.path as usize == pi && (b.prev_dist / 7.0).max(0.0) as usize == k).find_map(|b| valid(b, near).map(|c| (b, c))) {
+                    best = Some((dd.sqrt(), b.id, circle));
                 }
             }
         }
@@ -4430,7 +4591,7 @@ impl Game {
             if let Some(pa) = &a.place_at {
                 self.towers[t].ability_cd.insert(name.to_string(), a.cooldown * FPS);
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
+                let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &pa.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -4647,7 +4808,7 @@ impl Game {
         // doesn't run in reverse).
         if let Some(proj) = &a.track_charge {
             let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-            let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
+            let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
             for k in 0..self.tracks.len() {
                 let reverse = proj.track_travel.as_ref().is_some_and(|x| x.reverse);
                 let d0 = if reverse { self.tracks[k].length() } else { 0.0 };
@@ -4670,7 +4831,7 @@ impl Game {
             let target = self.bloons.iter().filter(|b| on_map(b.pos, 0.0)).max_by(|x, y| x.progress().total_cmp(&y.progress())).map(|b| b.pos);
             if let Some(p) = target {
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
+                let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &lp.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -6116,20 +6277,30 @@ impl Game {
         }
     }
 
-    /// HYPOTHESIS P-PREEMPT: every Pre-emptive Strike Sub launches its strike at each MOAB-class
-    /// bloon the round sends, the moment it appears (an instant projectile on it; its
-    /// CreateProjectileOnExpireModel does the damage). Children of popped bloons don't count.
+    /// PreEmptiveStrikeLauncher.Launch (VERIFIED-DISASM @0xd7cca0) for each Pre-emptive Strike
+    /// Sub, as MOAB-class bloon `target` enters the track: its strike made at the throw offset
+    /// turned by the tower's rotation (Vector2.Rotate) and moved down by z / tan 60
+    /// (AddDisplaySpaceHeight), aimed at the bloon, whose position it takes from then (recording
+    /// sub_050). Children of popped bloons don't count. (throwOffsetSecond, used on every other
+    /// launch when set, is zero on every Sub.)
     fn preemptive_strikes(&mut self, target: u64) {
-        let Some(pos) = self.bloons.iter().find(|b| b.id == target).map(|b| b.pos) else { return };
-        let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
+        if !self.bloons.iter().any(|b| b.id == target) {
+            return;
+        }
+        let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
         for t in 0..self.towers.len() {
             let Some(proj) = self.tier(t).and_then(|tr| tr.preempt.clone()) else { continue };
+            let [ex, ey, ez] = self.tier(t).map_or([0.0; 3], |tr| tr.preempt_offset);
+            let (sa, ca) = crt_sin_cos(DEG2RAD * self.towers[t].game_rot.unwrap_or(0.0));
+            let (ox, oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
+            let tp = self.towers[t].pos;
+            let at = [tp[0] + ox, tp[1] - (oy - ez / TAN60)];
             let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
             let start = self.projectiles.len();
-            self.emit(pos, 0.0, &single, &proj, None, tiers, owner);
+            self.emit(at, 0.0, &single, &proj, None, tiers, owner);
             for pr in &mut self.projectiles[start..] {
                 pr.target = Some(target);
-                pr.pos = pos;
+                pr.pos = at;
             }
         }
     }
@@ -6440,7 +6611,7 @@ impl Game {
                         let i = wi;
                         wi += 1;
                         let clock = if weapon.between_rounds { self.steps as i64 } else { self.round_clock };
-                        if !self.towers[t].weapons[i].ready(clock) || !self.round_active {
+                        if !self.towers[t].weapons[i].ready(clock) || !(self.sandbox || self.round_active || !self.bloons.is_empty()) {
                             continue;
                         }
                         match self.brew_target(t, brew, buff.range(attack.range)) {
@@ -6494,6 +6665,7 @@ impl Game {
                 // The chosen target's offset from its bloon (CanHitMoab's precalculatedOffset), kept
                 // exact rather than recomputed from the point.
                 let mut best_off = [0.0f32; 2];
+                let mut best_circle: Option<u8> = None;
                 let mut any_target = false;
                 let (camo, range) = (attack.camo || buff.camo, buff.range(attack.range));
                 // STAND-IN P-SHARED: Advanced Intel shares the ranges of all other placed towers
@@ -6611,6 +6783,7 @@ impl Game {
                     let plain = seg_q.is_some_and(|q| seg_near(q, if cant_moab { range } else { range + 2.0 })) && seg_clear;
                     let mut aim_at = b.pos;
                     let mut aim_off = [0.0f32; 2];
+                    let mut aim_circle: Option<u8> = None;
                     // HYPOTHESIS P-SHAREDGRID: with isSharedRangeEnabled the attack targets the
                     // segments TargetSupplierSharedRange.PressTheGridsTogether (@0xe0ee30) keeps,
                     // the plain ones only: no MOAB reaches in by its collision circles (recording
@@ -6627,16 +6800,17 @@ impl Game {
                         let fwd = [(z[0] - a[0]) / l, (z[1] - a[1]) / l];
                         d.circles
                             .iter()
-                            .map(|c| match rot {
+                            .enumerate()
+                            .map(|(ci, c)| match rot {
                                 Some(r) => {
                                     let a = DEG2RAD * -r;
                                     let (sa, ca) = crt_sin_cos(a);
                                     let (ox, oy) = (ca * c[0] - sa * c[1], ca * c[1] + sa * c[0]);
-                                    [b.pos[0] + ox, b.pos[1] - oy, c[2], ox, -oy]
+                                    [b.pos[0] + ox, b.pos[1] - oy, c[2], ox, -oy, ci as f32]
                                 }
                                 None => {
                                     let (ox, oy) = (fwd[0] * c[1] - fwd[1] * c[0], fwd[1] * c[1] + fwd[0] * c[0]);
-                                    [b.pos[0] + ox, b.pos[1] + oy, c[2], ox, oy]
+                                    [b.pos[0] + ox, b.pos[1] + oy, c[2], ox, oy, ci as f32]
                                 }
                             })
                             // In range + its radius, and seen: the segment's line is clear, or (map
@@ -6648,6 +6822,7 @@ impl Game {
                             .map(|c| {
                                 aim_at = [c[0], c[1]];
                                 aim_off = [c[3], c[4]];
+                                aim_circle = Some(c[5] as u8);
                             })
                             .is_some()
                     });
@@ -6737,9 +6912,10 @@ impl Game {
                         best_key = key;
                         best = Some((score, aim_at, b.id));
                         best_off = aim_off;
+                        best_circle = aim_circle;
                     }
                 }
-                if attack.pool_fallback && best.is_none() && self.round_active {
+                if attack.pool_fallback && best.is_none() && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
                     best = self.track_point(pos, range, 0.0);
                 }
                 if let Some(off) = attack.track_target.filter(|_| mode != TargetMode::Point) {
@@ -6753,7 +6929,7 @@ impl Game {
                             .max_by(|x, y| x.progress().total_cmp(&y.progress()))
                             .map(|b| (0.0, b.pos, 0))
                     };
-                    best = if !self.round_active && self.bloons.is_empty() {
+                    best = if !(self.sandbox || self.round_active || !self.bloons.is_empty()) {
                         None
                     } else {
                         match mode {
@@ -6774,7 +6950,7 @@ impl Game {
                 // HYPOTHESIS P-RANDPOS: RandomPositionBasicModel picks a uniform direction and a
                 // distance in [minRadius, maxRadius], kept inside the map bounds.
                 if let Some([lo, hi]) = attack.random_position {
-                    best = if self.round_active {
+                    best = if (self.sandbox || self.round_active || !self.bloons.is_empty()) {
                         // HYPOTHESIS P-RANDLAND: RandomPositionModel (areaType Land) redraws
                         // until the spot is placeable land clear by targetRadius; no shot if 20
                         // draws all fail.
@@ -6792,9 +6968,8 @@ impl Game {
                         None
                     };
                 }
-                // HYPOTHESIS P-POINTER: point-aiming attacks fire at their point while any bloon
-                // they could hit is in range (map-wide for Dartling / Mortar), and turn towards it
-                // at RotateToPointerModel.rate (turning shots fire along the barrel).
+                // Point-aiming attacks fire at their point (below) and turn towards it at
+                // RotateToPointerModel.rate (HYPOTHESIS P-POINTER: turning shots fire along the barrel).
                 let mut turning = false;
                 if mode.aims_at_point() {
                     let tw = &self.towers[t];
@@ -6803,7 +6978,12 @@ impl Game {
                         TargetMode::Pointer => self.coop_pointer(tw.id).unwrap_or(fwd),
                         _ => tw.point.unwrap_or(fwd),
                     };
-                    best = any_target.then_some((0.0, aim, 0));
+                    // TargetPointer.GetTarget (VERIFIED-DISASM @0xe06e20): the pointer is always a
+                    // valid Target; TargetSelectedPoint.CanHaveTarget (@0xe0aa00): its point once
+                    // set. So they fire whenever rounds are active, bloons or not (sandbox: a
+                    // Dartling shoots at the cursor as soon as it is placed).
+                    let has_point = mode == TargetMode::Pointer || self.towers[t].point.is_some();
+                    best = (has_point || any_target).then_some((0.0, aim, 0));
                     if let Some(rate) = attack.turn_rate.filter(|r| *r < 1e5) {
                         if !turned {
                             let want = (aim[1] - pos[1]).atan2(aim[0] - pos[0]);
@@ -6875,7 +7055,11 @@ impl Game {
                     let clock = if weapon.between_rounds { now_t } else { self.round_clock };
                     let tw = &mut self.towers[t];
                     let quota_left = weapon.per_round.map_or(true, |n| tw.weapons[w].round_shots < n) && !at_limit;
-                    let decide = best.or(ambient.then_some((0.0, pos, 0))).filter(|_| quota_left);
+                    // Weapon.Process (VERIFIED-DISASM @0xc6f800): without fireBetweenRounds it does
+                    // nothing unless Simulation.AreRoundsActive: a Dartling, Mortar or Spike
+                    // Factory between rounds with nothing out stays quiet (not in sandbox).
+                    let rounds_on = weapon.between_rounds || (self.sandbox || self.round_active || !self.bloons.is_empty());
+                    let decide = best.or(ambient.then_some((0.0, pos, 0))).filter(|_| quota_left && rounds_on);
                     // Weapon.Process (VERIFIED-DISASM @0xc6f800): once lastEmission + rateFrames
                     // <= its clock and the attack has a target, the throw animation starts and
                     // the cooldown restarts there; the projectile leaves animationOffsetFrames
@@ -6889,6 +7073,7 @@ impl Game {
                     if let Some(id) = started_id {
                         st.aim_id = id;
                         st.aim_off = best_off;
+                        st.aim_circle = best_circle;
                     }
                     if let Some(p) = started {
                         if st.anim >= 0 {
@@ -6903,7 +7088,7 @@ impl Game {
                         st.anim = -1;
                         spawns += 1;
                     }
-                    let (aimed, aim_id, aim_off) = (st.aim_at, st.aim_id, st.aim_off);
+                    let (aimed, aim_id, aim_off, aim_circle) = (st.aim_at, st.aim_id, st.aim_off, st.aim_circle);
                     // RotateToTarget.Process (VERIFIED-DISASM @0xdf6be0) with onlyRotateDuringThrow:
                     // while a weapon is in its throw (Weapon.IsInThrow: animationStartedAt >= 0),
                     // ApplyRotation turns the tower to the attack's target each frame, the frame the
@@ -7038,6 +7223,7 @@ impl Game {
                             }
                             if !double {
                                 tw.shots += 1;
+                                tw.weapons[w].emits += 1;
                             }
                             for ab in &mut tw.brews {
                                 ab.shots_left = ab.shots_left.saturating_sub(1);
@@ -7173,7 +7359,7 @@ impl Game {
                             let (s, c) = if weapon.aim_offset.is_some() { face.sin_cos() } else { dir.sin_cos() };
                             // EmissionWithOffsetsModel: each shot from the next throw marker in turn.
                             let n = emission.markers.len();
-                            let [ex, ey, ez] = if n > 0 { emission.markers[(self.towers[t].shots as usize).saturating_sub(1) % n] } else { weapon_eject };
+                            let [ex, ey, ez] = if n > 0 { emission.markers[(self.towers[t].weapons[w].emits as usize).saturating_sub(1) % n] } else { weapon_eject };
                             // Weapon.GetEjectPosition (VERIFIED-DISASM @0xc6e520 + recording): the eject offset
                             // turned with the tower (game: Vector2.Rotate by -rotation; the clone's y is flipped,
                             // so its x mirrors), then Vector3.AddDisplaySpaceHeight moves it ejectZ / tan 60 down
@@ -7213,11 +7399,15 @@ impl Game {
                                 // ejectZ / tan 60 below the tower.)
                                 self.emit_z = ez;
                                 self.emit(from, dir, emission, &spec, crit, tiers, owner);
+                                // EjectEffectModel: the muzzle effect at the eject point (visual).
+                                for (fx, k) in &weapon.eject_fx {
+                                    self.place_fx.push((from, fx.clone(), *k));
+                                }
                                 // MultiEmissionModel: its secondary projectile, at the same eject
                                 // point (recording ice_250: Absolute Zero's pierce-999 pulse with
                                 // the blast, both at z 7).
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
+                                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                                     self.emit(from, dir, &single, sec, None, tiers, owner);
                                 }
                                 self.emit_z = 0.0;
@@ -7238,7 +7428,7 @@ impl Game {
                                 self.emit_z = 0.0;
                                 // MultiEmissionModel: its secondary projectile from the tower too.
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
+                                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                                     self.emit(pos, dir, &single, sec, None, tiers, owner);
                                 }
                                 if ambient {
@@ -7294,11 +7484,27 @@ impl Game {
                                     pr.spec.radius = pr.spec.radius.max(step * 0.5);
                                     pr.frames_left = pr.frames_left.max(1.0);
                                 }
-                                self.tracers.push((from, [from[0] + lc * range, from[1] + ls * range]));
+                                let to = [from[0] + lc * range, from[1] + ls * range];
+                                match &weapon.line_fx {
+                                    // LineEffectModel: its beam and, every few frames while it
+                                    // fires, its start / end effects (visual).
+                                    Some(lf) => {
+                                        if self.steps % 12 == 0 {
+                                            for (fx, at) in [(&lf.start, from), (&lf.end, to)] {
+                                                if let Some(fx) = fx {
+                                                    self.place_fx.push((at, fx.clone(), 1.0));
+                                                }
+                                            }
+                                        }
+                                        self.beams.push((from, to, lf.clone()));
+                                    }
+                                    None => self.tracers.push((from, to)),
+                                }
                             }
                             if proj.seek.is_some() && !ambient {
                                 for pr in &mut self.projectiles[start..] {
                                     pr.seek = Some(target_id);
+                                    pr.seek_off = aim_circle.map(|_| aim_off);
                                 }
                             }
                             // HYPOTHESIS P-ARRIVE: ArriveAtTargetModel flies straight to where the target
@@ -7885,7 +8091,7 @@ impl Game {
             let d0 = (dist + self.rand() * nc.path_range).min(len);
             let p0 = self.tracks[path as usize].pos(d0);
             let owner = self.towers[t].id;
-            let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
+            let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
             let start = self.projectiles.len();
             self.emit(p0, 0.0, &single, &sp, None, tiers, owner);
             for pr in &mut self.projectiles[start..] {
@@ -8094,7 +8300,7 @@ impl Game {
                 "destroy_emit" => match &e.projectile {
                     Some(p) => EffectKind::DestroyEmit {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 })),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None })),
                         dont_copy: e.dont_copy,
                     },
                     None => continue,
@@ -8102,7 +8308,7 @@ impl Game {
                 "carry" => match &e.projectile {
                     Some(p) => EffectKind::Carry {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 })),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None })),
                         uids: Vec::new(),
                     },
                     None => continue,
@@ -8112,7 +8318,7 @@ impl Game {
                         ignore: e.ignore_same_frame,
                         skip: e.ignore_same_frame,
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 })),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None })),
                     },
                     None => continue,
                 },
@@ -8286,17 +8492,70 @@ impl Game {
         }
     }
 
+    /// A projectile going (pierce or lifespan run out): its sounds, its exhaust and expire
+    /// projectiles (with whether it ran out of pierce) and the sub-tower it makes.
+    #[allow(clippy::type_complexity)]
+    fn retire_projectile(&mut self, pr: &Projectile) -> (Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32), bool)>, Option<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64)>) {
+        let (mut out, mut sub) = (Vec::new(), None);
+            // HYPOTHESIS P-EXPIRESOUND: expire sounds play whenever the projectile goes,
+            // exhaust sounds only when its pierce ran out.
+            self.sound(&pr.spec.expire_sounds, None);
+            // Its effects (visual): CreateEffectOnExhausted out of pierce (where it was hit),
+            // CreateEffectOnExpire when its lifespan ran out.
+            let (fxs, at) = if pr.pierce <= 0.0 { (&pr.spec.exhaust_fx, pr.prev) } else { (&pr.spec.expire_fx, pr.pos) };
+            for (fx, k) in fxs {
+                self.place_fx.push((at, fx.clone(), *k));
+            }
+            if pr.pierce <= 0.0 {
+                self.sound(&pr.spec.exhaust_sounds, None);
+            }
+            // (Projectile.Expire and .Exhausted both run its Exhausted: any not done yet.
+            // Only Expire, its lifespan run out, first runs Expired: CreateProjectileOnExpire,
+            // VERIFIED-DISASM Projectile.Expire @0xcab2a0; recording sub_003, an Airburst
+            // dart out of pierce on a Lead makes 3 darts, not 6.)
+            let expired = pr.pierce > 0.0;
+            let order = pr.spec.on_exhaust.iter().enumerate().filter(|e| e.1.expire).chain(pr.spec.on_exhaust.iter().enumerate().filter(|e| !e.1.expire));
+            for (k, ex) in order {
+                if pr.exhaust_done & (1 << k) != 0 || (!self.rounds_active() && !ex.between_rounds) || (ex.expire && !expired) {
+                    continue;
+                }
+                let mut ex = ex.clone();
+                if let Some([interval, pierce, radius]) = ex.per_distance.filter(|d| d[0] > 0.0) {
+                    let n = ((pr.pos[0] - pr.origin[0]).hypot(pr.pos[1] - pr.origin[1]) / interval).floor();
+                    ex.projectile.pierce += n * pierce;
+                    ex.projectile.radius += n * radius;
+                }
+                // (Out of pierce, it was exhausted in Projectile.CollideBloon, before this
+                // frame's move: recording boomerang_paragon_r63, a glaive on a Lead leaves
+                // its MoabDot where it was.)
+                let at = if pr.pierce <= 0.0 { pr.prev } else { pr.pos };
+                let at = if ex.use_target { pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map_or(at, |b| b.pos) } else { at };
+                out.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
+            }
+            // HYPOTHESIS P-TYPEDTOWER: typed sub-towers (Sentry Expert) take turns in
+            // crushing, boom, cold, energy order.
+            let n = pr.spec.create_tower.len();
+            if n > 0 {
+                let spec = pr.spec.create_tower[self.typed_made % n].clone();
+                self.typed_made += 1;
+                sub = Some((spec, pr.pos, pr.owner));
+            }
+        (out, sub)
+    }
+
     /// CreateProjectileOnExhaustFraction's projectiles.
     #[allow(clippy::type_complexity)]
-    fn spawn_exhausted(&mut self, exhausted: Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32))>) {
-        for (pos, dir, ex, tiers, owner, target, (grot, z)) in exhausted {
+    fn spawn_exhausted(&mut self, exhausted: Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32))>) {
+        for (pos, dir, ex, tiers, owner, target, (grot, z, dir_rot)) in exhausted {
             let start = self.projectiles.len();
             // ArcEmission.GetDirection starts from the emitting tower's rotation now (recording
             // dart_500: a Juggernaut's burst turns with the tower's newer throw); the projectile's
             // own when the tower's isn't known.
             self.emit_rot = self.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).or(grot);
             self.emit_z = z;
+            self.emit_dir_rot = Some(dir_rot);
             self.emit(pos, dir, &ex.emission, &ex.projectile, None, tiers, owner); // P-EXHAUST
+            self.emit_dir_rot = None;
             self.emit_rot = None;
             self.emit_z = 0.0;
             // Made while the projectiles were processed, after this frame's pass: they move on the
@@ -8382,7 +8641,15 @@ impl Game {
             let (s, c) = a.sin_cos();
             // The game's direction (SingleEmission / ArcEmission.GetDirection: rotation - offsetStart
             // + offset + k x sliceSize degrees, Vector2.Rotate of (0, 1)).
-            let grot = self.emit_rot.and_then(|r| match em.kind.as_str() {
+            // EmissionRotationOffProjectileDirection.OnGetDirection (VERIFIED-DISASM @0xc5b290),
+            // from a projectile: k x angleInBetween + its direction's rotation + startingOffset
+            // (with alwaysCentre -(count - 1) x angleInBetween x 0.5) (recording sub_002: an
+            // Airburst dart's three at -25, 0, +25 off where it flies, not the tower's facing).
+            let off_dir = em.dir_off.zip(self.emit_dir_rot).map(|([start, step, centre], r)| {
+                let start = if centre != 0.0 { -((n as f32 - 1.0) * step * 0.5) } else { start };
+                k as f32 * step + r + start
+            });
+            let grot = off_dir.or_else(|| self.emit_rot.and_then(|r| match em.kind.as_str() {
                 "Arc" if n > 1 => {
                     let full = (em.angle - 360.0).abs() < 1e-3;
                     // ArcEmission.GetDirection (VERIFIED-DISASM @0xc56720): (rotation - angle / 2 +
@@ -8392,7 +8659,7 @@ impl Game {
                 }
                 "Single" | "Arc" | "Parallel" => Some(r),
                 _ => None,
-            });
+            }));
             let gdir = grot.map(game_dir);
             let ahead = if em.kind == "Random" { em.offset_start } else { 0.0 };
             let mut pos = [from[0] - s * off + c * ahead, from[1] + c * off + s * ahead];
@@ -8488,6 +8755,9 @@ impl Game {
                 clear_t: self.sim_elapsed as f32,
                 age: 0.0,
                 seek: None,
+                seek_off: None,
+                instant_set: false,
+                bolt_from: None,
                 moving: 0.0,
                 arrive_at: None,
                 rounds_left: spec.rounds,
@@ -8564,8 +8834,8 @@ impl Game {
             self.spawn_emitted(k, path);
         }
         self.steps += 1;
-        // Simulation.Simulate: roundTime counts only while a round is on or bloons are out.
-        if self.round_active || !self.bloons.is_empty() {
+        // Simulation.Simulate: roundTime counts only while rounds are active (always in sandbox).
+        if self.rounds_active() {
             self.round_clock += 1;
         }
         // Slow zones (Arctic Wind), measured from the tower.
@@ -8634,6 +8904,26 @@ impl Game {
         for pr in &mut self.projectiles {
             pr.fresh = false;
         }
+        // Spawner.Process (VERIFIED-DISASM @0xf930c0): its bloons outside the track whose position
+        // is now on the map (Map.IsPointOnMap) enter it, each tower's OnBloonEnterTrack: the
+        // MOAB entrance voice and Pre-emptive Strike (recording sub_050: launched the frame after
+        // a MOAB first stands on the map, not when it spawns). After the collision pass, so
+        // what it makes waits a frame (fresh).
+        let mut k = 0;
+        while k < self.outside_track.len() {
+            let id = self.outside_track[k];
+            match self.bloons.iter().find(|b| b.id == id).map(|b| (b.pos, b.kind)) {
+                None => {
+                    self.outside_track.remove(k);
+                }
+                Some((p, kind)) if on_map(p, 0.0) => {
+                    self.outside_track.remove(k);
+                    self.preemptive_strikes(id);
+                    self.enter_voice(kind);
+                }
+                Some(_) => k += 1,
+            }
+        }
         let p2 = std::time::Instant::now();
         // Projectiles.
         let (lo, hi) = self.bounds;
@@ -8690,19 +8980,6 @@ impl Game {
                 self.projectiles[p].hit.clear();
             }
             // TrackTarget.GetNewTarget, when it will look below (from where it is now).
-            // TrackTarget.Process (VERIFIED-DISASM @0xd13290): on a look it drops a target that is
-            // no longer IsBloonValid (recording sub_001: a dart's Black goes behind a log), then
-            // with trackNewTargets finds a new one if it has none (or always, with
-            // constantlyAquireNewTarget). (None, _): no look; (Some(keep), pick).
-            let look = {
-                let pr = &self.projectiles[p];
-                pr.spec.seek.as_ref().filter(|_| pr.spec.path.is_none() && (self.sim_elapsed.saturating_sub(pr.seek_t) >= 5 || pr.dir.is_none())).map(|sk| {
-                    let range = self.seek_range(pr, sk);
-                    let keep = pr.seek.filter(|&id| self.bloons.iter().find(|b| b.id == id).is_some_and(|b| self.seek_valid(pr, sk, b, range, None)));
-                    let pick = (sk.new_targets && (keep.is_none() || sk.constantly)).then(|| self.seek_pick(pr, sk, None));
-                    (keep, pick)
-                })
-            };
             {
                 let pr = &mut self.projectiles[p];
                 if let Some(path) = &pr.spec.path {
@@ -8744,59 +9021,6 @@ impl Game {
                         pr.frames_left = 0.0;
                     }
                 } else {
-                    // HYPOTHESIS P-SEEK: seeking shots turn towards their target at turnRate
-                    // deg/s; once it is gone they pick the closest unhit bloon within `distance`
-                    // and half of maxSeekAngle either side of their heading.
-                    if let Some(sk) = &pr.spec.seek {
-                        let heading = pr.vel[1].atan2(pr.vel[0]);
-                        let mut aim = pr.seek.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.pos);
-                        // TrackTarget.Process (VERIFIED-DISASM @0xd13290): it looks again (drops a
-                        // gone target, finds a new one) only 5 frames after its last look; between,
-                        // a gone target means flying straight (recording tack_500: a meteor whose
-                        // MOAB popped).
-                        if let Some((keep, pick)) = look {
-                            pr.seek_t = self.sim_elapsed;
-                            pr.seek = keep;
-                            if let Some(best) = pick {
-                                pr.seek = best.map(|x| x.0);
-                            }
-                            aim = pr.seek.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.pos);
-                        }
-                        if let (Some(q), Some(d), false, true) = (aim, pr.dir, pr.spec.speed == 0.0, pr.seek_moved) {
-                            // TrackTarget.CalculateDirection (VERIFIED-DISASM @0xd127b0), game frame:
-                            // Vector2.AngleBetween(direction, target - position) (@0xf64060: the
-                            // atan2f difference wrapped into -pi..pi, negated, in degrees), clamped
-                            // to turnRatePerFrame, and the direction turned by it
-                            // (Vector3Boxed.Rotate @0xf654a0); TravelStrait then moves it at its
-                            // speed (recording tack_500: Inferno Ring's meteor).
-                            // (Not on its first move: recording tack_500, the meteor's first step
-                            // is straight along its launch direction.)
-                            let t = [q[0] - pr.pos[0], -(q[1] - pr.pos[1])];
-                            let mut a = crt_atan2(t[1], t[0]) - crt_atan2(d[1], d[0]);
-                            if a > std::f32::consts::PI {
-                                a += -2.0 * std::f32::consts::PI;
-                            } else if a < -std::f32::consts::PI {
-                                a += 2.0 * std::f32::consts::PI;
-                            }
-                            // turnRatePerFrame = turnRate x (1 / 60) in f32 (360 -> 6.0000005: recording
-                            // sub_000_close, a torpedo's y one float step off at 6.0).
-                            let max = sk.turn_rate * FRAME_TIME;
-                            let ang = (RAD2DEG * -a).clamp(-max, max);
-                            let r = DEG2RAD * -ang;
-                            let (sn, cs) = crt_sin_cos(r);
-                            let nd = [cs * d[0] - sn * d[1], cs * d[1] + sn * d[0]];
-                            pr.dir = Some(nd);
-                            let sf = pr.spec.speed * FRAME_TIME;
-                            pr.vel = [nd[0] * sf, -nd[1] * sf];
-                            pr.grot = None;
-                        } else if let (Some(q), None) = (aim, pr.dir) {
-                            let max = (sk.turn_rate / FPS).to_radians();
-                            let h = heading + angle_diff((q[1] - pr.pos[1]).atan2(q[0] - pr.pos[0]), heading).clamp(-max, max);
-                            let sp = pr.vel[0].hypot(pr.vel[1]);
-                            pr.vel = [h.cos() * sp, h.sin() * sp];
-                            pr.grot = None;
-                        }
-                    }
                     // AccelerateModel: faster each frame up to maxSpeed.
                     if let Some([a, max]) = pr.spec.accel {
                         let sp = pr.vel[0].hypot(pr.vel[1]);
@@ -8917,8 +9141,17 @@ impl Game {
                 if let Some(id) = pr.target.filter(|_| pr.spec.instant || !pr.spec.only_target) {
                     let at = self.bloons.iter().find(|b| b.id == id).map(|b| b.pos);
                     match (at, pr.spec.instant) {
-                        (Some(q), true) => pr.pos = q,
-                        (None, true) => pr.frames_left = 0.0,
+                        // (Instant: its target's position once the bloons have moved, below.)
+                        (Some(_), true) => {}
+                        // Instant.Process (VERIFIED-DISASM @0xce0640): its target invalid, it stays
+                        // at the bloon's last position, and expires there only with
+                        // destroyIfInvalid (recording sub_050: Pre-emptive Strike's missile on a
+                        // MOAB a Ballistic Missile popped lives out its lifespan).
+                        (None, true) => {
+                            if pr.spec.instant_destroy {
+                                pr.frames_left = 0.0;
+                            }
+                        }
                         // Bounced glaives (HYPOTHESIS P-BOUNCE-TRAVEL) home in on their next bloon
                         // at their own speed and fly on straight if it is gone.
                         (Some(q), false) => {
@@ -9304,14 +9537,23 @@ impl Game {
                     let names = self.projectiles[p].spec.hit_sounds.clone();
                     self.sound(&names, None);
                 }
-                // Projectile.ClearTarget (TrackTarget.Collide below) looks for the next target at
-                // once, from where the shot and the bloons are in the collision pass (recording
-                // sub_000_last: the closest from there, not after this frame's moves).
-                let repick = {
-                    let pr = &self.projectiles[p];
-                    (pr.seek == Some(id) && pr.spec.seek.as_ref().is_some_and(|s| s.new_targets))
-                        .then(|| pr.spec.seek.as_ref().and_then(|sk| self.seek_pick(pr, sk, Some(layer))).map(|x| x.0))
-                };
+                // CreateLightningEffect: a bolt from where the last jump ended (the shot's origin
+                // first) to the bloon it hit (visual).
+                if let Some(bl) = self.projectiles[p].spec.bolts.clone() {
+                    let to = self.bloons.iter().find(|b| b.id == id).map_or(self.projectiles[p].prev, |b| b.pos);
+                    let pr = &mut self.projectiles[p];
+                    let from = pr.bolt_from.unwrap_or(pr.origin);
+                    pr.bolt_from = Some(to);
+                    let uid = pr.uid;
+                    self.bolts.push((from, to, bl, uid));
+                }
+                // CreateEffectOnContact: its effect where it hit (visual).
+                if !self.projectiles[p].spec.contact_fx.is_empty() {
+                    let at = self.projectiles[p].prev;
+                    for (fx, k) in self.projectiles[p].spec.contact_fx.clone() {
+                        self.place_fx.push((at, fx, k));
+                    }
+                }
                 let pr = &mut self.projectiles[p];
                 // CollideBloon adds the layer it hit; what that layer became carries it in its
                 // lineage.
@@ -9322,15 +9564,10 @@ impl Game {
                 // looks again at once (lastTargetSearchElapsed = 0) and, with trackNewTargets,
                 // drops it (recording sub_000_close: a torpedo turns to the next bloon after
                 // hitting its first).
-                // TrackTarget.Collide: lastTargetSearchElapsed = 0, so its next Process looks (and
-                // starts the 5 frames from there): the pick here doesn't count as a look
-                // (recording sub_001: a dart drops a Black gone behind a log 16 frames after its
-                // hit, not 15).
+                // TrackTarget.Collide: lastTargetSearchElapsed = 0, so its Process this frame looks
+                // (`track_targets`).
                 if pr.seek == Some(id) {
                     pr.seek_t = 0;
-                    if let Some(pick) = repick {
-                        pr.seek = pick;
-                    }
                 }
                 pr.pierce -= pr.spec.pierce_cost;
                 let heading = if pr.spec.instant && pr.target.is_some() {
@@ -9421,7 +9658,7 @@ impl Game {
                         continue;
                     }
                     pr.exhaust_done |= 1 << k;
-                    if !self.round_active && !ex.between_rounds {
+                    if !(self.sandbox || self.round_active || !self.bloons.is_empty()) && !ex.between_rounds {
                         continue;
                     }
                     let mut ex = ex.clone();
@@ -9434,48 +9671,18 @@ impl Game {
                     // frame's move: recording boomerang_paragon_r63, a glaive on a Lead leaves
                     // its MoabDot where it was.)
                     let at = if pr.pierce <= 0.0 { pr.prev } else { pr.pos };
-                    exhausted.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), (pr.grot, pr.z), pr.pierce <= 0.0));
+                    exhausted.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
                 }
             }
             let pr = &self.projectiles[p];
-            if pr.pierce <= 0.0 || pr.frames_left <= 0.0 {
+            // An instant shot whose expire projectile goes where its living target is expires
+            // after the bloons have moved (below).
+            let later = pr.spec.instant && pr.pierce > 0.0 && pr.spec.on_exhaust.iter().any(|e| e.use_target) && pr.target.is_some_and(|id| self.bloons.iter().any(|b| b.id == id));
+            if pr.pierce <= 0.0 || (pr.frames_left <= 0.0 && !later) {
                 let pr = self.projectiles.remove(p);
-                // HYPOTHESIS P-EXPIRESOUND: expire sounds play whenever the projectile goes,
-                // exhaust sounds only when its pierce ran out.
-                self.sound(&pr.spec.expire_sounds, None);
-                if pr.pierce <= 0.0 {
-                    self.sound(&pr.spec.exhaust_sounds, None);
-                }
-                // (Projectile.Expire and .Exhausted both run its Exhausted: any not done yet.
-                // Only Expire, its lifespan run out, first runs Expired: CreateProjectileOnExpire,
-                // VERIFIED-DISASM Projectile.Expire @0xcab2a0; recording sub_003, an Airburst
-                // dart out of pierce on a Lead makes 3 darts, not 6.)
-                let expired = pr.pierce > 0.0;
-                let order = pr.spec.on_exhaust.iter().enumerate().filter(|e| e.1.expire).chain(pr.spec.on_exhaust.iter().enumerate().filter(|e| !e.1.expire));
-                for (k, ex) in order {
-                    if pr.exhaust_done & (1 << k) != 0 || (!self.round_active && !ex.between_rounds) || (ex.expire && !expired) {
-                        continue;
-                    }
-                    let mut ex = ex.clone();
-                    if let Some([interval, pierce, radius]) = ex.per_distance.filter(|d| d[0] > 0.0) {
-                        let n = ((pr.pos[0] - pr.origin[0]).hypot(pr.pos[1] - pr.origin[1]) / interval).floor();
-                        ex.projectile.pierce += n * pierce;
-                        ex.projectile.radius += n * radius;
-                    }
-                    // (Out of pierce, it was exhausted in Projectile.CollideBloon, before this
-                    // frame's move: recording boomerang_paragon_r63, a glaive on a Lead leaves
-                    // its MoabDot where it was.)
-                    let at = if pr.pierce <= 0.0 { pr.prev } else { pr.pos };
-                    exhausted.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), (pr.grot, pr.z), pr.pierce <= 0.0));
-                }
-                // HYPOTHESIS P-TYPEDTOWER: typed sub-towers (Sentry Expert) take turns in
-                // crushing, boom, cold, energy order.
-                let n = pr.spec.create_tower.len();
-                if n > 0 {
-                    let spec = pr.spec.create_tower[self.typed_made % n].clone();
-                    self.typed_made += 1;
-                    subs.push((spec, pr.pos, pr.owner));
-                }
+                let (mut ex, sub) = self.retire_projectile(&pr);
+                exhausted.append(&mut ex);
+                subs.extend(sub);
             } else {
                 p += 1;
             }
@@ -9554,7 +9761,7 @@ impl Game {
                 self.tick_bloon_effects(i, round_clock, &mut dots, &mut emits);
             }
         }
-        let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
+        let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
         for (pos, proj, owner) in emits {
             let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
             self.emit(pos, 0.0, &single, &proj, None, tiers, owner);
@@ -9568,6 +9775,33 @@ impl Game {
             }
         }
         self.carry_follow(false);
+        // Instant (its Process in the process list after the bloons it follows): an instant shot
+        // takes its target's position from after this frame's move; not one made this frame
+        // (recording sub_050: Pre-emptive Strike's missile sits at its launch point, then on
+        // the MOAB where the MOAB is in each frame).
+        let now = self.sim_elapsed * 4;
+        // CreateProjectileOnExpire with useTargetPosition: the expiring shot's projectile goes
+        // where its target is now that the bloons have moved (recording sub_040: a Ballistic
+        // Missile's blast on the MOAB; Pre-emptive Strike's, without it, where the missile was).
+        let mut p = 0;
+        while p < self.projectiles.len() {
+            let pr = &self.projectiles[p];
+            if pr.spec.instant && pr.born < now && pr.frames_left <= 0.0 && pr.pierce > 0.0 && pr.spec.on_exhaust.iter().any(|e| e.use_target) {
+                let pr = self.projectiles.remove(p);
+                let (ex, sub) = self.retire_projectile(&pr);
+                exhausted.extend(ex.into_iter().map(|(a, b, c, d, e, f, g, _)| (a, b, c, d, e, f, g)));
+                subs.extend(sub);
+            } else {
+                p += 1;
+            }
+        }
+        for pr in self.projectiles.iter_mut().filter(|pr| pr.spec.instant && pr.born < now && !(pr.spec.instant_once && pr.instant_set)) {
+            if let Some(q) = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.pos) {
+                pr.pos = q;
+                pr.instant_set = true;
+            }
+        }
+        self.track_targets();
         // CreateSoundOnBloonLeak (OnLivesLost): the hero's line, at most every 2400 frames.
         if leak_voice {
             self.hero_voice(|s| &s.leak, "HeroLeak", 2400);
@@ -9711,8 +9945,7 @@ impl Game {
                 }
             }
             if self.defs[k].tags.iter().any(|t| t == "Moabs") {
-                self.preemptive_strikes(id);
-                self.enter_voice(k);
+                self.outside_track.push(id);
             }
         }
         // ChurchillBaseRotation.Process (VERIFIED-DISASM @0xd26830), at the frame's end (what the turret's aim and the exhausts read is the
@@ -9761,6 +9994,12 @@ impl Game {
         }
         self.race_step_end();
         self.in_step = false;
+    }
+    /// Simulation.AreRoundsActive (VERIFIED-DISASM @0xa75170): the map's spawner condition first
+    /// (sandbox: always; time runs there whether or not anything was sent), else a round is on or
+    /// any bloon exists.
+    pub fn rounds_active(&self) -> bool {
+        self.sandbox || self.round_active || !self.bloons.is_empty()
     }
     fn finish_round(&mut self){
             // The round's end flushes the factories too (VERIFIED by recording: Path.bloonsList

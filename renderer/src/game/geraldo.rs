@@ -113,7 +113,7 @@ impl Game {
                     } else {
                         0.0
                     };
-                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0 };
+                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                     let tiers = self.towers[g].tiers;
                     self.emit(p, dir, &single, &proj, None, tiers, gid);
                     true

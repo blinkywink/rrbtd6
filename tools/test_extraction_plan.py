@@ -60,8 +60,13 @@ class PlanTests(unittest.TestCase):
         self.assertIn(("tools/assets/compact_anims.py", str(ctx.out / "models")), ctx.calls)
         self.assertIn(("tools/assets/pack_anims.py", str(ctx.out / "models")), ctx.calls)
         self.assertIn(("tools/assets/delta_anims.py", str(ctx.out / "models")), ctx.calls)
+        self.assertIn(("tools/assets/repack_anims.py", str(ctx.out / "models")), ctx.calls)
+        self.assertIn(("tools/assets/word_anims.py", str(ctx.out / "models"), "--root", str(ctx.root)), ctx.calls)
         self.assertEqual(ctx.calls[-1], ("tools/assets/share_model_textures.py", str(ctx.out / "models")))
-        self.assertEqual(driver.STEPS[-1], driver.finish)
+        self.assertEqual(driver.STEPS[-2:], [driver.finish, driver.dedupe])
+        ctx.calls.clear()
+        driver.dedupe(ctx)
+        self.assertEqual(ctx.calls, [("tools/assets/link_duplicates.py", str(ctx.out))])
         self.assertGreater(driver.STEP_VERSIONS["finish"], 1)
 
     def test_new_menus_and_daily_chest_hit_volume_are_in_the_launcher_recipe(self):

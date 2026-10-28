@@ -411,11 +411,14 @@ impl Title {
             return now - c >= self.ui.clip_length("TitleScreenBg", "TitleScreenBgClose").max(0.25) as f64;
         }
         let opening = ui_t < ui_open || bg_t < bg_open;
+        // The buttons work once they're in: TitleScreen.TransitionToMainMenu has no wait for the
+        // background's open clip (the plane), which runs about a second longer than the UI's.
+        let ui_opening = ui_t < ui_open;
         let test_start = std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_STARTUP_PRESS_START").is_some();
         let test_account=std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_STARTUP_ACCOUNT").is_some();
-        if !opening && (self.ui.node.clicked(&format!("{info}/LoginButton/Button")) || self.ui.node.clicked(&format!("{info}/PlayerNameTxt")) || test_account) {
+        if !ui_opening && (self.ui.node.clicked(&format!("{info}/LoginButton/Button")) || self.ui.node.clicked(&format!("{info}/PlayerNameTxt")) || test_account) {
             hud.account_ui.open(&self.root);
-        } else if (self.ui.node.clicked(&format!("{TITLE_UI}/Start")) || test_start) && !opening {
+        } else if (self.ui.node.clicked(&format!("{TITLE_UI}/Start")) || test_start) && !ui_opening {
             // TitleScreen.TransitionToMainMenu (click sound, music fades over 2 s).
             self.closing = Some(now);
             if std::env::var_os("RRBTD6_PRESENTATION_CHECK").is_some() { crate::presentation_check::arm(); }

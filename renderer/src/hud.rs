@@ -99,6 +99,8 @@ pub struct Hud {
     pub show_pops: bool,
     /// Seconds since the upgrade menu opened on the left (lives/cash slide out of its way).
     stats_slide: Option<f32>,
+    /// The upgrade menu is open on the right, over the sandbox menu.
+    tsm_right: bool,
     green: TmpStyle,
     brown: TmpStyle,
     pub(crate) menus: crate::menus::Menus,
@@ -117,8 +119,11 @@ pub struct Hud {
 const DRAG_THRESHOLD: f32 = 10.0;
 /// ScrollRect decelerationRate (velocity kept per second).
 const DECELERATION: f32 = 0.135;
-/// Shop scroll per mouse-wheel notch (canvas units, half a button row).
-const WHEEL_STEP: f32 = 162.0;
+/// Shop ScrollRect m_ScrollSensitivity (16:9 UITowers): canvas units per mouse-wheel notch.
+const WHEEL_STEP: f32 = 150.0;
+/// miniquad reports the raw Windows wheel delta (WHEEL_DELTA = 120 per notch); Unity's
+/// scrollDelta counts notches.
+const WHEEL_NOTCH: f32 = 120.0;
 
 /// MainHudLeftAlign "StatsPanel" controller: LeftGroup anchoredPosition.x, sampled over
 /// StatsSlideInFromLeft (0.167 s); StatsSlideInFromRight snaps back to the first value.
@@ -392,6 +397,7 @@ impl Hud {
                 .and_then(|v| v["show_pops"].as_bool())
                 .unwrap_or(false),
             stats_slide: None,
+            tsm_right: false,
             green,
             brown,
             menus,
@@ -598,7 +604,17 @@ impl Hud {
         find_icon(&self.icons, name, tower, path, tier)
     }
 
-    pub fn draw(&mut self, game: &Game, selected: Option<usize>, placing: Option<usize>, speed: u32, auto_start: bool) -> Vec<Action> {
+    /// BloonMenu.Toggle / Show: an obscured panel reopens, then Show clears selection.
+    /// Keep this handoff in one place so the HUD and the game agree in the same frame.
+    pub fn toggle_sandbox(&mut self, selected: &mut Option<usize>) {
+        let obscured = selected.is_some() && self.tsm_right;
+        self.sandbox.open = !self.sandbox.open || obscured;
+        if self.sandbox.open {
+            *selected = None;
+        }
+    }
+
+    pub fn draw(&mut self, game: &Game, mut selected: Option<usize>, placing: Option<usize>, speed: u32, auto_start: bool) -> Vec<Action> {
         let mut out = Vec::new();
         let s = Self::canvas_scale();
         self.scale = s;
@@ -618,7 +634,10 @@ impl Hud {
         let tb = format!("{SHOP}/ToggleBloons");
         self.shop.set_active(&tb, game.sandbox);
         if game.sandbox && self.shop.clicked(&tb) {
-            self.sandbox.open = !self.sandbox.open;
+            self.toggle_sandbox(&mut selected);
+            if self.sandbox.open {
+                out.push(Action::Close);
+            }
         }
         let go = format!("{SHOP}/FastFoward-Go");
         // Sandbox: the button only toggles fast forward (rounds come from the sandbox menu's
@@ -647,7 +666,7 @@ impl Hud {
             let over = view.screen.contains(m);
             let wheel = mouse_wheel().1;
             if over && wheel != 0.0 {
-                self.scroll -= wheel.clamp(-3.0, 3.0) * WHEEL_STEP;
+                self.scroll -= wheel / WHEEL_NOTCH * WHEEL_STEP;
                 self.scroll_vel = 0.0;
             }
             if over && is_mouse_button_pressed(MouseButton::Left) {
@@ -750,6 +769,7 @@ impl Hud {
         // MainHudRightAlign "OpenRight" state: the round panel slides left of an open menu.
         let menu_w = self.tsm.find("Ratio/Scaler/BG1").map_or(0.0, |n| n.screen.w / s);
         let open_right = tw.is_some_and(|(_, tw)| tw.pos[0] < (game.bounds.0[0] + game.bounds.1[0]) / 2.0);
+        self.tsm_right = open_right;
         self.right.rt.pos.x = -25.0 - if open_right { menu_w } else { 0.0 };
         self.stats_slide = (tw.is_some() && !open_right).then(|| self.stats_slide.map_or(0.0, |t| t + dt));
         if let Some(g) = self.left.find_mut("LeftGroup") {
@@ -1182,7 +1202,8 @@ impl Hud {
         if let Some(race)=&mut self.race_ui{draw_tree(race,map,&mut ctx);}
         draw_tree(&mut self.shop, full, &mut ctx);
         self.draw_geraldo(game, selected, canvas, SHOP_W, s, &mut out);
-        self.draw_sandbox(game, full, canvas.y, s, &mut out);
+        let tsm_over_sandbox = self.tsm_right;
+        self.draw_sandbox(game, full, canvas.y, s, tsm_over_sandbox, &mut out);
         self.draw_abilities(game, &mut out);
         self.draw_temple(full, canvas.y, s, &mut out);
         // IMF Loan: what's still owed, in red under the cash.

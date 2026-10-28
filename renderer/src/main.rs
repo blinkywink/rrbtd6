@@ -49,6 +49,8 @@ use std::path::PathBuf;
 const BURST_LIFE: f32 = 0.3;
 /// Seconds a Sniper shot's tracer stays visible (stand-in effect).
 const TRACER_LIFE: f32 = 0.12;
+/// Seconds a LineEffectModel beam stays drawn after its shot.
+const BEAM_HOLD: f32 = 0.25;
 
 /// The tier-index keys of tower `t`'s model and, for a Paragon, of its top: the display level's
 /// own versions when exported ("paragon3", "paragon_top3"), else the first level's.
@@ -235,6 +237,17 @@ fn game_icon(root: &std::path::Path) -> Option<miniquad::conf::Icon> {
 }
 
 fn conf() -> macroquad::conf::Conf {
+    if std::env::args().nth(1).as_deref()==Some("--audit-animation-codec"){
+        let args:Vec<_>=std::env::args().collect();
+        let result=(||->std::io::Result<()>{
+            let root=args.get(2).ok_or_else(||std::io::Error::other("missing models directory"))?;
+            let report=args.get(3).ok_or_else(||std::io::Error::other("missing report path"))?;
+            let results=animation_storage::audit_candidates(std::path::Path::new(root))?;
+            std::fs::write(report,serde_json::to_vec(&results)?)?;Ok(())
+        })();
+        if let Err(error)=result{eprintln!("codec audit failed: {error}");std::process::exit(1);}
+        std::process::exit(0);
+    }
     if std::env::args().nth(1).as_deref()==Some("--canonicalize-anims") {
         let Some(path)=std::env::args_os().nth(2) else {eprintln!("missing models directory");std::process::exit(2)};
         match runtime_anim_export::run(std::path::Path::new(&path)) {
@@ -703,6 +716,11 @@ async fn game_main() {
     let mut pops: Vec<([f32; 2], f32)> = Vec::new();
     let mut bursts: Vec<(game::Burst, f32)> = Vec::new();
     let mut tracers: Vec<(([f32; 2], [f32; 2]), f32)> = Vec::new();
+    let mut beams: Vec<(([f32; 2], [f32; 2], data::LineFx), f32)> = Vec::new();
+    let mut bolts: Vec<(([f32; 2], [f32; 2], data::Bolts, u64), f32)> = Vec::new();
+    // Beam quads (LineEffectModel displays exported as a one-sided mesh): their texture, tint
+    // and width from meta.json, drawn as a flat strip.
+    let mut beam_strips: HashMap<String, Option<(Texture2D, [u8; 4], f32)>> = HashMap::new();
     let mut cash_pops: Vec<(([f32; 2], f64), f32)> = Vec::new();
     // Crossbow Master's "Crit!" (CritText.prefab): (where, when).
     let mut crit_texts: Vec<([f32; 2], f32)> = Vec::new();
@@ -2020,7 +2038,10 @@ async fn game_main() {
                     let (mut ab, mut ao) = (Vec::new(), Vec::new());
                     for (dir, off, ai) in attack_index[t.def].get(&key).into_iter().flatten() {
                         // Each attack display turns with its own attack (Robo Monkey's arms).
-                        let aim_yaw = std::f32::consts::FRAC_PI_2 - t.aims.get(*ai).map_or(t.aim, |a| a.0);
+                        // A RotateToPointer attack (Dartling) turns smoothly at its rate: its gun
+                        // follows the tower's turning angle, not the aim of its last shot.
+                        let turns = game.tier_of(t).and_then(|tr| tr.attacks.get(*ai)).is_some_and(|a| a.turn_rate.is_some_and(|r| r < 1e5));
+                        let aim_yaw = std::f32::consts::FRAC_PI_2 - if turns { t.angle } else { t.aims.get(*ai).map_or(t.aim, |a| a.0) };
                         if let Some(m) = tier_anims.get_mut(&(t.def, dir.clone())).and_then(|m| m.as_mut()) {
                             let (s, c) = aim_yaw.sin_cos();
                             let p = [pos[0] + off[0] * c + off[2] * s, pos[1] + off[1], pos[2] - off[0] * s + off[2] * c];
@@ -2268,6 +2289,107 @@ async fn game_main() {
                 let k = 1.0 - (now - t0) * speed as f32 / TRACER_LIFE;
                 let (a, b) = ([a[0], a[1] - 10.0 * tilt], [b[0], b[1] - 10.0 * tilt]);
                 render3d::flat_segment(a, b, 10.0, 1.2, Color::new(1.0, 0.9, 0.5, 0.15 * k), Color::new(1.0, 1.0, 0.85, 0.9 * k));
+            }
+            // LineEffectModel beams (Ray of Doom, Plasma Accelerator): the beam display tiled every
+            // lineDisplayLength from the eject point, out to the line's end when endless (else
+            // one length). Shown while the weapon keeps firing (a short hold between shots).
+            beams.extend(game.beams.drain(..).map(|b| (b, now)));
+            // (Held until just past Ray of Doom's next shot, 0.2 s: it stays on while firing.)
+            beams.retain(|(_, t0)| (now - t0) * (speed as f32) < BEAM_HOLD);
+            {
+                // Only the newest beam per start point (a fast weapon queues one a frame).
+                let mut seen: Vec<[i32; 2]> = Vec::new();
+                for ((a, b, lf), _) in beams.iter().rev() {
+                    let key = [a[0].round() as i32, a[1].round() as i32];
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    seen.push(key);
+                    let Some(name) = lf.beam.as_ref().and_then(|g| proj_index.get(g)).cloned() else { continue };
+                    if !beam_strips.contains_key(&name) {
+                        let dir = proj_root.join(&name);
+                        let meta: Option<serde_json::Value> = std::fs::read_to_string(dir.join("meta.json")).ok().and_then(|s| serde_json::from_str(&s).ok());
+                        let strip = match meta {
+                            Some(m) => {
+                                let part = &m["parts"][0];
+                                let c = |i: usize| (part["tint"][0][i].as_f64().unwrap_or(1.0).clamp(0.0, 1.0) * 255.0) as u8;
+                                let w = (m["bbox"][1][0].as_f64().unwrap_or(5.0) - m["bbox"][0][0].as_f64().unwrap_or(-5.0)) as f32;
+                                match part["texture"].as_str() {
+                                    Some(t) => load_work::complete_asset(tex(dir.join(t))).map(|t| (t, [c(0), c(1), c(2), c(3)], w)),
+                                    None => None,
+                                }
+                            }
+                            None => None,
+                        };
+                        beam_strips.insert(name.clone(), strip);
+                    }
+                    if proj_tried.insert(name.clone()) {
+                        if let Some(d) = load_work::complete_asset(load_proj(proj_root.join(&name))) {
+                            proj_displays.insert(name.clone(), d);
+                        }
+                    }
+                    let Some(disp) = proj_displays.get(&name) else { continue };
+                    let strip = beam_strips.get(&name).and_then(|s| s.as_ref());
+                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    let dist = dx.hypot(dy).max(1e-3);
+                    let (ux, uy) = (dx / dist, dy / dist);
+                    let heading = uy.atan2(ux);
+                    let seg = lf.len.max(1.0);
+                    let reach = if lf.endless { dist } else { seg.min(dist) };
+                    let tiles = (reach / seg).ceil().max(1.0) as usize;
+                    for i in 0..tiles {
+                        let d = seg * (i as f32 + 0.5);
+                        let (x, z) = (a[0] + ux * d, a[1] + uy * d - 10.0 * tilt);
+                        match disp {
+                            ProjDisplay::Mesh(m) => match strip {
+                                // INFERRED: BeamLight (a shader graph, not exported) runs the glow's
+                                // cross-section along the quad; the mesh maps the whole radial
+                                // glow, which tiled would read as beads.
+                                Some((t, c, w)) => render3d::flat_sprite_additive(t, x, 10.0, z, *w, seg, [0.5, 0.5], [ux, uy], *c, true),
+                                None => m.draw_at([x, 10.0, z], std::f32::consts::FRAC_PI_2 - heading, &mut scratch),
+                            },
+                            ProjDisplay::Sprite { tex, w, .. } => render3d::flat_sprite(tex, x, 10.0, z, *w, seg, [0.5, 0.5], [ux, uy]),
+                            ProjDisplay::Layers(ls) => draw_layers(ls, x, 10.0, z, heading, 0.0),
+                        }
+                    }
+                }
+            }
+            // CreateLightningEffect bolts: of its displays, the shortest whose sprite reaches the
+            // jump (else the longest; one of each size picked by the shot's uid), stretched
+            // along it, for the effect's lifeSpan.
+            bolts.extend(game.bolts.drain(..).map(|b| (b, now)));
+            bolts.retain(|((_, _, bl, _), t0)| (now - t0) * (speed as f32) < bl.life);
+            for ((a, b, bl, uid), _) in &bolts {
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let dist = dx.hypot(dy);
+                if dist < 0.5 {
+                    continue;
+                }
+                let names: Vec<String> = bl.displays.iter().filter_map(|g| proj_index.get(g).cloned()).collect();
+                for name in &names {
+                    if proj_tried.insert(name.clone()) {
+                        if let Some(d) = load_work::complete_asset(load_proj(proj_root.join(name))) {
+                            proj_displays.insert(name.clone(), d);
+                        }
+                    }
+                }
+                let mut opts: Vec<(f32, f32, &Texture2D)> = Vec::new();
+                for name in &names {
+                    match proj_displays.get(name) {
+                        Some(ProjDisplay::Sprite { tex, w, h, .. }) => opts.push((*h, *w, tex)),
+                        Some(ProjDisplay::Layers(ls)) if !ls.is_empty() => opts.push((ls[0].h, ls[0].w, &ls[0].tex)),
+                        _ => {}
+                    }
+                }
+                if opts.is_empty() {
+                    continue;
+                }
+                let fit = opts.iter().map(|o| o.0).filter(|&h| h >= dist).fold(f32::MAX, f32::min);
+                let want = if fit == f32::MAX { opts.iter().map(|o| o.0).fold(0.0, f32::max) } else { fit };
+                let same: Vec<_> = opts.iter().filter(|o| o.0 == want).collect();
+                let (_, w, t) = same[(*uid as usize) % same.len()];
+                let (mx, mz) = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5 - 10.0 * tilt);
+                render3d::flat_sprite(t, mx, 12.0, mz, *w, dist, [0.5, 0.5], [dx / dist, dy / dist]);
             }
             if let (Some(def), true) = (placing, in_map) {
                 let in_hand = tier_index[def].get("000").or(tier_index[def].get("100")).cloned();
@@ -2544,7 +2666,15 @@ async fn game_main() {
             let t0 = get_time();
             h.geraldo.armed = item_pick;
             let coop_blocked=h.coop_blocks(mouse_position().into());
-            if coop_blocked{uitree::block_input(true);}
+            // In game no front-end popup owns the input: a block a menu left set (the saved-game
+            // warning's Start New used to) must not leave every HUD button dead.
+            uitree::block_input(coop_blocked);
+            if autotest.is_some() && !coop_blocked && game.sandbox
+                && std::env::var("RRBTD6_SANDBOX_TOGGLE_FRAME").ok().and_then(|v| v.parse::<u32>().ok()) == Some(frames)
+            {
+                h.toggle_sandbox(&mut selected);
+                eprintln!("autotest: sandbox toggle selected={selected:?} open={}", h.sandbox.open);
+            }
             let mut actions = h.draw(&game, selected, placing, speed, auto_start);
             if coop_blocked{uitree::block_input(false);actions.clear();}
             h.draw_coop(&game,coop_config.as_ref(),front.coop_slot(),coop_runtime.as_ref().map(|r|&r.replica.requests),coop_runtime.as_ref().map_or(0,|r|r.replica.frame),&mut actions);

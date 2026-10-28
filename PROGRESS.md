@@ -261,3 +261,34 @@ model metadata files, plus every non-path metadata value. Repeat pass changed
 nothing. Existing exe passed gameplay (Dart/Wizard) and home-menu smoke captures.
 No renderer/simulation code changed. Claude's engine/game and website edits remain
 outside this change.
+
+
+2026-10-27 animation recompression: packed animations now use zlib level 6 (pack_anims.py,
+delta_anims.py) and finish step v7 runs repack_anims.py to migrate existing installs. Every
+replacement is streamed, verified byte-for-byte against the original payload and swapped
+atomically only when smaller. Local migration: 1,841 animations, 3.232 -> 2.833 GB, saving
+0.399 GB (12.3%) in 257 s with two workers; no pending files remain. Models folder
+3.991 -> 3.591 GB. Runtime decoding is unchanged (any zlib level reads the same); rebuilt
+BTD6.exe gameplay smoke (Heli 5-0-0, Wizard, Alchemist, Ninja, MOAB) rendered correctly.
+
+2026-10-27 duplicate assets: dedupe step v1 (link_duplicates.py) stores byte-identical runtime
+assets once as NTFS hard links; every path and byte is unchanged, so no runtime change. Only
+binary assets (.png/.dz/.z/.bin/.flac/...) are linked, never metadata. Before any later
+re-export the driver splits links back into separate copies (exporters overwrite in place) and
+dedupe relinks at the end. Local: 3,802 files, 0.328 GB stored once (mostly tower animations
+repeated across upgrade tiers and the same shadow.png in ~1,000 model folders). Runtime asset
+folders 5.614 -> 5.285 GB. Gameplay smoke with the rebuilt BTD6.exe rendered normally.
+
+
+2026-10-28: finish v8 measured lossless .wz animation migration: 1,059 accepted,
+547 retained old format; 629 MB logical savings. Runtime folders now 5.138 GB
+logical / 4.781 GB unique file bytes after hard-link deduplication, versus
+5.767 / 5.439 GB immediately before. Accepted stream decode medians sum to
+12.120 -> 9.980 s; no per-frame simulation/rendering change. Exact native/Python
+verification, 60 tooling tests and six storage tests passed. Full game suite
+still has the separate Preemptive Strike failure. See tools/EXTRACTION.md.
+
+Sandbox: opening Bloons clears selection in the same frame. Selected right-side
+upgrade panels no longer make the Bloons button appear dead. Fresh installed
+GameAssembly trace confirms Show calls SetSelected(null); broader native external
+hide/position wiring is not yet fully established. Selected Druid smoke passed.

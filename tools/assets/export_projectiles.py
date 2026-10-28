@@ -222,14 +222,27 @@ for guid, p in sorted(plan.items(), key=lambda kv: (index.get(kv[1]["prefab"], "
         n = sprite_layers(root, out)
         done[name] = f"sprite {w:.2f} x {h:.2f}, {n} layers"
     else:
+        # The mesh subprocess loads the bundle itself: free ours first so only one copy of a big
+        # bundle (asset_references_assets_all, ~13 GB unpacked) is in memory at a time.
+        if os.path.getsize(os.path.join(AA, bundle)) > 200_000_000:
+            envs.clear()
+            root = sr = af = None
+            gc.collect()
         done[name] = export_mesh(out, bundle, prefab)
         if done[name].startswith("FAIL"):
             # The subprocess runs out of memory while this process holds every loaded bundle.
             envs.clear()
             gc.collect()
             done[name] = export_mesh(out, bundle, prefab)
-            envs[bundle] = UnityPy.load(os.path.join(AA, bundle))
-            root = dict(envs[bundle].container.items())[prefab].deref()
+        if done[name].startswith(("mesh 0 parts", "FAIL")) and bundle not in envs:
+            try:
+                envs[bundle] = UnityPy.load(os.path.join(AA, bundle))
+                root = dict(envs[bundle].container.items())[prefab].deref()
+            except MemoryError:
+                envs.clear()
+                gc.collect()
+                print(name, done[name], "(no reload for the particle stand-in: out of memory)", flush=True)
+                continue
         if done[name].startswith(("mesh 0 parts", "FAIL")):
             img, size = particle_sprite(root)
             if img is not None:

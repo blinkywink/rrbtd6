@@ -16,3 +16,4 @@ fsspec==2026.9.0
 tpk_ar==0.2.4
 
 soundfile==0.13.1
+zstandard==0.25.0

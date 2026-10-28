@@ -275,3 +275,50 @@ caches and extraction tools; they are not full installer size claims. No measure
 FPS or RAM reduction is claimed for this storage migration.
 
 Shared-texture follow-up: 47 offline Python tooling checks passed.
+
+Animation recompression (2026-10-27, finish step v7)
+----------------------------------------------------
+pack_anims.py and delta_anims.py now write zlib level 6 instead of level 1. repack_anims.py
+recompresses existing level-1 streams in place (the zlib FLEVEL bits tell them apart, so
+level-6 files are skipped and repeat runs change nothing). It streams with bounded memory,
+checks the stride and frame count against meta.json, verifies the full decoded payload hash
+before an atomic replace, and keeps the original if anything changes underneath it or the
+result isn't smaller. Measured locally: 3.232 -> 2.833 GB across 1,841 files (0.399 GB, 12.3%).
+
+Measured animation storage (2026-10-28, finish step v8)
+------------------------------------------------------
+word_anims.py adds .bin.wz: temporal 16-bit position prediction, byte prediction
+for normals, and Zstandard. This restores every existing quantized animation byte;
+there is no further quantization, frame dropping, or change to interpolation.
+Restoration runs once during worker staging, with SSE2 acceleration on x86_64
+and a scalar fallback. Playback buffers and per-frame animation work are unchanged.
+Old .bin/.z/.dz files retain read priority and remain supported. Install the new
+client before migrating; old clients cannot read a migrated .wz-only model.
+
+The extraction finish pass keeps originals while preparing candidates. The matching
+client's --audit-animation-codec command verifies decoded bytes and times three
+alternating old/new decode pairs per distinct stream. A candidate replaces its
+original only if smaller and new_median + 0.1 ms <= old_median * 0.97. Otherwise
+the candidate is removed and the original stays. Identical encoded pairs reuse
+their timing decision. Checksums, bounded decoding, atomic replacement, and source
+timestamp/size checks protect against corruption and concurrent reexports.
+Packing adds setup work; timing decisions depend on the setup machine and are not
+a guarantee of a particular future load time. No FPS or resident RAM gain is claimed.
+
+Local migration accepted 1,059 candidates and retained 547 old streams. It saved
+629,154,600 logical bytes. For accepted streams, summed native median decode times
+were 12.120 -> 9.980 seconds (17.7% less); the median per-stream reduction was
+16.2%. Some rejected streams were slower, so the gate is required.
+
+The same runtime asset folders measured 5,767,478,801 -> 5,138,324,201 logical
+bytes. Accounting for hard-linked identical files, unique file bytes changed
+5,439,157,959 -> 4,781,024,089 (658 MB, 12.1% less). These counts exclude developer
+caches, tools and executables, and do not include filesystem allocation overhead.
+They remain above the earlier official install measurement of 3,362,276,112 bytes.
+The initial baseline includes newly exported content since the previous audit.
+
+Validation: 60 offline Python tooling checks and six native storage tests passed
+(two fixture benchmarks ignored). Every migrated candidate was verified by both
+Python and the native client. The broader game suite had 132 passing tests and
+one unrelated Preemptive Strike simulation failure; 19 were ignored.
+

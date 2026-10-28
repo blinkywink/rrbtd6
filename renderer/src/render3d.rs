@@ -88,6 +88,36 @@ thread_local! {
         },
     )
     .expect("sprite shader");
+    /// Additive sprites (glow beams: Ray of Doom's BeamLight quad is light on black).
+    static ADD_MAT: Material = load_material(
+        ShaderSource::Glsl { vertex: SPRITE_VS, fragment: SPRITE_FS },
+        MaterialParams {
+            pipeline_params: PipelineParams {
+                depth_test: Comparison::LessOrEqual,
+                depth_write: false,
+                color_blend: Some(BlendState::new(Equation::Add, BlendFactor::Value(BlendValue::SourceAlpha), BlendFactor::One)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .expect("additive sprite shader");
+}
+
+/// `flat_sprite_tinted`, blended additively. With `beam` the texture's middle row runs the
+/// whole length (a glow's cross-section as a continuous beam).
+pub fn flat_sprite_additive(tex: &Texture2D, x: f32, y: f32, z: f32, w: f32, h: f32, pivot: [f32; 2], dir: [f32; 2], color: [u8; 4], beam: bool) {
+    let fwd = vec2(dir[0], dir[1]).normalize_or_zero();
+    let right = vec2(fwd.y, -fwd.x);
+    let v = |u: f32, vv: f32| {
+        let p = vec2(x, z) + right * ((u - pivot[0]) * w) + fwd * ((vv - pivot[1]) * h);
+        Vertex { position: gl(p.x, y, p.y), uv: vec2(u, if beam { 0.5 } else { 1.0 - vv }), color, normal: Vec4::ZERO }
+    };
+    ADD_MAT.with(|m| {
+        gl_use_material(m);
+        draw_geometry(&[v(0.0, 0.0), v(1.0, 0.0), v(1.0, 1.0), v(0.0, 1.0)], &[0, 1, 2, 0, 2, 3], Some(tex));
+        gl_use_default_material();
+    });
 }
 
 fn draw_sprite_mesh(mesh: &Mesh) {

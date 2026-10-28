@@ -1991,7 +1991,8 @@ impl Hud {
             if fe.adv.hide_perks{fore.set_active(&format!("{FORE}/PerksButton"),false);}
         }
         if let Screen::Menu(page)=fe.screen{if let Some(page)=fe.pages.get_mut(&page){page.warm(&mut self.sprites);}}
-        if let Some(FrontAction::Play{map,mode})=&out {
+        // Sandbox has no saves, so starting one never asks about the map's saved game.
+        if let Some(FrontAction::Play{map,mode})=out.as_ref().filter(|a|!matches!(a,FrontAction::Play{mode,..} if mode.ends_with("Sandbox"))) {
             if let Some((entry,_))=fe.list.iter().find(|(_,key)|key==map){
                 if let Some(saved)=account_preview::saved_game(&entry.id){
                     if fe.save_warning.open(&fe.root,map.clone(),mode.clone(),&saved){out=None;}
@@ -2086,7 +2087,8 @@ impl Hud {
             }
         }
         if let Some((map,mode))=fe.save_warning.draw(full,&mut ctx){out=Some(FrontAction::Play{map,mode});}
-        crate::uitree::block_input(support);
+        // Whether a popup is still open now: one closed this frame (Start New) unblocks.
+        crate::uitree::block_input(self.support_open()||fe.save_warning.is_open());
         // Every way into the Legends page (home world, menus) shows the not-supported popup.
         if next == Some(Screen::Menu(MenuPage::Legends)) {
             next = None;

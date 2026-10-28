@@ -107,12 +107,21 @@ Towers:
   the clone applies only the first copy (HYPOTHESIS P-DOTDEGRADE covers one DoT degrade a frame
   and splits restarting the other DoTs).
 
-- [ ] Monkey Sub (Logs, harness now loads the recording's map; Logs path from the game's dump):
-  sub_000_last matches. Verified: TrackTarget.Collide (a hit target is dropped and the next picked
-  at once from collision-pass positions), new targets within the whole maxSeekAngle,
-  turnRatePerFrame = turnRate x (1/60) in f32. Open (structural): the clone moves and collides
-  each projectile in turn, the game collides every projectile first and then moves them, so a
-  torpedo can't see a bloon another torpedo kills later in the same pass (sub_000_close rt 695).
+- [ ] Monkey Sub (Logs, harness loads the recording's map; Logs path from the game's dump): 14/32
+  match (000 all targetings, 003, 300, 320, 400, 420 x3, 500, 520). Verified: TrackTarget runs at
+  the frame's end (after projectiles and bloons move); a look every 5 frames (at once after it
+  hits its target) drops an invalid target and picks with BloonManager.GetClosestTarget (segments
+  as filed at the frame's start, nearest point first; plain bloons need range + 2, MOABs within
+  range + 40 by CanHitMoab and steer at that circle as it was when targeted); lifetime range
+  counts the current frame; submerge attacks paused while surfaced; shared-range targeting has no
+  MOAB circle reach; Pre-emptive Strike on entering the map from its throw offset; instant shots
+  follow after the bloons move, stay put when the target goes; CreateProjectileOnExpire only on
+  lifespan expiry (useTargetPosition on the target); Airburst fans off the dart's direction;
+  EmissionWithOffsets markers per weapon. Open: (1) 1-ulp rotation drift on small turns (sub_002
+  rt 939, 205/502 rt 644, 010 rt 3046: sin/cos of a fraction of a degree); (2) the game reuses a
+  dead MOAB's bloon object, and an Instant missile targeting it reads the recycled object's
+  position (sub_050 rt 528, 052 rt 506); (3) sub_001 rt 1291, 030 rt 955, 032 rt 591, 040 rt 816,
+  upgrades_r30 rt 901 not looked at yet.
 
 - [ ] Game RNG: Simulation.Initialise makes syncedRandom / unsyncedRandom = BufferedRandom(
   GameModel.randomSeed) (System.Random inside, NextDouble = next x 1/int.MaxValue, one value

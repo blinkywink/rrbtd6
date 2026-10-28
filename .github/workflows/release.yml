@@ -43,16 +43,20 @@ jobs:
           python -I tools/test_extraction_plan.py
           python -I tools/test_model_refs.py
           python -I tools/test_shared_textures.py
+          python -I tools/test_repack_anims.py
+          python -I tools/test_link_duplicates.py
           cargo test --release -p rrbtd6-launcher --locked
 
       - name: Build game and launcher
         shell: bash
         run: cargo build -p btd6-game -p rrbtd6-launcher --release
 
-      - name: Test lossless audio storage
+      - name: Test lossless storage
         shell: bash
         run: |
-          python -m pip install soundfile==0.13.1 numpy==2.5.4
+          python -m pip install soundfile==0.13.1 numpy==2.5.4 zstandard==0.25.0
+          python -I tools/test_word_anims.py
+          cargo test --release -p btd6-game animation_storage:: --locked
           python -I tools/test_audio_storage.py
           python -I tools/test_audio_storage.py --fixtures target/audio-fixtures
           RRBTD6_AUDIO_FIXTURES=target/audio-fixtures cargo test --release -p btd6-game lossless_mixer_equivalence --locked -- --ignored

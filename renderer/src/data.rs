@@ -539,6 +539,9 @@ pub struct Tier {
     /// PreEmptiveStrikeLauncherModel.projectileModel: launched at each MOAB-class bloon.
     #[serde(default)]
     pub preempt: Option<Proj>,
+    /// PreEmptiveStrikeLauncherModel throwOffsetX / Y / Z.
+    #[serde(default)]
+    pub preempt_offset: [f32; 3],
     /// MerchantShipModel: a merchant ship (counted by Trade Empire).
     #[serde(default)]
     pub merchant: bool,
@@ -870,6 +873,13 @@ pub struct Weapon {
     /// WeaponModel.ejectX/Y/Z: launch point relative to the tower (x right, y forward, z up).
     #[serde(default)]
     pub eject: [f32; 3],
+    /// EjectEffectModel / AlternatingEjectEffectModel: muzzle effect (prefab, scale) at the
+    /// eject point on each throw, visual only.
+    #[serde(default)]
+    pub eject_fx: Vec<(String, f32)>,
+    /// LineEffectModel (Ray of Doom): the beam drawn along its line shots.
+    #[serde(default)]
+    pub line_fx: Option<LineFx>,
     pub emission: Emission,
     pub projectile: Proj,
     pub crit: Option<Crit>,
@@ -1067,6 +1077,10 @@ pub struct Emission {
     /// MultiEmissionModel.secondaryProjectileModel: also fired from the tower each shot.
     #[serde(default)]
     pub secondary: Option<Box<Proj>>,
+    /// EmissionRotationOffProjectileDirectionModel: (startingOffset, angleInBetween,
+    /// alwaysCentre as 0 / 1).
+    #[serde(default)]
+    pub dir_off: Option<[f32; 3]>,
 }
 
 fn one_u() -> u32 {
@@ -1138,6 +1152,23 @@ pub struct ParentDamage {
 }
 
 #[derive(Deserialize, Clone)]
+pub struct Bolts {
+    pub displays: Vec<String>,
+    pub life: f32,
+}
+
+/// LineEffectModel: `beam` (display GUID) tiled every `len` along the shot, out to the map's
+/// edge when `endless`; `start` / `end` effects (prefab names) at its ends.
+#[derive(Deserialize, Clone)]
+pub struct LineFx {
+    pub beam: Option<String>,
+    pub len: f32,
+    pub endless: bool,
+    pub start: Option<String>,
+    pub end: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
 pub struct Exhaust {
     pub projectile: Proj,
     pub emission: Emission,
@@ -1158,6 +1189,9 @@ pub struct Exhaust {
     /// when its pierce does (Projectile.Exhausted).
     #[serde(default)]
     pub expire: bool,
+    /// CreateProjectileOnExpireModel.useTargetPosition: made where the shot's target is.
+    #[serde(default)]
+    pub use_target: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1259,6 +1293,24 @@ pub struct Proj {
     /// InstantModel: hits its target bloon (FilterAllExceptTargetModel) the frame it is fired.
     #[serde(default)]
     pub instant: bool,
+    /// InstantModel.destroyIfInvalid: it expires once its target is gone (else it stays).
+    #[serde(default)]
+    pub instant_destroy: bool,
+    /// InstantModel.dontFollowTarget: placed on its target once only.
+    #[serde(default)]
+    pub instant_once: bool,
+    /// Effects (prefab under effects/, scale), visual only: CreateEffectOnContactModel at each
+    /// hit, CreateEffectOnExhausted / ExhaustFraction when its pierce runs out,
+    /// CreateEffectOnExpireModel when it goes.
+    #[serde(default)]
+    pub contact_fx: Vec<(String, f32)>,
+    #[serde(default)]
+    pub exhaust_fx: Vec<(String, f32)>,
+    #[serde(default)]
+    pub expire_fx: Vec<(String, f32)>,
+    /// CreateLightningEffectModel: bolt displays drawn along each jump, for `life` seconds.
+    #[serde(default)]
+    pub bolts: Option<Bolts>,
     #[serde(default)]
     pub retarget: Option<Retarget>,
     /// FollowPathModel (boomerangs): a fixed path, x right and y forward of the throw.

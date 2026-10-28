@@ -66,7 +66,9 @@ def items(v):
 
 # INFERRED: the catalog stores no file name next to projectile display GUIDs. Each GUID is used
 # by exactly one tier family, matched here to the one projectile prefab named for that family.
-# None = no mesh/sprite prefab (particle-only fire rings); the renderer draws a stand-in.
+# None = an empty prefab (nothing drawn). Particle-only prefabs (Wall of Fire, Phoenix fireballs,
+# undead bloons) resolve through the catalog like the rest: export_projectiles.py gives them a
+# stand-in sprite and export_particles.py their particle effect, which the renderer plays instead.
 PROJECTILE_BY_GUID = {
     "bdbeaa256e6c63b45829535831843376": "Assets/Monkeys/DartMonkey/Graphics/Projectiles/Dart.prefab",
     "69bf8d5932f2bea4f9ce36f861240d2e": "Assets/Monkeys/DartMonkey/Graphics/Projectiles/TripleDart.prefab",
@@ -100,11 +102,6 @@ PROJECTILE_BY_GUID = {
     "125ac5d653097974b9707f641258f71b": "Assets/Monkeys/WizardMonkey/Graphics/Projectiles/Fireball.prefab",
     "01dfdf7fe33be28409a9c2e1db9bbec0": "Assets/Monkeys/WizardMonkey/Graphics/Projectiles/DragonsBreath.prefab",
     "e79b286d1972c1d4aa342ebc9b7e135b": "Assets/Monkeys/WizardMonkey/Graphics/Projectiles/Shimmer.prefab",
-    "27f9db7f7939e494f95841e1d1748d4c": None,  # fireball explosion
-    "49e42c2afd70db546bba06f394f61ece": None,  # wall of fire (an effect prefab)
-    "cdf07044d71c264479133c1105e1127e": None,
-    "7d20c1a1c571fbb49acb188f8b25ab4d": None,  # Necromancer undead bloons
-    "de84aa71096aed7418a5ea117dc7001e": None,  # Prince of Darkness undead MOABs
     "7c001a7fcad3c6d48b14aacba03a98bc": "Assets/Monkeys/SuperMonkey/Graphics/Projectiles/LaserBlast.prefab",
     "904432f1c20b4b145998e26a6e56cbb1": "Assets/Monkeys/SuperMonkey/Graphics/Projectiles/LaserBlastSingle.prefab",
     "2f62958cc36daf74d88833447725e357": "Assets/Monkeys/SuperMonkey/Graphics/Projectiles/PlasmaBlast.prefab",
@@ -146,7 +143,6 @@ PROJECTILE_BY_GUID = {
     "87629b86f2051a64bbd04c9509437f11": "Assets/Monkeys/BoomerangMonkey/Graphics/Projectiles/HotGlaiveLordGlaive.prefab",
     "e23d594d3bf5af44c8b1e2445fe10a9e": "Assets/Monkeys/BoomerangMonkey/Graphics/Projectiles/GlaiveLordGlaiveOrbit.prefab",
     "8dd1a46e669f8194aa4b595d265251a9": "Assets/Monkeys/BoomerangMonkey/Graphics/Projectiles/HotGlaiveLordGlaiveOrbit.prefab",
-    "40e48558ba284a64eb83a588ad6dd7d6": None,  # Ring of Fire burst
     "6f709716c169ccf4b8e4169bb868d190": None,  # Inferno Ring burst
     "595c7fb1d3705aa478d0d5171b74fb57": "Assets/Monkeys/BananaFarm/Graphics/Projectiles/Banana.prefab",
     "5ea56473fe0c6a441b0ab5891b3aa2ba": "Assets/Monkeys/BananaFarm/Graphics/Projectiles/LongLifeBanana.prefab",

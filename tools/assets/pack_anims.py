@@ -62,7 +62,7 @@ def pack(path, keep_original=False):
     pending = None
     try:
         digest = hashlib.blake2b()
-        encoder = zlib.compressobj(1)
+        encoder = zlib.compressobj(6)
         with tempfile.NamedTemporaryFile(dir=path.parent, prefix=target.name + ".", suffix=".pending", delete=False) as out:
             pending = Path(out.name)
             with path.open("rb") as src:

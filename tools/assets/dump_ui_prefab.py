@@ -134,7 +134,8 @@ def component(owner, t, cls):
         # NK_TextMeshProUGUI and other TMP subclasses.
         out["script"], cls = cls, "TextMeshProUGUI"
         out["type"] = cls
-    for k in KEEP.get(cls, []):
+    # ScrollRect subclasses (ScrollRectWithDragCancel) keep the ScrollRect fields.
+    for k in KEEP.get(cls, KEEP["ScrollRect"] if "m_ScrollSensitivity" in t else []):
         if k in t:
             out[k] = t[k]
     if "m_Color" in t:
