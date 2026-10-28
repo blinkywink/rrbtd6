@@ -1,4 +1,4 @@
-"""Decode every AudioClip of the game into local_extracted/audio/<clip>.wav (read-only): all
+"""Decode every AudioClip of the game into local_extracted/audio/<clip>.flac (read-only): all
 sound effects and voice lines (asset_references bundle) and every music track (music_assets_*
 bundles). Reports any sound name in local_extracted/game/game.json that has no clip.
 FSB5 clips are decoded with UnityPy (fmod_toolkit). Existing files are kept.
@@ -9,6 +9,9 @@ import glob
 import json
 import os
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compress_audio import encode_bytes
 
 import UnityPy
 
@@ -57,11 +60,15 @@ def export(bundle, names=None):
         if c.m_Name in have:
             continue
         try:
-            for _, data in c.samples.items():
-                open(os.path.join(OUT, c.m_Name + ".wav"), "wb").write(data)
+            samples = c.samples
+            if not samples:
+                raise ValueError("AudioClip decoded no samples")
+            for _, data in samples.items():
+                encode_bytes(data, Path(OUT) / (c.m_Name + ".flac"))
                 break
         except Exception as e:
             print("decode failed", c.m_Name, type(e).__name__, e, flush=True)
+            raise
     return done
 
 

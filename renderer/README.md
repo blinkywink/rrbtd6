@@ -814,3 +814,13 @@ animations at the exact precision the old runtime already used. Rebuild the
 client before running the developer extraction script. Whole identical frames
 can share RAM; frame offsets resolve once per pose. See tools/EXTRACTION.md for
 measured sizes, CPU costs, validation and the still-open total-size target.
+
+
+Audio storage: extracted audio now uses lossless PCM16 FLAC (audio step v2),
+with legacy WAV reads retained. Music decoding and shared-buffer preparation
+happen on workers; the existing mixer/resampler consumes the identical prepared
+samples. The queue transfers an Arc instead of copying a whole track on the
+mixer thread. Two decode jobs and one next-track buffer bound preparation.
+Cold SFX can still wait on first use, and decoded playback PCM is unchanged in
+size. Local audio: 1.990 -> 0.845 GB, every source sample verified before removing
+the WAV. Build/install the new executable before migrating older local assets.

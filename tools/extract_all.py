@@ -296,6 +296,7 @@ def particles(c):
 def audio(c):
     c.py("tools/assets/export_audio.py", c.game)
     c.py("tools/assets/export_jukebox.py", c.game)
+    c.py("tools/assets/compress_audio.py", c.out / "audio")
 
 
 def bloon_models(c):
@@ -347,7 +348,9 @@ def startup(c):
     c.py("tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", "NinjaKiwiSplashUI", "InitialLoadingUI",
          "TitleScreenUI", "DataConflictUI", "AccountManagementUI", "LinkAccountUI",
          env={"RRBTD6_UI_BUNDLES": "*_monoscripts_*.bundle;initial_loading_ui_scenes_all_*.bundle;ui_scenes_all_*.bundle;asset_references_assets_all_*.bundle"})
-    c.py("tools/assets/export_bundle_sprites.py", c.game, c.out / "sprites/_loose", "ui_scenes_all_*.bundle", "TitleBg")
+    c.py("tools/assets/export_bundle_sprites.py", c.game, c.out / "sprites/_loose", "ui_scenes_all_*.bundle", "TitleBg", "BTD6Logo")
+    # The window and taskbar icon, from the player's own BloonsTD6.exe.
+    c.py("tools/assets/export_game_icon.py", c.game, c.out / "brand")
     # The splash and initial loading screens' sprites live in their own scene bundle.
     c.py("tools/assets/export_bundle_sprites.py", c.game, c.out / "sprites/_loose", "initial_loading_ui_scenes_all_*.bundle",
          "NZoA_RGB_Game Sector Logo_WhiteText", "NkLogoKiwiIcon", "NkLogoKiwiText", "NkLogoMask", "NkLogoNinjaText",
@@ -432,8 +435,10 @@ def load_state(path, fp):
 # extended exporter). Other tools changes do not make players re-extract.
 STEP_VERSIONS = {s.__name__: 1 for s in STEPS}
 # startup 2: the splash and initial loading screens' sprites.
-STEP_VERSIONS["startup"] = 3
+# startup 4: the title screen's BTD6Logo and the game's window icon.
+STEP_VERSIONS["startup"] = 4
 STEP_VERSIONS["finish"] = 5
+STEP_VERSIONS["audio"] = 2
 
 
 def cleanup_bundle_cache(c):

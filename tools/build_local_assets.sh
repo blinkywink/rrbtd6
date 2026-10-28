@@ -135,6 +135,7 @@ $PY tools/assets/export_missing_upgrade_icons.py "$GAME"
 echo "== audio: every sound clip and music track, decoded to WAV; the jukebox track list"
 $PY tools/assets/export_audio.py "$GAME"
 $PY tools/assets/export_jukebox.py "$GAME"
+$PY tools/assets/compress_audio.py local_extracted/audio
 echo "== MOAB-class 3D models and damage states"
 $PY tools/assets/export_bloon_models.py "$GAME"
 $PY tools/assets/canonical_anims.py . local_extracted/models

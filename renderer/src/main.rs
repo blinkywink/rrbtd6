@@ -224,6 +224,16 @@ fn win_size() -> (i32, i32) {
         .unwrap_or((1600, 900))
 }
 
+/// The window and taskbar icon: brand/icon{16,32,64}.rgba from the player's own game.
+fn game_icon(root: &std::path::Path) -> Option<miniquad::conf::Icon> {
+    let read = |n: u32| std::fs::read(root.join(format!("brand/icon{n}.rgba"))).ok();
+    Some(miniquad::conf::Icon {
+        small: read(16)?.try_into().ok()?,
+        medium: read(32)?.try_into().ok()?,
+        big: read(64)?.try_into().ok()?,
+    })
+}
+
 fn conf() -> macroquad::conf::Conf {
     if std::env::args().nth(1).as_deref()==Some("--canonicalize-anims") {
         let Some(path)=std::env::args_os().nth(2) else {eprintln!("missing models directory");std::process::exit(2)};
@@ -241,12 +251,9 @@ fn conf() -> macroquad::conf::Conf {
         high_dpi: true,
         sample_count: std::env::var("RRBTD6_MSAA").ok().and_then(|v| v.parse().ok()).unwrap_or(adv.msaa.max(1)),
         platform: miniquad::conf::Platform { window_aspect_ratio:Some((16,9)), swap_interval: Some(if adv.vsync { 1 } else { 0 }), ..Default::default() },
-        // RustTD6's own icon (assets/brand; DEVIATIONS.md 8).
-        icon: Some(miniquad::conf::Icon {
-            small: *include_bytes!("../../assets/brand/icon16.rgba"),
-            medium: *include_bytes!("../../assets/brand/icon32.rgba"),
-            big: *include_bytes!("../../assets/brand/icon64.rgba"),
-        }),
+        // The game's own icon, taken from the player's BloonsTD6.exe at setup (brand/; nothing
+        // of it is shipped). None until the assets are prepared.
+        icon: game_icon(&root()),
         ..Default::default()
     };
     let mut conf:macroquad::conf::Conf=miniquad_conf.into();

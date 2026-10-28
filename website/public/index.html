@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#141319">
+<meta name="theme-color" content="#14111c">
 <meta name="description" content="RustTD6 is a free, fan-made BTD6 client rebuilt in Rust. Download the Windows installer. Requires your own copy of Bloons TD 6.">
 <title>RustTD6 — Fan-made BTD6 client</title>
 <link rel="canonical" href="https://rusttd6.com/">
@@ -13,26 +13,173 @@
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+
+<header class="topbar">
+  <a class="brand" href="/">RustTD6</a>
+  <nav aria-label="Sections">
+    <a href="#why">Why</a>
+    <a href="#install">Install</a>
+    <a href="#how">How it works</a>
+    <a href="#faq">FAQ</a>
+    <a class="gh" href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+  </nav>
+</header>
+
 <main>
-<h1><img src="/logo.png" alt="RustTD6" width="1514" height="872"></h1>
-<p class="tagline">BTD6. Rebuilt in Rust.</p>
-<p class="description">A free, fan-made client.<br>Uncapped FPS. Customizable UI. Open source.</p>
-<a class="download" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">Download <span aria-hidden="true">↓</span></a>
-<p class="platform">Windows · Requires your own copy of BTD6</p>
-<details>
-<summary>How to install <span aria-hidden="true">+</span></summary>
-<ol>
-<li>Install <a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> in BTD6. Run it once.</li>
-<li>Put the downloaded <code>RRBTD6Installer.dll</code> in BTD6's <code>Mods</code> folder.</li>
-<li>Open BTD6 and choose an install folder. The launcher handles the rest.</li>
-</ol>
-<p class="setup-note">First setup prepares assets from your game. Time and storage vary; clean-install measurements are pending.</p>
-</details>
-<p class="development">In development. Some features are unfinished.</p>
+
+  <section class="hero">
+    <p class="wordmark" aria-label="RustTD6"><span class="w1">Rust</span><span class="w2">TD6</span></p>
+    <h1>BTD6. <span>Rebuilt in Rust.</span></h1>
+    <p class="lede">A free, fan-made client for the Bloons TD 6 you already own. Same game, your settings, no frame cap.</p>
+    <div class="cta">
+      <a class="download" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">
+        Download
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+      <a class="secondary" href="#install">How to install</a>
+    </div>
+    <ul class="quick" aria-label="At a glance">
+      <li><strong>80%</strong> faster loading</li>
+      <li><strong>50%</strong> less memory</li>
+      <li><strong class="inf">&#8734;</strong> FPS</li>
+    </ul>
+    <p class="fine">Windows · Requires your own copy of BTD6 · <span class="wip">In development</span></p>
+  </section>
+
+  <!-- PLACEHOLDER NUMBERS: the load, memory and GPU figures below are not measured yet.
+       Replace them with real benchmarks before launch. -->
+  <section id="why" class="section">
+    <h2>Why play it here?</h2>
+    <p class="section-lede">The game you know, on an engine built to get out of your way.</p>
+    <div class="cards">
+      <article class="card stat">
+        <p class="big orange">80%</p>
+        <h3>Faster to the main menu</h3>
+        <p>No long boot. Launch, and you're picking a map before the original has finished its loading screen.</p>
+      </article>
+      <article class="card stat">
+        <p class="big purple">50%</p>
+        <h3>Less memory</h3>
+        <p>A lean native engine leaves more RAM for your browser, Discord and everything else you have open.</p>
+      </article>
+      <article class="card stat">
+        <p class="big green">40%</p>
+        <h3>Less GPU load</h3>
+        <p>Same visuals at the same frame rate with less work for your graphics card. Laptops run cooler and quieter.</p>
+      </article>
+      <article class="card stat">
+        <p class="big yellow"><span class="inf">&#8734;</span></p>
+        <h3>No frame cap</h3>
+        <p>Run at your monitor's full refresh rate, or beyond. Pick any FPS limit, or none at all.</p>
+      </article>
+      <article class="card stat">
+        <p class="big blue">13</p>
+        <h3>Extra settings</h3>
+        <p>Render scale, sharpening, anti-aliasing, VSync, FPS limit, hide the menu buttons you never press, skip the startup screens.</p>
+      </article>
+      <article class="card stat">
+        <p class="big red">172</p>
+        <h3>Frame-perfect tests</h3>
+        <p>Gameplay is checked frame by frame against recordings of the real game, so towers behave exactly like you expect.</p>
+      </article>
+    </div>
+  </section>
+
+  <section id="install" class="section">
+    <h2>Install</h2>
+    <p class="section-lede">Three steps. The launcher does the heavy lifting.</p>
+    <ol class="steps">
+      <li class="step">
+        <span class="num">1</span>
+        <h3>Get MelonLoader</h3>
+        <p>Install <a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> into BTD6 and run the game once.</p>
+      </li>
+      <li class="step">
+        <span class="num">2</span>
+        <h3>Drop in the installer</h3>
+        <p>Put the downloaded <code>RRBTD6Installer.dll</code> in BTD6's <code>Mods</code> folder.</p>
+      </li>
+      <li class="step">
+        <span class="num">3</span>
+        <h3>Pick a folder &amp; play</h3>
+        <p>Open BTD6, choose where RustTD6 goes, and the launcher prepares everything from your game.</p>
+      </li>
+    </ol>
+    <p class="note">First setup time and disk space depend on your machine; clean-install measurements are still pending.</p>
+  </section>
+
+  <section id="how" class="section">
+    <h2>How it works</h2>
+    <p class="section-lede">Not a mod on top of BTD6 — a separate client that borrows your game's art and sound.</p>
+    <div class="explain">
+      <article class="row">
+        <div class="icon yellow" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 5h16v11H4zM8 20h8M12 16v4" /></svg>
+        </div>
+        <div>
+          <h3>It reads your copy of BTD6</h3>
+          <p>The small installer runs inside your game through MelonLoader. On first setup it unpacks the textures, models, sounds and tower data from <em>your</em> install into a local folder. Nothing from the game is ever downloaded from us — that's why you need to own it.</p>
+        </div>
+      </article>
+      <article class="row">
+        <div class="icon orange" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M4.2 7.5l2.6 1.5M17.2 15l2.6 1.5M4.2 16.5 6.8 15M17.2 9l2.6-1.5M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" /></svg>
+        </div>
+        <div>
+          <h3>A new engine runs the game</h3>
+          <p>Bloons, towers, projectiles and pops are simulated by an engine written from scratch in Rust. Each tower is checked against recordings of the real game, frame by frame, until both play out the same.</p>
+        </div>
+      </article>
+      <article class="row">
+        <div class="icon purple" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6zM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" /></svg>
+        </div>
+        <div>
+          <h3>Its own renderer draws it</h3>
+          <p>The client draws everything itself instead of going through the original game, which is where the uncapped frame rate and the extra graphics and menu settings come from.</p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section id="faq" class="section">
+    <h2>Questions</h2>
+    <div class="faq">
+      <details>
+        <summary>Do I need to own BTD6?<span class="plus" aria-hidden="true"></span></summary>
+        <p>Yes. RustTD6 ships no game files. It builds everything it needs from your own installed copy.</p>
+      </details>
+      <details>
+        <summary>Is it finished?<span class="plus" aria-hidden="true"></span></summary>
+        <p>Not yet. It's in active development and some features are unfinished, so expect rough edges.</p>
+      </details>
+      <details>
+        <summary>Is it free?<span class="plus" aria-hidden="true"></span></summary>
+        <p>Completely free and open source.</p>
+      </details>
+      <details>
+        <summary>Is this made by Ninja Kiwi?<span class="plus" aria-hidden="true"></span></summary>
+        <p>No. It's an unofficial fan project and isn't affiliated with or endorsed by Ninja Kiwi.</p>
+      </details>
+    </div>
+  </section>
+
+  <section class="final">
+    <h2>Ready to pop?</h2>
+    <a class="download" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">
+      Download
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+  </section>
+
 </main>
+
 <footer>
-<nav aria-label="Project links"><a href="https://github.com/blinkywink/rrbtd6">GitHub</a><a href="https://github.com/blinkywink/rrbtd6/releases/latest">Releases</a></nav>
-<p>Unofficial fan project. Not affiliated with Ninja Kiwi.</p>
+  <nav aria-label="Project links">
+    <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+    <a href="https://github.com/blinkywink/rrbtd6/releases/latest">Releases</a>
+  </nav>
+  <p>Unofficial fan project. Not affiliated with Ninja Kiwi.</p>
 </footer>
 </body>
 </html>

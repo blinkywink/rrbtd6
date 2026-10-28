@@ -1154,6 +1154,10 @@ pub struct Exhaust {
     /// radiusPerInterval) by distance flown.
     #[serde(default)]
     pub per_distance: Option<[f32; 3]>,
+    /// CreateProjectileOnExpireModel: only when its lifespan runs out (Projectile.Expire), not
+    /// when its pierce does (Projectile.Exhausted).
+    #[serde(default)]
+    pub expire: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1927,6 +1931,12 @@ pub struct Seek {
     /// Only bloons within this many degrees of the heading (360 = any).
     pub max_angle: f32,
     pub new_targets: bool,
+    /// useLifetimeAsDistance: its range for a new target is the way it has left to fly.
+    #[serde(default)]
+    pub lifetime: bool,
+    /// constantlyAquireNewTarget: a new pick on every look, not only once it has none.
+    #[serde(default)]
+    pub constantly: bool,
 }
 
 #[derive(Deserialize, Clone)]

@@ -231,3 +231,21 @@ Finish v5 requires the matching executable, canonical_anims.py and delta_anims.p
 all old layouts remain readable. Validation: 130 Rust / 36 offline Python checks,
 real-asset exact comparisons, four GPU comparisons and menu/gameplay captures.
 Claude's simulation work and proprietary outputs remain unstaged.
+
+
+2026-10-27 audio storage: all 2,806 PCM16 WAVs replaced with verified lossless
+FLAC: 1.990 -> 0.845 GB, saving 1.145 GB (57.55%). No WAVs remain in runtime
+audio. Clean exports write FLAC directly; audio step v2 migrates old installs.
+Same mixer/resampler samples verified bit-for-bit, including the largest track.
+Music decode and shared PCM preparation run on workers; mixer queue avoids the
+large track copy. Max two workers / one music lookahead. Cold SFX can still wait;
+playback PCM memory does not shrink with the compressed disk files. Root BTD6.exe
+updated and audio-enabled gameplay/home checks passed (five effects, zero missing,
+music playing). 131 Rust game tests passed; explicit equivalence and mixer tests
+passed. Runtime asset audit now totals 7.099 GB; still larger than official BTD6.
+Claude's simultaneous simulation/data and other UI edits are left out of this
+commit. See tools/EXTRACTION.md for measurements and limits.
+
+Audio follow-up tooling validation: 42 offline Python checks passed; the release
+ZIP includes the compressor and excludes private account tools and scenarios.
+Synthetic FLAC/mixer equivalence is also wired into the release workflow.

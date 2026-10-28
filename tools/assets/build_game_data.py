@@ -564,7 +564,9 @@ def main():
                 tf = pb[k][0]["f"]
                 out["seek"] = {"distance": tf.get("distance", 0.0), "turn_rate": tf.get("turnRate", 360.0),
                                "max_angle": 360.0 if tf.get("ignoreSeekAngle") else tf.get("maxSeekAngle", 360.0),
-                               "new_targets": tf.get("trackNewTargets", True)}
+                               "new_targets": tf.get("trackNewTargets", True),
+                               "lifetime": bool(tf.get("useLifetimeAsDistance")),
+                               "constantly": bool(tf.get("constantlyAquireNewTarget"))}
         if hero_track and "seek" not in out:
             out["seek"] = {"distance": 9999.0, "turn_rate": hero_track.get("rotation", 9.0) * 60.0,
                            "max_angle": 360.0, "new_targets": True}
@@ -693,7 +695,7 @@ def main():
             # CreateProjectileOnExpireModel (First Strike's strike): spawned where it expires; a
             # target-only one inherits the expiring projectile's target.
             out["on_exhaust"] += [{"projectile": projectile(deref(ce["f"]["projectile"]), depth + 1),
-                                   "emission": emission(deref(ce["f"].get("emission")))}
+                                   "emission": emission(deref(ce["f"].get("emission"))), "expire": True}
                                   for ce in pb.get("CreateProjectileOnExpireModel", []) if deref(ce["f"].get("projectile"))]
             # DestroyWhenCollidingWithModel (DanDMonke's net trap): after collisionCount contacts
             # it goes, firing subProjectile (as pierce running out).

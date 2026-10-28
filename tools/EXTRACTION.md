@@ -192,3 +192,50 @@ Village RAM and float-representation comparisons described above; 36 offline
 Python tooling checks passed. The rebuilt client passed four exact MOAB/BAD
 GPU comparisons and migrated gameplay (including converted Mermonkey) and home
 menu smoke captures. No account/cloud writes or simulation changes were made.
+
+
+Lossless audio storage (2026-10-27, audio step v2)
+------------------------------------------------
+AudioClip exports now write verified PCM16 FLAC directly, with no intermediate
+WAV file on disk. Existing installs migrate through compress_audio.py. A WAV is
+removed only after matching rate/channels/frame count and a hash of every decoded
+16-bit sample; failure retains the source. Temporary output is flushed and
+atomically replaced. Original installed-game files are never modified.
+
+All 2,806 local clips migrated: 1,989,858,500 -> 844,680,867 bytes, saving
+1,145,177,633 bytes (57.55%); zero runtime WAVs remain. Conversion and complete
+sample verification took 13.8 seconds on this PC (four workers, warm files).
+Direct exports avoid writing then rereading all WAVs. New soundfile dependency
+is pinned in tools/requirements.txt. Older executables cannot read FLAC; install
+the matching executable before migrating. Fresh WAV exports remain readable.
+
+The same quad-snd mixer, mono duplication and resampler are retained. Music
+file reading, FLAC decoding and shared-buffer allocation run on CPU workers;
+queueing prepared shared PCM does not copy the track on the mixer thread. At
+most two background jobs and one prepared music lookahead are retained. Looping
+reuses the current buffer. Cold unprepared effects can still wait to preserve
+event timing; this is not a claim that all loading stutters have been eliminated.
+Decoded playback buffers remain PCM; disk savings do not imply equal RAM savings,
+and near track changes the next decoded track temporarily occupies extra RAM.
+
+Mixer equivalence compared every f32 bit for mono/stereo and 44.1/48/22.05 kHz
+synthetic pairs plus the largest game track (27,256,386 output samples).
+Largest track: 59.334 -> 28.880 MB; a single component decode measured 286.17 ms WAV
+versus 543.46 ms FLAC. The slower codec is why music decoding runs off the render
+thread. This is not an FPS improvement measurement.
+
+Latest audited runtime asset folders total 7,098,872,522 bytes; the official
+install previously measured 3,362,276,112 bytes. We are still larger, mostly due
+to baked vertex animations. These totals exclude developer/tool/private caches.
+Validation: 131 Rust game tests passed / 18 ignored, explicit mixer-equivalence
+and prepared-buffer mixer tests passed, and audio-enabled gameplay/home captures
+passed. Gameplay loaded five effect clips with zero missing and music playing.
+
+To reproduce mixer checks without game files, run tools/test_audio_storage.py
+--fixtures target/audio-fixtures with the extraction Python, then set
+RRBTD6_AUDIO_FIXTURES=target/audio-fixtures and run cargo test --profile game
+-p btd6-game lossless_mixer_equivalence -- --ignored --nocapture.
+
+Audio follow-up tooling validation: 42 offline Python checks passed; the release
+ZIP includes the compressor and excludes private account tools and scenarios.
+Synthetic FLAC/mixer equivalence is also wired into the release workflow.

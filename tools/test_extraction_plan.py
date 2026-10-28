@@ -38,6 +38,16 @@ def fixture(root, data):
 
 
 class PlanTests(unittest.TestCase):
+    def test_audio_extracts_compressed_and_migrates_existing_wavs(self):
+        ctx = Context(Path("fixture"))
+        driver.audio(ctx)
+        self.assertEqual(ctx.calls, [
+            ("tools/assets/export_audio.py", "game-fixture"),
+            ("tools/assets/export_jukebox.py", "game-fixture"),
+            ("tools/assets/compress_audio.py", str(ctx.out / "audio")),
+        ])
+        self.assertEqual(driver.STEP_VERSIONS["audio"], 2)
+
     def test_sprite_atlases_are_exported_once_and_late_animations_are_compacted(self):
         ctx = Context(Path("fixture"))
         ctx.root = Path("fixture-install")

@@ -1,7 +1,7 @@
 //! The original startup sequence: the Ninja Kiwi splash (NinjaKiwiSplashUI), the initial loading
 //! screen (InitialLoadingUI) and the title screen (TitleScreenUI): a perspective world of 2D
-//! sprites behind a canvas with Start. The title shows RustTD6's logo in place of the BTD6 one
-//! (DEVIATIONS.md 8); Advanced > Skip Startup Screen goes straight to the main menu.
+//! sprites behind a canvas with Start, the BTD6 logo included (from the player's own game files).
+//! Advanced > Skip Startup Screen goes straight to the main menu.
 use crate::frontend::{apply_animation, curve_value};
 use crate::hud::Hud;
 use crate::uitree::{draw_tree, Ctx, Node, R, Rt};
@@ -16,7 +16,6 @@ const SKIP_UI: f32 = 0.83;
 const SKIP_BG: f32 = 0.63;
 /// TitleScreen.TransitionToMainMenu: AudioFactory.FadeMusic(2).
 pub const MUSIC_FADE: f64 = 2.0;
-const LOGO_PNG: &[u8] = include_bytes!("../../assets/brand/title_logo.png");
 
 /// Only assets used by the title world and its own controls, including those
 /// revealed partway through the opening. Other menu pages remain lazy.
@@ -28,7 +27,7 @@ pub(crate) fn title_sprites(root: &Path) -> Vec<String> {
             let world = path.starts_with("TitleScreenBg") && component["type"] == "SpriteRenderer";
             let ui = path.starts_with(TITLE_UI) && component["type"] == "Image";
             if world || ui {
-                if let Some(name) = component["sprite"].as_str().filter(|name| *name != "BTD6Logo") { names.push(name.to_owned()); }
+                if let Some(name) = component["sprite"].as_str() { names.push(name.to_owned()); }
             }
         }
         for child in node["children"].as_array().into_iter().flatten() { visit(child, &path, names); }
@@ -267,7 +266,6 @@ pub(crate) struct Title {
     world: World,
     /// The camera's vertical field of view (degrees).
     fov: f32,
-    logo: Texture2D,
     began: f64,
     /// Seconds into the open animations (skippable).
     skip: Option<(f64, f32, f32)>,
@@ -296,9 +294,7 @@ impl Title {
         ui.node.set_active(&format!("{TITLE_UI}/PlayerInfo/PlayerNameTxt"), player.is_some());
         ui.node.set_text(&format!("{TITLE_UI}/PlayerInfo/PlayerNameTxt"), player.unwrap_or(""));
         ui.node.set_active(&format!("{TITLE_UI}/LoadingSpinner"), false);
-        let logo = Texture2D::from_file_with_format(LOGO_PNG, Some(ImageFormat::Png));
-        logo.set_filter(FilterMode::Linear);
-        Some(Self { root: root.to_owned(), ui, world, fov, logo, began: get_time(), skip: None, closing: None, last: get_time(), plane: plane.map(|p| (p, crate::anim::Shaders::new())), trace_frames: std::env::var_os("RRBTD6_STARTUP_FRAME_TRACE").is_some() })
+        Some(Self { root: root.to_owned(), ui, world, fov, began: get_time(), skip: None, closing: None, last: get_time(), plane: plane.map(|p| (p, crate::anim::Shaders::new())), trace_frames: std::env::var_os("RRBTD6_STARTUP_FRAME_TRACE").is_some() })
     }
 
     fn draw_plane(actor: &mut Option<(crate::anim::AnimModel, crate::anim::Shaders)>, began: f64, fov: f32, matrix: Mat4) {
@@ -338,15 +334,8 @@ impl Title {
                 if let Some(a) = actor { Self::draw_plane(&mut self.plane, self.began, self.fov, a); }
                 actor_drawn = true;
             }
-            let logo = s.name == "BTD6Logo";
-            let (tex, size) = if logo {
-                // RustTD6's logo at the BTD6 logo's height.
-                let aspect = self.logo.width() / self.logo.height();
-                (self.logo.clone(), vec2(s.size.y * aspect, s.size.y))
-            } else {
-                let Some(t) = hud.sprites.get(&s.name) else { continue };
-                ((*t.tex).clone(), s.size)
-            };
+            let Some(t) = hud.sprites.get(&s.name) else { continue };
+            let (tex, size) = ((*t.tex).clone(), s.size);
             let lo = -s.pivot * size;
             let corners = [vec2(lo.x, lo.y + size.y), vec2(lo.x + size.x, lo.y + size.y), vec2(lo.x, lo.y), vec2(lo.x + size.x, lo.y)]
                 .map(|c| m.transform_point3(vec3(c.x, c.y, 0.0)));

@@ -86,7 +86,7 @@ places the clone is meant to differ, by the owner's request.
 
 ## 8. RustTD6 branding
 
-- The window title is **RustTD6**, and the executable, taskbar and window use RustTD6's own icon
-  (`assets/brand/icon.png`).
-- The title screen shows the **RustTD6** logo (`assets/brand/title_logo.png`) in place of the
-  BTD6 logo, with everything around it (the characters, bloons and background) unchanged.
+- The window title is **RustTD6**. The window and taskbar use the game's own icon, read from the
+  player's BloonsTD6.exe during setup; the executable itself carries no icon (nothing of the
+  game's art is shipped).
+- The title screen shows the original BTD6 logo, from the player's own game files.
