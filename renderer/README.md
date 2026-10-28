@@ -833,6 +833,6 @@ the stream once, with unchanged playback buffers and frame sampling. See
 tools/EXTRACTION.md for the 2026-10-28 measurements and compatibility limits.
 
 Sandbox Bloons now clears tower selection when opening, matching the native
-BloonMenu.Show -> InputManager.SelectedSelectionDisabled handoff. A panel hidden
-behind a right-hand upgrade menu reopens on its button instead of toggling closed.
+BloonMenu.Show -> InputManager.SelectedSelectionDisabled handoff. The native Initialise subscription closes it on scene hits, and temporarily
+hides it during tower placement. TSM side does not determine its visibility.
 RRBTD6_SANDBOX_TOGGLE_FRAME exercises the same handoff during an autotest.

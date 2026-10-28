@@ -200,6 +200,9 @@ DONE
   Count and Spacing fields, Set Round with its Go button, and Reset Damage / Reset Cooldowns /
   Destroy Bloons / Destroy Monkeys. The Sandbox hotkeys (Send <bloon>, Clear Bloons, ...) work
   too once bound in Hotkeys. Not yet: the Powers button and Set Cash / Set Health.
+  Follow-up: Bloons works while a tower is selected. Opening clears selection;
+  map clicks close the panel, while tower placement temporarily hides it and restores
+  it afterward. Confirmed from the installed game's input event subscriptions.
 - Placement effect missing. -> Each tower's own placement effect (CreateEffectOnPlaceModel:
   PlacementEffect, PlacementEffectLarge, HeroPlacementEffect) now plays where it's placed.
 - Paragons: confirm screen and icons. -> Buying a Paragon opens the game's "Upgrade to Paragon"

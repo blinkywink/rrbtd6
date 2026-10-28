@@ -288,7 +288,8 @@ logical / 4.781 GB unique file bytes after hard-link deduplication, versus
 verification, 60 tooling tests and six storage tests passed. Full game suite
 still has the separate Preemptive Strike failure. See tools/EXTRACTION.md.
 
-Sandbox: opening Bloons clears selection in the same frame. Selected right-side
-upgrade panels no longer make the Bloons button appear dead. Fresh installed
-GameAssembly trace confirms Show calls SetSelected(null); broader native external
-hide/position wiring is not yet fully established. Selected Druid smoke passed.
+Sandbox: opening Bloons clears selection in the same frame. Fresh installed
+GameAssembly tracing confirms Show calls SetSelected(null). Initialise binds
+OnSceneHit to clear showInternal, and OnHideShowPlacementBlockingUI to
+ShowHideExternal. Panel visibility now follows scene hits and placement rather
+than which side the upgrade panel occupies. Selected Druid smoke passed.

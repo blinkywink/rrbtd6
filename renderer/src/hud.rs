@@ -99,8 +99,6 @@ pub struct Hud {
     pub show_pops: bool,
     /// Seconds since the upgrade menu opened on the left (lives/cash slide out of its way).
     stats_slide: Option<f32>,
-    /// The upgrade menu is open on the right, over the sandbox menu.
-    tsm_right: bool,
     green: TmpStyle,
     brown: TmpStyle,
     pub(crate) menus: crate::menus::Menus,
@@ -397,7 +395,6 @@ impl Hud {
                 .and_then(|v| v["show_pops"].as_bool())
                 .unwrap_or(false),
             stats_slide: None,
-            tsm_right: false,
             green,
             brown,
             menus,
@@ -604,11 +601,10 @@ impl Hud {
         find_icon(&self.icons, name, tower, path, tier)
     }
 
-    /// BloonMenu.Toggle / Show: an obscured panel reopens, then Show clears selection.
+    /// BloonMenu.Toggle / Show: opening the panel clears selection.
     /// Keep this handoff in one place so the HUD and the game agree in the same frame.
     pub fn toggle_sandbox(&mut self, selected: &mut Option<usize>) {
-        let obscured = selected.is_some() && self.tsm_right;
-        self.sandbox.open = !self.sandbox.open || obscured;
+        self.sandbox.open = !self.sandbox.open;
         if self.sandbox.open {
             *selected = None;
         }
@@ -769,7 +765,6 @@ impl Hud {
         // MainHudRightAlign "OpenRight" state: the round panel slides left of an open menu.
         let menu_w = self.tsm.find("Ratio/Scaler/BG1").map_or(0.0, |n| n.screen.w / s);
         let open_right = tw.is_some_and(|(_, tw)| tw.pos[0] < (game.bounds.0[0] + game.bounds.1[0]) / 2.0);
-        self.tsm_right = open_right;
         self.right.rt.pos.x = -25.0 - if open_right { menu_w } else { 0.0 };
         self.stats_slide = (tw.is_some() && !open_right).then(|| self.stats_slide.map_or(0.0, |t| t + dt));
         if let Some(g) = self.left.find_mut("LeftGroup") {
@@ -1202,8 +1197,8 @@ impl Hud {
         if let Some(race)=&mut self.race_ui{draw_tree(race,map,&mut ctx);}
         draw_tree(&mut self.shop, full, &mut ctx);
         self.draw_geraldo(game, selected, canvas, SHOP_W, s, &mut out);
-        let tsm_over_sandbox = self.tsm_right;
-        self.draw_sandbox(game, full, canvas.y, s, tsm_over_sandbox, &mut out);
+        // BloonMenu.ShowHideExternal listens to placement-blocking UI, not TSM side.
+        self.draw_sandbox(game, full, canvas.y, s, placing.is_some(), &mut out);
         self.draw_abilities(game, &mut out);
         self.draw_temple(full, canvas.y, s, &mut out);
         // IMF Loan: what's still owed, in red under the cash.

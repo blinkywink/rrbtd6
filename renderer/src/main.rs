@@ -1656,6 +1656,9 @@ async fn game_main() {
             }
             dragging &= !drop;
         } else if in_map && is_mouse_button_pressed(MouseButton::Left) {
+            if game.sandbox {
+                if let Some(h) = hud.as_mut() { h.sandbox.scene_hit(); }
+            }
             let was = selected;
             selected = game.tower_at(mouse_world);
             // CreateSoundOnSelected: a hero says something when clicked.

@@ -451,7 +451,7 @@ STEP_VERSIONS["core_menus"] = 2
 # startup 2: the splash and initial loading screens' sprites.
 # startup 4: the title screen's BTD6Logo and the game's window icon.
 STEP_VERSIONS["startup"] = 4
-# finish 7: animations repacked at zlib level 6.
+# finish 8: measured word-prediction candidates, accepted by the matching native client.
 STEP_VERSIONS["finish"] = 8
 STEP_VERSIONS["audio"] = 2
 STEP_VERSIONS["dedupe"] = 1

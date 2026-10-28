@@ -2,7 +2,7 @@
 //! ToggleBloons button): a button per bloon type, camo / regrow / fortified toggles, Count and
 //! Spacing fields, Set Round, and destroy bloons / monkeys and reset cooldowns / damage.
 //! It slides in and out with its SandBoxSlideOut animator (BloonMenu.Show / Hide), and stays
-//! slid out while the upgrade menu is open over it (BloonMenu.hideExternal).
+//! slid out during tower placement (BloonMenu.hideExternal). Scene hits close it.
 
 use crate::hud::{Action, Hud};
 use crate::uitree::{draw_tree, Ctx, Node, R};
@@ -82,6 +82,12 @@ fn bloon_icon(game: &crate::game::Game, name: &str, camo: bool, regrow: bool, fo
 }
 
 impl SandboxUi {
+    /// BloonMenu.Initialise subscribes this to InputManager.OnSceneHit.
+    pub fn scene_hit(&mut self) {
+        self.open = false;
+        self.editing = None;
+    }
+
     pub fn load(prefabs: &Path) -> Self {
         let mut menu = Node::load(&prefabs.join("SandboxBloonsMenu.json"));
         // The prefab export names bindings from the menu itself; Node paths start below it.
@@ -156,8 +162,8 @@ fn field_path(f: Field) -> &'static str {
 }
 
 impl Hud {
-    /// The sandbox bloon menu over the shop; returns the game actions clicked. `hide`: the
-    /// upgrade menu is open on its side.
+    /// The sandbox bloon menu over the shop; returns the game actions clicked.
+    /// `hide` is temporary placement blocking, preserving the user's open state.
     pub fn draw_sandbox(&mut self, game: &crate::game::Game, full: R, canvas_h: f32, s: f32, hide: bool, out: &mut Vec<Action>) {
         let ui = &mut self.sandbox;
         // BloonMenu.Update: shown while toggled on and not hidden by another menu; the Open clip
