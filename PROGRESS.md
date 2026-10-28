@@ -360,3 +360,6 @@ for stock-game comparisons, preserving their data for a later restore.
 - Mods button now uses selected option 7, the original CreateChallengeIcon clipboard/pencil,
   at the existing 315-unit bottom-right position. Removed the rejected generated image
   from the executable and restored the ordinary shared sprite loading path.
+
+- Mods caption/padding polish: moved the icon inward, added a smaller native outlined MODS
+  label below it, and made the caption clickable. Menu screenshot checked at 1280x720.

@@ -1149,7 +1149,7 @@ impl Hud {
                 if let Some(m) = fe.main.as_mut() {
                     // Our main menu toggles (Advanced settings, see DEVIATIONS.md).
                     m.set_active(&format!("{MAIN}/Mods"),fe.adv.show_mods);
-                    if m.clicked(&format!("{MAIN}/Mods/Button")){next=Some(Screen::Menu(MenuPage::Mods));}
+                    if m.clicked(&format!("{MAIN}/Mods/Button"))||m.clicked(&format!("{MAIN}/Mods/Button/Text")){next=Some(Screen::Menu(MenuPage::Mods));}
                     m.set_active(&format!("{MAIN}/BottomButtonGroup/Legends"), !fe.adv.hide_legends);
                     m.set_active(&format!("{MAIN}/Store"), !fe.adv.hide_store);
                     // Without the Shop, the Trophy Store moves up into its slot.

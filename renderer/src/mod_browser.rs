@@ -74,13 +74,22 @@ pub(super) fn add_home_button(node:&mut Node,runtime:&mut serde_json::Value){
     button.name="Mods".into();button.set_active("Flag",false);button.set_active("NewTowerDot",false);
     // Selected original clipboard/pencil artwork, with native hover/press feedback.
     button.rt.amin=vec2(1.0,0.0);button.rt.amax=button.rt.amin;button.rt.pivot=vec2(1.0,0.0);
-    button.rt.pos=vec2(-30.0,30.0);button.rt.size=vec2(315.0,315.0);
+    button.rt.pos=vec2(-60.0,150.0);button.rt.size=vec2(315.0,315.0);
     let button_size=button.rt.size;
     if let Some(image)=button.find_mut("Button"){
         image.rt.amin=vec2(0.5,0.5);image.rt.amax=image.rt.amin;image.rt.pivot=vec2(0.5,0.5);
         image.rt.pos=Vec2::ZERO;image.rt.size=button_size;
     }
-    button.set_sprite("Button",Some(MODS_BUTTON_SPRITE));button.active=false;
+    button.set_sprite("Button",Some(MODS_BUTTON_SPRITE));
+    // Use the same outlined title font and material as the other home captions.
+    if let Some(mut label)=node.find(&format!("{MAIN}/BottomButtonGroup/Knowledge/KnowledgeAnim/Button/Text")).cloned(){
+        label.name="Text".into();label.active=true;
+        label.rt.amin=vec2(0.5,0.0);label.rt.amax=label.rt.amin;label.rt.pivot=vec2(0.5,1.0);
+        label.rt.pos=vec2(0.0,-6.0);label.rt.size=vec2(360.0,90.0);label.rt.scale=Vec2::ONE;
+        if let Some(text)=&mut label.txt{text.text="MODS".into();text.size=72.0;text.auto=false;}
+        if let Some(image)=button.find_mut("Button"){image.children.push(label);}
+    }
+    button.active=false;
     if let Some(main)=node.find_mut(MAIN){main.children.push(button);}
     // Reuse the authored hover/press clips too; alias bindings just once at load.
     if let Some(animators)=runtime["animators"].as_array_mut(){
@@ -113,7 +122,7 @@ mod tests {
         add_home_button(&mut node,&mut json!({"animators":[]}));
         let button=node.find("MainMenuCanvas/MainMenu/Mods").unwrap();
         assert_eq!(button.rt.amin,vec2(1.0,0.0));assert_eq!(button.rt.pivot,vec2(1.0,0.0));
-        assert_eq!(button.rt.pos,vec2(-30.0,30.0));assert_eq!(button.rt.size,vec2(315.0,315.0));
+        assert_eq!(button.rt.pos,vec2(-60.0,150.0));assert_eq!(button.rt.size,vec2(315.0,315.0));
         let image=button.find("Button").unwrap();assert_eq!(image.rt.size,button.rt.size);
         assert_eq!(image.img.as_ref().unwrap().sprite.as_deref(),Some(MODS_BUTTON_SPRITE));
     }
