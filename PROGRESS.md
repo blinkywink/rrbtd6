@@ -300,3 +300,13 @@ preserving exact numbers, escapes, duplicate keys and string content. Verified
 logical / 4.651 GB unique file bytes. No runtime codec or per-frame work. Fixed
 Sandbox animator loading to normalize parsed paths independently of formatting.
 Seven migration tests, 15 extraction-plan tests and one native regression passed.
+
+2026-10-28 display modes: added native F11 plus Windowed/Borderless/Exclusive
+in Advanced > Graphics. Saves the display mode and last fullscreen preference;
+restores the previous window bounds when leaving fullscreen. Uses the current
+monitor desktop mode (including non-16:9), with unchanged map composition.
+Exclusive uses temporary CDS_FULLSCREEN, restores on focus loss/exit, and falls
+back to borderless on rejection. Fixed stale border measurements during style
+changes and fractional-DPI framebuffer truncation. Four Advanced settings tests
+passed; native F11/repeat, monitor coverage, bounds restore, focus and resize
+checks passed. Fullscreen gameplay and Graphics settings captures reviewed.

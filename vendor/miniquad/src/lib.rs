@@ -343,6 +343,19 @@ pub mod window {
         }
     }
 
+    /// Windows display mode: 0 windowed, 1 borderless, 2 exclusive at desktop resolution.
+    #[cfg(target_os = "windows")]
+    pub fn set_window_mode(mode: u8, preferred: u8) {
+        native_display().lock().unwrap().native_requests
+            .send(native::Request::SetWindowMode { mode: mode.min(2), preferred: preferred.clamp(1, 2) }).unwrap();
+    }
+
+    /// Actual applied mode (exclusive may fall back to borderless if rejected).
+    #[cfg(target_os = "windows")]
+    pub fn window_mode() -> u8 {
+        crate::native::windows::WINDOW_MODE.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Get current OS clipboard value
     pub fn clipboard_get() -> Option<String> {
         let mut d = native_display().lock().unwrap();

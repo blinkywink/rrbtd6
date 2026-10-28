@@ -842,3 +842,22 @@ Finish v9 compacts ordinary runtime JSON by removing whitespace outside strings,
 with exact value tokens retained. The Sandbox animator loader normalizes parsed
 paths rather than relying on spaces in JSON. No runtime compression codec or
 per-frame storage work is introduced. See tools/EXTRACTION.md for measured savings.
+
+
+Windows display modes: Settings > Advanced > Graphics > Display Mode selects
+Windowed, Borderless, or Exclusive immediately. F11 toggles between a 16:9
+window and the last fullscreen choice, including during loading. Window bounds
+are restored within the session; mode and fullscreen preference persist across
+launches. Fullscreen covers the monitor containing the window at its desktop
+resolution and refresh rate. Map composition stays 16:9, with padding on other
+aspects; fullscreen does not force the physical monitor into a 16:9 mode.
+
+Exclusive uses a temporary Win32 CDS_FULLSCREEN display mode. The original
+desktop mode is restored on focus loss and normal exit, and reapplied on focus
+return. If the driver rejects exclusive, the applied mode falls back to
+borderless and the settings reflect that result. Windows fullscreen optimizations
+and driver presentation policy still apply; no FPS gain is promised for exclusive.
+Fractional-DPI framebuffer sizes are converted once instead of truncated twice.
+RRBTD6_NATIVE_DISPLAY_CHECK exercises F11/repeat, monitor bounds, window restore,
+exclusive focus and exit restoration. RRBTD6_NATIVE_ASPECT_CHECK covers all eight
+resize edges and maximize/restore. RRBTD6_DISPLAY_MODE=0|1|2 overrides only autotests.

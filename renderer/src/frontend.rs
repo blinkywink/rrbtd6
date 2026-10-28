@@ -188,7 +188,7 @@ const ADV_SECTIONS: [&str;3] = ["Default","Graphics","UI"];
 
 fn advanced_row_section(name:&str)->usize{
     match name.strip_prefix("Ours").and_then(|v|v.parse::<usize>().ok()){
-        Some(1..=6)=>1,
+        Some(1..=6 | 20)=>1,
         Some(_)=>2,
         None=>0,
     }
@@ -786,6 +786,7 @@ impl FrontEnd {
                             r.name = format!("Ours{i}");
                             extra.push(r);
                         }
+                        extra.sort_by_key(|row| row.name != "Ours20");
                         let original=std::mem::take(&mut c.children);
                         for (section,name) in ADV_SECTIONS.iter().enumerate(){
                             let mut head=header.clone().unwrap_or_else(||title.clone());

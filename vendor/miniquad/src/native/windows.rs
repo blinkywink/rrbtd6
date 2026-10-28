@@ -96,7 +96,20 @@ mod wgl;
 
 use libopengl32::LibOpengl32;
 
+pub(crate) static WINDOW_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+struct ExclusiveDisplay {
+    device: [u16; 32],
+    original: DEVMODEW,
+    mode: DEVMODEW,
+    active: bool,
+}
+
 pub(crate) struct WindowsDisplay {
+    windowed_rect: Option<RECT>,
+    exclusive: Option<ExclusiveDisplay>,
+    preferred_fullscreen: u8,
+    changing_window_mode: bool,
     fullscreen: bool,
     dpi_aware: bool,
     window_resizable: bool,
@@ -270,47 +283,101 @@ impl WindowsDisplay {
     }
 
     fn set_fullscreen(&mut self, fullscreen: bool) {
-        self.fullscreen = fullscreen as _;
-
-        let win_style: DWORD = get_win_style(self.fullscreen, self.window_resizable);
-
-        unsafe {
-            #[cfg(target_arch = "x86_64")]
-            SetWindowLongPtrA(self.wnd, GWL_STYLE, win_style as _);
-            #[cfg(target_arch = "x86")]
-            SetWindowLong(self.wnd, GWL_STYLE, win_style as _);
-
-            if self.fullscreen {
-                SetWindowPos(
-                    self.wnd,
-                    HWND_TOP,
-                    0,
-                    0,
-                    GetSystemMetrics(SM_CXSCREEN),
-                    GetSystemMetrics(SM_CYSCREEN),
-                    SWP_FRAMECHANGED,
-                );
-            } else {
-                let (w, h) = {
-                    let d = crate::native_display().lock().unwrap();
-                    (d.screen_width, d.screen_height)
-                };
-
-                SetWindowPos(
-                    self.wnd,
-                    HWND_TOP,
-                    0,
-                    0,
-                    // this is probably not correct: with high dpi content_width and window_width are actually different..
-                    w,
-                    h,
-                    SWP_FRAMECHANGED,
-                );
-            }
-
-            ShowWindow(self.wnd, SW_SHOW);
-        };
+        self.set_window_mode(if fullscreen { 1 } else { 0 });
     }
+
+    fn restore_exclusive(&mut self) -> bool {
+        if let Some(mut state) = self.exclusive.take() {
+            if state.active {
+                let result = unsafe { ChangeDisplaySettingsExW(state.device.as_ptr(), &mut state.original,
+                    std::ptr::null_mut(), 0, std::ptr::null_mut()) };
+                if result != DISP_CHANGE_SUCCESSFUL {
+                    eprintln!("display-mode: restoring desktop rejected ({result})");
+                    self.exclusive = Some(state);
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn exclusive_focus(&mut self, active: bool) {
+        if let Some(mut state) = self.exclusive.take() {
+            if state.active != active {
+                let mode = if active { &mut state.mode } else { &mut state.original };
+                let flags = if active { CDS_FULLSCREEN } else { 0 };
+                let result = unsafe { ChangeDisplaySettingsExW(state.device.as_ptr(), mode,
+                    std::ptr::null_mut(), flags, std::ptr::null_mut()) };
+                if result != DISP_CHANGE_SUCCESSFUL {
+                    if !active {
+                        self.exclusive = Some(state);
+                        return;
+                    }
+                    eprintln!("display-mode: focus transition rejected ({result}); using borderless");
+                    WINDOW_MODE.store(1, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
+                state.active = active;
+            }
+            self.exclusive = Some(state);
+        }
+    }
+
+    fn set_window_mode(&mut self, requested: u8) {
+        let mut mode = requested.min(2);
+        let old = WINDOW_MODE.load(std::sync::atomic::Ordering::Relaxed);
+        if old == mode { return; }
+        unsafe {
+            if !self.fullscreen && mode != 0 {
+                let mut rect: RECT = std::mem::zeroed();
+                if GetWindowRect(self.wnd, &mut rect) != 0 { self.windowed_rect = Some(rect); }
+            }
+            let monitor = MonitorFromWindow(self.wnd, MONITOR_DEFAULTTONEAREST);
+            let mut info: MONITORINFOEXW = std::mem::zeroed();
+            info.cbSize = std::mem::size_of::<MONITORINFOEXW>() as DWORD;
+            if GetMonitorInfoW(monitor, &mut info as *mut _ as *mut MONITORINFO) == 0 {
+                eprintln!("display-mode: cannot query window monitor");
+                return;
+            }
+            if !self.restore_exclusive() { return; }
+            if mode == 2 {
+                let mut original: DEVMODEW = std::mem::zeroed();
+                original.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+                if EnumDisplaySettingsW(info.szDevice.as_ptr(), ENUM_CURRENT_SETTINGS, &mut original) != 0 {
+                    let mut native = original;
+                    let result = ChangeDisplaySettingsExW(info.szDevice.as_ptr(), &mut native,
+                        std::ptr::null_mut(), CDS_FULLSCREEN, std::ptr::null_mut());
+                    if result == DISP_CHANGE_SUCCESSFUL {
+                        self.exclusive = Some(ExclusiveDisplay { device: info.szDevice, original, mode: native, active: true });
+                    } else {
+                        eprintln!("display-mode: exclusive rejected ({result}); using borderless");
+                        mode = 1;
+                    }
+                } else { mode = 1; }
+            }
+            self.fullscreen = mode != 0;
+            if mode != 0 { self.preferred_fullscreen = mode; }
+            WINDOW_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
+            let style = get_win_style(self.fullscreen, self.window_resizable);
+            // Nonclient borders still describe the old style during FRAMECHANGED.
+            // Restore the saved outer bounds without applying an obsolete border size.
+            self.changing_window_mode = true;
+            #[cfg(target_arch = "x86_64")]
+            SetWindowLongPtrA(self.wnd, GWL_STYLE, style as _);
+            #[cfg(target_arch = "x86")]
+            SetWindowLongA(self.wnd, GWL_STYLE, style as _);
+            let rect = if self.fullscreen { info.rcMonitor } else {
+                self.windowed_rect.unwrap_or(info.rcWork)
+            };
+            SetWindowPos(self.wnd, HWND_TOP, rect.left, rect.top,
+                rect.right - rect.left, rect.bottom - rect.top, SWP_FRAMECHANGED);
+            self.changing_window_mode = false;
+            ShowWindow(self.wnd, SW_SHOW);
+            // The main loop updates dimensions and emits the resize event together.
+            eprintln!("display-mode: applied {mode}");
+        }
+    }
+
 }
 
 fn get_win_style(is_fullscreen: bool, is_resizable: bool) -> DWORD {
@@ -411,6 +478,18 @@ fn constrain_sizing(rect:&mut RECT,edge:usize,border:(i32,i32),ratio:(u32,u32)){
             let (x,y)=fit_aspect(w,h,(16,9));check(x,y);assert!(x<=w&&y<=h);
         }
     }
+    #[test]fn fractional_dpi_does_not_drop_fullscreen_pixels(){
+        for scale in [1.0,1.25,1.5,1.75,2.0]{
+            assert_eq!(framebuffer_extent(2048,scale,scale),2048);
+            assert_eq!(framebuffer_extent(1280,scale,scale),1280);
+            assert_eq!(framebuffer_extent(2560,scale,scale),2560);
+        }
+        assert_eq!(framebuffer_extent(0,1.0,1.0),1);
+    }
+}
+
+fn framebuffer_extent(pixels:i32,content_scale:f32,window_scale:f32)->i32{
+    ((pixels as f64*(content_scale as f64/window_scale as f64)).round() as i32).max(1)
 }
 
 unsafe fn window_border(hwnd:HWND)->(i32,i32){
@@ -441,14 +520,24 @@ unsafe extern "system" fn win32_wndproc(
         return DefWindowProcW(hwnd, umsg, wparam, lparam);
     }
     let payload = &mut *(display_ptr as *mut WindowsDisplay);
+    if umsg == WM_KEYDOWN && wparam as i32 == VK_F11 {
+        if lparam & (1 << 30) == 0 {
+            payload.set_window_mode(if payload.fullscreen { 0 } else { payload.preferred_fullscreen });
+        }
+        return 0;
+    }
+    if umsg == WM_ACTIVATE {
+        let active = LOWORD(wparam as _) == WA_ACTIVE || LOWORD(wparam as _) == WA_CLICKACTIVE;
+        payload.exclusive_focus(active);
+    }
     let event_handler = payload.event_handler.as_mut().unwrap();
 
     match umsg {
-        WM_SIZING if !payload.fullscreen&&payload.window_aspect_ratio.is_some()=>{
+        WM_SIZING if !payload.fullscreen&&!payload.changing_window_mode&&payload.window_aspect_ratio.is_some()=>{
             constrain_sizing(&mut *(lparam as *mut RECT),wparam,window_border(hwnd),payload.window_aspect_ratio.unwrap());
             return TRUE as LRESULT;
         }
-        WM_WINDOWPOSCHANGING if !payload.fullscreen&&payload.window_aspect_ratio.is_some()=>{
+        WM_WINDOWPOSCHANGING if !payload.fullscreen&&!payload.changing_window_mode&&payload.window_aspect_ratio.is_some()=>{
             let pos=&mut *(lparam as *mut WINDOWPOS);
             if pos.flags&SWP_NOSIZE==0&&IsIconic(hwnd)==0{
                 let (bw,bh)=window_border(hwnd);
@@ -1118,14 +1207,10 @@ impl WindowsDisplay {
             let mut client_rect: RECT = std::mem::zeroed();
             if GetClientRect(hwnd, &mut client_rect as *mut _ as _) != 0 {
                 // Calculate window width and height based on the client area
-                let window_width =
-                    ((client_rect.right - client_rect.left) as f32 / self.window_scale) as i32;
-                let window_height =
-                    ((client_rect.bottom - client_rect.top) as f32 / self.window_scale) as i32;
-
                 // Prevent a framebuffer size of 0 when the window is minimized
-                let fb_width = ((window_width as f32 * self.content_scale) as i32).max(1);
-                let fb_height = ((window_height as f32 * self.content_scale) as i32).max(1);
+                // Convert once: truncating the logical size first loses pixels at fractional DPI.
+                let fb_width = framebuffer_extent(client_rect.right-client_rect.left,self.content_scale,self.window_scale);
+                let fb_height = framebuffer_extent(client_rect.bottom-client_rect.top,self.content_scale,self.window_scale);
 
                 // Check for size changes
                 if fb_width != d.screen_width || fb_height != d.screen_height {
@@ -1194,6 +1279,10 @@ impl WindowsDisplay {
             } => self.set_window_size(new_width as _, new_height as _),
             SetWindowPosition { new_x, new_y } => self.set_window_position(new_x, new_y),
             SetFullscreen(fullscreen) => self.set_fullscreen(fullscreen),
+            SetWindowMode { mode, preferred } => {
+                self.preferred_fullscreen = preferred;
+                self.set_window_mode(mode);
+            }
             ShowKeyboard(show) => {
                 // On Windows, ShowKeyboard controls IME state
                 if show {
@@ -1241,6 +1330,10 @@ where
         let (msg_wnd, msg_dc) = create_msg_window();
         let mut display = WindowsDisplay {
             fullscreen: false,
+            windowed_rect: None,
+            exclusive: None,
+            preferred_fullscreen: 1,
+            changing_window_mode: false,
             dpi_aware: false,
             window_resizable: conf.window_resizable,
             window_aspect_ratio: conf.platform.window_aspect_ratio,
@@ -1320,6 +1413,44 @@ where
         }
 
         let mut done = false;
+        if std::env::var_os("RRBTD6_NATIVE_DISPLAY_CHECK").is_some() {
+            for scale in [1.0,1.25,1.5,1.75,2.0] {
+                assert_eq!(framebuffer_extent(2048,scale,scale),2048);
+                assert_eq!(framebuffer_extent(1280,scale,scale),1280);
+            }
+            let mut before: RECT = std::mem::zeroed(); GetWindowRect(wnd, &mut before);
+            SendMessageW(wnd, WM_KEYDOWN, VK_F11 as WPARAM, 0);
+            assert_eq!(WINDOW_MODE.load(std::sync::atomic::Ordering::Relaxed), 1);
+            let monitor = MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST);
+            let mut info: MONITORINFO = std::mem::zeroed();
+            info.cbSize = std::mem::size_of::<MONITORINFO>() as DWORD;
+            assert_ne!(GetMonitorInfoW(monitor, &mut info), 0);
+            let mut full: RECT = std::mem::zeroed(); GetWindowRect(wnd, &mut full);
+            assert_eq!((full.left,full.top,full.right,full.bottom),
+                (info.rcMonitor.left,info.rcMonitor.top,info.rcMonitor.right,info.rcMonitor.bottom));
+            SendMessageW(wnd, WM_KEYDOWN, VK_F11 as WPARAM, 1 << 30);
+            assert_eq!(WINDOW_MODE.load(std::sync::atomic::Ordering::Relaxed), 1, "held F11 must not repeatedly toggle");
+            SendMessageW(wnd, WM_KEYDOWN, VK_F11 as WPARAM, 0);
+            let mut restored: RECT = std::mem::zeroed(); GetWindowRect(wnd, &mut restored);
+            assert_eq!((before.left,before.top,before.right,before.bottom),
+                (restored.left,restored.top,restored.right,restored.bottom), "window bounds must be restored");
+            display.set_window_mode(2);
+            if WINDOW_MODE.load(std::sync::atomic::Ordering::Relaxed) == 2 {
+                SendMessageW(wnd, WM_ACTIVATE, WA_INACTIVE as WPARAM, 0);
+                assert!(display.exclusive.as_ref().is_some_and(|s| !s.active));
+                SendMessageW(wnd, WM_ACTIVATE, WA_ACTIVE as WPARAM, 0);
+                assert!(display.exclusive.as_ref().is_some_and(|s| s.active));
+                display.set_window_mode(0);
+                SendMessageW(wnd, WM_KEYDOWN, VK_F11 as WPARAM, 0);
+                assert_eq!(WINDOW_MODE.load(std::sync::atomic::Ordering::Relaxed), 2, "F11 must remember exclusive mode");
+                SendMessageW(wnd, WM_KEYDOWN, VK_F11 as WPARAM, 0);
+                assert!(display.exclusive.is_none());
+                eprintln!("native-display-check: F11, key repeat, monitor coverage, window restore, exclusive focus and preferred mode passed");
+            } else {
+                display.set_window_mode(0);
+                eprintln!("native-display-check: borderless passed; driver rejected exclusive, fallback exercised");
+            }
+        }
         if conf.platform.window_aspect_ratio==Some((16,9))&&std::env::var_os("RRBTD6_NATIVE_ASPECT_CHECK").is_some(){
             for edge in 1..=8{
                 let mut rect=RECT{left:100,top:100,right:953,bottom:741};
@@ -1381,6 +1512,19 @@ where
             }
         }
 
+        let verify_desktop = if std::env::var_os("RRBTD6_NATIVE_DISPLAY_CHECK").is_some() {
+            display.exclusive.as_ref().map(|s| (s.device, s.original))
+        } else { None };
+        display.restore_exclusive();
+        if let Some((device, original)) = verify_desktop {
+            let mut actual: DEVMODEW = std::mem::zeroed();
+            actual.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+            assert_ne!(EnumDisplaySettingsW(device.as_ptr(), ENUM_CURRENT_SETTINGS, &mut actual),0);
+            assert_eq!((actual.dmPelsWidth,actual.dmPelsHeight,actual.dmDisplayFrequency,actual.dmBitsPerPel),
+                (original.dmPelsWidth,original.dmPelsHeight,original.dmDisplayFrequency,original.dmBitsPerPel));
+            eprintln!("native-display-check: desktop mode restored on exit");
+        }
+        WINDOW_MODE.store(0, std::sync::atomic::Ordering::Relaxed);
         (display.libopengl32.wglDeleteContext)(gl_ctx);
         DestroyWindow(wnd);
     }
