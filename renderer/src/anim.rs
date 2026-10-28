@@ -328,6 +328,7 @@ impl Drop for StagedTex{fn drop(&mut self){if self.claimed{crate::render3d::rele
 /// i8 / 127. Frame-major: [frame][vertex].
 struct Frames {
     q: Vec<QVert>,
+    frame_bases: Option<Vec<usize>>,
     lo: [f32; 3],
     /// (max - min) / 65535 per axis.
     step: [f32; 3],
@@ -336,15 +337,21 @@ struct Frames {
 // Hashing/decoding happens while staging, never while sampling animation frames.
 // Weak entries let the last owning model release its animation normally.
 static FRAME_CACHE:std::sync::Mutex<Option<std::collections::HashMap<blake3::Hash,std::sync::Weak<Frames>>>>=std::sync::Mutex::new(None);
+#[cfg(test)]
 fn shared_frames(bytes:&[u8],quant:Option<([f32;3],[f32;3])>)->std::sync::Arc<Frames>{
+    shared_frames_for_model(bytes,quant,0)
+}
+fn shared_frames_for_model(bytes:&[u8],quant:Option<([f32;3],[f32;3])>,nverts:usize)->std::sync::Arc<Frames>{
     let mut hash=blake3::Hasher::new();hash.update(&[quant.is_some() as u8]);
     if let Some((lo,hi))=quant{for v in lo.into_iter().chain(hi){hash.update(&v.to_bits().to_le_bytes());}}
-    hash.update(bytes);let key=hash.finalize();
+    hash.update(&(nverts as u64).to_le_bytes());hash.update(bytes);let key=hash.finalize();
     {
         let cache=FRAME_CACHE.lock().unwrap_or_else(|e|e.into_inner());
         if let Some(frames)=cache.as_ref().and_then(|c|c.get(&key)).and_then(std::sync::Weak::upgrade){return frames;}
     }
-    let decoded=std::sync::Arc::new(match quant{Some((lo,hi))=>Frames::from_q(bytes,lo,hi),None=>Frames::from_f32(bytes)});
+    let mut decoded=match quant{Some((lo,hi))=>Frames::from_q(bytes,lo,hi),None=>Frames::from_f32(bytes)};
+    decoded.deduplicate_frames(bytes,nverts,if quant.is_some(){10}else{24});
+    let decoded=std::sync::Arc::new(decoded);
     let mut cache=FRAME_CACHE.lock().unwrap_or_else(|e|e.into_inner());let cache=cache.get_or_insert_with(Default::default);
     // Another staging worker may have finished the same data while we decoded.
     if let Some(frames)=cache.get(&key).and_then(std::sync::Weak::upgrade){return frames;}
@@ -359,37 +366,67 @@ struct QVert {
 }
 
 impl Frames {
+    fn frame_base(&self, frame:usize, nverts:usize)->usize {
+        self.frame_bases.as_ref().map_or(frame*nverts,|bases|bases[frame])
+    }
+
+    /// Share byte-identical whole frames. Resolve offsets once per model pose,
+    /// leaving the vertex interpolation loop and its memory layout unchanged.
+    fn deduplicate_frames(&mut self,source:&[u8],nverts:usize,stride:usize) {
+        let Some(frame_bytes)=nverts.checked_mul(stride).filter(|&n|n>0) else{return};
+        if source.len()%frame_bytes!=0 || source.len()/frame_bytes<2{return;}
+        let mut buckets:std::collections::HashMap<blake3::Hash,Vec<usize>>=Default::default();
+        let mut unique=Vec::new();
+        let mut bases=Vec::with_capacity(source.len()/frame_bytes);
+        for (i,frame) in source.chunks_exact(frame_bytes).enumerate(){
+            let key=blake3::hash(frame);
+            let candidates=buckets.entry(key).or_default();
+            if let Some(&original)=candidates.iter().find(|&&j|&source[j*frame_bytes..(j+1)*frame_bytes]==frame){
+                bases.push(bases[original]);
+            }else{
+                bases.push(unique.len()*nverts);unique.push(i);candidates.push(i);
+            }
+        }
+        let old_bytes=self.q.len()*std::mem::size_of::<QVert>();
+        let new_bytes=unique.len()*nverts*std::mem::size_of::<QVert>()+bases.len()*std::mem::size_of::<usize>();
+        if new_bytes>=old_bytes*9/10{return;}
+        let mut compact=Vec::with_capacity(unique.len()*nverts);
+        for frame in unique {compact.extend_from_slice(&self.q[frame*nverts..(frame+1)*nverts]);}
+        self.q=compact;self.frame_bases=Some(bases);
+    }
     fn from_q(ab: &[u8], lo: [f32; 3], hi: [f32; 3]) -> Self {
         let q = ab
             .chunks_exact(10)
             .map(|c| QVert { p: [0, 1, 2].map(|k| u16::from_le_bytes([c[2 * k], c[2 * k + 1]])), n: [0, 1, 2].map(|k| c[6 + k] as i8) })
             .collect();
-        Self { q, lo, step: [0, 1, 2].map(|k| (hi[k] - lo[k]) / 65535.0) }
+        Self { q, frame_bases: None, lo, step: [0, 1, 2].map(|k| (hi[k] - lo[k]) / 65535.0) }
+    }
+
+    fn float_bounds(ab:&[u8])->([f32;3],[f32;3]) {
+        if ab.len()<24{return ([0.0;3],[0.0;3]);}
+        let (mut lo,mut hi)=([f32::MAX;3],[f32::MIN;3]);
+        for c in ab.chunks_exact(24){for k in 0..3{
+            let v=f32::from_le_bytes(c[k*4..k*4+4].try_into().unwrap());
+            lo[k]=lo[k].min(v);hi[k]=hi[k].max(v);
+        }}
+        (lo,hi)
     }
 
     /// The f32 anim.bin ([px py pz nx ny nz] per vertex), quantized the same way as
     /// compact_anims.py (1/65535 of the animated bounds).
     fn from_f32(ab: &[u8]) -> Self {
-        let v: Vec<f32> = ab.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
-        let (mut lo, mut hi) = ([0.0f32; 3], [0.0f32; 3]);
-        if v.len() >= 6 {
-            (lo, hi) = ([f32::MAX; 3], [f32::MIN; 3]);
-            for c in v.chunks_exact(6) {
-                for k in 0..3 {
-                    lo[k] = lo[k].min(c[k]);
-                    hi[k] = hi[k].max(c[k]);
-                }
-            }
-        }
+        let (lo, hi) = Self::float_bounds(ab);
         let span = [0, 1, 2].map(|k| (hi[k] - lo[k]).max(1e-9));
-        let q = v
-            .chunks_exact(6)
-            .map(|c| QVert {
+        let q = ab
+            .chunks_exact(24)
+            .map(|bytes| {
+                let c:[f32;6]=[0,1,2,3,4,5].map(|k|f32::from_le_bytes(bytes[k*4..k*4+4].try_into().unwrap()));
+                QVert {
                 p: [0, 1, 2].map(|k| (((c[k] - lo[k]) / span[k]) * 65535.0).round().clamp(0.0, 65535.0) as u16),
                 n: [3, 4, 5].map(|k| (c[k].clamp(-1.0, 1.0) * 127.0).round() as i8),
-            })
+            }})
             .collect();
-        Self { q, lo, step: [0, 1, 2].map(|k| (hi[k] - lo[k]) / 65535.0) }
+        Self { q, frame_bases: None, lo, step: [0, 1, 2].map(|k| (hi[k] - lo[k]) / 65535.0) }
     }
 
     /// Position and normal blended between two frame vertices.
@@ -400,6 +437,23 @@ impl Frames {
         let n = [0, 1, 2].map(|k| (a.n[k] as f32 * (1.0 - u) + b.n[k] as f32 * u) * (1.0 / 127.0));
         (p, n)
     }
+}
+
+/// Offline migration uses the exact existing runtime quantizer, including its
+/// f32 arithmetic and rounding. This does not add another quality reduction.
+pub(crate) fn write_runtime_quantized(source:&[u8],writer:&mut impl std::io::Write)
+    ->std::io::Result<([f32;3],[f32;3],blake3::Hash)> {
+    let (lo,hi)=Frames::float_bounds(source);
+    let frames=Frames::from_f32(source);
+    let mut hash=blake3::Hasher::new();
+    let mut bytes=Vec::with_capacity(1024*1024+10);
+    for v in frames.q {
+        for p in v.p {bytes.extend_from_slice(&p.to_le_bytes());}
+        bytes.extend(v.n.map(|x|x as u8));bytes.push(0);
+        if bytes.len()>=1024*1024 {hash.update(&bytes);writer.write_all(&bytes)?;bytes.clear();}
+    }
+    hash.update(&bytes);writer.write_all(&bytes)?;
+    Ok((lo,hi,hash.finalize()))
 }
 
 fn decode(path: &Path) -> Option<Image> {
@@ -558,7 +612,7 @@ impl AnimModel {
                 weight: a["weight"].as_f64().unwrap_or(0.0) as f32,
             })
             .collect();
-        let frames = shared_frames(&ab,quant);
+        let frames = shared_frames_for_model(&ab,quant,nverts);
         let shadow = match meta["shadow"].as_object() {
             Some(s) => decode(&dir.join("shadow.png")).map(|tex| {
                 let pos = s["pos"].as_array().map_or([0.0, 0.0], |p| [p[0].as_f64().unwrap_or(0.0) as f32, p[1].as_f64().unwrap_or(0.0) as f32]);
@@ -678,8 +732,8 @@ impl AnimModel {
             let a = x.floor() as usize;
             (a, (a + 1).min(clip.frames - 1), x.fract())
         };
-        let base0 = (clip.offset + f0) * self.nverts;
-        let base1 = (clip.offset + f1) * self.nverts;
+        let base0 = self.frames.frame_base(clip.offset + f0,self.nverts);
+        let base1 = self.frames.frame_base(clip.offset + f1,self.nverts);
         let (s, co) = yaw.sin_cos();
         let rot = |x: f32, z: f32| (x * co + z * s, -x * s + z * co);
         let tilt = self.tilt.map(|(p, r, k)| (p.sin_cos(), r.sin_cos(), k));
@@ -967,6 +1021,40 @@ pub async fn verify_prefetch(root:&Path){
         assert!(!std::sync::Arc::ptr_eq(&a,&different));assert_ne!(a.lerp(0,0,0.0),different.lerp(0,0,0.0));
         let mut changed=bytes;changed[0]=9;assert!(!std::sync::Arc::ptr_eq(&a,&shared_frames(&changed,bounds)));
     }
+    #[test]fn repeated_frames_share_memory_with_exact_interpolation(){
+        let a=[1,2,3,4,5,6,127,0,129,0,11,12,13,14,15,16,64,63,192,0];
+        let mut b=a;b[0]=99;
+        let source:Vec<u8>=[a,a,a,b,a,b,a,a].into_iter().flatten().collect();
+        let direct=Frames::from_q(&source,[-2.0;3],[7.0;3]);
+        let compact=shared_frames_for_model(&source,Some(([-2.0;3],[7.0;3])),2);
+        assert_eq!(compact.q.len(),4);
+        assert!(compact.frame_bases.is_some());
+        for f0 in 0..8{for f1 in 0..8{for v in 0..2{for u in [0.0,0.125,0.37,0.5,1.0]{
+            assert_eq!(direct.lerp(f0*2+v,f1*2+v,u),compact.lerp(compact.frame_base(f0,2)+v,compact.frame_base(f1,2)+v,u));
+        }}}}
+    }
+    #[test]fn offline_quantization_matches_the_previous_float_runtime(){
+        let values:Vec<f32>=(0..1200).map(|i|((i as f32*0.17).sin()*40.0)).collect();
+        let source:Vec<u8>=values.iter().flat_map(|x|x.to_le_bytes()).collect();
+        let mut bytes=Vec::new();let (lo,hi,hash)=write_runtime_quantized(&source,&mut bytes).unwrap();
+        assert_eq!(hash,blake3::hash(&bytes));
+        let direct=Frames::from_f32(&source);let q=Frames::from_q(&bytes,lo,hi);
+        let mut reference_lo=[f32::MAX;3];let mut reference_hi=[f32::MIN;3];
+        for c in values.chunks_exact(6){for k in 0..3{reference_lo[k]=reference_lo[k].min(c[k]);reference_hi[k]=reference_hi[k].max(c[k]);}}
+        assert_eq!(lo,reference_lo);assert_eq!(hi,reference_hi);
+        let span:[f32;3]=[0,1,2].map(|k|(hi[k]-lo[k]).max(1e-9));
+        for (i,c) in values.chunks_exact(6).enumerate(){
+            for k in 0..3{assert_eq!(q.q[i].p[k],(((c[k]-lo[k])/span[k])*65535.0).round().clamp(0.0,65535.0) as u16);}
+            for k in 0..3{assert_eq!(q.q[i].n[k],(c[k+3].clamp(-1.0,1.0)*127.0).round() as i8);}
+            for u in [0.0,0.37,1.0]{assert_eq!(direct.lerp(i,(i+1)%q.q.len(),u),q.lerp(i,(i+1)%q.q.len(),u));}
+        }
+    }
+    #[test]fn changing_frames_keep_the_direct_layout(){
+        let source:Vec<u8>=(0..40).collect();
+        let compact=shared_frames_for_model(&source,Some(([0.0;3],[1.0;3])),2);
+        assert!(compact.frame_bases.is_none());
+        assert_eq!(compact.frame_base(1,2),2);
+    }
     #[test]fn shared_animation_cache_does_not_keep_unused_frames_alive(){
         let a=shared_frames(&[99,87,65,43,21,9,12,23,34,0],Some(([12.0;3],[34.0;3])));
         let weak=std::sync::Arc::downgrade(&a);drop(a);assert!(weak.upgrade().is_none());
@@ -975,6 +1063,41 @@ pub async fn verify_prefetch(root:&Path){
         let handles:Vec<_>=(0..8).map(|_|std::thread::spawn(||shared_frames(&[78,56,34,12,1,2,3,4,5,0],Some(([45.0;3],[67.0;3]))))).collect();
         let frames:Vec<_>=handles.into_iter().map(|h|h.join().unwrap()).collect();
         assert!(frames.iter().all(|f|std::sync::Arc::ptr_eq(&frames[0],f)));
+    }
+    #[test]
+    #[ignore="requires an unconverted local float animation"]
+    fn local_float_representation(){
+        let dir=std::env::var_os("RRBTD6_FLOAT_FIXTURE").unwrap();let path=std::path::Path::new(&dir);
+        let meta:serde_json::Value=serde_json::from_slice(&std::fs::read(path.join("meta.json")).unwrap()).unwrap();
+        assert!(meta.get("quant").is_none());
+        let count=meta["anims"].as_array().unwrap().iter().map(|a|a["offset"].as_u64().unwrap()+a["frames"].as_u64().unwrap()).max().unwrap();
+        let source=crate::animation_storage::read(path,"anim.bin",count*meta["vertex_count"].as_u64().unwrap()*24).unwrap();
+        let start=std::time::Instant::now();let direct=Frames::from_f32(&source);let old=start.elapsed();
+        let mut bytes=Vec::new();let (lo,hi,_)=write_runtime_quantized(&source,&mut bytes).unwrap();
+        let start=std::time::Instant::now();let canonical=Frames::from_q(&bytes,lo,hi);let new=start.elapsed();
+        assert_eq!(direct.q.len(),canonical.q.len());assert_eq!(direct.lo,canonical.lo);assert_eq!(direct.step,canonical.step);
+        for (a,b) in direct.q.iter().zip(&canonical.q){assert_eq!(a.p,b.p);assert_eq!(a.n,b.n);}
+        eprintln!("Float representation: {} -> {} bytes decoded; conversion {:.2} -> {:.2} ms; every runtime position/normal exact",source.len(),bytes.len(),old.as_secs_f64()*1000.0,new.as_secs_f64()*1000.0);
+    }
+    #[test]
+    #[ignore="requires local MonkeyVillage assets"]
+    fn local_repeated_frame_ram(){
+        let path=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../local_extracted/models/MonkeyVillage");
+        let meta:serde_json::Value=serde_json::from_slice(&std::fs::read(path.join("meta.json")).unwrap()).unwrap();
+        let nverts=meta["vertex_count"].as_u64().unwrap() as usize;
+        let count=meta["anims"].as_array().unwrap().iter().map(|a|a["offset"].as_u64().unwrap()+a["frames"].as_u64().unwrap()).max().unwrap() as usize;
+        let source=crate::animation_storage::read(&path,"anim_q.bin",(count*nverts*10) as u64).unwrap();
+        let bound=|k:&str|[0,1,2].map(|i|meta["quant"][k][i].as_f64().unwrap() as f32);
+        let direct=Frames::from_q(&source,bound("min"),bound("max"));
+        let compact=shared_frames_for_model(&source,Some((bound("min"),bound("max"))),nverts);
+        for frame in 0..count{for v in 0..nverts{for u in [0.0,0.37,1.0]{
+            let next=(frame+1)%count;
+            assert_eq!(direct.lerp(frame*nverts+v,next*nverts+v,u),compact.lerp(compact.frame_base(frame,nverts)+v,compact.frame_base(next,nverts)+v,u));
+        }}}
+        let before=direct.q.len()*std::mem::size_of::<QVert>();
+        let after=compact.q.len()*std::mem::size_of::<QVert>()+compact.frame_bases.as_ref().map_or(0,|x|x.len()*std::mem::size_of::<usize>());
+        assert!(after<before);
+        eprintln!("Village animation RAM: {before} -> {after} bytes; all frames/vertices and three interpolation weights exact");
     }
     #[test]
     #[ignore="requires local exported Desperado tier assets"]

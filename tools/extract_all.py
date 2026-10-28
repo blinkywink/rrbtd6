@@ -385,10 +385,12 @@ def menu_additions(c):
 
 
 def finish(c):
+    c.py("tools/assets/canonical_anims.py", c.root, c.out / "models")
     # Home/startup models are exported after bloon_models' earlier compaction pass.
     # Keep that earlier pass to bound peak disk usage; finish compresses late models too.
     c.py("tools/assets/compact_anims.py", c.out / "models")
     c.py("tools/assets/pack_anims.py", c.out / "models")
+    c.py("tools/assets/delta_anims.py", c.out / "models")
     c.py("tools/assets/patch_tmp_gradients.py", c.game, c.root)
     c.py("tools/assets/rebuild_shader_glsl.py", c.out)
 
@@ -431,7 +433,7 @@ def load_state(path, fp):
 STEP_VERSIONS = {s.__name__: 1 for s in STEPS}
 # startup 2: the splash and initial loading screens' sprites.
 STEP_VERSIONS["startup"] = 3
-STEP_VERSIONS["finish"] = 3
+STEP_VERSIONS["finish"] = 5
 
 
 def cleanup_bundle_cache(c):

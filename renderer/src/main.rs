@@ -8,6 +8,7 @@
 
 mod anim;
 mod animation_storage;
+mod runtime_anim_export;
 mod audio;
 mod data;
 mod game;
@@ -224,6 +225,13 @@ fn win_size() -> (i32, i32) {
 }
 
 fn conf() -> macroquad::conf::Conf {
+    if std::env::args().nth(1).as_deref()==Some("--canonicalize-anims") {
+        let Some(path)=std::env::args_os().nth(2) else {eprintln!("missing models directory");std::process::exit(2)};
+        match runtime_anim_export::run(std::path::Path::new(&path)) {
+            Ok(())=>std::process::exit(0),
+            Err(error)=>{eprintln!("animation migration failed: {error}");std::process::exit(1)}
+        }
+    }
     let adv = advanced::Advanced::load(&read_settings(&root()));
     let miniquad_conf=Conf {
         window_title: WINDOW_TITLE.into(),

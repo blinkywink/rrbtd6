@@ -806,3 +806,11 @@ as well as legacy unpacked animations. Decompression runs during model staging;
 frame sampling is unchanged. tools/assets/pack_anims.py migrates existing models
 and the launcher performs this at extraction finish step v3. See tools/EXTRACTION.md
 for measured size savings, load-time costs and old-client compatibility.
+
+The follow-up storage format also accepts .bin.dz temporal prediction. This is
+expanded once in place during staging, with identical sampling data. Finish v5
+uses the matching executable in --canonicalize-anims mode to store legacy float
+animations at the exact precision the old runtime already used. Rebuild the
+client before running the developer extraction script. Whole identical frames
+can share RAM; frame offsets resolve once per pose. See tools/EXTRACTION.md for
+measured sizes, CPU costs, validation and the still-open total-size target.

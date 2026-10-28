@@ -46,8 +46,10 @@ class PlanTests(unittest.TestCase):
                          [("tools/assets/export_sprites.py", "game-fixture", str(ctx.out / "sprites"))])
         ctx.calls.clear()
         driver.finish(ctx)
-        self.assertEqual(ctx.calls[0], ("tools/assets/compact_anims.py", str(ctx.out / "models")))
+        self.assertEqual(ctx.calls[0], ("tools/assets/canonical_anims.py", str(ctx.root), str(ctx.out / "models")))
+        self.assertIn(("tools/assets/compact_anims.py", str(ctx.out / "models")), ctx.calls)
         self.assertIn(("tools/assets/pack_anims.py", str(ctx.out / "models")), ctx.calls)
+        self.assertIn(("tools/assets/delta_anims.py", str(ctx.out / "models")), ctx.calls)
         self.assertEqual(driver.STEPS[-1], driver.finish)
         self.assertGreater(driver.STEP_VERSIONS["finish"], 1)
 

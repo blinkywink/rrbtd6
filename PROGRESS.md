@@ -217,3 +217,17 @@ uploads. Synchronous demand callers can still wait on an unprepared model.
 123 Rust tests, 29 offline tooling checks, four exact prefetch GPU comparisons,
 and packed gameplay/home smoke checks passed. Claude's engine/simulation changes
 and recorder scenarios were left untouched. See tools/EXTRACTION.md for limits.
+
+2026-10-27 storage follow-up: exact frame-difference prediction and existing-runtime
+quantization at installation reduce models further to 5.080 GB (74% below the
+initial 19.488 GB; 4.860 GB saved in this pass). Raw float staging no longer
+allocates a second full float vector. Identical whole frames can share RAM with
+no per-vertex lookup changes. Measured Village animation RAM 80.9 -> 9.1 KB;
+Mermonkey conversion 24.38 -> 3.63 ms; Pat prediction load 97.17 -> 80.69 ms.
+These are asset-specific measurements. Total audited runtime asset folders remain
+8.448 GB versus the official install's 3.362 GB, so the total-size target remains
+open. Native bone/curve storage and decoded WAV data remain major gaps.
+Finish v5 requires the matching executable, canonical_anims.py and delta_anims.py;
+all old layouts remain readable. Validation: 130 Rust / 36 offline Python checks,
+real-asset exact comparisons, four GPU comparisons and menu/gameplay captures.
+Claude's simulation work and proprietary outputs remain unstaged.

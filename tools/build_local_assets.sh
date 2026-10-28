@@ -137,6 +137,7 @@ $PY tools/assets/export_audio.py "$GAME"
 $PY tools/assets/export_jukebox.py "$GAME"
 echo "== MOAB-class 3D models and damage states"
 $PY tools/assets/export_bloon_models.py "$GAME"
+$PY tools/assets/canonical_anims.py . local_extracted/models
 echo "== shrink baked animations (idle + attack clips, quantized)"
 $PY tools/assets/compact_anims.py local_extracted/models
 echo "== done. Play with: cargo run -p btd6-game --release"
@@ -156,3 +157,5 @@ $PY tools/assets/export_menu_chrome.py "$GAME" local_extracted
 
 # Lossless storage, read by the current client (preserves every baked frame).
 $PY tools/assets/pack_anims.py local_extracted/models
+
+$PY tools/assets/delta_anims.py local_extracted/models

@@ -136,3 +136,59 @@ Runtime checks: 123 Rust tests passed / 15 ignored, 29 offline tooling checks
 passed (including six new storage checks), and four exact GPU comparisons for
 background-prefetched versus directly loaded MOAB/BAD models. Gameplay and the
 home menu were smoke-tested with the migrated local assets. BTD6.exe was rebuilt.
+
+## Predictive storage and installation-time runtime conversion
+
+Finish step v5 uses the matching client in headless --canonicalize-anims mode
+before compaction/packing. Legacy float animations are stored using precisely
+the runtime's existing f32 quantizer (same arithmetic, bounds and rounding), not
+a new quality level. The old runtime already discarded this float precision on
+every load. The exported source floats are removed after the new representation
+and metadata are verified/installed; the original BTD6 bundles are untouched.
+A developer running build_local_assets.sh must rebuild the matching client first.
+
+After ordinary zlib packing, delta_anims.py predicts each byte from that byte in
+the preceding frame, with wrapping arithmetic, then zlib-compresses it. The .dz
+header contains RRDIF001 and a little-endian u64 frame-byte stride. Each converted
+payload is reconstructed and checked against the complete original hash/length
+before replacement. Files which do not shrink retain .z. This prediction pass
+is byte-lossless, including original float bits when used without canonicalizing.
+The runtime accepts .bin, .bin.z and .bin.dz in that priority order, reconstructing
+prediction once in place. No extra full-animation decode buffer is needed.
+Grafting tools read all layouts. An older client cannot read .dz.
+
+Byte-identical whole animation frames may also share RAM if the map plus unique
+frames saves at least 10 percent. Clip timing/counts stay unchanged and two frame
+bases are resolved once per pose; the vertex interpolation loop is unchanged.
+Changing frames retain the direct layout. Legacy float decoding also avoids the
+previous temporary Vec<f32>, which duplicated the entire source float buffer.
+
+Component measurements on this PC: Pat Fusty Level20, 20.034 -> 10.568 MB on disk;
+Rust warm decode 97.17 -> 80.69 ms (ten exact comparisons). Village animation RAM
+80,910 -> 9,062 bytes, with all frames/vertices compared at three interpolation
+weights. Mermonkey float representation 22,351,680 -> 9,313,200 bytes decoded;
+conversion CPU 24.38 -> 3.63 ms, with every quantized position/normal exact. These
+are asset-specific measurements, not whole-game RAM/FPS or clean-install claims.
+
+Full local follow-up (2026-10-27): the prediction migration processed 1,841
+packed animations, saving 4.435 GB. Native canonicalization converted all 93
+remaining float models from 5.731 GB of decoded floats to 2.388 GB of the exact
+existing runtime representation. After repacking, models occupy 5,079,651,863
+bytes versus the initial 19,487,978,396: 14.408 GB reclaimed, 73.93% smaller.
+This follow-up alone saved 4.860 GB versus the previous 9.939 GB models folder.
+1,696 animation files use prediction, 145 retain ordinary zlib, and two remain
+unpacked; no pending files remain. Old raw-float bytes are not retained after
+canonicalization, while their prior runtime positions/normals are retained.
+
+The installed official game measured 3,362,276,112 bytes. Our audited runtime
+asset folders still total 8,447,731,412 bytes, excluding Python/tools/executables,
+private caches and development outputs. This is not yet smaller than BTD6.
+Audio remains 1,989,858,500 bytes of WAV data. Native bone/curve animation storage
+and audio format work remain the major opportunities; do not advertise victory
+on total install size or universal RAM/FPS improvements from these measurements.
+
+Validation: 130 Rust tests passed / 17 ignored, plus the real-asset prediction,
+Village RAM and float-representation comparisons described above; 36 offline
+Python tooling checks passed. The rebuilt client passed four exact MOAB/BAD
+GPU comparisons and migrated gameplay (including converted Mermonkey) and home
+menu smoke captures. No account/cloud writes or simulation changes were made.

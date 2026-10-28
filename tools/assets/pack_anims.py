@@ -20,7 +20,13 @@ def read_bytes(path):
     path = Path(path)
     if path.exists():
         return path.read_bytes()
-    return zlib.decompress(path.with_name(path.name + ".z").read_bytes())
+    packed = path.with_name(path.name + ".z")
+    if packed.exists():
+        return zlib.decompress(packed.read_bytes())
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from delta_anims import read_bytes as read_delta
+    return read_delta(path.with_name(path.name + ".dz"))
 
 
 def signature(path):
