@@ -63,10 +63,8 @@ pub struct Advanced {
     pub hide_map_friends:bool,
     pub double_cash_enabled:bool,
     pub fast_track_enabled:bool,
-    /// 0 windowed, 1 borderless fullscreen, 2 desktop-resolution exclusive fullscreen.
-    pub window_mode: u8,
-    /// F11 restores this fullscreen mode after returning to a window.
-    pub fullscreen_preference: u8,
+    /// Fill the current monitor without changing its display mode (also toggled with F11).
+    pub fullscreen: bool,
 }
 
 impl Default for Advanced {
@@ -84,7 +82,7 @@ impl Default for Advanced {
             hide_legends: false, hide_store: false, hide_race: false, hide_boss: false, hide_boss_rush: false,
             hide_odyssey: false, hide_contested_territory: false, hide_social_season: false, skip_startup: false,hide_perks:false,hide_double_cash:false,hide_fast_track:false,
             hide_map_friends:false,double_cash_enabled:false,fast_track_enabled:false,
-            window_mode:0,fullscreen_preference:1 }
+            fullscreen:false }
     }
 }
 
@@ -110,8 +108,10 @@ impl Advanced {
         a.effects_scale = a.effects_scale.clamp(0.0, 1.0);
         a.stereo = a.stereo.clamp(0.0, 1.0);
         a.range_circle = a.range_circle.min(3);
-        if a.window_mode > 2 { a.window_mode = 0; }
-        if !(1..=2).contains(&a.fullscreen_preference) { a.fullscreen_preference = 1; }
+        // Migrate the old three-way setting, respecting an explicitly saved toggle.
+        if settings["advanced"]["fullscreen"].is_null() {
+            a.fullscreen = matches!(settings["advanced"]["window_mode"].as_u64(), Some(1 | 2));
+        }
         a.disable_hidden_features();
         a
     }
@@ -161,9 +161,8 @@ impl Advanced {
             Row::Toggle("Hide Double Cash Button",self.hide_double_cash,"Turns Double Cash off, then hides its control."),
             Row::Toggle("Hide Fast Track Button",self.hide_fast_track,"Turns Fast Track off, then hides its control."),
             Row::Toggle("Hide Friends' Map Records",self.hide_map_friends,"Hides friends' best-round badges and the map records panel."),
-            Row::Slider("Display Mode", stop_t(self.window_mode as usize, 3),
-                ["Windowed", "Borderless", "Exclusive"][self.window_mode.min(2) as usize].into(), 3,
-                "F11 switches between a 16:9 window and your last fullscreen mode. Fullscreen uses the monitor's desktop resolution."),
+            Row::Toggle("Fullscreen", self.fullscreen,
+                "Fill the screen. You can also press F11 to switch fullscreen on or off."),
         ]
     }
 
@@ -187,6 +186,7 @@ impl Advanced {
             17 => self.hide_double_cash=!self.hide_double_cash,
             18 => self.hide_fast_track=!self.hide_fast_track,
             19 => self.hide_map_friends=!self.hide_map_friends,
+            20 => self.fullscreen = !self.fullscreen,
             _ => {}
         }
         self.disable_hidden_features();
@@ -199,10 +199,6 @@ impl Advanced {
             // 5% steps.
             3 => self.render_scale = ((SCALE_MIN + t.clamp(0.0, 1.0) * (1.0 - SCALE_MIN)) * 20.0).round() / 20.0,
             5 => self.msaa = MSAA[stop_of(t, MSAA.len())],
-            20 => {
-                self.window_mode = stop_of(t, 3) as u8;
-                if self.window_mode != 0 { self.fullscreen_preference = self.window_mode; }
-            }
             _ => {}
         }
     }
@@ -212,16 +208,19 @@ impl Advanced {
 mod hidden_features_tests{
     use super::*;
     #[test]
-    fn display_mode_roundtrip_preserves_fullscreen_choice_and_rejects_invalid_modes() {
+    fn fullscreen_toggle_migrates_old_preferences_and_roundtrips() {
         let mut a = Advanced::default();
-        a.slide(20, 1.0);
-        assert_eq!((a.window_mode, a.fullscreen_preference), (2, 2));
-        a.slide(20, 0.0);
+        a.toggle(20);
+        assert!(a.fullscreen);
         let b = Advanced::load(&serde_json::json!({"advanced": a}));
-        assert_eq!((b.window_mode, b.fullscreen_preference), (0, 2));
-        let invalid = Advanced::load(&serde_json::json!({"advanced": {"window_mode": 99, "fullscreen_preference": 0}}));
-        assert_eq!((invalid.window_mode, invalid.fullscreen_preference), (0, 1));
-        assert_eq!(Advanced::load(&serde_json::json!({})).window_mode, 0);
+        assert!(b.fullscreen);
+        a.toggle(20);
+        assert!(!a.fullscreen);
+        for mode in [1, 2] {
+            assert!(Advanced::load(&serde_json::json!({"advanced": {"window_mode": mode}})).fullscreen);
+        }
+        assert!(!Advanced::load(&serde_json::json!({"advanced": {"window_mode": 2, "fullscreen": false}})).fullscreen);
+        assert!(!Advanced::load(&serde_json::json!({})).fullscreen);
     }
     #[test]
     fn hiding_double_cash_and_fast_track_switches_them_off_without_reenabling(){

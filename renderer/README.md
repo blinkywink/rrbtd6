@@ -844,20 +844,17 @@ paths rather than relying on spaces in JSON. No runtime compression codec or
 per-frame storage work is introduced. See tools/EXTRACTION.md for measured savings.
 
 
-Windows display modes: Settings > Advanced > Graphics > Display Mode selects
-Windowed, Borderless, or Exclusive immediately. F11 toggles between a 16:9
-window and the last fullscreen choice, including during loading. Window bounds
-are restored within the session; mode and fullscreen preference persist across
-launches. Fullscreen covers the monitor containing the window at its desktop
-resolution and refresh rate. Map composition stays 16:9, with padding on other
-aspects; fullscreen does not force the physical monitor into a 16:9 mode.
+Fullscreen: Settings > Advanced > Graphics has one Fullscreen on/off toggle,
+with an F11 hint. F11 also works during loading. Fullscreen fills the current
+monitor at its desktop resolution without changing display settings; windowed
+mode retains 16:9 and restores the previous window bounds. Map composition stays
+16:9 on other monitor aspects. The old window_mode setting migrates to the new
+fullscreen boolean. Exclusive display switching has been removed.
+RRBTD6_NATIVE_DISPLAY_CHECK covers F11/repeat, monitor bounds, fractional DPI and
+window restoration; RRBTD6_NATIVE_ASPECT_CHECK covers resizing/maximize/restore.
+RRBTD6_FULLSCREEN=0|1 overrides only autotests.
 
-Exclusive uses a temporary Win32 CDS_FULLSCREEN display mode. The original
-desktop mode is restored on focus loss and normal exit, and reapplied on focus
-return. If the driver rejects exclusive, the applied mode falls back to
-borderless and the settings reflect that result. Windows fullscreen optimizations
-and driver presentation policy still apply; no FPS gain is promised for exclusive.
-Fractional-DPI framebuffer sizes are converted once instead of truncated twice.
-RRBTD6_NATIVE_DISPLAY_CHECK exercises F11/repeat, monitor bounds, window restore,
-exclusive focus and exit restoration. RRBTD6_NATIVE_ASPECT_CHECK covers all eight
-resize edges and maximize/restore. RRBTD6_DISPLAY_MODE=0|1|2 overrides only autotests.
+Button animation feedback restores the authored image color on state changes.
+This prevents pressed-only color channels from leaving the settings gear dimmed
+when the shared Normal clip omits its corresponding color bindings. A regression
+check covers both release and reopening a screen.

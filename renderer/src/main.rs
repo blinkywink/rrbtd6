@@ -277,10 +277,7 @@ fn conf() -> macroquad::conf::Conf {
 const WINDOW_TITLE: &str = "RustTD6";
 
 fn apply_display_mode(a: &advanced::Advanced) {
-    #[cfg(target_os = "windows")]
-    miniquad::window::set_window_mode(a.window_mode, a.fullscreen_preference);
-    #[cfg(not(target_os = "windows"))]
-    set_fullscreen(a.window_mode != 0);
+    miniquad::window::set_fullscreen(a.fullscreen);
 }
 
 /// Ends a frame for the Advanced settings: "Show FPS" puts the frame rate in the window title
@@ -462,8 +459,7 @@ async fn game_main() {
 
     let mut adv = advanced::Advanced::load(&read_settings(&root));
     if std::env::var_os("RRBTD6_AUTOTEST").is_some() {
-        adv.window_mode = std::env::var("RRBTD6_DISPLAY_MODE").ok()
-            .and_then(|v| v.parse::<u8>().ok()).filter(|m| *m <= 2).unwrap_or(0);
+        adv.fullscreen = std::env::var("RRBTD6_FULLSCREEN").is_ok_and(|v| v == "1");
     }
     apply_display_mode(&adv);
     let mut display_pending = true;
@@ -1054,10 +1050,9 @@ async fn game_main() {
         if display_pending {
             display_pending = false;
         } else {
-            let mode = miniquad::window::window_mode();
-            if adv.window_mode != mode {
-                adv.window_mode = mode;
-                if mode != 0 { adv.fullscreen_preference = mode; }
+            let fullscreen = miniquad::window::is_fullscreen();
+            if adv.fullscreen != fullscreen {
+                adv.fullscreen = fullscreen;
                 front.adv = adv.clone();
                 if autotest.is_none() {
                     save_setting(&root, "advanced", serde_json::to_value(&adv).unwrap_or_default());
@@ -1066,7 +1061,7 @@ async fn game_main() {
         }
         #[cfg(not(target_os = "windows"))]
         if is_key_pressed(KeyCode::F11) {
-            adv.window_mode = if adv.window_mode == 0 { 1 } else { 0 };
+            adv.fullscreen = !adv.fullscreen;
             apply_display_mode(&adv);
             front.adv = adv.clone();
             if autotest.is_none() { save_setting(&root, "advanced", serde_json::to_value(&adv).unwrap_or_default()); }
@@ -1298,7 +1293,7 @@ async fn game_main() {
                     audio.set_jukebox(&change);
                 }
                 Some(frontend::FrontAction::Advanced(a)) => {
-                    if a.window_mode != adv.window_mode {
+                    if a.fullscreen != adv.fullscreen {
                         apply_display_mode(&a);
                         display_pending = true;
                     }

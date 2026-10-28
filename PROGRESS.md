@@ -310,3 +310,15 @@ back to borderless on rejection. Fixed stale border measurements during style
 changes and fractional-DPI framebuffer truncation. Four Advanced settings tests
 passed; native F11/repeat, monitor coverage, bounds restore, focus and resize
 checks passed. Fullscreen gameplay and Graphics settings captures reviewed.
+
+2026-10-28 follow-up: simplified Display Mode to a Fullscreen toggle with an F11
+hint, per user request. Removed exclusive switching and saved-mode selection;
+old fullscreen modes migrate to the boolean. Fullscreen leaves desktop display
+settings unchanged. Button feedback now restores authored colors on state
+changes, fixing dimmed settings icons when Normal omits pressed color channels.
+Fullscreen migration and three button-motion regression checks passed.
+Native F11/repeat, fractional-DPI, monitor bounds, window restoration and all
+eight sizing edges/maximize-restore checks passed with the simplified toggle.
+Reviewed Fullscreen-on and home captures; rebuilt the root BTD6.exe.
+Local Epic MelonLoader bootstrap and mod directories moved to an ignored backup
+for stock-game comparisons, preserving their data for a later restore.

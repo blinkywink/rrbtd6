@@ -75,8 +75,6 @@ pub(crate) enum Request {
     SetWindowSize { new_width: u32, new_height: u32 },
     SetWindowPosition { new_x: u32, new_y: u32 },
     SetFullscreen(bool),
-    #[cfg(target_os = "windows")]
-    SetWindowMode { mode: u8, preferred: u8 },
     ShowKeyboard(bool),
     SetImePosition { x: i32, y: i32 },
     SetImeEnabled(bool),
