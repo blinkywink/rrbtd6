@@ -2,6 +2,7 @@
 use crate::{modding::{self,Catalog},uitree::Node};
 use macroquad::prelude::*;
 use std::{collections::HashSet,path::{Path,PathBuf}};
+const MODS_BUTTON_SPRITE:&str="MainMenuUiAtlas/CreateChallengeIcon";
 const CONTENT:&str="Canvas/AccessibilitySettings/Panel/Scroll/Viewport/Content";
 pub(super) struct Browser {
     root:PathBuf,catalog:Catalog,selected:HashSet<String>,rows:Vec<Option<String>>,
@@ -71,7 +72,7 @@ pub(super) fn add_home_button(node:&mut Node,runtime:&mut serde_json::Value){
     if node.find(&format!("{MAIN}/Mods")).is_some(){return;}
     let Some(mut button)=node.find(&format!("{MAIN}/Settings")).cloned() else{return;};
     button.name="Mods".into();button.set_active("Flag",false);button.set_active("NewTowerDot",false);
-    // Original client artwork, with the same native hover/press feedback.
+    // Selected original clipboard/pencil artwork, with native hover/press feedback.
     button.rt.amin=vec2(1.0,0.0);button.rt.amax=button.rt.amin;button.rt.pivot=vec2(1.0,0.0);
     button.rt.pos=vec2(-30.0,30.0);button.rt.size=vec2(315.0,315.0);
     let button_size=button.rt.size;
@@ -79,7 +80,7 @@ pub(super) fn add_home_button(node:&mut Node,runtime:&mut serde_json::Value){
         image.rt.amin=vec2(0.5,0.5);image.rt.amax=image.rt.amin;image.rt.pivot=vec2(0.5,0.5);
         image.rt.pos=Vec2::ZERO;image.rt.size=button_size;
     }
-    button.set_sprite("Button",Some(crate::ui::MODS_BUTTON_SPRITE));button.active=false;
+    button.set_sprite("Button",Some(MODS_BUTTON_SPRITE));button.active=false;
     if let Some(main)=node.find_mut(MAIN){main.children.push(button);}
     // Reuse the authored hover/press clips too; alias bindings just once at load.
     if let Some(animators)=runtime["animators"].as_array_mut(){
@@ -105,7 +106,7 @@ mod tests {
     use crate::modding::{Entry,Manifest};
     use serde_json::json;
     #[test]
-    fn custom_button_is_slightly_larger_in_bottom_right_corner(){
+    fn selected_button_is_slightly_larger_in_bottom_right_corner(){
         let mut node=Node::from_json(&json!({"name":"Scene","active":true,"children":[{"name":"MainMenuCanvas","active":true,"children":[
             {"name":"MainMenu","active":true,"children":[{"name":"Settings","active":true,"children":[
                 {"name":"Button","active":true,"comps":[{"type":"Image","enabled":true,"sprite":"OptionsBtn"}]}]}]}]}]}));
@@ -114,7 +115,7 @@ mod tests {
         assert_eq!(button.rt.amin,vec2(1.0,0.0));assert_eq!(button.rt.pivot,vec2(1.0,0.0));
         assert_eq!(button.rt.pos,vec2(-30.0,30.0));assert_eq!(button.rt.size,vec2(315.0,315.0));
         let image=button.find("Button").unwrap();assert_eq!(image.rt.size,button.rt.size);
-        assert_eq!(image.img.as_ref().unwrap().sprite.as_deref(),Some(crate::ui::MODS_BUTTON_SPRITE));
+        assert_eq!(image.img.as_ref().unwrap().sprite.as_deref(),Some(MODS_BUTTON_SPRITE));
     }
     #[test]
     fn toggling_native_row_emits_sorted_local_preferences(){

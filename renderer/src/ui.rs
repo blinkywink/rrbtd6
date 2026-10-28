@@ -374,19 +374,6 @@ struct UiTextures{
     textures:HashMap<blake3::Hash,std::rc::Weak<Texture2D>>,
 }
 thread_local!{static UI_TEXTURES:std::cell::RefCell<UiTextures>=Default::default();}
-pub const MODS_BUTTON_SPRITE:&str="RustTD6/ModsButton";
-const MODS_BUTTON_PATH:&str="@rusttd6/mods-button.png";
-fn ui_sprite_bytes(path:&Path)->Option<std::borrow::Cow<'static,[u8]>>{
-    if path==Path::new(MODS_BUTTON_PATH){Some(std::borrow::Cow::Borrowed(include_bytes!("../assets/ui/mods-button.png")))}
-    else{std::fs::read(path).ok().map(std::borrow::Cow::Owned)}
-}
-fn decode_ui_sprite(path:&Path,bytes:&[u8])->Option<Image>{
-    let mut image=Image::from_file_with_format(bytes,Some(ImageFormat::Png)).ok()?;
-    // Keep the original authored art in the executable, but only upload the
-    // resolution needed by this small menu button. Preparation runs off-thread.
-    if path==Path::new(MODS_BUTTON_PATH){while image.width>320{image=crate::render3d::half_size(&image);}}
-    Some(image)
-}
 fn shared_ui_texture(path:&Path)->Option<std::rc::Rc<Texture2D>>{
     shared_ui_texture_with(path,None)
 }
@@ -399,9 +386,9 @@ fn shared_ui_texture_with(path:&Path,decoded:Option<&Image>)->Option<std::rc::Rc
     UI_TEXTURES.with(|cache|{
         let mut cache=cache.borrow_mut();
         if let Some(texture)=cache.paths.get(path).and_then(|key|cache.textures.get(key)).and_then(std::rc::Weak::upgrade){return Some(texture);}
-        let bytes=ui_sprite_bytes(path)?;let key=blake3::hash(&bytes);
+        let bytes=std::fs::read(path).ok()?;let key=blake3::hash(&bytes);
         let texture=if let Some(texture)=cache.textures.get(&key).and_then(std::rc::Weak::upgrade){texture}else{
-            let texture=std::rc::Rc::new(match decoded{Some(img)=>Texture2D::from_image(img),None=>Texture2D::from_image(&decode_ui_sprite(path,&bytes)?)});
+            let texture=std::rc::Rc::new(match decoded{Some(img)=>Texture2D::from_image(img),None=>Texture2D::from_file_with_format(&bytes,Some(ImageFormat::Png))});
             texture.set_filter(FilterMode::Linear);cache.textures.insert(key,std::rc::Rc::downgrade(&texture));texture
         };
         cache.paths.insert(path.to_owned(),key);Some(texture)
@@ -452,7 +439,6 @@ impl Sprites {
                 }
             }
         }
-        index.insert(MODS_BUTTON_SPRITE.into(),(PathBuf::from(MODS_BUTTON_PATH),[0.0;4],10.8));
         index
     }
 
@@ -480,9 +466,9 @@ impl Sprites {
                 let jobs: Vec<_> = chunk.iter().map(|(_, (path, _, _))| {
                     let path = path.clone();
                     crate::load_work::spawn(move || {
-                        let bytes = ui_sprite_bytes(&path)?;
+                        let bytes = std::fs::read(path).ok()?;
                         let key = blake3::hash(&bytes);
-                        let image = decode_ui_sprite(&path,&bytes)?;
+                        let image = Image::from_file_with_format(&bytes, Some(ImageFormat::Png)).ok()?;
                         Some((key, image))
                     })
                 }).collect();
@@ -652,21 +638,5 @@ fn one_edit(a: &str, b: &str) -> bool {
         s[p..].iter().skip(1).eq(l[p..].iter().skip(1))
     } else {
         s[p..] == l[p + 1..]
-    }
-}
-
-#[cfg(test)]
-mod client_icon_tests{
-    use super::*;
-    #[test]
-    fn custom_mods_art_is_embedded_transparent_and_uses_a_small_upload(){
-        let path=Path::new(MODS_BUTTON_PATH);
-        let bytes=ui_sprite_bytes(path).unwrap();
-        let image=decode_ui_sprite(path,&bytes).unwrap();
-        assert_eq!(image.width,image.height);
-        assert!((256..=320).contains(&image.width));
-        assert!(image.bytes.chunks_exact(4).any(|pixel|pixel[3]==0));
-        assert!(image.bytes.chunks_exact(4).any(|pixel|pixel[3]>=250));
-        assert_eq!(Sprites::build_index(Path::new("missing-test-assets"),&[])[MODS_BUTTON_SPRITE].0,path);
     }
 }

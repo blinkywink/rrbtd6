@@ -356,3 +356,7 @@ for stock-game comparisons, preserving their data for a later restore.
   Embedded art uses shared sprite preparation/cache and a <=320-pixel GPU upload. Event
   viewport no longer needs a reserved slot. Thirteen targeted tests and GPU sharing/upload
   smoke checks passed; latest menu screenshot inspected. Prompt saved beside the artwork.
+
+- Mods button now uses selected option 7, the original CreateChallengeIcon clipboard/pencil,
+  at the existing 315-unit bottom-right position. Removed the rejected generated image
+  from the executable and restored the ordinary shared sprite loading path.
