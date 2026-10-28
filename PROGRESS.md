@@ -350,3 +350,9 @@ for stock-game comparisons, preserving their data for a later restore.
 - Mods home button now sits on the right above the bottom navigation, uses the original
   circular GameEditorBtn Engineer/hammer art and native hover/press clips. Event scrolling
   reserves its space and restores authored bounds when hidden; regression check passes.
+
+- Mods button revised by request: original custom puzzle/wrench artwork, bottom-right
+  corner with a 30-unit edge inset, 315-unit size (5% larger). Native hover/press retained.
+  Embedded art uses shared sprite preparation/cache and a <=320-pixel GPU upload. Event
+  viewport no longer needs a reserved slot. Thirteen targeted tests and GPU sharing/upload
+  smoke checks passed; latest menu screenshot inspected. Prompt saved beside the artwork.

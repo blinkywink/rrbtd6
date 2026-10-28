@@ -71,10 +71,15 @@ pub(super) fn add_home_button(node:&mut Node,runtime:&mut serde_json::Value){
     if node.find(&format!("{MAIN}/Mods")).is_some(){return;}
     let Some(mut button)=node.find(&format!("{MAIN}/Settings")).cloned() else{return;};
     button.name="Mods".into();button.set_active("Flag",false);button.set_active("NewTowerDot",false);
-    // The game's circular Engineer/hammer emblem, with its original frame and shading.
+    // Original client artwork, with the same native hover/press feedback.
     button.rt.amin=vec2(1.0,0.0);button.rt.amax=button.rt.amin;button.rt.pivot=vec2(1.0,0.0);
-    button.rt.pos=vec2(-40.0,550.0);button.rt.size=vec2(300.0,300.0);
-    button.set_sprite("Button",Some("GameEditorBtn"));button.active=false;
+    button.rt.pos=vec2(-30.0,30.0);button.rt.size=vec2(315.0,315.0);
+    let button_size=button.rt.size;
+    if let Some(image)=button.find_mut("Button"){
+        image.rt.amin=vec2(0.5,0.5);image.rt.amax=image.rt.amin;image.rt.pivot=vec2(0.5,0.5);
+        image.rt.pos=Vec2::ZERO;image.rt.size=button_size;
+    }
+    button.set_sprite("Button",Some(crate::ui::MODS_BUTTON_SPRITE));button.active=false;
     if let Some(main)=node.find_mut(MAIN){main.children.push(button);}
     // Reuse the authored hover/press clips too; alias bindings just once at load.
     if let Some(animators)=runtime["animators"].as_array_mut(){
@@ -93,17 +98,6 @@ pub(super) fn add_home_button(node:&mut Node,runtime:&mut serde_json::Value){
     }
 }
 
-pub(super) fn layout_home_button(node:&mut Node,shown:bool,event_origin:&mut Option<(f32,f32)>){
-    const MAIN:&str="MainMenuCanvas/MainMenu";
-    node.set_active(&format!("{MAIN}/Mods"),shown);
-    if let Some(events)=node.find_mut(&format!("{MAIN}/EventButtonGroup")){
-        let (y,height)=*event_origin.get_or_insert((events.rt.pos.y,events.rt.size.y));
-        // Keep the top edge fixed and reserve one button's height at the bottom.
-        // Restoring visibility restores the exact authored event viewport.
-        let reserve=if shown{325.0}else{0.0};
-        events.rt.pos.y=y+reserve*0.5;events.rt.size.y=height-reserve;
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -111,21 +105,16 @@ mod tests {
     use crate::modding::{Entry,Manifest};
     use serde_json::json;
     #[test]
-    fn right_button_reserves_event_space_without_drift_or_moving_its_top(){
+    fn custom_button_is_slightly_larger_in_bottom_right_corner(){
         let mut node=Node::from_json(&json!({"name":"Scene","active":true,"children":[{"name":"MainMenuCanvas","active":true,"children":[
-            {"name":"MainMenu","active":true,"children":[{"name":"EventButtonGroup","active":true},{"name":"Mods","active":false}]}]}]}));
-        let path="MainMenuCanvas/MainMenu/EventButtonGroup";
-        let events=node.find_mut(path).unwrap();events.rt.pos.y=125.5;events.rt.size.y=-799.0;
-        let mut origin=None;
-        for _ in 0..3{
-            layout_home_button(&mut node,true,&mut origin);
-            let events=node.find(path).unwrap();assert_eq!(events.rt.pos.y,288.0);assert_eq!(events.rt.size.y,-1124.0);
-            assert_eq!(events.rt.pos.y+(2160.0+events.rt.size.y)*0.5,125.5+(2160.0-799.0)*0.5);
-            assert!(node.find("MainMenuCanvas/MainMenu/Mods").unwrap().active);
-        }
-        layout_home_button(&mut node,false,&mut origin);
-        let events=node.find(path).unwrap();assert_eq!((events.rt.pos.y,events.rt.size.y),(125.5,-799.0));
-        assert!(!node.find("MainMenuCanvas/MainMenu/Mods").unwrap().active);
+            {"name":"MainMenu","active":true,"children":[{"name":"Settings","active":true,"children":[
+                {"name":"Button","active":true,"comps":[{"type":"Image","enabled":true,"sprite":"OptionsBtn"}]}]}]}]}]}));
+        add_home_button(&mut node,&mut json!({"animators":[]}));
+        let button=node.find("MainMenuCanvas/MainMenu/Mods").unwrap();
+        assert_eq!(button.rt.amin,vec2(1.0,0.0));assert_eq!(button.rt.pivot,vec2(1.0,0.0));
+        assert_eq!(button.rt.pos,vec2(-30.0,30.0));assert_eq!(button.rt.size,vec2(315.0,315.0));
+        let image=button.find("Button").unwrap();assert_eq!(image.rt.size,button.rt.size);
+        assert_eq!(image.img.as_ref().unwrap().sprite.as_deref(),Some(crate::ui::MODS_BUTTON_SPRITE));
     }
     #[test]
     fn toggling_native_row_emits_sorted_local_preferences(){

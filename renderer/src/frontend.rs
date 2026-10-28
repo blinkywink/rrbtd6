@@ -301,7 +301,6 @@ pub struct FrontEnd {
     pub adv: crate::advanced::Advanced,
     /// The Trophy Store button's original height (it takes the Shop's slot when that's hidden).
     trophy_store_y: Option<f32>,
-    mods_event_origin:Option<(f32,f32)>,
     adv_scroll: f32,
     adv_expanded: [bool; 3],
     hotkeys: Option<Node>,
@@ -616,7 +615,6 @@ impl FrontEnd {
             advanced: None,
             adv: crate::advanced::Advanced::default(),
             trophy_store_y: None,
-            mods_event_origin:None,
             adv_scroll: 0.0,
             adv_expanded: [false; 3],
             hotkeys: None,
@@ -638,6 +636,7 @@ impl FrontEnd {
                 if let Some(m) = self.main.as_mut() {
                     apply_pose(m, &self.root.join("ui/runtime/MainMenuUi.json"), "HomeScreen", "Open");
                     mod_browser::add_home_button(m,&mut self.main_runtime);
+                    m.set_active(&format!("{MAIN}/Mods"),self.adv.show_mods);
                     for n in ["EventButtonGroup", "LoadGame"] {
                         m.set_active(&format!("{MAIN}/{n}"), false);
                     }
@@ -1149,7 +1148,7 @@ impl Hud {
             Screen::Main => {
                 if let Some(m) = fe.main.as_mut() {
                     // Our main menu toggles (Advanced settings, see DEVIATIONS.md).
-                    mod_browser::layout_home_button(m,fe.adv.show_mods,&mut fe.mods_event_origin);
+                    m.set_active(&format!("{MAIN}/Mods"),fe.adv.show_mods);
                     if m.clicked(&format!("{MAIN}/Mods/Button")){next=Some(Screen::Menu(MenuPage::Mods));}
                     m.set_active(&format!("{MAIN}/BottomButtonGroup/Legends"), !fe.adv.hide_legends);
                     m.set_active(&format!("{MAIN}/Store"), !fe.adv.hide_store);
