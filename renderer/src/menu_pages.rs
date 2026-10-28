@@ -12,6 +12,7 @@ pub(super) struct Page {
     buttons:super::button_motion::ButtonMotion,
     profile:Option<super::profile_browser::Browser>,
     pub(super) jukebox:Option<super::jukebox::Browser>,
+    pub(super) mods:Option<super::mod_browser::Browser>,
     daily_reward:Option<super::daily_reward::Browser>,
     event:Option<super::event_details::Detail>,
     goals:Option<super::season_goals::Browser>,
@@ -281,6 +282,7 @@ impl Page {
         if input.released {
             let clicked=self.pointer_start.take().is_some() && !self.pointer_dragged;
             if clicked && self.daily_reward.as_mut().is_some_and(|d|d.click(&mut self.node,input.pointer)){return;}
+            if clicked && self.mods.as_mut().is_some_and(|m|m.click(&mut self.node,input.pointer)){return;}
             if clicked && self.jukebox.as_mut().is_some_and(|j|j.click(&mut self.node,input.pointer)){return;}
             if clicked && self.profile.as_mut().is_some_and(|p|p.click(&mut self.node,input.pointer)){
                 if self.profile.as_mut().is_some_and(|p|std::mem::take(&mut p.stats_changed)){
@@ -841,7 +843,7 @@ fn scroll_regions(data: &serde_json::Value, node: &Node) -> Vec<ScrollRegion> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum MenuPage { CoopLobby,SocialGoals,SocialSeason,DailyStandard,DailyAdvanced,DailyCoop,Race,DailyStandardRules,DailyAdvancedRules,DailyCoopRules,RaceRules,BossRules,BossEliteRules,Profile, Knowledge, KnowledgeTree, Social, Powers, Achievements, Store, TrophyStore, Legends, Mailbox, QuickMatch, JoinMatch, Friends, Teams, Perks, Quests, Gift, Events, Television, Jukebox, DailyReward }
+pub enum MenuPage { CoopLobby,SocialGoals,SocialSeason,DailyStandard,DailyAdvanced,DailyCoop,Race,DailyStandardRules,DailyAdvancedRules,DailyCoopRules,RaceRules,BossRules,BossEliteRules,Profile, Knowledge, KnowledgeTree, Social, Powers, Achievements, Store, TrophyStore, Legends, Mailbox, QuickMatch, JoinMatch, Friends, Teams, Perks, Quests, Gift, Events, Television, Jukebox, DailyReward, Mods }
 
 impl MenuPage {
     pub(super) fn event_spec(self)->Option<(&'static str,bool)>{
@@ -857,7 +859,7 @@ impl MenuPage {
         Some(match name {
             "daily"=>Self::DailyStandard,"daily_advanced"=>Self::DailyAdvanced,"daily_coop"=>Self::DailyCoop,"race"=>Self::Race,
             "daily_rules"=>Self::DailyStandardRules,"advanced_rules"=>Self::DailyAdvancedRules,"race_rules"=>Self::RaceRules,"boss_rules"=>Self::BossRules,"boss_elite_rules"=>Self::BossEliteRules,
-            "profile"=>Self::Profile,"jukebox"=>Self::Jukebox,"daily_reward"=>Self::DailyReward,
+            "mods"=>Self::Mods,"profile"=>Self::Profile,"jukebox"=>Self::Jukebox,"daily_reward"=>Self::DailyReward,
             "quests"=>Self::Quests,"gift"=>Self::Gift,"events"=>Self::Events,"tv"=>Self::Television,
             "coop_lobby"=>Self::CoopLobby,"social_goals"=>Self::SocialGoals,"social_season"=>Self::SocialSeason,"friends"=>Self::Friends,"teams"=>Self::Teams,"perks"=>Self::Perks,
             "knowledge" => Self::Knowledge, "knowledge_tree" => Self::KnowledgeTree,
@@ -877,6 +879,7 @@ impl MenuPage {
             Self::SocialSeason => ("SocialSeasonsEventUI","SocialSeasonsEventUI","Open"),
             Self::Profile => ("PlayerStatsUI","PlayerStats","Open"),
             Self::Jukebox => ("JukeboxUI","JukeboxAnimation","Open"),
+            Self::Mods => ("AccessibilitySettingsUI","PopupWithBgAnim","PopupWithBgOpen"),
             Self::DailyReward => ("DailyRewardUI","DailyRewardsAnimation","Open"),
             Self::Quests => ("QuestBrowserUI","QuestBrowserAnim","Open"),
             Self::Gift => ("TowerGiftBoxUI","TowerGiftBoxPopUp","Open"),
@@ -1139,6 +1142,7 @@ impl MenuPage {
         let social=super::social_pages::SocialPage::load(root,file,&mut node);
         let profile=if self==Self::Profile{super::profile_browser::Browser::load(root,&mut node)}else{None};
         let jukebox=if self==Self::Jukebox{super::jukebox::Browser::load(root,&mut node,crate::menus::load_loc(&root.join("text/English.xml")))}else{None};
+        let mods=if self==Self::Mods{super::mod_browser::Browser::load(root,&mut node)}else{None};
         let daily_reward=if self==Self::DailyReward{super::daily_reward::Browser::load(root,&mut node)}else{None};
         let scrolls=scroll_regions(&data,&node);
         let powers=(!power_items.is_empty()).then(||PowerBrowser {costs:vec![0;power_items.len()],shown:vec![false;power_items.len()],quantities:vec![None;power_items.len()],
@@ -1169,7 +1173,7 @@ impl MenuPage {
             let entry=|id:&str|text.split(&format!("<T id=\"{id}\">")).nth(1).and_then(|s|s.split('<').next()).unwrap_or(id).to_owned();
             TrophyState {inventory:false,tab:5,live:None,account:None,cards:Vec::new(),day:entry("day"),days:entry("days"),root:root.to_owned()}
         });
-        let mut page=Page {first_presentation:true,node,season_second:None,buttons,profile,jukebox,daily_reward,event,goals,coop,scrolls,trophy_items,trophy_selected:Some(0),trophy,pointer_start:None,pointer_dragged:false,animation,powers,search,knowledge,legends,join_code,social,home_requested:false};
+        let mut page=Page {first_presentation:true,node,season_second:None,buttons,profile,jukebox,mods,daily_reward,event,goals,coop,scrolls,trophy_items,trophy_selected:Some(0),trophy,pointer_start:None,pointer_dragged:false,animation,powers,search,knowledge,legends,join_code,social,home_requested:false};
         if self==Self::Legends {
             let preview=std::env::var("RRBTD6_LEGENDS_PREVIEW").unwrap_or_default();
             let index=page.legends.as_ref().and_then(|b|b.data["slides"].as_array())
@@ -1229,7 +1233,7 @@ mod catalog_tests {
         let mut page=Page {first_presentation:true,season_second:None,node:Node::from_json(&json!({"name":"Scene","children":[tree]})),
             buttons:Default::default(),
             scrolls:Vec::new(),trophy_items:vec![json!({"category":1}),json!({"category":0}),json!({"category":2})],
-            profile:None,jukebox:None,daily_reward:None,event:None,goals:None,coop:None,trophy_selected:Some(0),trophy:None,pointer_start:None,pointer_dragged:false,animation:None,powers:None,search:None,knowledge:None,legends:None,join_code:None,social:None,home_requested:false};
+            profile:None,jukebox:None,mods:None,daily_reward:None,event:None,goals:None,coop:None,trophy_selected:Some(0),trophy:None,pointer_start:None,pointer_dragged:false,animation:None,powers:None,search:None,knowledge:None,legends:None,join_code:None,social:None,home_requested:false};
         page.filter_trophies(Some(0));
         assert_eq!(page.trophy_selected,Some(1));
         let cards=&page.node.find(TROPHY_GRID).unwrap().children;

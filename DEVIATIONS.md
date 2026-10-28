@@ -50,7 +50,7 @@ places the clone is meant to differ, by the owner's request.
 - Planned settings (added once the screens they skip exist):
   - **Always Use Cloud Save** — skip the "use your local save or your cloud save?" question
     after pressing Play on the startup screen, and always load the newest cloud save.
-  - **Mods Button** — shows a Mods button on the main menu (see 7).
+  - **Mods Button** — implemented as Show Mods Button in UI settings (see 7).
 
 ## 4. No Legends DLC modes
 
@@ -76,13 +76,18 @@ places the clone is meant to differ, by the owner's request.
   co-op servers, so it can play with both official and RustTD6 clients.
 - Not built yet: connecting to the official co-op servers needs Ninja Kiwi's network protocol.
 
-## 7. Mods (planned)
+## 7. Mods
 
-- An optional **Mods** button on the main menu (Advanced settings) with a set of simple preset
-  mods. The mods themselves are written once the game is complete.
-- In a co-op lobby the host can pick mods for the match; every player on this client gets them
-  applied automatically and sees which are active. Players on the official client are not
-  affected.
+- **Show Mods Button** in Advanced > UI is off by default and adds a Mods button on home.
+- The native settings-style manager lists installed mods, enables/disables them locally,
+  reloads manifests and reports validation errors or conflicts.
+- Data-only mod API 1 is implemented: versioned JSON manifests in `mods/<folder>/mod.json`,
+  with a new-local-Sandbox hook for starting cash/lives. The included Practice Start example
+  is disabled by default. See `mods/README.md` and `mods/mod.schema.json`.
+- Manifests are read only on manager open/reload or new modded Sandbox creation; there are
+  no per-frame callbacks. Hiding the button does not disable previously enabled mods.
+- Normal games, events, co-op, account data and uploads are unchanged. Tower/projectile hooks,
+  scripting and co-op mod negotiation remain future work.
 
 ## 8. RustTD6 branding
 

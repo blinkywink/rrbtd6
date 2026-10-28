@@ -61,6 +61,7 @@ pub struct Advanced {
     pub hide_double_cash:bool,
     pub hide_fast_track:bool,
     pub hide_map_friends:bool,
+    pub show_mods:bool,
     pub double_cash_enabled:bool,
     pub fast_track_enabled:bool,
     /// Fill the current monitor without changing its display mode (also toggled with F11).
@@ -81,7 +82,7 @@ impl Default for Advanced {
             show_fps: false, fps_cap: 0, vsync: true, render_scale: 1.0, sharpen: true, msaa: 4, full_textures: false,
             hide_legends: false, hide_store: false, hide_race: false, hide_boss: false, hide_boss_rush: false,
             hide_odyssey: false, hide_contested_territory: false, hide_social_season: false, skip_startup: false,hide_perks:false,hide_double_cash:false,hide_fast_track:false,
-            hide_map_friends:false,double_cash_enabled:false,fast_track_enabled:false,
+            hide_map_friends:false,show_mods:false,double_cash_enabled:false,fast_track_enabled:false,
             fullscreen:false }
     }
 }
@@ -163,6 +164,7 @@ impl Advanced {
             Row::Toggle("Hide Friends' Map Records",self.hide_map_friends,"Hides friends' best-round badges and the map records panel."),
             Row::Toggle("Fullscreen", self.fullscreen,
                 "Fill the screen. You can also press F11 to switch fullscreen on or off."),
+            Row::Toggle("Show Mods Button",self.show_mods,"Shows the local mod manager on the main menu. Hiding the button does not disable installed mods."),
         ]
     }
 
@@ -187,6 +189,7 @@ impl Advanced {
             18 => self.hide_fast_track=!self.hide_fast_track,
             19 => self.hide_map_friends=!self.hide_map_friends,
             20 => self.fullscreen = !self.fullscreen,
+            21 => self.show_mods = !self.show_mods,
             _ => {}
         }
         self.disable_hidden_features();
@@ -207,6 +210,13 @@ impl Advanced {
 #[cfg(test)]
 mod hidden_features_tests{
     use super::*;
+    #[test]
+    fn mods_button_is_opt_in_and_visibility_roundtrips(){
+        let mut settings=Advanced::default();assert!(!settings.show_mods);
+        settings.toggle(21);assert!(settings.show_mods);
+        assert!(Advanced::load(&serde_json::json!({"advanced":settings})).show_mods);
+        settings.toggle(21);assert!(!settings.show_mods);
+    }
     #[test]
     fn fullscreen_toggle_migrates_old_preferences_and_roundtrips() {
         let mut a = Advanced::default();

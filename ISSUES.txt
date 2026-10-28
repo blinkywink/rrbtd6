@@ -83,6 +83,9 @@ OPEN
 
 DONE
 ----
+- Optional Mods menu: Show Mods Button in Advanced > UI, native-style mod manager,
+  local enable/disable/reload, and data-only API 1 for new local Sandbox cash/lives.
+  Practice Start example is disabled by default; see mods/README.md. Tower hooks later.
 - Removed the home island's Bloons TV and its click target by request.
 - Perks is a navigation button without a checkbox; Hide Perks Button only hides it.
 - Profile avatar/banner tabs were transparent: keep their solid blue background under the

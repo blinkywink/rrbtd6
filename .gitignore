@@ -9,3 +9,10 @@ __pycache__/
 /tools/.venv/
 # The one playable build (tools/build_exe.sh).
 /BTD6.exe
+# Installed local mods are user content; keep only the shipped API docs and example.
+/mods/*
+!/mods/README.md
+!/mods/mod.schema.json
+!/mods/practice-start/
+/mods/practice-start/*
+!/mods/practice-start/mod.json

@@ -12,6 +12,7 @@ mod runtime_anim_export;
 mod audio;
 mod data;
 mod game;
+mod modding;
 mod load_work;
 mod frame_bench;
 mod frame_pacer;
@@ -447,6 +448,7 @@ async fn game_main() {
     let maps = map_keys(&root);
     let mut map_key: String = read_settings(&root)["map"].as_str().filter(|m| maps.iter().any(|k| k == m)).unwrap_or("tutorial").to_string();
     let mut game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key));
+    modding::apply_new_sandbox(&root,&mut game,true);
     if benchmark_input("RRBTD6_BENCH_SIM_DIR").is_some()&&benchmark_input("RRBTD6_BENCH_SETTINGS").is_some(){
         eprintln!("frame-bench-inputs: isolated mode={}",game.mode_name);
     }
@@ -1080,11 +1082,14 @@ async fn game_main() {
             save_setting(&root, "map", serde_json::json!(map_key));
             let worker_root=root.clone();let worker_json=json.clone();let worker_map=map_key.clone();
             let worker_hero=if coop_config.is_some(){None}else{hero.clone()};
+            let worker_local=coop_config.is_none()&&race_config.is_none();
             let worker_mode=coop_config.as_ref().map(|c|["Easy","Medium","Hard"][c.room.settings.difficulty as usize].to_owned());
             game=loading_task(load_work::spawn(move||{
                 let mut loaded=game_data(&worker_root,&worker_json,worker_hero.as_deref(),&worker_map);
                 if let Some(mode)=worker_mode{loaded.mode=mode;}
-                Game::new(loaded)
+                let mut game=Game::new(loaded);
+                modding::apply_new_sandbox(&worker_root,&mut game,worker_local);
+                game
             }),&mut front,&mut hud,&mut audio,adv.fps_cap).await;
             if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
             terrain = None;
@@ -1289,6 +1294,7 @@ async fn game_main() {
                     }
                     save_settings(&root, v);
                 }
+                Some(frontend::FrontAction::Mods(ids))=>{save_setting(&root,"mods",serde_json::json!(ids));}
                 Some(frontend::FrontAction::Jukebox(change))=>{
                     save_setting(&root,"jukebox",serde_json::json!(change.tracks.iter().map(|(id,_)|id).collect::<Vec<_>>()));
                     audio.set_jukebox(&change);
@@ -1422,6 +1428,7 @@ async fn game_main() {
                         menus::MenuAction::Restart => {
                             if coop_runtime.is_none(){
                             game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key));
+                            modding::apply_new_sandbox(&root,&mut game,coop_config.is_none()&&race_config.is_none());
             if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
                             pops.clear();
                             (placing, selected, speed, acc) = (None, None, 1, 0.0);
@@ -1584,6 +1591,7 @@ async fn game_main() {
             let next = order[(cur + if back { order.len() - 1 } else { 1 }) % order.len()];
             save_setting(&root, "mode", serde_json::json!(next));
             game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key));
+            modding::apply_new_sandbox(&root,&mut game,coop_config.is_none()&&race_config.is_none());
             if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
             eprintln!("difficulty: {next}");
         }
@@ -1604,6 +1612,7 @@ async fn game_main() {
                 hero = Some(ids[next].clone());
                 save_setting(&root, "hero", serde_json::json!(ids[next]));
                 game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key));
+                modding::apply_new_sandbox(&root,&mut game,coop_config.is_none()&&race_config.is_none());
             if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
                 hud = load_work::complete_asset(Hud::load(&root, &game));
                 placing = None;

@@ -1,0 +1,11 @@
+{
+  "api_version": 1,
+  "id": "practice-start",
+  "name": "Practice Start",
+  "version": "1.0.0",
+  "description": "Start a local Sandbox with $100,000 and 200 lives. A small example of the data-only mod API.",
+  "on_new_sandbox": {
+    "starting_cash": 100000,
+    "starting_lives": 200
+  }
+}

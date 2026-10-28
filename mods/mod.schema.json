@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RustTD6 mod API 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "id", "name", "version"],
+  "properties": {
+    "api_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "version": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "description": { "type": "string", "maxLength": 1024 },
+    "on_new_sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "starting_cash": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000000000 },
+        "starting_lives": { "type": ["integer", "null"], "minimum": 1, "maximum": 1000000000 }
+      }
+    }
+  }
+}

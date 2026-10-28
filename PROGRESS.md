@@ -332,3 +332,17 @@ for stock-game comparisons, preserving their data for a later restore.
   the playing track or emptying the queue. Four focused regression tests pass.
 - Local cached-account check: 17 owned paid tracks, all 17 extracted audio clips present.
 - No account requests, purchase changes or uploads are performed by these controls.
+
+## Optional Mods menu and data-only API 1 (2026-10-28)
+
+- Advanced > UI > Show Mods Button (off by default), a home button, and a manager using the
+  original settings panel/toggles/buttons. Reload and native OK/Back controls are wired.
+- Local `mods` preference stores enabled manifest IDs. Bad/missing/duplicate IDs and conflicting
+  rules are reported; unknown API versions/fields and out-of-range values are rejected.
+- New-local-Sandbox hook supports initial cash/lives without depending on unfinished towers.
+  Normal games, events and co-op bypass it. No per-frame dispatch or asset scans were added.
+- Included disabled Practice Start example, manifest schema and API authoring documentation.
+- Targeted test run: eleven tests pass, including UI selection, settings persistence, validation,
+  duplicate/conflict handling and scope isolation. Menu/home/enabled-state screenshots checked.
+- End-to-end launch verified Practice Start sets Sandbox cash=100000 and lives=200; test
+  preferences were restored byte-for-byte afterward.

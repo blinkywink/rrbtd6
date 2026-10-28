@@ -30,6 +30,8 @@ pub(crate) mod home_events;
 mod profile_browser;
 #[path = "jukebox.rs"]
 pub(crate) mod jukebox;
+#[path = "mod_browser.rs"]
+mod mod_browser;
 #[path = "daily_reward.rs"]
 mod daily_reward;
 #[path = "save_warning.rs"]
@@ -103,6 +105,7 @@ pub enum FrontAction {
     Race(serde_json::Value),
     Quit,
     Jukebox(jukebox::Change),
+    Mods(Vec<String>),
     ReturnToPause,
     SelectHero(String),
     SelectSkin { hero: String, skin: String },
@@ -632,6 +635,7 @@ impl FrontEnd {
                 self.main_open_animation = Some(get_time());
                 if let Some(m) = self.main.as_mut() {
                     apply_pose(m, &self.root.join("ui/runtime/MainMenuUi.json"), "HomeScreen", "Open");
+                    mod_browser::add_home_button(m);
                     for n in ["EventButtonGroup", "LoadGame"] {
                         m.set_active(&format!("{MAIN}/{n}"), false);
                     }
@@ -786,7 +790,7 @@ impl FrontEnd {
                             r.name = format!("Ours{i}");
                             extra.push(r);
                         }
-                        extra.sort_by_key(|row| row.name != "Ours20");
+                        extra.sort_by_key(|row| match row.name.as_str(){"Ours20"=>0,"Ours0"=>1,"Ours21"=>2,_=>3});
                         let original=std::mem::take(&mut c.children);
                         for (section,name) in ADV_SECTIONS.iter().enumerate(){
                             let mut head=header.clone().unwrap_or_else(||title.clone());
@@ -1143,6 +1147,8 @@ impl Hud {
             Screen::Main => {
                 if let Some(m) = fe.main.as_mut() {
                     // Our main menu toggles (Advanced settings, see DEVIATIONS.md).
+                    m.set_active(&format!("{MAIN}/Mods"),fe.adv.show_mods);
+                    if m.clicked(&format!("{MAIN}/Mods/Button")){next=Some(Screen::Menu(MenuPage::Mods));}
                     m.set_active(&format!("{MAIN}/BottomButtonGroup/Legends"), !fe.adv.hide_legends);
                     m.set_active(&format!("{MAIN}/Store"), !fe.adv.hide_store);
                     // Without the Shop, the Trophy Store moves up into its slot.
@@ -1151,6 +1157,8 @@ impl Hud {
                         let home = *fe.trophy_store_y.get_or_insert(trophy.rt.pos.y);
                         trophy.rt.pos.y = if fe.adv.hide_store { store_y } else { home };
                     }
+                    let mods_y=m.find(&format!("{MAIN}/TrophyStore")).map(|n|n.rt.pos.y-325.0);
+                    if let (Some(y),Some(mods))=(mods_y,m.find_mut(&format!("{MAIN}/Mods"))){mods.rt.pos.y=y;}
                     if let Some(page)=home_events::update(&fe.root,m,s,&fe.adv.hidden_events()){next=Some(Screen::Menu(page));}
                     if let Some(hero)=fe.selected_hero.as_deref().or_else(||fe.heroes.first().map(|h|h.id.as_str())) {
                         let skin=selected_skin(&fe.hero_data,&fe.hero_skins,hero);
@@ -1201,7 +1209,9 @@ impl Hud {
             Screen::Menu(page) => {
                 let mut back=back;
                 if let Some(menu) = fe.pages.get_mut(&page) {
+                    if page==MenuPage::Mods && menu.node.clicked("Canvas/AccessibilitySettings/Panel/OkBtn"){back=true;}
                     if page==MenuPage::DailyReward && menu.node.clicked("Canvas/DailyRewardScreen/BgPanel/ImgClose"){back=true;}
+                    if let Some(ids)=menu.mods.as_mut().and_then(|m|m.pending.take()){out=Some(FrontAction::Mods(ids));}
                     if let Some(change)=menu.jukebox.as_mut().and_then(|j|j.pending.take()){out=Some(FrontAction::Jukebox(change));}
                     if back && menu.dismiss_search() {back=false;}
                     menu.animate();
