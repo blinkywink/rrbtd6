@@ -322,3 +322,26 @@ Validation: 60 offline Python tooling checks and six native storage tests passed
 Python and the native client. The broader game suite had 132 passing tests and
 one unrelated Preemptive Strike simulation failure; 19 were ignored.
 
+JSON whitespace (2026-10-28, finish step v9)
+------------------------------------------
+compact_json.py removes only JSON whitespace outside quoted strings. It preserves
+number spellings (including negative zero and exponents), escapes, Unicode,
+duplicate object keys, array order, and every byte inside strings. Both forms are
+parsed and compared before replacement, the temporary file is reread, and the
+source is checked again before atomic replacement. Invalid or concurrently changed
+sources are retained. Repeat passes skip already compact files. Settings, saves,
+account caches, and research directories are outside its runtime-folder allowlist.
+
+Local migration checked 4,993 files and compacted 4,941: 256,901,646 -> 127,275,884
+bytes, saving 129,625,762 bytes. Total runtime folders now measure 5,008,698,439
+logical bytes / 4,651,398,327 unique file bytes accounting for existing hard links.
+No compression codec, runtime decompression, per-frame work, or data precision
+change was introduced. These storage savings are not an FPS benchmark claim.
+
+The Sandbox animator loader formerly edited raw JSON with a whitespace-sensitive
+text replacement. The updated client normalizes parsed binding paths during worker
+loading instead; a native regression test covers pretty and compact JSON. Use the
+updated client when migrating existing Sandbox runtime files. Seven migration/token
+tests, 15 extraction-plan checks and the native binding test passed. All migrated
+files were independently reread and checked for valid, fully compact JSON.
+

@@ -163,3 +163,4 @@ $PY tools/assets/delta_anims.py local_extracted/models
 $PY tools/assets/repack_anims.py local_extracted/models
 $PY tools/assets/word_anims.py local_extracted/models
 $PY tools/assets/share_model_textures.py local_extracted/models
+$PY tools/assets/compact_json.py local_extracted

@@ -836,3 +836,9 @@ Sandbox Bloons now clears tower selection when opening, matching the native
 BloonMenu.Show -> InputManager.SelectedSelectionDisabled handoff. The native Initialise subscription closes it on scene hits, and temporarily
 hides it during tower placement. TSM side does not determine its visibility.
 RRBTD6_SANDBOX_TOGGLE_FRAME exercises the same handoff during an autotest.
+
+
+Finish v9 compacts ordinary runtime JSON by removing whitespace outside strings,
+with exact value tokens retained. The Sandbox animator loader normalizes parsed
+paths rather than relying on spaces in JSON. No runtime compression codec or
+per-frame storage work is introduced. See tools/EXTRACTION.md for measured savings.

@@ -403,6 +403,7 @@ def finish(c):
     c.py("tools/assets/patch_tmp_gradients.py", c.game, c.root)
     c.py("tools/assets/rebuild_shader_glsl.py", c.out)
     c.py("tools/assets/share_model_textures.py", c.out / "models")
+    c.py("tools/assets/compact_json.py", c.out)
 
 
 def dedupe(c):
@@ -451,8 +452,8 @@ STEP_VERSIONS["core_menus"] = 2
 # startup 2: the splash and initial loading screens' sprites.
 # startup 4: the title screen's BTD6Logo and the game's window icon.
 STEP_VERSIONS["startup"] = 4
-# finish 8: measured word-prediction candidates, accepted by the matching native client.
-STEP_VERSIONS["finish"] = 8
+# finish 9: remove runtime JSON whitespace while preserving every value token.
+STEP_VERSIONS["finish"] = 9
 STEP_VERSIONS["audio"] = 2
 STEP_VERSIONS["dedupe"] = 1
 

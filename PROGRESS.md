@@ -293,3 +293,10 @@ GameAssembly tracing confirms Show calls SetSelected(null). Initialise binds
 OnSceneHit to clear showInternal, and OnHideShowPlacementBlockingUI to
 ShowHideExternal. Panel visibility now follows scene hits and placement rather
 than which side the upgrade panel occupies. Selected Druid smoke passed.
+
+2026-10-28 JSON storage: finish v9 strips only whitespace outside quoted strings,
+preserving exact numbers, escapes, duplicate keys and string content. Verified
+4,993 files, compacted 4,941; saved 129,625,762 bytes. Runtime assets now 5.009 GB
+logical / 4.651 GB unique file bytes. No runtime codec or per-frame work. Fixed
+Sandbox animator loading to normalize parsed paths independently of formatting.
+Seven migration tests, 15 extraction-plan tests and one native regression passed.

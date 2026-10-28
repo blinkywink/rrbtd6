@@ -11,6 +11,25 @@ use std::path::Path;
 
 const MENU: &str = "SandboxContainer/Layout";
 const LIST: &str = "SandboxContainer/Layout/BloonsScroll/Viewport/BloonList";
+
+/// Exported animator bindings include the prefab root, unlike Node-relative paths.
+/// Normalize parsed values so pretty and compact JSON work identically.
+fn relative_runtime_paths(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if let Some(path) = fields.get_mut("path") {
+                if let Some(relative) = path.as_str().and_then(|p| p.strip_prefix("SandboxBloonsMenu/")) {
+                    *path = serde_json::Value::String(relative.to_owned());
+                }
+            }
+            for child in fields.values_mut() { relative_runtime_paths(child); }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items { relative_runtime_paths(child); }
+        }
+        _ => {}
+    }
+}
 /// The bloon buttons, in the game's order (BloonMenu: base types; the toggles add variants).
 /// TestBloon / TestBloonMoab (999999 / 100000000 health, no leak damage) close the list.
 pub const BLOONS: [&str; 19] = [
@@ -93,8 +112,8 @@ impl SandboxUi {
         // The prefab export names bindings from the menu itself; Node paths start below it.
         let runtime = prefabs.parent().map(|ui| ui.join("runtime/SandboxBloonsMenu.json"))
             .and_then(|p| std::fs::read_to_string(p).ok())
-            .map(|text| text.replace("\"path\": \"SandboxBloonsMenu/", "\"path\": \""))
             .and_then(|text| serde_json::from_str(&text).ok())
+            .map(|mut value| { relative_runtime_paths(&mut value); value })
             .unwrap_or_default();
         let button = Node::load(&prefabs.join("SpawnBloonButton.json"));
         if let Some(m) = menu.as_mut() {
@@ -149,6 +168,28 @@ impl SandboxUi {
     /// A text field has keyboard focus (hotkeys are off meanwhile).
     pub fn typing(&self) -> bool {
         self.open && self.editing.is_some()
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn animation_bindings_are_independent_of_json_whitespace() {
+        let source = serde_json::json!({"animators": [{
+            "path": "SandboxBloonsMenu/Mask",
+            "clips": [{"bindings": [{"path": "SandboxBloonsMenu/SandboxContainer", "start": [975.0]}]}]
+        }], "description": "SandboxBloonsMenu/keep this text", "other": {"path": "OtherMenu/Mask"}});
+        let mut pretty: serde_json::Value = serde_json::from_str(&serde_json::to_string_pretty(&source).unwrap()).unwrap();
+        let mut compact: serde_json::Value = serde_json::from_str(&serde_json::to_string(&source).unwrap()).unwrap();
+        relative_runtime_paths(&mut pretty);
+        relative_runtime_paths(&mut compact);
+        assert_eq!(pretty, compact);
+        assert_eq!(compact["animators"][0]["path"], "Mask");
+        assert_eq!(compact["animators"][0]["clips"][0]["bindings"][0]["path"], "SandboxContainer");
+        assert_eq!(compact["description"], source["description"]);
+        assert_eq!(compact["other"], source["other"]);
     }
 }
 
