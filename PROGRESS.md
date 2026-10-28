@@ -346,3 +346,7 @@ for stock-game comparisons, preserving their data for a later restore.
   duplicate/conflict handling and scope isolation. Menu/home/enabled-state screenshots checked.
 - End-to-end launch verified Practice Start sets Sandbox cash=100000 and lives=200; test
   preferences were restored byte-for-byte afterward.
+
+- Mods home button now sits on the right above the bottom navigation, uses the original
+  circular GameEditorBtn Engineer/hammer art and native hover/press clips. Event scrolling
+  reserves its space and restores authored bounds when hidden; regression check passes.

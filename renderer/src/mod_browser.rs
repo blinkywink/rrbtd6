@@ -66,17 +66,43 @@ impl Browser {
 }
 
 /// Add one native-looking menu button once; no images are decoded per frame.
-pub(super) fn add_home_button(node:&mut Node){
+pub(super) fn add_home_button(node:&mut Node,runtime:&mut serde_json::Value){
     const MAIN:&str="MainMenuCanvas/MainMenu";
     if node.find(&format!("{MAIN}/Mods")).is_some(){return;}
     let Some(mut button)=node.find(&format!("{MAIN}/Settings")).cloned() else{return;};
-    button.name="Mods".into();button.rt.pos.y=-1660.0;button.set_active("Flag",false);button.set_active("NewTowerDot",false);
-    button.set_sprite("Button",Some("BlueBtnSquare"));
-    let label=Node::from_json(&serde_json::json!({"name":"Label","active":true,"rect":{"anchor_min":[0,0],"anchor_max":[1,1],"size":[0,0],"scale":[1,1]},
-        "comps":[{"type":"TextMeshProUGUI","m_text":"MODS","m_fontSize":72,"m_HorizontalAlignment":2,"m_VerticalAlignment":512,
-            "font":"Btd6FontTitleSDF","material":"Btd6FontTitleSDFOutlineBlack","color":[1,1,1,1]}]}));
-    button.children.push(label);button.active=false;
+    button.name="Mods".into();button.set_active("Flag",false);button.set_active("NewTowerDot",false);
+    // The game's circular Engineer/hammer emblem, with its original frame and shading.
+    button.rt.amin=vec2(1.0,0.0);button.rt.amax=button.rt.amin;button.rt.pivot=vec2(1.0,0.0);
+    button.rt.pos=vec2(-40.0,550.0);button.rt.size=vec2(300.0,300.0);
+    button.set_sprite("Button",Some("GameEditorBtn"));button.active=false;
     if let Some(main)=node.find_mut(MAIN){main.children.push(button);}
+    // Reuse the authored hover/press clips too; alias bindings just once at load.
+    if let Some(animators)=runtime["animators"].as_array_mut(){
+        let from=format!("{MAIN}/Settings/Button");let to=format!("{MAIN}/Mods/Button");
+        let copies:Vec<_>=animators.iter().filter(|a|a["path"].as_str()==Some(from.as_str())).cloned().map(|mut a|{
+            a["path"]=serde_json::json!(to);
+            for clip in a["clips"].as_array_mut().into_iter().flatten(){
+                for binding in clip["bindings"].as_array_mut().into_iter().flatten(){
+                    if let Some(path)=binding["path"].as_str().filter(|p|p.starts_with(&from)){
+                        binding["path"]=serde_json::json!(format!("{to}{}",&path[from.len()..]));
+                    }
+                }
+            }
+            a
+        }).collect();animators.extend(copies);
+    }
+}
+
+pub(super) fn layout_home_button(node:&mut Node,shown:bool,event_origin:&mut Option<(f32,f32)>){
+    const MAIN:&str="MainMenuCanvas/MainMenu";
+    node.set_active(&format!("{MAIN}/Mods"),shown);
+    if let Some(events)=node.find_mut(&format!("{MAIN}/EventButtonGroup")){
+        let (y,height)=*event_origin.get_or_insert((events.rt.pos.y,events.rt.size.y));
+        // Keep the top edge fixed and reserve one button's height at the bottom.
+        // Restoring visibility restores the exact authored event viewport.
+        let reserve=if shown{325.0}else{0.0};
+        events.rt.pos.y=y+reserve*0.5;events.rt.size.y=height-reserve;
+    }
 }
 
 #[cfg(test)]
@@ -84,6 +110,23 @@ mod tests {
     use super::*;
     use crate::modding::{Entry,Manifest};
     use serde_json::json;
+    #[test]
+    fn right_button_reserves_event_space_without_drift_or_moving_its_top(){
+        let mut node=Node::from_json(&json!({"name":"Scene","active":true,"children":[{"name":"MainMenuCanvas","active":true,"children":[
+            {"name":"MainMenu","active":true,"children":[{"name":"EventButtonGroup","active":true},{"name":"Mods","active":false}]}]}]}));
+        let path="MainMenuCanvas/MainMenu/EventButtonGroup";
+        let events=node.find_mut(path).unwrap();events.rt.pos.y=125.5;events.rt.size.y=-799.0;
+        let mut origin=None;
+        for _ in 0..3{
+            layout_home_button(&mut node,true,&mut origin);
+            let events=node.find(path).unwrap();assert_eq!(events.rt.pos.y,288.0);assert_eq!(events.rt.size.y,-1124.0);
+            assert_eq!(events.rt.pos.y+(2160.0+events.rt.size.y)*0.5,125.5+(2160.0-799.0)*0.5);
+            assert!(node.find("MainMenuCanvas/MainMenu/Mods").unwrap().active);
+        }
+        layout_home_button(&mut node,false,&mut origin);
+        let events=node.find(path).unwrap();assert_eq!((events.rt.pos.y,events.rt.size.y),(125.5,-799.0));
+        assert!(!node.find("MainMenuCanvas/MainMenu/Mods").unwrap().active);
+    }
     #[test]
     fn toggling_native_row_emits_sorted_local_preferences(){
         let mut node=Node::from_json(&json!({"name":"Scene","active":true,"children":[{"name":"Canvas","active":true,"children":[
