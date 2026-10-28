@@ -1820,6 +1820,9 @@ def main():
         paragon = ({"tier": tier(pt), "cost": pu["cost"], "name": pu["_name"], "display": prefab_name(pt["f"].get("display")), "top": top,
                     "tops": tops, "bases": bases, "levels": len(dpaths),
                     "base_display": pt["f"].get("display"),
+                    # ParagonTowerModel.endAnimationState: ParagonTower.Finish sets the tower's and its
+                    # attack displays' animation state to it when the sacrifice ends (-1: none).
+                    "end_anim": ptm.get("endAnimationState", -1),
                     # ParagonTowerModel.inactiveDurationFrames: attacks paused while the sacrifice plays.
                     "inactive_frames": int(round(ptm.get("inactiveDuration", 0.0) * 60))}
                    if pt and pu else None)

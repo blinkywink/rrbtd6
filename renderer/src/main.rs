@@ -263,7 +263,8 @@ fn conf() -> macroquad::conf::Conf {
         window_height: win_size().1,
         high_dpi: true,
         sample_count: std::env::var("RRBTD6_MSAA").ok().and_then(|v| v.parse().ok()).unwrap_or(adv.msaa.max(1)),
-        platform: miniquad::conf::Platform { window_aspect_ratio:Some((16,9)), swap_interval: Some(if adv.vsync { 1 } else { 0 }), ..Default::default() },
+        // Any window shape: render3d::layout frames the map and HUD as the game does.
+        platform: miniquad::conf::Platform { window_aspect_ratio:None, swap_interval: Some(if adv.vsync { 1 } else { 0 }), ..Default::default() },
         // The game's own icon, taken from the player's BloonsTD6.exe at setup (brand/; nothing
         // of it is shipped). None until the assets are prepared.
         icon: game_icon(&root()),
@@ -1488,7 +1489,7 @@ async fn game_main() {
             }
             let a=render3d::to_screen(&cam,[-100.0,0.0,0.0],vw,vh);let b=render3d::to_screen(&cam,[100.0,0.0,0.0],vw,vh);
             let r=render3d::map_frame(vw,vh);
-            assert!(((b.x-a.x)/r.w-100.0/(render3d::ORTHO_SIZE*(16.0/9.0))).abs()<0.0001);
+            assert!(((b.x-a.x)/r.w-100.0/(render3d::ORTHO_SIZE*1.5)).abs()<0.0001);
             eprintln!("viewport-check: {vw}x{vh}, uniform native framing and five input round trips passed");
         }
         shaders.forward = (cam.target - cam.position).normalize();
@@ -1626,7 +1627,7 @@ async fn game_main() {
             game.tracers.clear();
             view.to_world(vec2(mx, my))
         };
-        let in_map = preview.is_some()||(render3d::map_frame(vw,vh).contains(vec2(mx,my)) && mx < screen_width() - Hud::panel_px() && !hud.as_ref().is_some_and(|h| h.blocks(vec2(mx, my))));
+        let in_map = preview.is_some()||(render3d::map_frame(vw,vh).contains(vec2(mx,my)) && !Hud::layout().shop.contains(vec2(mx,my)) && Hud::layout().map.contains(vec2(mx,my)) && !hud.as_ref().is_some_and(|h| h.blocks(vec2(mx, my))));
         if in_map && mouse_world[0] < 1e8 {
             if coop_runtime.is_some(){
                 if get_time()-coop_mouse_at>=0.1{
@@ -2048,7 +2049,7 @@ async fn game_main() {
                 // The body keeps its idle pick (variants) between frames; other parts just idle.
                 let mut pick = idle_picks.get(&t.id).copied().unwrap_or((usize::MAX, 0.0));
                 let attacked = t.attack_t < f32::MAX;
-                let mut pose = |m: &mut anim::AnimModel, body: bool| match m.attack_clip() {
+                let mut pose = |m: &mut anim::AnimModel, body: bool, yaw: f32| match m.attack_clip() {
                     _ if shown(m).is_some() => {
                         let (c, at) = shown(m).unwrap();
                         m.meshes(c, at, pos, yaw, outline_scale, blink, sel_outline)
@@ -2061,12 +2062,18 @@ async fn game_main() {
                     }
                 };
                 if let Some(m) = fan_model.or(tier_model).or(tower_anims[t.def].as_mut()) {
-                    let (body, outline) = pose(m, true);
-                    // The Paragon's attack display, on top with the same facing; both outlines
-                    // go under both bodies.
+                    let (body, outline) = pose(m, true, yaw);
+                    // The Paragon's attack display, on top; both outlines go under both bodies.
+                    // Its attacks' RotateToTargetModel with rotateTower false (Apex Plasma
+                    // Master) turns only this display to the target: the legs keep their facing.
                     let top = top_key.as_ref().and_then(|k| tier_index[t.def].get(k)).cloned();
+                    let top_yaw = if game.tier_of(t).is_some_and(|tr| !tr.attacks.is_empty() && tr.attacks.iter().all(|a| !a.turn_body)) {
+                        std::f32::consts::FRAC_PI_2 - t.aim
+                    } else {
+                        yaw
+                    };
                     let (tb, to) = match top.and_then(|dir| tier_anims.get_mut(&(t.def, dir))).and_then(|m| m.as_mut()) {
-                        Some(m) => pose(m, false),
+                        Some(m) => pose(m, false, top_yaw),
                         None => (Vec::new(), Vec::new()),
                     };
                     // Attack displays (Dartling gun, Super Monkey arm...): on the tower, turned to
@@ -2547,11 +2554,16 @@ async fn game_main() {
                     draw_rectangle_lines(x0, y0, x1 - x0, y1 - y0, 2.0, BLACK);
                 }
             }
-            // Preserve native map framing on resize, without another render target.
-            let frame=render3d::map_frame(vw,vh);
-            let padding=Color::from_rgba(12,14,12,255);
-            if frame.y>0.0{draw_rectangle(0.0,0.0,vw,frame.y,padding);draw_rectangle(0.0,frame.bottom(),vw,vh-frame.bottom(),padding);}
-            if frame.x>0.0{draw_rectangle(0.0,0.0,frame.x,vh,padding);draw_rectangle(frame.right(),0.0,vw-frame.right(),vh,padding);}
+            // Outside the UIRect: the shop's tiled pattern (render3d::layout, Hud::draw_padding).
+            let lay=render3d::layout(vw,vh);
+            match hud.as_mut(){
+                Some(h)=>h.draw_padding(&lay),
+                None=>{
+                    let ui=lay.ui;let padding=Color::from_rgba(12,14,12,255);
+                    draw_rectangle(0.0,0.0,vw,ui.y,padding);draw_rectangle(0.0,ui.bottom(),vw,vh-ui.bottom(),padding);
+                    draw_rectangle(0.0,0.0,ui.x,vh,padding);draw_rectangle(ui.right(),0.0,vw-ui.right(),vh,padding);
+                }
+            }
             // Gallery autotest: each tower's tiers under it.
             if gallery {
                 for t in &game.towers {

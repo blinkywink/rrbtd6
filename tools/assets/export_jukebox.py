@@ -16,7 +16,24 @@ TypeTreeHelper.read_typetree_boost = False
 GAME = sys.argv[1]
 AA = os.path.join(GAME, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWindows64", "Full")
 bundle = json.load(open("local_extracted/all_container_paths.json"))["Assets/Data/GameData.asset"].rsplit("_", 1)[0]
-env = UnityPy.load(*(glob.glob(os.path.join(AA, bundle + "_*.bundle")) + glob.glob(os.path.join(AA, "*_monoscripts_*.bundle"))))
+scripts = glob.glob(os.path.join(AA, "*_monoscripts_*.bundle"))
+if not scripts:
+    scripts = glob.glob(os.path.join(os.path.dirname(AA), "Half", "*_monoscripts_*.bundle"))
+env = UnityPy.load(*(glob.glob(os.path.join(AA, bundle + "_*.bundle")) + scripts))
+
+# Resolve Trophy Store music via its actual itemTarget pointer, not display names.
+wallets = {}
+for pointer in env.container.values():
+    obj = pointer.deref()
+    if obj.type.name != "MonoBehaviour":
+        continue
+    t = obj.read_typetree()
+    for item in t.get("itemTypes", []):
+        target = item.get("itemTarget", {})
+        if item.get("itemType") == 8 and target.get("m_PathID"):
+            if target.get("m_FileID", 0):
+                raise ValueError("Unexpected external Trophy Store music reference")
+            wallets[(obj.assets_file.name, target["m_PathID"])] = t.get("walletIdOverride") or t["id"]
 
 tracks = []
 for o in env.objects:
@@ -31,7 +48,8 @@ for o in env.objects:
     for ref in t["musicTrackData"]:
         m = o.assets_file.objects[ref["m_PathID"]].read_typetree()
         tracks.append({"id": m["id"], "loc": m["locKey"], "free": bool(m["freeTrack"]),
-                       "jukebox": not m["unavailableInJukeBox"]})
+                       "jukebox": not m["unavailableInJukeBox"],
+                       "wallet": wallets.get((o.assets_file.name, ref["m_PathID"]), "")})
     break
 os.makedirs("local_extracted/ui/runtime", exist_ok=True)
 json.dump(tracks, open("local_extracted/ui/runtime/jukebox.json", "w"), indent=1)

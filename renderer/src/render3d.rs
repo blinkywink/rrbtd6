@@ -591,11 +591,47 @@ pub fn draw_oriented(m: &Model, axis: Vec3, at: Vec3, dir: Vec3, scale: f32) {
 /// Half-width of the playable map (`Map.IsPointOnMap`: x within ±150).
 pub const PLAY_HALF_WIDTH: f32 = 150.0;
 
-/// Native 16:9 composition fitted uniformly inside any window. Logical pixels.
+/// The in-game layout for a window (logical pixels), as the game builds it:
+/// ScreenRatio.IsOrOver14x9 (VERIFIED-DISASM @0x1815f7130: aspect - 14/9 > -0.01) picks
+/// RatioCanvasScaler.AdjustRefResolution's reference (3840 x 2160, else 3840 x 2880; CanvasScaler
+/// Expand: the canvas covers it), and InGameUIRect.UpdateRect (@0x180876350) a centred UIRect of
+/// a 3:2 map plus the shop (600 wide on the right, else 320 tall along the bottom) scaled to fit:
+/// 3840 x 2160 or 3840 x 2880 canvas units. InGameMapRect.UpdateRect (@0x180876090) gives the
+/// map camera the UIRect less the shop. Outside the UIRect the shop's tiled pattern pads.
+#[derive(Clone, Copy, Debug)]
+pub struct Layout {
+    /// Screen px per canvas unit.
+    pub scale: f32,
+    /// UIRect, map rect (the camera's 3:2 view) and the shop's rect, screen px.
+    pub ui: Rect,
+    pub map: Rect,
+    pub shop: Rect,
+    /// Below 14:9: the shop is the bottom bar (ShopMenu4:3).
+    pub bottom: bool,
+}
+
+pub fn layout(width: f32, height: f32) -> Layout {
+    let (w, h) = (width.max(1.0), height.max(1.0));
+    let bottom = !(w / h - 14.0 / 9.0 > -0.01);
+    let (cw, ch) = if bottom { (3840.0, 2880.0) } else { (3840.0, 2160.0) };
+    let scale = (w / cw).min(h / ch);
+    let ui = Rect::new((w - cw * scale) * 0.5, (h - ch * scale) * 0.5, cw * scale, ch * scale);
+    let (map, shop) = if bottom {
+        let bar = 320.0 * scale;
+        (Rect::new(ui.x, ui.y, ui.w, ui.h - bar), Rect::new(ui.x, ui.bottom() - bar, ui.w, bar))
+    } else {
+        let side = 600.0 * scale;
+        (Rect::new(ui.x, ui.y, ui.w - side, ui.h), Rect::new(ui.right() - side, ui.y, side, ui.h))
+    };
+    Layout { scale, ui, map, shop, bottom }
+}
+
+/// The rect the map camera renders into (logical pixels): InGameMapRect.UpdateRect
+/// (@0x180876090) sets Camera.pixelRect to the map rect's world corners, so the camera's view is
+/// the 3:2 map rect itself, centred on the camera target (orthographicSize 100.46 at 3:2 is 301
+/// units across: the playable x range, Map.IsPointOnMap's +-150).
 pub fn map_frame(width:f32,height:f32)->Rect{
-    let (w,h)=(width.max(1.0),height.max(1.0));
-    let scale=(w/16.0).min(h/9.0);
-    Rect::new((w-16.0*scale)*0.5,(h-9.0*scale)*0.5,16.0*scale,9.0*scale)
+    layout(width, height).map
 }
 
 /// Full-window projection surrounding the unchanged native camera composition.
@@ -617,14 +653,19 @@ pub fn camera(target: [f32; 2], viewport_w: f32, viewport_h: f32) -> Camera3D {
         target: t,
         up: gl(0.0, a.cos(), a.sin()),
         // RRBTD6_ZOOM=k (debug): k times closer.
-        fovy: ortho_half_height(target, viewport_w / viewport_h) * 2.0
+        fovy: ORTHO_SIZE * 2.0
             / std::env::var("RRBTD6_ZOOM").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0),
-        aspect: Some(viewport_w / viewport_h),
+        aspect: Some(1.5),
         projection: Projection::Orthographics,
         z_near: 1.0,
         z_far: 12000.0,
-        // GL viewport is in physical pixels; viewport_w/h are logical (high_dpi).
-        viewport: Some((0, 0, (viewport_w * screen_dpi_scale()) as i32, (viewport_h * screen_dpi_scale()) as i32)),
+        // The map rect's viewport (map_frame); GL viewports are physical pixels from
+        // the bottom left, map_frame logical from the top left (high_dpi).
+        viewport: {
+            let f = map_frame(viewport_w, viewport_h);
+            let k = screen_dpi_scale();
+            Some(((f.x * k).round() as i32, ((viewport_h - f.bottom()) * k).round() as i32, (f.w * k).round() as i32, (f.h * k).round() as i32))
+        },
         ..Default::default()
     }
 }
@@ -632,13 +673,15 @@ pub fn camera(target: [f32; 2], viewport_w: f32, viewport_h: f32) -> Camera3D {
 /// Unity (x, y, z) -> logical screen position.
 pub fn to_screen(cam: &Camera3D, p: [f32; 3], vw: f32, vh: f32) -> Vec2 {
     let n = cam.matrix().project_point3(gl(p[0], p[1], p[2]));
-    vec2((n.x + 1.0) / 2.0 * vw, (1.0 - n.y) / 2.0 * vh)
+    let f = map_frame(vw, vh);
+    vec2(f.x + (n.x + 1.0) / 2.0 * f.w, f.y + (1.0 - n.y) / 2.0 * f.h)
 }
 
 /// Mouse position -> Unity ground-plane (x, z), using the inverse camera matrix.
 pub fn pick_ground(cam: &Camera3D, mouse: Vec2, vw: f32, vh: f32) -> Option<[f32; 2]> {
-    if !map_frame(vw,vh).contains(mouse){return None;}
-    let ndc = vec2(mouse.x / vw * 2.0 - 1.0, 1.0 - mouse.y / vh * 2.0);
+    let f = map_frame(vw, vh);
+    if !f.contains(mouse){return None;}
+    let ndc = vec2((mouse.x - f.x) / f.w * 2.0 - 1.0, 1.0 - (mouse.y - f.y) / f.h * 2.0);
     let inv = cam.matrix().inverse();
     let p0 = inv.project_point3(vec3(ndc.x, ndc.y, -1.0));
     let p1 = inv.project_point3(vec3(ndc.x, ndc.y, 1.0));
@@ -654,13 +697,18 @@ pub fn pick_ground(cam: &Camera3D, mouse: Vec2, vw: f32, vh: f32) -> Option<[f32
 #[cfg(test)]mod framing_tests{
     use super::*;
     #[test]fn resized_map_keeps_native_composition_and_uniform_scale(){
-        for (w,h) in [(1600.0,900.0),(800.0,900.0),(2560.0,1080.0),(900.0,1600.0),(1.0,1.0)]{
-            let r=map_frame(w,h);assert!((r.w/r.h-16.0/9.0).abs()<1e-5);
-            assert!(r.x>=0.0&&r.y>=0.0&&r.right()<=w+0.01&&r.bottom()<=h+0.01);
-            let half=ortho_half_height([0.0,0.0],w/h);
-            let px_per_unit=h/(half*2.0);
-            assert!((r.h/(ORTHO_SIZE*2.0)-px_per_unit).abs()<1e-5);
-            assert!((r.center()-vec2(w/2.0,h/2.0)).length()<0.001);
+        for (w,h) in [(1600.0,900.0),(800.0,900.0),(2560.0,1080.0),(900.0,1600.0),(1200.0,1100.0),(1440.0,900.0),(1.0,1.0)]{
+            let l=layout(w,h);
+            // InGameUIRect: 3840x2160 (14:9 and wider) or 3840x2880, uniformly scaled, centred,
+            // inside the window; the map rect is 3:2 either way.
+            assert_eq!(l.bottom,w/h<14.0/9.0-0.01);
+            assert!((l.ui.w/l.ui.h-if l.bottom{4.0/3.0}else{16.0/9.0}).abs()<1e-4);
+            assert!(l.ui.x>=-0.01&&l.ui.y>=-0.01&&l.ui.right()<=w+0.01&&l.ui.bottom()<=h+0.01);
+            assert!((l.ui.center()-vec2(w/2.0,h/2.0)).length()<0.001);
+            assert!((l.map.w/l.map.h-1.5).abs()<1e-4);
+            // The camera renders the map rect itself (Camera.pixelRect).
+            let r=map_frame(w,h);
+            assert!((r.x-l.map.x).abs()<1e-4&&(r.y-l.map.y).abs()<1e-4&&(r.w-l.map.w).abs()<1e-4&&(r.h-l.map.h).abs()<1e-4);
         }
         assert_eq!(ortho_half_height([0.0,0.0],16.0/9.0),ORTHO_SIZE);
     }

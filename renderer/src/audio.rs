@@ -19,22 +19,10 @@ use std::path::PathBuf;
 const FALLBACK_PLAYLIST: [&str; 6] = ["MusicUpbeat1A", "MusicUpbeat2A", "MusicUpbeat3A", "MusicCityA", "MusicBTD5JazzA", "MusicSailsAgain"];
 
 /// The jukebox's tracks (AudioJukeBox.musicTrackData, in its order): the ones listed in the
-/// jukebox (not unavailableInJukeBox) that are free; Trophy Store tracks need owning and
-/// aren't offered yet. (clip id, loc key of its name)
+/// jukebox (not unavailableInJukeBox). Account ownership is applied when its cached
+/// snapshot arrives; startup initially offers free tracks. (clip id, localized name key)
 fn playlist(root: &std::path::Path) -> Vec<(String, String)> {
-    let tracks: Vec<serde_json::Value> = std::fs::read_to_string(root.join("ui/runtime/jukebox.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    let list: Vec<(String, String)> = tracks
-        .iter()
-        .filter(|t| t["jukebox"] == true && t["free"] == true)
-        .filter_map(|t| Some((t["id"].as_str()?.to_string(), t["loc"].as_str().unwrap_or("").to_string())))
-        .collect();
-    let list=if list.is_empty(){FALLBACK_PLAYLIST.iter().map(|s|(s.to_string(),String::new())).collect()}else{list};
-    let settings:serde_json::Value=std::fs::read(root.join("settings.json")).ok().and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or_default();
-    if let Some(ids)=settings["jukebox"].as_array(){ids.iter().filter_map(|id|list.iter().find(|(name,_)|id.as_str()==Some(name)).cloned()).collect()}
-    else{list}
+    crate::frontend::jukebox::saved_playlist(root,&Default::default()).unwrap_or_else(||FALLBACK_PLAYLIST.iter().map(|s|(s.to_string(),String::new())).collect())
 }
 
 #[cfg(test)]
@@ -107,6 +95,7 @@ pub struct Audio {
     music: Option<(usize, Clip, f64)>,
     playlist: Vec<(String, String)>,
     music_enabled:bool,
+    music_account:Option<(bool,u64)>,
     requested_track:Option<usize>,
     pub sfx_volume: f32,
     pub music_volume: f32,
@@ -182,7 +171,7 @@ impl Audio {
             playing: HashMap::new(),
             all: Vec::new(),
             music: None,
-            playlist: playlist(root),music_enabled:true,requested_track:None,
+            playlist: playlist(root),music_enabled:true,music_account:None,requested_track:None,
             sfx_volume: DEFAULT_SFX,
             music_volume: DEFAULT_MUSIC,
             loop_track: false,
@@ -255,6 +244,15 @@ impl Audio {
 
     /// Keeps the playlist going: the next track starts when the current one ends.
     pub fn music(&mut self, now: f64) {
+        // The account reader is asynchronous. Refresh once per new snapshot, without
+        // polling files or cloning the inventory on ordinary frames.
+        if let Some((owned,revision))=crate::frontend::account_preview::music_ownership(self.music_account){
+            self.music_account=Some(revision);
+            if let Some(tracks)=crate::frontend::jukebox::saved_playlist(self.dir.parent().unwrap_or(&self.dir),&owned){
+                let selected=self.track().and_then(|id|tracks.iter().position(|(next,_)|next==id)).unwrap_or(0);
+                self.set_jukebox(&crate::frontend::jukebox::Change{tracks,selected,playing:self.music_enabled});
+            }
+        }
         self.pump();
         if self.music_volume <= 0.0 || !self.music_enabled || self.playlist.is_empty() {
             self.prepared_music=None;

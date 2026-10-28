@@ -2,7 +2,7 @@
 keep the placement, idle-variant, attack-idle and upgrade clips the game's
 MonkeyAnimationController plays, not just idle and attack).
 
-Usage: python -I tools/assets/reexport_all_clips.py <game install> [chunk size]
+Usage: python -I tools/assets/reexport_all_clips.py <game install> [chunk size] [target list file]
 Covers models/<Tower>/tiers/* (each display plan's tier and attack displays) and
 models/{subtowers,air,fans}/*. New exports go to local_extracted/models_new/ and replace the old
 dir (moved to local_extracted/models_old/) one by one; reruns skip what's done. Afterwards
@@ -37,6 +37,29 @@ for kind in ("subtowers", "air", "fans"):
         if cand:
             jobs.setdefault(d.rstrip("/\\").replace("\\", "/"), (paths[cand[0]].rsplit("_", 1)[0], cand[0]))
 
+# Every other exported model: tier dirs no display plan names (Paragon degree displays,
+# "...Legs" bases) and each tower's base model (models/<Tower>, its plan's 000 display).
+def by_name(n, t):
+    cand = sorted((p for p in paths if p.endswith(f"/{n}.prefab")), key=lambda p: (f"/{t}/" not in p, "/Generated/" in p, p))
+    return (paths[cand[0]].rsplit("_", 1)[0], cand[0]) if cand else None
+for plan_p in sorted(glob.glob("local_extracted/display_plans/*.json")):
+    t = os.path.splitext(os.path.basename(plan_p))[0]
+    base = json.load(open(plan_p)).get("towers", {}).get("000")
+    if base and os.path.exists(f"local_extracted/models/{t}/meta.json"):
+        jobs.setdefault(f"local_extracted/models/{t}", (base["bundle"].rsplit("_", 1)[0], base["prefab"]))
+    for d in sorted(glob.glob(f"local_extracted/models/{t}/tiers/*/")):
+        target = d.rstrip("/\\").replace("\\", "/")
+        if target not in jobs and (j := by_name(os.path.basename(target), t)):
+            jobs[target] = j
+# Optional: only the target dirs listed in this file (one per line).
+if len(sys.argv) > 3:
+    only = {l.strip().replace("\\", "/") for l in open(sys.argv[3]) if l.strip()}
+    jobs = {t: j for t, j in jobs.items() if t in only}
+    for t in only:
+        if os.path.exists(os.path.join(t, ".allclips")):
+            os.remove(os.path.join(t, ".allclips"))
+
+
 def staged(target):
     return target.replace("local_extracted/models/", NEW + "/", 1)
 
@@ -61,7 +84,8 @@ for i in range(0, len(todo), CHUNK):
         old = t.replace("local_extracted/models/", OLD + "/", 1)
         os.makedirs(os.path.dirname(old), exist_ok=True)
         shutil.rmtree(old, ignore_errors=True)
-        shutil.move(t, old)
+        if os.path.exists(t):
+            shutil.move(t, old)
         shutil.move(s, t)
         open(os.path.join(t, ".allclips"), "w").close()
     print(f"{min(i + CHUNK, len(todo))}/{len(todo)}", flush=True)

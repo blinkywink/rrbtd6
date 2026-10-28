@@ -161,6 +161,7 @@ impl Page {
                 axes:vec2(0.0,1.0),offset:Vec2::ZERO,velocity:Vec2::ZERO,sensitivity:150.0,drag:None})).collect();
         }}
         if let Some(event)=&mut self.event{event.bind(&mut self.node);}
+        if let Some(jukebox)=&mut self.jukebox{jukebox.refresh(&mut self.node);}
         if let Some(daily)=&mut self.daily_reward{daily.animate(&mut self.node);}
         if let Some(profile)=&mut self.profile{profile.animate(&mut self.node);}
         if let Some(social)=&mut self.social{social.animate(&mut self.node);}

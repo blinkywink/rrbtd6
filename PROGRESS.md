@@ -322,3 +322,13 @@ eight sizing edges/maximize-restore checks passed with the simplified toggle.
 Reviewed Fullscreen-on and home captures; rebuilt the root BTD6.exe.
 Local Epic MelonLoader bootstrap and mod directories moved to an ignored backup
 for stock-game comparisons, preserving their data for a later restore.
+
+## Jukebox ownership and playlist controls (2026-10-28)
+
+- Resolve MusicTrackData to Trophy Store wallet IDs through the original itemTarget pointers.
+- Cached account ownership unlocks music in the native menu and playback; sign-out rechecks it.
+- Original up/down playlist buttons now reorder without restarting the current track.
+- Saved playlists preserve order, reject duplicate/unknown/unowned IDs, and handle removing
+  the playing track or emptying the queue. Four focused regression tests pass.
+- Local cached-account check: 17 owned paid tracks, all 17 extracted audio clips present.
+- No account requests, purchase changes or uploads are performed by these controls.

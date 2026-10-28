@@ -372,6 +372,9 @@ pub struct ParagonDef {
     /// ParagonTowerModel.inactiveDurationFrames.
     #[serde(default)]
     pub inactive_frames: u64,
+    /// ParagonTowerModel.endAnimationState (-1: none).
+    #[serde(default = "minus_one_i32")]
+    pub end_anim: i32,
 }
 
 /// ParagonDegreeDataModel fields (camelCase as in the game).
@@ -661,6 +664,10 @@ pub struct Support {
     /// Seconds an ability's support zone lasts (0 for a tower's own supports).
     #[serde(default)]
     pub lifespan: f32,
+}
+
+fn minus_one_i32() -> i32 {
+    -1
 }
 
 fn five() -> u32 {

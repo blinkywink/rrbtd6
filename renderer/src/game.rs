@@ -6441,6 +6441,15 @@ impl Game {
         zones: &[([f32; 2], f32, crate::data::Zone)], shoves: &[([f32; 2], crate::data::MoabShove)], leak_voice: &mut bool) {
         for t in only_temp.map_or_else(|| (0..self.towers.len()).collect::<Vec<_>>(), |t| vec![t]) {
             let buff = self.buffs[t].clone();
+            // ParagonTower.Finish (@0xd6f480): when the sacrifice ends it sets the tower's and its
+            // attack displays' animation state to endAnimationState. That is the index after the
+            // controller's animationStates (Apex Plasma Master and Glaive Dominus: 2 states, end 2;
+            // Ascended Shadow: 3, end 3), where the high-quality animator puts Placement: the
+            // Paragon drops in again.
+            if only_temp.is_none() && self.towers[t].paragon.is_some() && self.sim_elapsed == self.towers[t].paragon_active_at
+                && self.tower_tiers[self.towers[t].def].as_ref().and_then(|x| x.paragon.as_ref()).is_some_and(|p| p.end_anim >= 0) {
+                self.towers[t].show = Some((crate::anim::PLACE_CLIP.into(), 0.0));
+            }
             if only_temp.is_none() {
                 let tw = &mut self.towers[t];
                 if tw.attack_t < f32::MAX {
@@ -11646,7 +11655,8 @@ mod beast_tests {
         assert!(!g.bloons.iter().any(|b| g.names[b.kind] == "Zomg"), "ZOMG destroyed");
     }
 
-    /// P-PREEMPT: Pre-emptive Strike destroys round 40's MOAB within a second of it appearing.
+    /// P-PREEMPT: Pre-emptive Strike destroys round 40's MOAB within a second of it entering the
+    /// map (it launches on OnBloonEnterTrack, so frames spent off-map before that don't count).
     #[test]
     fn preemptive_strike() {
         let (mut g, c) = logs_game();
@@ -11658,7 +11668,7 @@ mod beast_tests {
         let (mut seen, mut longest, mut life) = (false, 0, 0);
         for _ in 0..6000 {
             g.step();
-            if g.bloons.iter().any(|b| g.names[b.kind] == "Moab") {
+            if g.bloons.iter().any(|b| g.names[b.kind] == "Moab" && !g.outside_track.contains(&b.id)) {
                 seen = true;
                 life += 1;
                 longest = longest.max(life);

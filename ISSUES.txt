@@ -18,8 +18,8 @@ OPEN
   and filters cached basic counters. Legends-specific rows and per-category public sharing still need work.
 - Friends: platform-share icon overlap fixed, missing-code controls hidden. Downloading the
   actual friends list / friend code and sending requests are still not wired.
-- Jukebox: native screen, free tracks and local playlist/playback controls wired. Owned Trophy
-  Store music, playlist reorder and exact preview/resume behavior still need work.
+- Jukebox: owned Trophy Store tracks, local playlist reorder, duplicate filtering and
+  selected-track removal are now wired. Exact preview/resume behavior still needs work.
 - Tower models (your list: Beast Handler sticks / headpieces / eyes, Dart 4xx-5xx eyes, Dartling
   broken, Desperado gun, Druid capes, Mortar 004/005 holes, Ninja 200/500 eyes, Spike Factory 040
   green, Super Monkey eyes / arms / bodies, Tack Ring of Fire, Wizard eyes, Engineer sentries not

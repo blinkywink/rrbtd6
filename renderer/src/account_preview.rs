@@ -387,6 +387,16 @@ pub(super) fn trophy_account()->Option<(Vec<[bool;4]>,f64)> {
     Some((rows,data["downloadedAt"].as_f64().unwrap_or(0.0)))
 }
 
+/// Only copy the music entitlement inputs when the cached account changes.
+/// Reading these never contacts the service or changes the official inventory.
+pub(crate) fn music_ownership(previous:Option<(bool,u64)>)->Option<(std::collections::HashSet<String>,(bool,u64))> {
+    let state=PREVIEW.get()?.try_lock().ok()?;let data=state.data.as_ref()?;
+    let revision=(data["localProfile"]==true,data["downloadedAt"].as_f64().unwrap_or(0.0).to_bits());
+    if previous==Some(revision){return None;}
+    let owned=data["profile"]["trophyStorePurchasedItems"].as_object().into_iter().flatten().map(|(id,_)|id.clone()).collect();
+    Some((owned,revision))
+}
+
 /// (friendScreenShowCode, toggleFriendRequests, Friends_List friendsCode, downloadedAt). The code comes
 /// only from the friends service (it differs from the account short code); absent offline, the game
 /// shows its empty default too.

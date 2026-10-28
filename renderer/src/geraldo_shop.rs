@@ -47,7 +47,7 @@ impl Hud {
         self.geraldo.node.as_ref().is_some_and(|n| n.active && n.rect(ROOT).is_some_and(|r| r.contains(p)))
     }
 
-    pub(crate) fn draw_geraldo(&mut self, game: &Game, selected: Option<usize>, canvas: Vec2, shop_w: f32, s: f32, out: &mut Vec<Action>) {
+    pub(crate) fn draw_geraldo(&mut self, game: &Game, selected: Option<usize>, ui: R, canvas_h: f32, shop_w: f32, s: f32, out: &mut Vec<Action>) {
         let open = selected.filter(|&t| game.towers.get(t).is_some_and(|tw| tw.sub.is_none() && game.tower_defs[tw.def].0 == "Geraldo"));
         let Some(n) = self.geraldo.node.as_mut() else { return };
         n.active = open.is_some();
@@ -57,8 +57,8 @@ impl Hud {
         };
         // Opposite the upgrade menu (which opens right of a tower on the map's left half).
         let open_right = game.towers[g].pos[0] < (game.bounds.0[0] + game.bounds.1[0]) / 2.0;
-        let x = if open_right { 0.0 } else { canvas.x - shop_w - PANEL_W };
-        let parent = R { min: vec2(x, 0.0), size: vec2(PANEL_W, canvas.y) };
+        let x = if open_right { ui.min.x } else { ui.min.x + ui.size.x - shop_w - PANEL_W };
+        let parent = R { min: vec2(x, ui.min.y), size: vec2(PANEL_W, ui.size.y) };
 
         let loc = &self.menus.loc;
         let text = |k: &str| loc.get(k).cloned();
@@ -131,7 +131,7 @@ impl Hud {
         if n.clicked(&format!("{TOP}/GamepadCloseContainer/CloseButton")) {
             out.push(Action::Close);
         }
-        let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h: canvas.y, clip: None };
+        let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h, clip: None };
         draw_tree(n, parent, &mut ctx);
         // The item in hand follows the cursor.
         if let Some(i) = self.geraldo.armed {

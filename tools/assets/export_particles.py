@@ -29,6 +29,8 @@ GAME, OUT, *PREFABS = sys.argv[1:]
 AA = os.path.join(GAME, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWindows64", "Full")
 ROOT = os.path.dirname(os.path.abspath(__file__))
 INDEX = json.load(open(os.path.join(ROOT, "..", "..", "local_extracted", "all_container_paths.json")))
+_CAB_PATH = os.path.join(ROOT, "..", "..", "local_extracted", "cab_index.json")
+CABS = json.load(open(_CAB_PATH)) if os.path.exists(_CAB_PATH) else {}
 
 SIMULATED = {"InitialModule", "EmissionModule", "ShapeModule", "SizeModule", "ColorModule", "RotationModule",
              "VelocityModule", "ForceModule", "ClampVelocityModule", "UVModule"}
@@ -178,7 +180,8 @@ def renderer(r, out_tex):
         out["blend"] = "add" if dst == 1 else ("premul" if src == 1 and dst == 10 else "alpha")
     else:
         n = (out.get("shader") or "").lower()
-        out["blend"] = "add" if "add" in n else "alpha"
+        # (Legacy "Particles/Alpha Blended Premultiply": Blend One OneMinusSrcAlpha.)
+        out["blend"] = "add" if "add" in n else ("premul" if "premultipl" in n else "alpha")
     # URP Particles/Unlit: _BaseColor (materials keep a stale legacy _TintColor). Legacy particle
     # shaders: 2 x _TintColor.
     urp = (out.get("shader") or "").startswith("Universal Render Pipeline") or "_BaseColor" in cols
@@ -226,11 +229,35 @@ def qrot(q, v):
     return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)]
 
 
+def load_bundle(path):
+    """UnityPy env of bundle `path` with the monoscripts and the bundles its externals live in
+    (materials, textures and shaders shared across bundles: unitybuiltinassets, ...), else their
+    PPtrs read as missing (an effect with no material, texture or shader). cab_index.py maps the
+    CAB names to bundle files."""
+    name = os.path.basename(path)
+    files = [path] + glob.glob(os.path.join(AA, "*_monoscripts_*.bundle"))
+    probe = UnityPy.load(path)
+    deps = set()
+    for f in probe.files.values():
+        for af in getattr(f, "files", {}).values():
+            for ext in getattr(af, "externals", []) or []:
+                cab = os.path.basename(ext.path).lower()
+                if cab in CABS and CABS[cab] != name:
+                    deps.add(CABS[cab])
+    del probe
+    return UnityPy.load(*files + [os.path.join(AA, d) for d in sorted(deps)])
+
+
 def export_scene(key):
     """Ambient effects of map <key>: each particle object without a particle-system ancestor."""
     bundle = glob.glob(os.path.join(AA, f"map_{key}_scenes_all_*.bundle"))[0]
-    env = UnityPy.load(*[bundle] + glob.glob(os.path.join(AA, "*_monoscripts_*.bundle")))
-    gos = [o for o in env.objects if o.type.name == "GameObject"]
+    env = load_bundle(bundle)
+    # Only the scene's own objects: the dependency bundles load_bundle adds hold other prefabs
+    # (tower effects, ...) that aren't placed in the map.
+    probe = UnityPy.load(bundle)
+    own = {n.lower() for f in probe.files.values() for n in (getattr(f, "files", {}) or {})}
+    del probe
+    gos = [o for o in env.objects if o.type.name == "GameObject" and o.assets_file.name.lower() in own]
     placed = []
 
     def comps(go):
@@ -309,7 +336,7 @@ def export_tiers(tower):
             seen.add(stem)
             b = INDEX[p["prefab"]]
             if b not in ENVS:
-                ENVS[b] = UnityPy.load(*[os.path.join(AA, b)] + glob.glob(os.path.join(AA, "*_monoscripts_*.bundle")))
+                ENVS[b] = load_bundle(os.path.join(AA, b))
             env = ENVS[b]
             root = env.container[p["prefab"]].read()
             name = f"tier_{tower}_{stem}"
@@ -341,7 +368,7 @@ def export_projectiles():
             ENVS.clear()
             import gc
             gc.collect()
-            ENVS[b] = UnityPy.load(*[os.path.join(AA, b)] + glob.glob(os.path.join(AA, "*_monoscripts_*.bundle")))
+            ENVS[b] = load_bundle(os.path.join(AA, b))
         env = ENVS[b]
         root = env.container[prefab].read()
         eff = f"proj_{name}"
@@ -369,7 +396,7 @@ def export(prefab):
     # bundle below; asset_references_assets_all is ~900 MB and takes seconds to load).
     if bundle not in _ENVS:
         _ENVS.clear()
-        _ENVS[bundle] = UnityPy.load(*[os.path.join(AA, bundle)] + glob.glob(os.path.join(AA, "*_monoscripts_*.bundle")))
+        _ENVS[bundle] = load_bundle(os.path.join(AA, bundle))
     env = _ENVS[bundle]
     obj = env.container[prefab] if prefab in env.container else next(v for k, v in env.container.items() if k == prefab)
     root = obj.read()

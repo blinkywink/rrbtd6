@@ -18,6 +18,8 @@ const REF: Vec2 = vec2(3840.0, 2160.0);
 const SHOP_W: f32 = 600.0;
 
 const SHOP: &str = "ShopMenu16:9";
+/// The bottom-bar shop below 14:9 (render3d::layout bottom).
+const SHOP_BOTTOM: &str = "ShopMenu4:3";
 const TSM_OPTS: &str = "Ratio/Scaler/TowerElements/SelectedTowerOptions";
 const THEME: &str = "Ratio/Scaler/TowerElements/SelectedTowerInformation/TowerSelectionMenuThemes/TSMThemeDefault";
 const INFO: &str = "Ratio/Scaler/InfoPanel";
@@ -91,6 +93,8 @@ pub struct Hud {
     shop_sel: usize,
     /// Shop list scroll offset (canvas units) and ScrollRect inertia (units/s).
     scroll: f32,
+    /// The shop layout the scroll position belongs to (ShopMenu4:3 when true).
+    shop_bottom: bool,
     scroll_vel: f32,
     press: Option<Press>,
     /// TSM "i" button: the InfoPanel (next upgrade descriptions, stats) is shown.
@@ -203,11 +207,13 @@ impl Hud {
         ]);
         right.set_text(&format!("{rp}/RoundGroup/Title"), "Round");
 
-        hide(&mut shop, &["CancelPurchaseButton", "ConfirmlPurchaseButton", "ShopMenu4:3", "ShopMenu3D"]);
-        for p in ["UITowersFrontier", "UITowersRogue", "ToggleBloons", "SendRound", "ReviewMapReturn", "EditorBackBtn", "EditorTowerBackBtn", "GoButtonGlowPulse"] {
-            shop.set_active(&format!("{SHOP}/{p}"), false);
+        hide(&mut shop, &["CancelPurchaseButton", "ConfirmlPurchaseButton", "ShopMenu3D"]);
+        for root in [SHOP, SHOP_BOTTOM] {
+            for p in ["UITowersFrontier", "UITowersRogue", "ToggleBloons", "SendRound", "ReviewMapReturn", "EditorBackBtn", "EditorTowerBackBtn", "GoButtonGlowPulse"] {
+                shop.set_active(&format!("{root}/{p}"), false);
+            }
+            shop.set_active(&format!("{root}/PowersButton"), true);
         }
-        shop.set_active(&format!("{SHOP}/PowersButton"), true);
         let portraits = root.join("ui").join("portraits");
         let mut extra = vec![root.join("ui").join("upgrades"), root.join("ui").join("panels")];
         for e in std::fs::read_dir(&portraits).into_iter().flatten().flatten() {
@@ -227,8 +233,8 @@ impl Hud {
                 Some((tower, f.file_name().to_string_lossy().trim_end_matches(".png").to_string()))
             })
             .collect();
-        if let Some(sorter) = shop.find_mut(&format!("{SHOP}/UITowers/Mask/Sorter")) {
-            sorter.children.clear();
+        let mut buttons = Vec::new();
+        {
             for (i, item) in game.shop.iter().enumerate() {
                 let mut b = button.clone();
                 b.name = format!("Tower{i}");
@@ -250,8 +256,14 @@ impl Hud {
                     i.preserve = true;
                 }
                 b.set_text("Button/Text", &money(item.cost));
-                sorter.children.push(b);
+                buttons.push(b);
                 budget.checkpoint().await;
+            }
+        }
+        // Both shop layouts get the same buttons (their grids size the cells).
+        for root in [SHOP, SHOP_BOTTOM] {
+            if let Some(sorter) = shop.find_mut(&format!("{root}/UITowers/Mask/Sorter")) {
+                sorter.children = buttons.clone();
             }
         }
 
@@ -385,6 +397,7 @@ impl Hud {
             scale: 1.0,
             shop_sel: 0,
             scroll: 0.0,
+            shop_bottom: false,
             scroll_vel: 0.0,
             press: None,
             info_open: std::env::var("RRBTD6_INFO").is_ok(),
@@ -405,9 +418,67 @@ impl Hud {
         })
     }
 
+    /// Everything outside the UIRect (render3d::layout): the shop's extra panel (ExtraSide:
+    /// UpgradesSlideoutBg_02 tinted 0.9528) under its tiled CornerFill pattern (ExtraSidePattern
+    /// colour 0.5377, 0.3757, 0.2004 at 0.2667; ShopMenu4:3's ExtraBottomPattern 0.4811, 0.3326,
+    /// 0.1748 at 0.4549; Image type Tiled), tiles at the sprite's canvas size (reference pixels
+    /// per unit 10.8 / its ppu).
+    pub fn draw_padding(&mut self, l: &crate::render3d::Layout) {
+        let (w, h) = (screen_width(), screen_height());
+        let ui = l.ui;
+        let bands = [
+            Rect::new(0.0, 0.0, w, ui.y),
+            Rect::new(0.0, ui.bottom(), w, h - ui.bottom()),
+            Rect::new(0.0, ui.y, ui.x, ui.h),
+            Rect::new(ui.right(), ui.y, w - ui.right(), ui.h),
+        ];
+        // The panel's centre (inside its 9-slice borders), stretched over each band.
+        if let Some(bg) = self.sprites.get("UpgradesSlideoutBg_02") {
+            let [bl, bb, br, bt] = bg.border;
+            let (w0, h0) = (bg.tex.width(), bg.tex.height());
+            let src = Rect::new(bl, bt, (w0 - bl - br).max(1.0), (h0 - bt - bb).max(1.0));
+            let tint = Color::new(0.9528, 0.9528, 0.9528, 1.0);
+            for b in bands.iter().filter(|b| b.w > 0.5 && b.h > 0.5) {
+                draw_texture_ex(&bg.tex, b.x, b.y, tint, DrawTextureParams { dest_size: Some(vec2(b.w, b.h)), source: Some(src), ..Default::default() });
+            }
+        }
+        let tint = if l.bottom { Color::new(0.4811, 0.3326, 0.1748, 0.4549) } else { Color::new(0.5377, 0.3757, 0.2004, 0.2667) };
+        let Some(sp) = self.sprites.get("CornerFill") else {
+            for b in bands.iter().filter(|b| b.w > 0.5 && b.h > 0.5) {
+                draw_rectangle(b.x, b.y, b.w, b.h, Color::from_rgba(125, 82, 47, 255));
+            }
+            return;
+        };
+        let k = 10.8 / sp.ppu * l.scale;
+        let (tw, th) = ((sp.tex.width() * k).max(1.0), (sp.tex.height() * k).max(1.0));
+        for b in bands.iter().filter(|b| b.w > 0.5 && b.h > 0.5) {
+            // Tiles from the UIRect's corner outwards, clipped to the band.
+            let (ox, oy) = (ui.x - ((ui.x - b.x) / tw).ceil() * tw, ui.y - ((ui.y - b.y) / th).ceil() * th);
+            let mut y = oy;
+            while y < b.bottom() {
+                let mut x = ox;
+                while x < b.right() {
+                    let (x0, y0) = (x.max(b.x), y.max(b.y));
+                    let (x1, y1) = ((x + tw).min(b.right()), (y + th).min(b.bottom()));
+                    if x1 > x0 && y1 > y0 {
+                        let src = Rect::new((x0 - x) / k, (y0 - y) / k, (x1 - x0) / k, (y1 - y0) / k);
+                        draw_texture_ex(&sp.tex, x0, y0, tint, DrawTextureParams { dest_size: Some(vec2(x1 - x0, y1 - y0)), source: Some(src), ..Default::default() });
+                    }
+                    x += tw;
+                }
+                y += th;
+            }
+        }
+    }
+
     /// Screen width taken by the tower shop (the map viewport is the rest).
     pub fn panel_px() -> f32 {
         SHOP_W * Self::canvas_scale()
+    }
+
+    /// The in-game layout for this window (render3d::layout).
+    pub fn layout() -> crate::render3d::Layout {
+        crate::render3d::layout(screen_width(), screen_height())
     }
 
     pub(crate) fn canvas_scale() -> f32 {
@@ -416,7 +487,8 @@ impl Hud {
 
     /// True if the point is over a HUD panel or button (map input should ignore it).
     pub fn blocks(&self, p: Vec2) -> bool {
-        p.x >= screen_width() - Self::panel_px()
+        let l = Self::layout();
+        l.shop.contains(p) || !l.ui.contains(p)
             || self.tsm.find("Ratio/Scaler/BG1").is_some_and(|n| self.tsm.active && n.screen.contains(p))
             || self.tsm.find(INFO).is_some_and(|n| self.tsm.active && n.active && n.screen.contains(p))
             || self.right.rect("Anim/RoundPanel/PauseButton").is_some_and(|r| r.contains(p))
@@ -431,12 +503,13 @@ impl Hud {
     /// icons): the granting upgrade's icon, a dark pie for the cooldown left with the seconds,
     /// and how many are ready when several towers have it.
     fn draw_abilities(&mut self, game: &Game, out: &mut Vec<Action>) {
-        let s = Self::canvas_scale();
+        let l = Self::layout();
+        let s = l.scale;
         self.ability_rects.clear();
         let m: Vec2 = mouse_position().into();
         for (i, g) in game.ability_groups().iter().enumerate() {
             let size = 200.0 * s;
-            let r = Rect::new((40.0 + i as f32 * 230.0) * s, screen_height() - (40.0 * s + size), size, size);
+            let r = Rect::new(l.map.x + (40.0 + i as f32 * 230.0) * s, l.map.bottom() - (40.0 * s + size), size, size);
             let c = r.center();
             let ready = g.ready > 0;
             draw_circle(c.x, c.y, size * 0.5, Color::from_rgba(40, 30, 20, 200));
@@ -520,11 +593,11 @@ impl Hud {
             underlay: Some((Color::new(0.0, 0.0, 0.0, 0.5), vec2(0.0, -0.4), 0.4, 0.0)),
             ..Default::default()
         };
-        let s = Self::canvas_scale();
-        let w = screen_width() - Self::panel_px();
+        let l = Self::layout();
+        let s = l.scale;
         self.fonts.draw("Btd6FontTitleSDF", &TextBox { gradient: None,
             text,
-            rect: Rect::new(0.0, 0.0, w, screen_height()),
+            rect: l.map,
             size: 260.0 * s,
             color,
             h_align: 2,
@@ -612,11 +685,13 @@ impl Hud {
 
     pub fn draw(&mut self, game: &Game, mut selected: Option<usize>, placing: Option<usize>, speed: u32, auto_start: bool) -> Vec<Action> {
         let mut out = Vec::new();
-        let s = Self::canvas_scale();
+        // The UIRect (render3d::layout) in canvas units, y up: the HUD trees lay out inside it.
+        let l = Self::layout();
+        let s = l.scale;
         self.scale = s;
         let canvas = vec2(screen_width() / s, screen_height() / s);
-        let full = R { min: Vec2::ZERO, size: canvas };
-        let map = R { min: Vec2::ZERO, size: vec2(canvas.x - SHOP_W, canvas.y) };
+        let full = R { min: vec2(l.ui.x / s, canvas.y - l.ui.bottom() / s), size: vec2(l.ui.w / s, l.ui.h / s) };
+        let map = R { min: vec2(l.map.x / s, canvas.y - l.map.bottom() / s), size: vec2(l.map.w / s, l.map.h / s) };
 
         // Lives / cash / round.
         let lg = "LeftGroup/LayoutGroup";
@@ -625,9 +700,19 @@ impl Hud {
         let round = (game.round + 1).min(game.total_rounds());
         self.right.set_text("Anim/RoundPanel/RoundGroup/Round/Value", &format!("{round}/{}", game.total_rounds()));
 
-        // Shop: Go / fast-forward state, affordability, hovered tower name.
+        // Shop: Go / fast-forward state, affordability, hovered tower name. Below 14:9 the game
+        // shows ShopMenu4:3 (the bottom bar) instead of ShopMenu16:9.
+        let shop_root = if l.bottom { SHOP_BOTTOM } else { SHOP };
+        self.shop.set_active(SHOP, !l.bottom);
+        self.shop.set_active(SHOP_BOTTOM, l.bottom);
+        if self.shop_bottom != l.bottom {
+            self.shop_bottom = l.bottom;
+            self.scroll = 0.0;
+            self.scroll_vel = 0.0;
+            self.press = None;
+        }
         // Sandbox: the ToggleBloons button opens the bloon menu.
-        let tb = format!("{SHOP}/ToggleBloons");
+        let tb = format!("{shop_root}/ToggleBloons");
         self.shop.set_active(&tb, game.sandbox);
         if game.sandbox && self.shop.clicked(&tb) {
             self.toggle_sandbox(&mut selected);
@@ -635,16 +720,16 @@ impl Hud {
                 out.push(Action::Close);
             }
         }
-        let go = format!("{SHOP}/FastFoward-Go");
+        let go = format!("{shop_root}/FastFoward-Go");
         // Sandbox: the button only toggles fast forward (rounds come from the sandbox menu's
         // round field and its send arrow).
         let running = game.round_active || game.sandbox;
         self.shop.set_active(&format!("{go}/Go"), !running);
         self.shop.set_active(&format!("{go}/FastForwardOff"), running && speed == 1);
         self.shop.set_active(&format!("{go}/FastForwardOn"), running && speed > 1);
-        self.shop.set_active(&format!("{SHOP}/SendRound"),game.race.is_some());
+        self.shop.set_active(&format!("{shop_root}/SendRound"),game.race.is_some());
         self.shop.set_active(&go,game.race.is_none());
-        if game.race.is_some()&&self.shop.clicked(&format!("{SHOP}/SendRound")){out.push(Action::Go);}
+        if game.race.is_some()&&self.shop.clicked(&format!("{shop_root}/SendRound")){out.push(Action::Go);}
         if let (Some(node),Some(race))=(&mut self.race_ui,&game.race){
             node.set_text("RaceTimer/RaceTimeTxt",&race.time_text());
             node.set_text("RaceTimer/Title",&race.name);
@@ -652,17 +737,20 @@ impl Hud {
         }
         // Shop list: a ScrollRect inside its RectMask2D (wheel, drag with inertia). A press
         // that turns into a drag doesn't click the tower under it.
-        let list = format!("{SHOP}/UITowers/Mask");
+        let list = format!("{shop_root}/UITowers/Mask");
         let m: Vec2 = mouse_position().into();
         let dt = get_frame_time().min(0.1);
         let mut tap: Option<Vec2> = None;
         let mut pull: Option<Vec2> = None;
         if let (Some(view), Some(sorter)) = (self.shop.find(&list), self.shop.find(&format!("{list}/Sorter"))) {
-            let max = (sorter.rt.size.y - view.screen.h / s).max(0.0);
+            // ScrollRect: vertical in ShopMenu16:9, horizontal in ShopMenu4:3 (OnScroll turns the
+            // wheel into x there: wheel up moves the content left).
+            let horizontal = l.bottom;
+            let max = if horizontal { sorter.rt.size.x - view.screen.w / s } else { sorter.rt.size.y - view.screen.h / s }.max(0.0);
             let over = view.screen.contains(m);
             let wheel = mouse_wheel().1;
             if over && wheel != 0.0 {
-                self.scroll -= wheel / WHEEL_NOTCH * WHEEL_STEP;
+                self.scroll += if horizontal { 1.0 } else { -1.0 } * wheel / WHEEL_NOTCH * WHEEL_STEP;
                 self.scroll_vel = 0.0;
             }
             if over && is_mouse_button_pressed(MouseButton::Left) {
@@ -671,13 +759,14 @@ impl Hud {
             }
             if let Some(p) = self.press.as_mut() {
                 if is_mouse_button_down(MouseButton::Left) {
-                    let (dx, dy) = (m.x - p.start.x, m.y - p.start.y);
-                    if !p.dragging && -dx > DRAG_THRESHOLD && -dx > dy.abs() {
+                    // (along, across) the scroll axis; pulling toward the map takes the tower.
+                    let (along, across) = if horizontal { (m.x - p.start.x, p.start.y - m.y) } else { (m.y - p.start.y, p.start.x - m.x) };
+                    if !p.dragging && across > DRAG_THRESHOLD && across > along.abs() {
                         pull = Some(p.start);
                     }
-                    p.dragging |= dy.abs() > DRAG_THRESHOLD;
+                    p.dragging |= along.abs() > DRAG_THRESHOLD;
                     if p.dragging {
-                        let to = (p.from - dy / s).clamp(0.0, max);
+                        let to = (p.from - along / s).clamp(0.0, max);
                         if dt > 0.0 {
                             let v = (to - self.scroll) / dt;
                             self.scroll_vel += (v - self.scroll_vel) * (dt * 10.0).min(1.0);
@@ -706,7 +795,13 @@ impl Hud {
             }
         }
         if let Some(sorter) = self.shop.find_mut(&format!("{list}/Sorter")) {
-            sorter.rt.pos.y = self.scroll;
+            if l.bottom {
+                sorter.rt.pos.x = -self.scroll;
+                sorter.rt.pos.y = 0.0;
+            } else {
+                sorter.rt.pos.x = 0.0;
+                sorter.rt.pos.y = self.scroll;
+            }
         }
         if let Some(def) = placing {
             if let Some(i) = game.shop.iter().position(|it| it.id == game.tower_defs[def].0) {
@@ -742,14 +837,14 @@ impl Hud {
             }
         }
         let sel_name = game.shop.get(self.shop_sel).map(|it| crate::spaced(&it.id)).unwrap_or_default();
-        self.shop.set_text(&format!("{SHOP}/TowerSelected/Text"), &sel_name);
+        self.shop.set_text(&format!("{shop_root}/TowerSelected/Text"), &sel_name);
         if self.shop.clicked(&go) {
             out.push(Action::Go);
         }
         if self.right.clicked("Anim/RoundPanel/PauseButton") {
             out.push(Action::Pause);
         }
-        if self.shop.clicked(&format!("{SHOP}/UpgradeTreeButton")) {
+        if self.shop.clicked(&format!("{shop_root}/UpgradeTreeButton")) {
             // Heroes have their own screen; show the first tower instead.
             let i = if game.shop.get(self.shop_sel).is_some_and(|it| !it.hero) {
                 self.shop_sel
@@ -811,7 +906,9 @@ impl Hud {
                 out.push(Action::SetPoint);
             }
             // This tier's theme's own controls (towerSelectionMenuThemeId).
-            let theme_id = game.tier(t).map(|x| x.tsm_theme.clone()).unwrap_or_default();
+            // The Boomerang paragon's model keeps AmbidextrousRangs, but the game shows it no hand
+            // buttons (observed in game; TSMThemeAmbidextrousRangs' decompile doesn't show why).
+            let theme_id = game.tier(t).map(|x| x.tsm_theme.clone()).filter(|id| !(tw.paragon.is_some() && id == "AmbidextrousRangs")).unwrap_or_default();
             for (id, names) in &self.theme_controls {
                 for n in names {
                     self.tsm.set_active(&format!("{THEME}/{n}"), *id == theme_id);
@@ -1196,7 +1293,7 @@ impl Hud {
         draw_tree(&mut self.right, map, &mut ctx);
         if let Some(race)=&mut self.race_ui{draw_tree(race,map,&mut ctx);}
         draw_tree(&mut self.shop, full, &mut ctx);
-        self.draw_geraldo(game, selected, canvas, SHOP_W, s, &mut out);
+        self.draw_geraldo(game, selected, full, canvas.y, SHOP_W, s, &mut out);
         // BloonMenu.ShowHideExternal listens to placement-blocking UI, not TSM side.
         self.draw_sandbox(game, full, canvas.y, s, placing.is_some(), &mut out);
         self.draw_abilities(game, &mut out);
