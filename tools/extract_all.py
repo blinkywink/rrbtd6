@@ -396,6 +396,7 @@ def finish(c):
     c.py("tools/assets/delta_anims.py", c.out / "models")
     c.py("tools/assets/patch_tmp_gradients.py", c.game, c.root)
     c.py("tools/assets/rebuild_shader_glsl.py", c.out)
+    c.py("tools/assets/share_model_textures.py", c.out / "models")
 
 
 STEPS = [metadata, sim_model, cab_index, catalogs, container_index, rounds_maps, sprites, mapset, tower_models, misc_art, upgrade_art,
@@ -437,7 +438,7 @@ STEP_VERSIONS = {s.__name__: 1 for s in STEPS}
 # startup 2: the splash and initial loading screens' sprites.
 # startup 4: the title screen's BTD6Logo and the game's window icon.
 STEP_VERSIONS["startup"] = 4
-STEP_VERSIONS["finish"] = 5
+STEP_VERSIONS["finish"] = 6
 STEP_VERSIONS["audio"] = 2
 
 

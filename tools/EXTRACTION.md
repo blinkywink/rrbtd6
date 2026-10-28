@@ -239,3 +239,39 @@ RRBTD6_AUDIO_FIXTURES=target/audio-fixtures and run cargo test --profile game
 Audio follow-up tooling validation: 42 offline Python checks passed; the release
 ZIP includes the compressor and excludes private account tools and scenarios.
 Synthetic FLAC/mixer equivalence is also wired into the release workflow.
+
+
+Shared model textures (2026-10-27, finish step v6)
+------------------------------------------------
+share_model_textures.py replaces byte-identical referenced PNG copies with one
+SHA-256-named PNG under models/shared_textures. Model texture and shader-noise
+paths become ordinary relative paths to that file. Existing renderers and preview
+tools already resolve these paths; no runtime codec, indirection table or new
+binary is needed. Image dimensions, pixels, filtering and material values remain
+unchanged. Implicit shadow filenames are retained. Same-size different-content
+images are never merged.
+
+The tool verifies source bytes, shared output and rewritten JSON before removing
+originals. Metadata is atomically replaced before any originals are removed; a
+failure retains readable copies. Fresh reexports can recreate local texture paths
+and a later finish pass shares them again. Run with the game closed after exporters finish, rather
+than concurrently with model export. Interrupted runs may retain harmless orphan
+copies; the tool favors retaining data over deleting uncertain assets.
+
+Local result: 1,142,789,911 original texture bytes removed, 53,537,472 shared
+bytes created: net saving 1,089,252,439 bytes. 1,923 model metadata files updated.
+An independent audit checked all 15,108 texture references in 2,020 model metadata
+files: every existing referenced image's SHA-256 matched before/after, and all
+non-path metadata values matched. A repeat pass made zero changes. No animation
+samples or gameplay data were modified. Gameplay (Dart + Wizard) and home-menu
+captures passed using the existing executable. Five synthetic sharing/failure/
+reexport tests and the extraction-plan checks pass.
+
+Runtime asset folders now total 6,009,860,773 bytes, including models at
+3,990,640,114 bytes. This is still larger than the official install's measured
+3,362,276,112 bytes. About 3.23 GB remains baked animation streams: native skeletal
+storage is the main remaining gap. These figures exclude executable, developer
+caches and extraction tools; they are not full installer size claims. No measured
+FPS or RAM reduction is claimed for this storage migration.
+
+Shared-texture follow-up: 47 offline Python tooling checks passed.

@@ -60,6 +60,7 @@ class PlanTests(unittest.TestCase):
         self.assertIn(("tools/assets/compact_anims.py", str(ctx.out / "models")), ctx.calls)
         self.assertIn(("tools/assets/pack_anims.py", str(ctx.out / "models")), ctx.calls)
         self.assertIn(("tools/assets/delta_anims.py", str(ctx.out / "models")), ctx.calls)
+        self.assertEqual(ctx.calls[-1], ("tools/assets/share_model_textures.py", str(ctx.out / "models")))
         self.assertEqual(driver.STEPS[-1], driver.finish)
         self.assertGreater(driver.STEP_VERSIONS["finish"], 1)
 

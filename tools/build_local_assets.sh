@@ -160,3 +160,4 @@ $PY tools/assets/export_menu_chrome.py "$GAME" local_extracted
 $PY tools/assets/pack_anims.py local_extracted/models
 
 $PY tools/assets/delta_anims.py local_extracted/models
+$PY tools/assets/share_model_textures.py local_extracted/models

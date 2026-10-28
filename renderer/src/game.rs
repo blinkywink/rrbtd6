@@ -6340,12 +6340,19 @@ impl Game {
                 }
             }
             let Some(mut tier) = self.tier(t).cloned() else { continue };
-            // Submerged: the submerge attack replaces the tower's own.
-            if self.towers[t].submerged {
-                match &tier.submerge {
-                    Some(sm) => tier.attacks = vec![sm.attack.clone()],
-                    None => self.towers[t].submerged = false,
+            // Submerge.UpdateAttackStates (VERIFIED-DISASM @0xdb9de0): the tower's attacks whose
+            // name has "Submerge" in it are paused while it is surfaced, the others while it is
+            // submerged (recording sub_300: Submerge and Support's pulse never fires on First).
+            // Without one of its own, the submerge attack replaces them.
+            let sub_state = self.towers[t].submerged;
+            let mut sub_paused: Vec<bool> = Vec::new();
+            match &tier.submerge {
+                Some(_) if tier.attacks.iter().any(|a| a.model_name.contains("Submerge")) => {
+                    sub_paused = tier.attacks.iter().map(|a| a.model_name.contains("Submerge") != sub_state).collect();
                 }
+                Some(sm) if sub_state => tier.attacks = vec![sm.attack.clone()],
+                Some(_) => {}
+                None => self.towers[t].submerged = false,
             }
             let extra: Vec<crate::data::Attack> = self.towers[t].temp.iter().map(|x| x.attack.clone()).collect();
             let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 
@@ -6424,7 +6431,7 @@ impl Game {
                     && !self.towers[t].paragon_kept.contains(&attack.model_name);
                 let paused = paused && (self.towers[t].paragon.is_none() || self.towers[t].paragon_kept.contains(&attack.model_name)
                     || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0);
-                if ((paused || fresh_attack) && ai < tier.attacks.len()) || ai.checked_sub(tier.attacks.len()).is_some_and(|k| waiting.get(k) == Some(&true)) {
+                if ((paused || fresh_attack || sub_paused.get(ai) == Some(&true)) && ai < tier.attacks.len()) || ai.checked_sub(tier.attacks.len()).is_some_and(|k| waiting.get(k) == Some(&true)) {
                     wi += attack.weapons.len();
                     continue;
                 }
@@ -6604,7 +6611,11 @@ impl Game {
                     let plain = seg_q.is_some_and(|q| seg_near(q, if cant_moab { range } else { range + 2.0 })) && seg_clear;
                     let mut aim_at = b.pos;
                     let mut aim_off = [0.0f32; 2];
-                    let seg_in = plain || (!d.circles.is_empty() && seg_q.is_some_and(|q| seg_near(q, range + 40.0)) && {
+                    // HYPOTHESIS P-SHAREDGRID: with isSharedRangeEnabled the attack targets the
+                    // segments TargetSupplierSharedRange.PressTheGridsTogether (@0xe0ee30) keeps,
+                    // the plain ones only: no MOAB reaches in by its collision circles (recording
+                    // sub_400: a MOAB is first a target when its segment's point is in range).
+                    let seg_in = plain || (!attack.shared_range && !d.circles.is_empty() && seg_q.is_some_and(|q| seg_near(q, range + 40.0)) && {
                         // CollisionGroupData.precalculatedOffset: the offset turned by the bloon's
                         // rotation (Bloon.SetRotation, VERIFIED-DISASM @0xfd5260; Vector2.Rotate as
                         // game_dir), game frame (y flipped here). Recording dart_502: on a curve the

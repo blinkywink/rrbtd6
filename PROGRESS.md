@@ -249,3 +249,15 @@ commit. See tools/EXTRACTION.md for measurements and limits.
 Audio follow-up tooling validation: 42 offline Python checks passed; the release
 ZIP includes the compressor and excludes private account tools and scenarios.
 Synthetic FLAC/mixer equivalence is also wired into the release workflow.
+
+
+2026-10-27 shared textures: finish step v6 shares exact referenced model PNG bytes
+through ordinary relative metadata paths. Net 1.089 GB saved, with no downscaling,
+re-encoding or runtime decompression. Model folder is now 3.991 GB and audited
+runtime asset folders 6.010 GB. Still above the official install's 3.362 GB; baked
+animations (~3.23 GB) are the remaining major storage problem. Independent checks
+preserved every existing image referenced by all 15,108 texture fields in 2,020
+model metadata files, plus every non-path metadata value. Repeat pass changed
+nothing. Existing exe passed gameplay (Dart/Wizard) and home-menu smoke captures.
+No renderer/simulation code changed. Claude's engine/game and website edits remain
+outside this change.
