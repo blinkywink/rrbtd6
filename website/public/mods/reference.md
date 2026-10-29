@@ -13,7 +13,7 @@ Copy [the example](../website/public/mods/quickstart.py) to `mods/quickstart/mod
 python tools/modsdk.py build mods/quickstart/mod.py
 ```
 
-Enable Advanced > UI > Show Mods Button, open Mods, Reload Mods, select the mod and Enable Mod.
+Enable Advanced > UI > Show Mods Button, open Mods, Reload Mods, then flip the switch beside a mod. Select its row to inspect properties and settings without changing whether it is enabled.
 Open Mods Folder opens the installation directory. Selecting a row only previews it.
 Changes apply to a new/restarted game without restarting the client. Live match entities keep
 the definitions they started with. Hiding the home button does not disable enabled mods.
