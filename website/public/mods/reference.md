@@ -414,7 +414,8 @@ Use ordinary callbacks/queued commands for follow-up actions.
   paragon `extra`; cancellation only. Paths remain zero-based.
 
 Bad decisions disable the offending script and preserve the native action or earlier
-valid overrides. Disabled subscriptions are removed from the hot path. Callbacks also
+valid overrides. Disabled subscriptions are removed from the hot path, along with that script's UI widgets
+so a failed modal cannot trap input. Callbacks also
 share a 100,000-operation budget per simulation tick across all scripts; the existing
 30,000-operation per-call limit still applies. This avoids multiplying the execution
 budget by thousands of damage events. Callback output is capped at 256 KiB.
