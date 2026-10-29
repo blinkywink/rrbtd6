@@ -19,6 +19,7 @@ fn run()->Result<(),String>{
         Client::join(options,Invite::parse(&code)?)
     };
     let start=Instant::now();let mut changed=false;let mut ready=false;let mut ready_at=None;let mut rtt=None;
+    let mods_test=args.iter().any(|a|a=="--mods");let mut mods_sent=false;
     let match_test=args.iter().any(|a|a=="--match");let mut started=false;let mut running=false;
     let desync=args.iter().any(|a|a=="--desync");
     let mut frames=0u64;let mut checksum=[7u8;32];let mut advance_at=Instant::now();
@@ -28,6 +29,10 @@ fn run()->Result<(),String>{
             Event::Joined{slot}=>own_slot=slot,
             Event::Room(room)=>{
                 if role=="host"{
+                    if mods_test&&!mods_sent{
+                        let package=rrbtd6_coop::ModPackage::new(r#"{"api_version":1,"id":"relay-test","name":"Relay test","version":"1","content":[{"op":"set","path":"/modes/Medium/cash","value":1234}]}"#.into())?;
+                        client.send(Command::Mods(vec![package]))?;mods_sent=true;
+                    }
                     if room.players.len()==players&&!changed{
                         let mut settings=room.settings.clone();settings.map="MonkeyMeadow".into();settings.difficulty=2;
                         client.send(Command::Settings(settings))?;changed=true;
@@ -42,6 +47,10 @@ fn run()->Result<(),String>{
                         let _=client.send(Command::Leave);return Ok(());
                     }
                 }else{
+                    if mods_test&&room.settings.map=="MonkeyMeadow"{
+                        if room.mods.len()!=1||room.mods[0].id!="relay-test"{return Err("Host mod did not transfer to guest".into());}
+                        rrbtd6_coop::mods::validate(&room.mods)?;
+                    }
                     if room.settings.map=="MonkeyMeadow"&&room.settings.difficulty==2&&!changed{client.send(Command::Ready(true))?;changed=true;}
                     if room.players.iter().any(|p|p.slot==own_slot&&p.ready){ready=true;ready_at.get_or_insert(Instant::now());}
                 }
@@ -49,6 +58,7 @@ fn run()->Result<(),String>{
             Event::Latency(ms)=>rtt=Some(ms),
             Event::Prepare(setup)=>{
                 if !match_test||setup.room.settings.map!="MonkeyMeadow"{return Err("Unexpected match configuration".into());}
+                if mods_test&&(setup.room.mods.len()!=1||setup.room.mods[0].id!="relay-test"){return Err("Match lost selected mods".into());}
                 client.send(Command::Loaded(if desync&&role!="host"{[8;32]}else{checksum}))?;
             },
             Event::Running=>{

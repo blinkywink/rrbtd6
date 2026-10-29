@@ -11,23 +11,23 @@ const MUTED:Color=Color::new(0.66,0.82,0.82,1.0);
 const GOOD:Color=Color::new(0.57,1.0,0.25,1.0);
 const BAD:Color=Color::new(1.0,0.69,0.36,1.0);
 #[derive(Clone)]
-struct Card {key:String,id:Option<String>,name:String,version:String,description:String,error:Option<String>,rules:SandboxRules,settings:SandboxSettings,missing:bool}
+struct Card {key:String,id:Option<String>,name:String,version:String,description:String,error:Option<String>,rules:SandboxRules,settings:SandboxSettings,changes:usize,missing:bool}
 fn cards(catalog:&Catalog,enabled:&HashSet<String>,overrides:&Overrides)->Vec<Card>{
     let mut found=HashSet::new();
     let mut rows:Vec<_>=catalog.entries.iter().map(|e|match &e.manifest{
         Ok(m)=>{found.insert(m.id.clone());Card{key:m.id.clone(),id:Some(m.id.clone()),name:m.name.clone(),version:m.version.clone(),
-            description:m.description.clone(),error:None,rules:m.resolved(overrides).unwrap_or_else(|_|m.on_new_sandbox.clone()),settings:m.settings.clone(),missing:false}},
+            description:m.description.clone(),error:None,rules:m.resolved(overrides).unwrap_or_else(|_|m.on_new_sandbox.clone()),settings:m.settings.clone(),changes:m.content.len(),missing:false}},
         Err(error)=>Card{key:format!("invalid:{}",e.folder),id:None,name:e.folder.clone(),version:String::new(),description:String::new(),
-            error:Some(error.clone()),rules:Default::default(),settings:Default::default(),missing:false},
+            error:Some(error.clone()),rules:Default::default(),settings:Default::default(),changes:0,missing:false},
     }).collect();
     let mut missing:Vec<_>=enabled.difference(&found).cloned().collect();missing.sort();
     for id in missing{rows.push(Card{key:format!("missing:{id}"),id:Some(id.clone()),name:id,version:String::new(),description:String::new(),
-        error:Some("This enabled mod is missing or invalid. Restore its files, or remove it from the enabled list below.".into()),rules:Default::default(),settings:Default::default(),missing:true});}
+        error:Some("This enabled mod is missing or invalid. Restore its files, or remove it from the enabled list below.".into()),rules:Default::default(),settings:Default::default(),changes:0,missing:true});}
     rows
 }
 pub(super) struct Browser {
     root:PathBuf,catalog:Catalog,selected:HashSet<String>,overrides:Overrides,rows:Vec<Card>,focus:Option<usize>,
-    template:Node,button:Node,body:Node,title:Node,notice:Option<String>,pub reset_details:bool,pub pending:Option<Vec<String>>,pub pending_settings:Option<Overrides>,
+    template:Node,button:Node,body:Node,title:Node,notice:Option<String>,pub reset_details:bool,pub pending:Option<Vec<String>>,pub pending_settings:Option<Overrides>,room:Option<(bool,Vec<String>)>,
 }
 fn text_all(node:&mut Node,text:&str){if let Some(t)=&mut node.txt{t.text=text.into();}for child in &mut node.children{text_all(child,text);}}
 fn place(node:&mut Node,anchor:Vec2,pivot:Vec2,pos:Vec2,size:Vec2){
@@ -48,13 +48,33 @@ impl Browser {
                 if let Some(t)=b.find_mut("Text"){t.rt.size.x=550.0;}}
         }
         let mut browser=Self{root:root.to_owned(),catalog:Catalog::scan(&modding::directory(root)),selected:modding::enabled(root),overrides:modding::overrides(root),
-            rows:Vec::new(),focus:None,template,button,body,title,notice:None,reset_details:false,pending:None,pending_settings:None};
+            rows:Vec::new(),focus:None,template,button,body,title,notice:None,reset_details:false,pending:None,pending_settings:None,room:None};
         browser.rebuild(node);Some(browser)
     }
     pub fn reopen(&mut self,node:&mut Node){
+        node.set_text(&format!("{BASE}/TopInfo/Title"),"MODS");
+        node.set_text(&format!("{BASE}/AvailableTracks/Title"),"INSTALLED MODS");
+        node.set_active(&format!("{BASE}/AvailableTracks/AddAllBtn"),true);node.set_active(&format!("{BASE}/Playlist/RemoveAllBtn"),true);
         self.catalog=Catalog::scan(&modding::directory(&self.root));self.selected=modding::enabled(&self.root);self.overrides=modding::overrides(&self.root);
-        self.notice=None;self.rebuild(node);
+        self.room=None;self.notice=None;self.rebuild(node);
     }
+    pub fn bind_room(&mut self,node:&mut Node,room:Option<(&[rrbtd6_coop::ModPackage],bool)>){
+        let Some((packages,host))=room else{
+            if self.room.take().is_some(){self.reopen(node);}return;
+        };
+        let signature=(host,packages.iter().map(|p|p.digest.clone()).collect::<Vec<_>>());
+        if self.room.as_ref()==Some(&signature){return;}
+        self.room=Some(signature);self.overrides=Overrides::new();
+        self.catalog=if host{Catalog::scan(&modding::directory(&self.root))}else{Catalog{entries:packages.iter().map(|p|crate::modding::Entry{
+            folder:p.id.clone(),manifest:crate::modding::Manifest::parse(p.manifest.as_bytes())}).collect()}};
+        self.selected=packages.iter().map(|p|p.id.clone()).collect();self.notice=None;self.rebuild(node);
+        node.set_text(&format!("{BASE}/TopInfo/Title"),"CO-OP MODS");
+        node.set_text(&format!("{BASE}/AvailableTracks/Title"),if host{"AVAILABLE MODS"}else{"HOST'S MODS"});
+        node.set_active(&format!("{BASE}/AvailableTracks/AddAllBtn"),host);
+        node.set_active(&format!("{BASE}/Playlist/RemoveAllBtn"),host);
+    }
+    pub fn report_error(&mut self,node:&mut Node,error:String){self.notice=Some(error);self.footer(node);}
+    fn editable(&self)->bool{self.room.as_ref().is_none_or(|(host,_)|*host)}
     fn text(&self,name:&str,value:&str,height:f32,title:bool)->Node{
         let mut n=if title{self.title.clone()}else{self.body.clone()};n.name=name.into();n.active=true;
         place(&mut n,vec2(0.5,1.0),vec2(0.5,1.0),Vec2::ZERO,vec2(1600.0,height));
@@ -104,11 +124,11 @@ impl Browser {
             place(&mut title,vec2(0.0,1.0),vec2(0.0,0.5),vec2(310.0,-110.0),vec2(1270.0,180.0));
             if let Some(t)=&mut title.txt{t.auto=true;t.min=42.0;t.max=78.0;t.wrap=true;}
             header.children.push(title);
-            let version=if card.version.is_empty(){"Local mod".into()}else{format!("Version {}  ·  Sandbox",card.version)};
+            let version=if card.version.is_empty(){"Local mod".into()}else{format!("Version {}  ·  {}",card.version,if card.rules==SandboxRules::default(){"Game content"}else{"Sandbox settings"})};
             let mut sub=self.text("Version",&version,90.0,false);
             place(&mut sub,vec2(0.0,1.0),vec2(0.0,0.5),vec2(310.0,-245.0),vec2(1270.0,90.0));header.children.push(sub);children.push(header);
             let on=card.id.as_ref().is_some_and(|id|self.selected.contains(id));
-            let mut state=self.text("Status",if card.error.is_some(){"Needs attention"}else if on{"Enabled for your next Sandbox"}else{"Disabled"},80.0,false);
+            let mut state=self.text("Status",if card.error.is_some(){"Needs attention"}else if on{"Enabled"}else{"Disabled"},80.0,false);
             if let Some(t)=&mut state.txt{t.color=if card.error.is_some(){BAD}else if on{GOOD}else{MUTED};}children.push(state);
             let description=card.error.as_deref().unwrap_or(&card.description);
             if !description.is_empty(){
@@ -116,17 +136,19 @@ impl Browser {
                 let mut desc=self.text("Description",description,height,false);if let Some(t)=&mut desc.txt{t.v=256;}if card.error.is_some(){if let Some(t)=&mut desc.txt{t.color=BAD;}}children.push(desc);
             }
             if card.error.is_none(){
+                if card.changes>0{children.push(self.text("ContentScope",&format!("{} content edits. Loaded for new games and menus.",card.changes),170.0,false));}
+
                 let mut effects=Vec::new();
                 if let Some(cash)=card.rules.starting_cash.filter(|_|card.settings.starting_cash.is_none()){effects.push(format!("Starting cash: ${}",super::account_preview::number(cash)));}
                 if let Some(lives)=card.rules.starting_lives.filter(|_|card.settings.starting_lives.is_none()){effects.push(format!("Starting lives: {}",super::account_preview::number(lives)));}
-                if effects.is_empty()&&card.rules==SandboxRules::default(){effects.push("No gameplay changes in this mod.".into());}
+                if effects.is_empty()&&card.rules==SandboxRules::default()&&card.changes==0{effects.push("No gameplay changes in this mod.".into());}
                 if !effects.is_empty(){
                     children.push(self.text("EffectsTitle","WHAT IT CHANGES",110.0,true));
                     let height=effects.len() as f32*85.0;children.push(self.text("Effects",&effects.join("\n"),height,false));
                 }
                 let controls=[("starting_cash","Starting cash",&card.settings.starting_cash,card.rules.starting_cash),
                     ("starting_lives","Starting lives",&card.settings.starting_lives,card.rules.starting_lives)];
-                if controls.iter().any(|(_,_,control,_)|control.is_some())||card.id.as_ref().is_some_and(|id|self.overrides.contains_key(id)) {
+                if self.room.is_none()&&(controls.iter().any(|(_,_,control,_)|control.is_some())||card.id.as_ref().is_some_and(|id|self.overrides.contains_key(id))) {
                     children.push(self.text("SettingsTitle","MOD SETTINGS",90.0,true));
                     if let Some(error)=self.catalog.entries.iter().filter_map(|e|e.manifest.as_ref().ok())
                         .find(|m|Some(&m.id)==card.id.as_ref()).and_then(|m|m.resolved(&self.overrides).err()) {
@@ -167,8 +189,9 @@ impl Browser {
     fn footer(&self,node:&mut Node){
         let installed=self.catalog.entries.len();
         let invalid=self.catalog.entries.iter().filter(|e|e.manifest.is_err()).count();
-        let issue=self.notice.clone().or_else(||self.catalog.compile_with(&self.selected,&self.overrides).err());
-        let status=issue.clone().unwrap_or_else(||format!("{installed} installed  ·  {} enabled{}\nChanges apply when you start a new Sandbox.",self.selected.len(),if invalid>0{format!("  ·  {invalid} needs attention")}else{String::new()}));
+        let issue=self.notice.clone().or_else(||if self.room.is_none(){self.catalog.compile_with(&self.selected,&self.overrides).err()}else{None});
+        let status=issue.clone().unwrap_or_else(||format!("{installed} installed  ·  {} enabled{}\nChanges apply when you start a new game.",self.selected.len(),if invalid>0{format!("  ·  {invalid} needs attention")}else{String::new()}));
+        let status=if self.room.is_some()&&issue.is_none(){format!("{} room mods selected\nHost-selected data transfers directly to every player.",self.selected.len())}else{status};
         let mut status_node=self.text("Status",&status,210.0,false);
         place(&mut status_node,vec2(0.0,0.5),vec2(0.0,0.5),vec2(75.0,0.0),vec2(1900.0,220.0));
         if let Some(t)=&mut status_node.txt{t.size=48.0;if issue.is_some(){t.color=BAD;}}
@@ -177,7 +200,7 @@ impl Browser {
         if let Some(text)=action.find_mut("Text"){text.rt.size.x=740.0;if let Some(t)=&mut text.txt{t.size=64.0;t.min=48.0;t.max=64.0;t.auto=true;}}
         if let Some(card)=self.focus.and_then(|i|self.rows.get(i)){
             let enabled=card.id.as_ref().is_some_and(|id|self.selected.contains(id));
-            action.active=card.id.is_some()&&(card.error.is_none()||enabled);
+            action.active=self.editable()&&card.id.is_some()&&(card.error.is_none()||enabled);
             text_all(&mut action,if card.missing{"Remove Missing Mod"}else if enabled{"Disable Mod"}else{"Enable Mod"});
             if let Some(img)=&mut action.img{img.sprite=Some(if enabled{"RedBtnLong"}else{"GreenBtnLong"}.into());}
         }
@@ -185,11 +208,13 @@ impl Browser {
     }
     pub fn click(&mut self,node:&mut Node,pointer:Vec2)->bool{
         let hit=|path:&str|node.rect(path).is_some_and(|r|r.contains(pointer));
-        if hit(&format!("{BASE}/AvailableTracks/AddAllBtn/AddAllBtn")){
+        if self.editable()&&hit(&format!("{BASE}/AvailableTracks/AddAllBtn/AddAllBtn")){
             self.notice=open_folder(&modding::directory(&self.root)).err();self.footer(node);return true;
         }
-        if hit(&format!("{BASE}/Playlist/RemoveAllBtn/RemoveAllBtn")){
-            self.catalog=Catalog::scan(&modding::directory(&self.root));self.notice=None;self.reset_details=true;self.rebuild(node);return true;
+        if self.editable()&&hit(&format!("{BASE}/Playlist/RemoveAllBtn/RemoveAllBtn")){
+            self.catalog=Catalog::scan(&modding::directory(&self.root));self.notice=None;self.reset_details=true;
+            let mut ids:Vec<_>=self.selected.iter().cloned().collect();ids.sort();self.pending=Some(ids);
+            self.rebuild(node);return true;
         }
         if let Some(card)=self.focus.and_then(|i|self.rows.get(i)).cloned().filter(|c|c.error.is_none()) {
             if hit(&format!("{DETAILS}/ResetSettings")) {
@@ -218,7 +243,7 @@ impl Browser {
                 }
             }
         }
-        if hit(&format!("{FOOTER}/Action")){
+        if self.editable()&&hit(&format!("{FOOTER}/Action")){
             let Some(id)=self.focus.and_then(|i|self.rows.get(i)).and_then(|r|r.id.clone()) else{return true;};
             if !self.selected.remove(&id){self.selected.insert(id);}
             let mut ids:Vec<_>=self.selected.iter().cloned().collect();ids.sort();self.pending=Some(ids);self.notice=None;self.rebuild(node);return true;
@@ -312,7 +337,7 @@ mod tests {
         let mut template=block();template.children=vec![body.clone()];template.children[0].name="TrackName".into();
         let button=block();
         let mut browser=Browser{root:PathBuf::new(),catalog:Catalog{entries},selected,overrides:Overrides::new(),rows:Vec::new(),focus:None,
-            template,button,body:body.clone(),title:body,notice:None,reset_details:false,pending:None,pending_settings:None};
+            template,button,body:body.clone(),title:body,notice:None,reset_details:false,pending:None,pending_settings:None,room:None};
         let mut node=node;browser.rebuild(&mut node);(browser,node)
     }
     fn entry(id:&str)->Entry{
@@ -373,6 +398,16 @@ mod tests {
         click(&mut browser,&mut node,&format!("{DETAILS}/ResetSettings"));
         assert!(browser.overrides.is_empty());
         assert!(browser.catalog.compile_with(&browser.selected,&browser.overrides).is_ok());
+    }
+
+    #[test]
+    fn guest_room_mod_manager_is_read_only_and_does_not_persist_local_ids(){
+        let manifest=Manifest::parse(include_bytes!("../../mods/practice-start/mod.json")).unwrap();
+        let package=rrbtd6_coop::ModPackage::new(serde_json::to_string(&manifest).unwrap()).unwrap();
+        let (mut browser,mut node)=fixture(vec![],HashSet::new());
+        browser.bind_room(&mut node,Some((&[package],false)));
+        assert_eq!(browser.rows.len(),1);assert!(!browser.editable());assert!(!node.find(&format!("{FOOTER}/Action")).unwrap().active);
+        assert!(browser.selected.contains("practice-start"));assert!(browser.pending.is_none());assert!(browser.pending_settings.is_none());
     }
 
 }

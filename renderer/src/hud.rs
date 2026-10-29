@@ -77,7 +77,7 @@ struct Press {
 pub struct Hud {
     pub(crate) account_ui:crate::account_ui::AccountUi,
     coop: coop_hud::CoopHud,
-    left: Node,
+    pub(crate) left: Node,
     race_ui:Option<Node>,
     right: Node,
     shop: Node,
@@ -493,6 +493,8 @@ impl Hud {
             || self.tsm.find(INFO).is_some_and(|n| self.tsm.active && n.active && n.screen.contains(p))
             || self.right.rect("Anim/RoundPanel/PauseButton").is_some_and(|r| r.contains(p))
             || self.ability_rects.iter().any(|r| r.contains(p))
+            || self.left.rect("LeftGroup/LayoutGroup/HealthGroup").is_some_and(|r|r.contains(p))
+            || self.left.rect("LeftGroup/LayoutGroup/CashGroup").is_some_and(|r|r.contains(p))
             || self.sandbox_blocks(p)
             || self.temple_blocks()
             || self.geraldo_blocks(p)
@@ -697,6 +699,7 @@ impl Hud {
         let lg = "LeftGroup/LayoutGroup";
         self.left.set_text(&format!("{lg}/HealthGroup/Health"), &format!("{:.0}", game.lives.max(0.0)));
         self.left.set_text(&format!("{lg}/CashGroup/Cash"), &money(game.cash));
+        self.sandbox_resources(game,&mut out);
         let round = (game.round + 1).min(game.total_rounds());
         self.right.set_text("Anim/RoundPanel/RoundGroup/Round/Value", &format!("{round}/{}", game.total_rounds()));
 

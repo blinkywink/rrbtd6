@@ -499,7 +499,15 @@ def fingerprint(c):
     return h.hexdigest()
 
 
+def asset_revision():
+    """Release contract: bump a step version when its required output changes."""
+    return hashlib.sha256(json.dumps(STEP_VERSIONS, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def main():
+    if sys.argv[1:] == ["--asset-revision"]:
+        print(asset_revision())
+        return
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--game", required=True, help="BTD6 install folder (with MelonLoader)")
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]), help="folder holding tools/")
@@ -542,6 +550,8 @@ def main():
         atomic_write(state_file, json.dumps(state))
     if not args.only and not args.keep_bundle_cache:
         cleanup_bundle_cache(c)
+    if not args.only:
+        atomic_write(c.out / "assets_version.json", json.dumps({"revision": asset_revision(), "source": fp}))
     print("extraction complete", flush=True)
 
 

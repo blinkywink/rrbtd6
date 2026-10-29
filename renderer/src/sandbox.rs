@@ -41,6 +41,8 @@ pub const BLOONS: [&str; 19] = [
 pub enum SandboxAction {
     Spawn { bloon: String, camo: bool, regrow: bool, fortified: bool, count: u32, spacing: f32 },
     SetRound(usize),
+    SetCash(f64),
+    SetLives(f64),
     ClearBloons,
     ClearTowers,
     ResetCooldowns,
@@ -54,6 +56,9 @@ impl SandboxAction {
                 game.sandbox_spawn(&bloon, camo, regrow, fortified, count, spacing);
             }
             SandboxAction::SetRound(n) => game.set_round(n),
+            SandboxAction::SetCash(n) if game.sandbox && n.is_finite() => game.cash=n.clamp(0.0,1e12).trunc(),
+            SandboxAction::SetLives(n) if game.sandbox && n.is_finite() => {game.lives=n.clamp(0.0,1e9).trunc();game.game_over=false;},
+            SandboxAction::SetCash(_) | SandboxAction::SetLives(_) => {},
             SandboxAction::ClearBloons => game.clear_bloons(),
             SandboxAction::ClearTowers => game.clear_towers(),
             SandboxAction::ResetCooldowns => game.reset_cooldowns(),
@@ -69,8 +74,20 @@ enum Field {
     Round,
 }
 
+#[derive(Clone,Copy,Debug,PartialEq)]
+pub enum Resource {Cash,Lives}
+struct ResourceEdit {kind:Resource,text:String,replace:bool}
+impl ResourceEdit {
+    fn action(&self)->Option<SandboxAction> {
+        let value=self.text.parse::<f64>().ok()?;
+        if !value.is_finite()||value<0.0||value.fract()!=0.0{return None;}
+        Some(match self.kind{Resource::Cash=>SandboxAction::SetCash(value.min(1e12)),Resource::Lives=>SandboxAction::SetLives(value.min(1e9))})
+    }
+}
 pub struct SandboxUi {
     menu: Option<Node>,
+    resource:Option<ResourceEdit>,
+    bloons:Vec<String>,
     pub open: bool,
     camo: bool,
     regrow: bool,
@@ -138,6 +155,8 @@ impl SandboxUi {
         }
         Self {
             menu,
+            resource:None,
+            bloons:BLOONS.iter().map(|s|s.to_string()).collect(),
             open: false,
             camo: false,
             regrow: false,
@@ -153,6 +172,11 @@ impl SandboxUi {
         }
     }
 
+    pub fn edit_resource(&mut self,kind:Resource,game:&crate::game::Game){
+        if !game.sandbox{return;}
+        self.editing=None;
+        self.resource=Some(ResourceEdit{kind,text:format!("{:.0}",match kind{Resource::Cash=>game.cash,Resource::Lives=>game.lives}),replace:true});
+    }
     /// Spawning `bloon` with the menu's current toggles, count and spacing (the Send hotkeys).
     pub fn spawn(&self, bloon: &str) -> SandboxAction {
         SandboxAction::Spawn {
@@ -167,7 +191,7 @@ impl SandboxUi {
 
     /// A text field has keyboard focus (hotkeys are off meanwhile).
     pub fn typing(&self) -> bool {
-        self.open && self.editing.is_some()
+        self.resource.is_some() || (self.open && self.editing.is_some())
     }
 }
 
@@ -175,6 +199,16 @@ impl SandboxUi {
 mod runtime_tests {
     use super::*;
 
+    #[test]
+    fn sandbox_resource_values_are_bounded_and_invalid_edits_do_not_commit(){
+        let edit=|kind,text:&str|ResourceEdit{kind,text:text.into(),replace:false};
+        assert!(edit(Resource::Cash,"").action().is_none());
+        assert!(edit(Resource::Lives,"-1").action().is_none());
+        assert!(edit(Resource::Cash,"NaN").action().is_none());
+        assert!(edit(Resource::Cash,"1.5").action().is_none());
+        assert!(matches!(edit(Resource::Lives,"0").action(),Some(SandboxAction::SetLives(0.0))));
+        assert!(matches!(edit(Resource::Cash,"9999999999999").action(),Some(SandboxAction::SetCash(1e12))));
+    }
     #[test]
     fn animation_bindings_are_independent_of_json_whitespace() {
         let source = serde_json::json!({"animators": [{
@@ -203,6 +237,38 @@ fn field_path(f: Field) -> &'static str {
 }
 
 impl Hud {
+    /// Edit the HUD counters directly. No simulation/account changes until commit.
+    pub fn sandbox_resources(&mut self,game:&crate::game::Game,out:&mut Vec<Action>){
+        if !game.sandbox{self.sandbox.resource=None;return;}
+        const CASH:&str="LeftGroup/LayoutGroup/CashGroup";
+        const LIVES:&str="LeftGroup/LayoutGroup/HealthGroup";
+        let hit=[(CASH,Resource::Cash),(LIVES,Resource::Lives)].into_iter().find(|(path,_)|self.left.clicked(path));
+        if is_mouse_button_pressed(MouseButton::Left){
+            if let Some((_,kind))=hit{
+                if self.sandbox.resource.as_ref().is_none_or(|edit|edit.kind!=kind){
+                    if let Some(action)=self.sandbox.resource.as_ref().and_then(ResourceEdit::action){out.push(Action::Sandbox(action));}
+                    self.sandbox.edit_resource(kind,game);
+                }
+            }else if let Some(edit)=self.sandbox.resource.take(){
+                if let Some(action)=edit.action(){out.push(Action::Sandbox(action));}
+            }
+        }
+        let Some(edit)=&mut self.sandbox.resource else{return;};
+        while let Some(c)=get_char_pressed(){
+            if c.is_ascii_digit(){
+                if edit.replace{edit.text.clear();edit.replace=false;}
+                if edit.text.len()<13{edit.text.push(c);}
+            }
+        }
+        if is_key_pressed(KeyCode::Backspace){if edit.replace{edit.text.clear();edit.replace=false;}else{edit.text.pop();}}
+        if is_key_pressed(KeyCode::Escape){self.sandbox.resource=None;return;}
+        if is_key_pressed(KeyCode::Enter)||is_key_pressed(KeyCode::KpEnter){
+            if let Some(action)=edit.action(){out.push(Action::Sandbox(action));self.sandbox.resource=None;return;}
+        }
+        let path=match edit.kind{Resource::Cash=>"LeftGroup/LayoutGroup/CashGroup/Cash",Resource::Lives=>"LeftGroup/LayoutGroup/HealthGroup/Health"};
+        let caret=if (get_time()*2.0) as i64%2==0{"|"}else{""};
+        self.left.set_text(path,&format!("{}{caret}",edit.text));
+    }
     /// The sandbox bloon menu over the shop; returns the game actions clicked.
     /// `hide` is temporary placement blocking, preserving the user's open state.
     pub fn draw_sandbox(&mut self, game: &crate::game::Game, full: R, canvas_h: f32, s: f32, hide: bool, out: &mut Vec<Action>) {
@@ -224,6 +290,12 @@ impl Hud {
             return;
         }
         let Some(m) = ui.menu.as_mut() else { return };
+        if ui.icons_for.is_none(){
+            if let Some(list)=m.find_mut(LIST){if let Some(template)=list.children.first().cloned(){
+                for name in game.custom_bloons(){if !ui.bloons.contains(&name){let mut button=template.clone();button.name=name.clone();list.children.push(button);ui.bloons.push(name);}}
+            }}
+        }
+
         if slide_len > 0.0 {
             crate::frontend::apply_animation(m, &ui.runtime, "SandBoxSlideOut", "SandboxSlideOutOpen", Some(ui.slide));
         }
@@ -283,7 +355,7 @@ impl Hud {
         let key = (ui.camo, ui.regrow, ui.fortified);
         if ui.icons_for != Some(key) {
             ui.icons_for = Some(key);
-            for name in BLOONS {
+            for name in &ui.bloons {
                 let icon = bloon_icon(game, name, ui.camo, ui.regrow, ui.fortified);
                 m.set_sprite(&format!("{LIST}/{name}/Icon"), icon.as_deref());
             }
@@ -297,7 +369,7 @@ impl Hud {
             }
             return;
         }
-        for name in BLOONS {
+        for name in &ui.bloons {
             if m.clicked(&format!("{LIST}/{name}")) {
                 acts.push(SandboxAction::Spawn { bloon: name.into(), camo: ui.camo, regrow: ui.regrow, fortified: ui.fortified, count, spacing });
             }
@@ -321,7 +393,7 @@ impl Hud {
         let over = view.is_some_and(|r| r.contains(mouse_position().into()));
         let (_, wheel) = mouse_wheel();
         if over && wheel != 0.0 {
-            let content = BLOONS.len().div_ceil(3) as f32 * 180.0;
+            let content = ui.bloons.len().div_ceil(3) as f32 * 180.0;
             let max = view.map_or(0.0, |r| (content - r.h / s).max(0.0));
             ui.scroll = (ui.scroll - wheel / 120.0 * 100.0).clamp(0.0, max);
         }

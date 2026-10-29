@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Making mods — RustTD6</title>
+<meta name="description" content="Write a RustTD6 mod, build its manifest, and load it without restarting the client.">
+<link rel="canonical" href="https://rusttd6.com/mods/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/mods/docs.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="/">RustTD6</a><nav aria-label="Navigation"><a href="#start">Quick start</a><a href="#api">API</a><a href="#coop">Co-op</a><a href="https://github.com/blinkywink/rrbtd6">GitHub</a></nav></header>
+<main class="docs">
+<section class="intro"><p class="eyebrow">MOD API 1 · EARLY PREVIEW</p><h1>Your code.<br>Your game.</h1><p class="lede">Write mods in files. Load them from the Mods menu. No DLL injection, no client restart, no in-game editor.</p><p>This is RustTD6's own mod format. BTD6 MelonLoader mods do not run in it.</p></section>
+<section class="block" id="start"><h2>Make your first mod</h2>
+<ol><li>Install RustTD6 and Python 3.10 or newer. The SDK is included at <code>tools/modsdk.py</code>.</li>
+<li>Save this as <code>mods/quickstart/mod.py</code>, next to your game:</li></ol>
+<pre><code># The SDK supplies Mod when it builds this script.
+mod = Mod("quickstart", "Quick Start", description="A custom dart, bloon and mode.")
+
+dart = mod.tower("dart", base="DartMonkey", cost=100)
+dart.projectile(damage=3, pierce=4)
+dart.weapon(rate=0.5)
+
+mod.bloon("durable-red", base="Red", maxHealth=5)
+mod.mode("training", base="Medium", cash=2000, lives=300)</code></pre>
+<p><a href="/mods/quickstart.py" download>Download the example</a></p>
+<ol start="3"><li>From the installation folder, build its manifest:</li></ol>
+<pre><code>python tools/modsdk.py build mods/quickstart/mod.py</code></pre>
+<ol start="4"><li>Enable <strong>Settings → Advanced → UI → Show Mods Button</strong>. Open Mods, press <strong>Reload Mods</strong>, select Quick Start, then <strong>Enable Mod</strong>.</li>
+<li>Start a new local game. Your new tower appears in the shop. Your new bloon appears in Sandbox. The mode screen has a custom-mode selector.</li></ol>
+<p>Your script runs only when you explicitly build it. The game reads its generated <code>mod.json</code> and compiles the definitions into its native simulation. You can generate the same JSON using another language.</p>
+</section>
+<section class="block" id="reload"><h2>Reload, don't restart</h2><p>Edit your code, build again, then reload the mod list. Changes apply to the next new game or restart of a game. An existing match keeps its current definitions; changing live entities underneath it is not supported yet.</p><p>Enable/disable is separate from selection. Optional per-mod settings save locally. The manager is for installed mods and settings, not authoring.</p></section>
+<section class="block" id="api"><h2>The content API</h2>
+<p>A manifest has <code>api_version</code>, a unique lowercase <code>id</code>, <code>name</code>, <code>version</code>, and a <code>content</code> list. Keep your ID stable between releases. The SDK prefixes your content IDs with your mod ID.</p>
+<details open><summary>Towers and projectiles</summary><p><code>mod.tower(name, base="DartMonkey", **patch)</code> clones the tower, its upgrade tiers and shared visual references, then adds it to the shop. Custom towers currently reuse an exported model and icon; a custom art importer is future work. Heroes cannot be used as clone bases.</p><p><code>tower.projectile(damage=3, pierce=4)</code> edits the base tier's projectile. <code>tower.weapon(rate=0.5)</code> sets its shot interval in seconds. Pass <code>tier="100"</code>, <code>attack=0</code> or <code>weapon=0</code> to edit another tier or weapon. Upgraded tiers keep their inherited values unless edited separately.</p><p>Reuse another native projectile with a build-time template:</p><pre><code>bomb = mod.projectile("big-bomb", base_tower="BombShooter", damage=10)
+dart.projectile(bomb, pierce=30)</code></pre><p>Projectiles are compiled native data attached to weapons. They are not Python objects or callbacks during play.</p></details>
+<details><summary>Bloons and rounds</summary><p><code>mod.bloon("durable-red", base="Red", maxHealth=5)</code> creates a new bloon using an existing visual. <code>speed</code>, <code>radius</code>, <code>children</code>, <code>isCamo</code> and supported native behaviors can be edited. Child references must exist and cannot form cycles.</p><p>Use <code>mod.set</code> to replace a round group with one referencing your new bloon, or send it from Sandbox. New arbitrary behaviors require an engine API addition.</p></details>
+<details><summary>Modes and global changes</summary><p><code>mod.mode("training", base="Medium", cash=2000)</code> adds a new mode. It is available in the custom-mode selector below the ordinary modes.</p><p><code>mod.all_modes(lives=500)</code> patches every mode present at that point in the content list. To change only an existing mode:</p><pre><code>mod.set("/modes/Medium/cash", 1500)
+mod.set("/towers/DartMonkey/cost", 100)</code></pre><p>These changes work in ordinary local games, not just Sandbox. Official events keep their own rules. In private co-op the room's mod set replaces each player's local selection.</p></details>
+<details><summary>Menus and statistics</summary><p><code>mod.menu(page, path, text="...", visible=False)</code> changes an existing menu node when that scene loads. Page names match exported prefab filenames, such as <code>MainMenuUI</code>. Paths match the node hierarchy in your local <code>ui/prefabs</code> export. Use text or visibility separately.</p><p>Native tower/bloon/weapon statistics are editable through content paths. New profile counters, scripted UI widgets and custom runtime callbacks are not implemented yet. Menu values that the game updates dynamically may overwrite a load-time edit.</p></details>
+<details><summary>Raw data and validation</summary><p><code>mod.set(path, value)</code> replaces an existing field using a JSON Pointer. Roots are <code>towers</code>, <code>tower_tiers</code>, <code>bloons</code>, <code>modes</code>, <code>start</code>, <code>rounds</code>, <code>round_sets</code> and <code>freeplay</code>. Inspect your own <code>local_extracted/game/game.json</code> for native field names and supported behaviors. Do not bundle extracted game data with a mod.</p><p>Manifests are limited to 64 KiB and 256 operations. Unknown operations, duplicate IDs, missing fields, child cycles and conflicting writes to the same path are rejected. Mods compile in sorted ID order; operations within a mod run in written order.</p><p><a href="https://github.com/blinkywink/rrbtd6/blob/main/mods/mod.schema.json">JSON schema</a> · <a href="https://github.com/blinkywink/rrbtd6/blob/main/mods/README.md">Full format reference</a> · <a href="https://github.com/blinkywink/rrbtd6/blob/main/tools/modsdk.py">SDK source</a></p></details>
+</section>
+<section class="block" id="coop"><h2>Mods with friends</h2><p>Host a private iroh room, then open <strong>Room Mods</strong>. The host chooses the set. Guests can inspect it, and receive its data directly from the host even if it is not installed locally. Received manifests stay isolated in the room; they do not replace installed mods or run author scripts.</p><p>The current transfer supports up to 16 data mods, totaling 24 KiB of manifest text. Custom art packs and large file transfers are not supported yet. Each package is hash-checked, changes clear everyone's Ready state, and all players must have the same client build and base game data. The normal load barrier also checks the compiled initial game state before play.</p><p>Room mods are locked once a match starts. Official-server interoperability is not implemented. Use a private RustTD6 room.</p></section>
+<section class="block"><h2>Client and asset updates</h2><p>Installed builds check GitHub through the launcher. A code-only compatible update installs automatically. If a release needs new extracted assets, you can keep playing the installed version or run the setup DLL inside BTD6 again. The launcher stages new assets and keeps the old build intact if extraction fails. Offline play uses the installed build.</p></section>
+<footer><p>RustTD6 is a fan-made project, not affiliated with Ninja Kiwi.</p><a href="/">Back home</a></footer>
+</main></body></html>

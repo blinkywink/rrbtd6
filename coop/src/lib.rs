@@ -1,24 +1,28 @@
 //! Private client-to-client rooms over encrypted QUIC, with automatic NAT traversal/relay.
 //! Network work starts explicitly, off the renderer thread. No official account credentials.
 mod transport;
+pub mod mods;
+pub use mods::ModPackage;
 mod match_flow;
 pub mod economy;
 pub use match_flow::{Action,Input,Frame,MatchStart,STEPS_PER_FRAME,IN_FLIGHT};
 pub use transport::{Client, Options};
 use serde::{Deserialize,Serialize};
 
-pub const VERSION:u32=7;
+pub const VERSION:u32=8;
 pub const MAX_PLAYERS:usize=4;
 pub const MAX_FRAME:usize=64*1024;
 pub const ALPN:&[u8]=b"rrbtd6/private-coop/1";
 
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
 pub struct Settings {
+    #[serde(default)]pub custom_mode:Option<String>,
     pub map:String,pub difficulty:u8,pub mode:u8,pub division:u8,pub closed:[bool;MAX_PLAYERS],
 }
-impl Default for Settings{fn default()->Self{Self{map:"Tutorial".into(),difficulty:1,mode:0,division:4,closed:[false;4]}}}
+impl Default for Settings{fn default()->Self{Self{custom_mode:None,map:"Tutorial".into(),difficulty:1,mode:0,division:4,closed:[false;4]}}}
 impl Settings{
     pub fn valid(&self)->bool{
+        self.custom_mode.as_ref().is_none_or(|id|!id.is_empty()&&id.len()<=96&&id.bytes().all(|b|b.is_ascii_alphanumeric()||b"._-".contains(&b)))&&
         !self.map.is_empty()&&self.map.len()<=80&&self.map.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_')&&
         self.difficulty<3&&self.mode<[3,4,7][self.difficulty.min(2) as usize]&&self.division<7&&!self.closed[0]
     }
@@ -26,9 +30,11 @@ impl Settings{
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
 pub struct Player{pub slot:u8,pub name:String,pub ready:bool,pub connected:bool}
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
-pub struct Room{pub revision:u64,pub settings:Settings,pub players:Vec<Player>}
+pub struct Room{pub revision:u64,pub settings:Settings,pub players:Vec<Player>,#[serde(default)]pub mods:Vec<ModPackage>}
 impl Room{
     fn valid(&self)->bool{
+        if mods::validate(&self.mods).is_err(){return false;}
+        if self.settings.custom_mode.as_ref().is_some_and(|id|!mods::mode_ids(&self.mods).contains(id)){return false;}
         if !self.settings.valid()||self.players.is_empty()||self.players.len()>MAX_PLAYERS{return false;}
         let mut seen=[false;MAX_PLAYERS];
         for p in &self.players{
@@ -40,7 +46,7 @@ impl Room{
 }
 
 #[derive(Clone,Debug)]
-pub enum Command{Settings(Settings),Ready(bool),Leave,Start,Loaded([u8;32]),Input{sequence:u64,action:Action},Advance,Ack{frame:u64,digest:[u8;32]}}
+pub enum Command{Settings(Settings),Mods(Vec<ModPackage>),Ready(bool),Leave,Start,Loaded([u8;32]),Input{sequence:u64,action:Action},Advance,Ack{frame:u64,digest:[u8;32]}}
 #[derive(Clone,Debug)]
 pub enum Event{
     Hosting{invite:String},Joined{slot:u8},Room(Room),Error(String),Disconnected(String),
@@ -80,7 +86,7 @@ struct State{room:Room}
 impl State{
     fn new(settings:Settings,host:&str)->Result<Self,String>{
         if !settings.valid(){return Err("Invalid room settings".into());}
-        Ok(Self{room:Room{revision:1,settings,players:vec![Player{slot:0,name:name(host),ready:false,connected:true}]}})
+        Ok(Self{room:Room{revision:1,settings,players:vec![Player{slot:0,name:name(host),ready:false,connected:true}],mods:Vec::new()}})
     }
     fn join(&mut self,player:&str)->Result<u8,String>{
         let slot=(1..MAX_PLAYERS).find(|&s|!self.room.settings.closed[s]&&!self.room.players.iter().any(|p|p.slot as usize==s)).ok_or("Room is full")?;
@@ -91,8 +97,17 @@ impl State{
     fn settings(&mut self,slot:u8,settings:Settings)->Result<(),String>{
         if slot!=0{return Err("Only the host can change the room".into());}
         if !settings.valid(){return Err("Invalid room settings".into());}
+        if settings.custom_mode.as_ref().is_some_and(|id|!mods::mode_ids(&self.room.mods).contains(id)){return Err("Selected mode is not provided by the room mods".into());}
         if self.room.players.iter().any(|p|settings.closed[p.slot as usize]){return Err("A connected player's slot cannot be closed".into());}
         if self.room.settings!=settings{self.room.settings=settings;for p in &mut self.room.players{p.ready=false;}self.room.revision+=1;}
+        Ok(())
+    }
+    fn mods(&mut self,slot:u8,mods:Vec<ModPackage>)->Result<(),String>{
+        if slot!=0{return Err("Only the host can select room mods".into());}
+        mods::validate(&mods)?;
+        if self.room.mods!=mods{
+            if self.room.settings.custom_mode.as_ref().is_some_and(|id|!mods::mode_ids(&mods).contains(id)){self.room.settings.custom_mode=None;self.room.settings.mode=0;}
+            self.room.mods=mods;for p in &mut self.room.players{p.ready=false;}self.room.revision+=1;}
         Ok(())
     }
     fn ready(&mut self,slot:u8,ready:bool)->Result<(),String>{
@@ -134,4 +149,23 @@ impl State{
         s.settings(0,s.room.settings.clone()).unwrap();assert_eq!(s.room.revision,revision);
         assert!(s.room.players.iter().find(|p|p.slot==2).unwrap().ready);
     }
+    #[test]
+    fn room_mod_changes_are_host_only_and_reset_readiness(){
+        let mut state=State::new(Settings::default(),"Host").unwrap();state.join("Guest").unwrap();
+        state.ready(0,true).unwrap();state.ready(1,true).unwrap();
+        let package=ModPackage::new(r#"{"api_version":1,"id":"example","version":"1"}"#.into()).unwrap();
+        assert!(state.mods(1,vec![package.clone()]).is_err());
+        state.mods(0,vec![package]).unwrap();assert!(state.room.players.iter().all(|p|!p.ready));assert!(state.room.valid());
+    }
+
+    #[test]
+    fn custom_room_mode_requires_its_mod_and_removal_returns_to_standard(){
+        let mut state=State::new(Settings::default(),"Host").unwrap();
+        let mut settings=state.room.settings.clone();settings.custom_mode=Some("test-mode".into());
+        assert!(state.settings(0,settings.clone()).is_err());
+        let package=ModPackage::new(r#"{"api_version":1,"id":"test","version":"1","content":[{"op":"mode","id":"test-mode","base":"Medium"}]}"#.into()).unwrap();
+        state.mods(0,vec![package]).unwrap();state.settings(0,settings).unwrap();assert!(state.room.valid());
+        state.mods(0,vec![]).unwrap();assert!(state.room.settings.custom_mode.is_none());assert_eq!(state.room.settings.mode,0);
+    }
+
 }

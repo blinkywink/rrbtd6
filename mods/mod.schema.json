@@ -110,6 +110,178 @@
           }
         }
       }
+    },
+    "content": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "id",
+              "base"
+            ],
+            "properties": {
+              "op": {
+                "const": "tower"
+              },
+              "id": {
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "patch": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "id",
+              "base"
+            ],
+            "properties": {
+              "op": {
+                "const": "bloon"
+              },
+              "id": {
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "patch": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "id",
+              "base"
+            ],
+            "properties": {
+              "op": {
+                "const": "mode"
+              },
+              "id": {
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "patch": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "path",
+              "value"
+            ],
+            "properties": {
+              "op": {
+                "const": "set"
+              },
+              "path": {
+                "type": "string"
+              },
+              "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "patch"
+            ],
+            "properties": {
+              "op": {
+                "const": "all_modes"
+              },
+              "patch": {
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "page",
+              "path"
+            ],
+            "properties": {
+              "op": {
+                "const": "menu"
+              },
+              "page": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "visible": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "from",
+              "path"
+            ],
+            "properties": {
+              "op": {
+                "const": "copy"
+              },
+              "from": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
     }
   }
 }

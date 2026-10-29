@@ -37,6 +37,7 @@ jobs:
       - name: Test tooling and updater
         shell: bash
         run: |
+          python -I tools/test_modsdk.py
           python -I tools/test_extraction_bootstrap.py
           python -I tools/test_package_tools.py
           python -I tools/test_shader_imports.py
@@ -46,6 +47,9 @@ jobs:
           python -I tools/test_repack_anims.py
           python -I tools/test_link_duplicates.py
           cargo test --release -p rrbtd6-launcher --locked
+          cargo test --release -p rrbtd6-coop --locked
+          cargo test --release -p btd6-game modding:: --locked
+          cargo test --release -p btd6-game frontend::mod_browser:: --locked
 
       - name: Build game and launcher
         shell: bash
@@ -83,7 +87,8 @@ jobs:
           cp target/release/rrbtd6-launcher.exe dist/rrbtd6-launcher.exe
           cp installer_out/RRBTD6Installer.dll dist/RRBTD6Installer.dll
           python -I tools/package_tools.py dist/rrbtd6-tools.zip
-          printf '{"build":%s,"commit":"%s"}\n' "${{ github.run_number }}" "${{ github.sha }}" > dist/version.json
+          revision="$(python -I tools/extract_all.py --asset-revision)"
+          printf '{"build":%s,"commit":"%s","assets_revision":"%s"}\n' "${{ github.run_number }}" "${{ github.sha }}" "$revision" > dist/version.json
 
       - name: Publish release
         shell: bash

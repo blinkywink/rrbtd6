@@ -53,6 +53,42 @@ const TRACER_LIFE: f32 = 0.12;
 /// Seconds a LineEffectModel beam stays drawn after its shot.
 const BEAM_HOLD: f32 = 0.25;
 
+type AttackIndex=HashMap<String,Vec<(String,[f32;3],usize)>>;
+fn tower_metadata(root:&std::path::Path,names:&[String])->(Vec<HashMap<String,String>>,Vec<AttackIndex>){
+    let mut tier_index=Vec::new();let mut attack_index=Vec::new();
+    for name in names {
+        let a: serde_json::Value = std::fs::read_to_string(root.join("models").join(name).join("tiers").join("attack.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        attack_index.push(
+            a.as_object()
+                .map(|o| {
+                    o.iter()
+                        .map(|(k, v)| {
+                            let list = v.as_array().map(|l| {
+                                l.iter()
+                                    .filter_map(|e| {
+                                        let off = e["offset"].as_array().map(|o| [0, 1, 2].map(|i| o.get(i).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32)).unwrap_or([0.0; 3]);
+                                        Some((e["dir"].as_str()?.to_string(), off, e["attack"].as_u64().unwrap_or(0) as usize))
+                                    })
+                                    .collect()
+                            });
+                            (k.clone(), list.unwrap_or_default())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        );
+        let idx = std::fs::read_to_string(root.join("models").join(name).join("tiers").join("index.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        tier_index.push(idx);
+    }
+    (tier_index,attack_index)
+}
+
 /// The tier-index keys of tower `t`'s model and, for a Paragon, of its top: the display level's
 /// own versions when exported ("paragon3", "paragon_top3"), else the first level's.
 fn model_keys(game: &Game, t: &game::Tower, idx: &HashMap<String, String>) -> (String, Option<String>) {
@@ -194,8 +230,9 @@ fn map_keys(root: &std::path::Path) -> Vec<String> {
 
 /// The game data with `hero` in the shop's hero slot (the default hero if unknown) on map `map`
 /// (game.json's own map if it isn't exported).
-fn game_data(root: &std::path::Path, json: &str, hero: Option<&str>, map: &str) -> data::GameData {
-    let mut d = with_hero(json, hero);
+fn game_data(root: &std::path::Path, json: &str, hero: Option<&str>, map: &str,local_mods:bool) -> data::GameData {
+    let compiled=match modding::game_json(root,json,local_mods){Ok(v)=>v,Err(error)=>{eprintln!("Content mods not applied: {error}");None}};
+    let mut d = with_hero(compiled.as_deref().unwrap_or(json), hero);
     // The difficulty from settings.json ("mode"), Medium by default.
     d.mode = read_settings(root)["mode"].as_str().unwrap_or("Medium").to_string();
     match std::fs::read_to_string(simulation_path(root,PathBuf::from("maps").join(map).join("map.json"))).map(|s| serde_json::from_str(&s)) {
@@ -238,6 +275,15 @@ fn game_icon(root: &std::path::Path) -> Option<miniquad::conf::Icon> {
 }
 
 fn conf() -> macroquad::conf::Conf {
+    // Installed builds enter through the updater even when their EXE is opened directly.
+    if std::env::var_os("RRBTD6_AUTOTEST").is_none()&&!std::env::args().any(|a|a=="--from-launcher") {
+        if let Some(dir)=std::env::current_exe().ok().and_then(|p|p.parent().map(std::path::Path::to_path_buf)) {
+            let launcher=dir.join("rrbtd6-launcher.exe");
+            if dir.join("version.json").is_file()&&launcher.is_file(){
+                if std::process::Command::new(launcher).current_dir(dir).spawn().is_ok(){std::process::exit(0);}
+            }
+        }
+    }
     if std::env::args().nth(1).as_deref()==Some("--audit-animation-codec"){
         let args:Vec<_>=std::env::args().collect();
         let result=(||->std::io::Result<()>{
@@ -447,7 +493,7 @@ async fn game_main() {
     let mut hero: Option<String> = read_settings(&root)["hero"].as_str().map(str::to_string);
     let maps = map_keys(&root);
     let mut map_key: String = read_settings(&root)["map"].as_str().filter(|m| maps.iter().any(|k| k == m)).unwrap_or("tutorial").to_string();
-    let mut game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key));
+    let mut game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,true));
     modding::apply_new_sandbox(&root,&mut game,true);
     if benchmark_input("RRBTD6_BENCH_SIM_DIR").is_some()&&benchmark_input("RRBTD6_BENCH_SETTINGS").is_some(){
         eprintln!("frame-bench-inputs: isolated mode={}",game.mode_name);
@@ -540,44 +586,14 @@ async fn game_main() {
     let mut tower_models: Vec<Option<render3d::Model>> = (0..ntowers).map(|_| None).collect();
     let mut models_loaded = vec![false; ntowers];
     let mut shaders = anim::Shaders::new();
-    let mut tower_anims: Vec<Option<anim::AnimModel>> = Vec::new();
     // Per-tier display prefabs (tools/assets/export_dart_tiers.py): tier key ("030") -> model dir,
     // loaded on first use since each one is 8-18 MB of baked animation.
-    let mut tier_index: Vec<HashMap<String, String>> = Vec::new();
     // Attack displays (export_tower_tiers.py attack.json): per tier key, the models an attack
     // adds on the tower (Dartling guns, Super Monkey arms...): (model dir, offset, scale).
-    let mut attack_index: Vec<HashMap<String, Vec<(String, [f32; 3], usize)>>> = Vec::new();
-    for (name, _) in &game.tower_defs {
-        let a: serde_json::Value = std::fs::read_to_string(root.join("models").join(name).join("tiers").join("attack.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        attack_index.push(
-            a.as_object()
-                .map(|o| {
-                    o.iter()
-                        .map(|(k, v)| {
-                            let list = v.as_array().map(|l| {
-                                l.iter()
-                                    .filter_map(|e| {
-                                        let off = e["offset"].as_array().map(|o| [0, 1, 2].map(|i| o.get(i).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32)).unwrap_or([0.0; 3]);
-                                        Some((e["dir"].as_str()?.to_string(), off, e["attack"].as_u64().unwrap_or(0) as usize))
-                                    })
-                                    .collect()
-                            });
-                            (k.clone(), list.unwrap_or_default())
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-        );
-        tower_anims.push(None);
-        let idx = std::fs::read_to_string(root.join("models").join(name).join("tiers").join("index.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        tier_index.push(idx);
-    }
+    let mut tower_visual_ids:Vec<_>=game.tower_defs.iter().enumerate().map(|(i,(id,_))|(id.clone(),game.tower_model(i).to_owned())).collect();
+    let names:Vec<_>=tower_visual_ids.iter().map(|(_,model)|model.clone()).collect();
+    let (mut tier_index,mut attack_index)=tower_metadata(&root,&names);
+    let mut tower_anims:Vec<Option<anim::AnimModel>>=(0..ntowers).map(|_|None).collect();
     let mut tier_anims: HashMap<(usize, String), Option<anim::AnimModel>> = HashMap::new();
     // Each tower body's current idle (clip, start): idle variants play out whole (anim.rs idle_pose).
     let mut idle_picks: HashMap<u64, (usize, f32)> = HashMap::new();
@@ -614,7 +630,7 @@ async fn game_main() {
             let d: usize = $d;
             if !models_loaded[d] {
                 models_loaded[d] = true;
-                let dir = root.join("models").join(&game.tower_defs[d].0);
+                let dir = root.join("models").join(game.tower_model(d));
                 tower_models[d] = load_work::complete_asset(render3d::Model::load(&dir));
                 tower_anims[d] = load_work::complete_asset(anim::AnimModel::load(&dir));
             }
@@ -622,7 +638,7 @@ async fn game_main() {
     }
     if let Some(d) = game.tower_defs.iter().position(|(n, _)| n == "DartMonkey") {
         models_loaded[d] = true;
-        let dir = root.join("models").join(&game.tower_defs[d].0);
+        let dir = root.join("models").join(game.tower_model(d));
         tower_models[d] = boot!(3, "Training Monkeys...", render3d::Model::load(&dir));
         tower_anims[d] = boot!(4, "Preparing Darts...", anim::AnimModel::load(&dir));
     }
@@ -741,16 +757,32 @@ async fn game_main() {
     particles.spawn_ambient(&map_key);
     // Particle systems inside tower prefabs (export_particles.py tiers:<Tower>): model dir ->
     // effect, per tower type; and which models' effects each placed tower is playing.
-    let tier_fx: Vec<HashMap<String, String>> = game
+    let mut tier_fx: Vec<HashMap<String, String>> = game
         .tower_defs
         .iter()
-        .map(|(name, _)| {
+        .map(|(name, def)| {
+            let name=def.model.as_deref().unwrap_or(name);
             std::fs::read_to_string(root.join("effects").join(format!("tier_{name}.json")))
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default()
         })
         .collect();
+    macro_rules! refresh_mod_models {($front:ident) => {{
+        let ids:Vec<_>=game.tower_defs.iter().enumerate().map(|(i,(id,_))|(id.clone(),game.tower_model(i).to_owned())).collect();
+        if ids!=tower_visual_ids {
+            let names:Vec<_>=ids.iter().map(|(_,model)|model.clone()).collect();let worker_root=root.clone();
+            let (tiers,attacks,effects)=loading_task(load_work::spawn(move||{
+                let (tiers,attacks)=tower_metadata(&worker_root,&names);
+                let effects=names.iter().map(|name|std::fs::read_to_string(worker_root.join("effects").join(format!("tier_{name}.json")))
+                    .ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default()).collect::<Vec<HashMap<String,String>>>();
+                (tiers,attacks,effects)
+            }),&mut $front,&mut hud,&mut audio,adv.fps_cap).await;
+            tier_index=tiers;attack_index=attacks;tier_fx=effects;
+            models_loaded=vec![false;ids.len()];tower_models=(0..ids.len()).map(|_|None).collect();tower_anims=(0..ids.len()).map(|_|None).collect();
+            tier_anims.clear();idle_picks.clear();tower_visual_ids=ids;
+        }
+    }};}
     let mut tower_fx: HashMap<u64, Vec<String>> = HashMap::new();
     // Particle systems inside projectile prefabs (export_particles.py projectiles): projectile
     // display name -> effect; the projectiles whose effect is playing (tagged by uid).
@@ -901,6 +933,7 @@ async fn game_main() {
     let gallery = std::env::var("RRBTD6_GALLERY").is_ok();
     mark("loop");
     let mut frames = 0u32;
+    let mut refresh_models_after_menu=false;
     let frontend_timing=std::env::var("RRBTD6_TIMING").is_ok();
     let (mut frontend_samples,mut frontend_cpu,mut frontend_max)=(0u32,0.0f64,0.0f64);
     let mut hud_time = 0.0f64;
@@ -1010,6 +1043,13 @@ async fn game_main() {
                 // Tiers set only: the panel offers the Paragon.
             } else {
                 eprintln!("autotest: paragon {}", game.upgrade(0, 0));
+                // RRBTD6_PARAGON_DEGREE=d: the bought Paragon at degree d (its display level).
+                if let Some(d) = std::env::var("RRBTD6_PARAGON_DEGREE").ok().and_then(|v| v.parse::<u32>().ok()) {
+                    let def = game.towers[0].def;
+                    if let Some(base) = game.tower_tiers[def].as_ref().and_then(|x| x.paragon.as_ref()).map(|p| p.tier.clone()) {
+                        game.towers[0].paragon = Some((d.clamp(1, 100), std::sync::Arc::new(game.paragon_tier(&base, d.clamp(1, 100)))));
+                    }
+                }
             }
             for tw in &game.towers {
                 eprintln!("autotest: tower {} tiers {:?} sub {} paragon {:?}", game.tower_defs[tw.def].0, tw.tiers, tw.sub.is_some(), tw.paragon.as_ref().map(|p| p.0));
@@ -1083,14 +1123,17 @@ async fn game_main() {
             let worker_root=root.clone();let worker_json=json.clone();let worker_map=map_key.clone();
             let worker_hero=if coop_config.is_some(){None}else{hero.clone()};
             let worker_local=coop_config.is_none()&&race_config.is_none();
-            let worker_mode=coop_config.as_ref().map(|c|["Easy","Medium","Hard"][c.room.settings.difficulty as usize].to_owned());
+            let worker_mods=coop_config.as_ref().map(|c|c.room.mods.clone()).unwrap_or_default();
+            let worker_mode=coop_config.as_ref().map(|c|c.room.settings.custom_mode.clone().unwrap_or_else(||["Easy","Medium","Hard"][c.room.settings.difficulty as usize].to_owned()));
             game=loading_task(load_work::spawn(move||{
-                let mut loaded=game_data(&worker_root,&worker_json,worker_hero.as_deref(),&worker_map);
+                let shared=match modding::room_json(&worker_json,&worker_mods){Ok(v)=>v,Err(error)=>{eprintln!("Room mods invalid: {error}");None}};
+                let mut loaded=game_data(&worker_root,shared.as_deref().unwrap_or(&worker_json),worker_hero.as_deref(),&worker_map,worker_local);
                 if let Some(mode)=worker_mode{loaded.mode=mode;}
                 let mut game=Game::new(loaded);
                 modding::apply_new_sandbox(&worker_root,&mut game,worker_local);
                 game
             }),&mut front,&mut hud,&mut audio,adv.fps_cap).await;
+            refresh_mod_models!(front);
             if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
             terrain = None;
             terrain_loaded = false;
@@ -1105,7 +1148,8 @@ async fn game_main() {
                 game.freeplay_seed=config.seed;
                 if std::env::var_os("RRBTD6_COOP_PLAYTEST").is_some()&&autotest.is_some(){
                     game.cash=10000.0;coop_test_stage=0;
-                    let def=game.tower_defs.iter().position(|(id,_)|id=="DartMonkey").unwrap();
+                    let kind=std::env::var("RRBTD6_COOP_TEST_TOWER").unwrap_or_else(|_|"DartMonkey".into());
+                    let def=game.tower_defs.iter().position(|(id,_)|id==&kind).unwrap();
                     let c=game.track.pos(180.0);let mut spots:Vec<[f32;2]>=Vec::new();
                     for r in [24.0f32,36.0,48.0,64.0]{for k in 0..32{
                         let angle=k as f32/32.0*std::f32::consts::TAU;let p=[c[0]+r*angle.cos(),c[1]+r*angle.sin()];
@@ -1127,7 +1171,7 @@ async fn game_main() {
             for d in &shop {
                 if let Some(dir) = tier_index[*d].get("000").or(tier_index[*d].get("100")) {
                     if !tier_anims.contains_key(&(*d, dir.clone())) {
-                        prefetch.request(root.join("models").join(&game.tower_defs[*d].0).join("tiers").join(dir));
+                        prefetch.request(root.join("models").join(game.tower_model(*d)).join("tiers").join(dir));
                     }
                 }
             }
@@ -1141,12 +1185,12 @@ async fn game_main() {
             for (k, d) in shop.iter().enumerate() {
                 for upcoming in shop.iter().skip(k).take(4){
                     if let Some(dir)=tier_index[*upcoming].get("000").or(tier_index[*upcoming].get("100")){
-                        if !tier_anims.contains_key(&(*upcoming,dir.clone())){prefetch.request(root.join("models").join(&game.tower_defs[*upcoming].0).join("tiers").join(dir));}
+                        if !tier_anims.contains_key(&(*upcoming,dir.clone())){prefetch.request(root.join("models").join(game.tower_model(*upcoming)).join("tiers").join(dir));}
                     }
                 }
                 if let Some(dir) = tier_index[*d].get("000").or(tier_index[*d].get("100")).cloned() {
                     if !tier_anims.contains_key(&(*d, dir.clone())) {
-                        let path = root.join("models").join(&game.tower_defs[*d].0).join("tiers").join(&dir);
+                        let path = root.join("models").join(game.tower_model(*d)).join("tiers").join(&dir);
                         tier_anims.insert((*d, dir),loading_task(prefetch.load_cooperative(&path),&mut front,&mut hud,&mut audio,adv.fps_cap).await);
                     }
                 }
@@ -1181,7 +1225,7 @@ async fn game_main() {
             game.removed.clear();speed=runtime.replica.speed as u32;auto_start=runtime.replica.auto_start;
             if std::env::var_os("RRBTD6_COOP_PLAYTEST").is_some()&&autotest.is_some()&&front.coop_running(){
                 let slot=front.coop_slot();let own=game.towers.iter().find(|t|runtime.replica.owns(slot,t.id)&&t.sub.is_none()).map(|t|t.id);
-                if coop_test_stage==0&&runtime.replica.frame>=5{if let Some(at)=coop_test_position{front.coop_input(rrbtd6_coop::Action::Place{kind:"DartMonkey".into(),at});coop_test_stage=1;}}
+                if coop_test_stage==0&&runtime.replica.frame>=5{if let Some(at)=coop_test_position{front.coop_input(rrbtd6_coop::Action::Place{kind:std::env::var("RRBTD6_COOP_TEST_TOWER").unwrap_or_else(|_|"DartMonkey".into()),at});coop_test_stage=1;}}
                 else if coop_test_stage==1&&runtime.replica.frame>=20{if let Some(tower)=own{front.coop_input(rrbtd6_coop::Action::Upgrade{tower,path:0});coop_test_stage=2;}}
                 else if coop_test_stage==2&&runtime.replica.frame>=30{if slot==0{front.coop_input(rrbtd6_coop::Action::StartRound);}coop_test_stage=3;}
                 else if coop_test_stage==3&&runtime.replica.frame>=100{if slot==1{if let Some(tower)=own{front.coop_input(rrbtd6_coop::Action::Sell{tower});}}coop_test_stage=4;}
@@ -1428,7 +1472,8 @@ async fn game_main() {
                         }
                         menus::MenuAction::Restart => {
                             if coop_runtime.is_none(){
-                            game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key));
+                            game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,coop_config.is_none()&&race_config.is_none()));
+            refresh_models_after_menu=true;
                             modding::apply_new_sandbox(&root,&mut game,coop_config.is_none()&&race_config.is_none());
             if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
                             pops.clear();
@@ -1453,6 +1498,7 @@ async fn game_main() {
                     }
                 }
             }
+            if std::mem::take(&mut refresh_models_after_menu){refresh_mod_models!(front);}
             if close {
                 menu = None;
             }
@@ -1526,6 +1572,9 @@ async fn game_main() {
                     acts.push(s);
                 }
             }
+            for (key,kind) in [("set_cash",sandbox::Resource::Cash),("set_health",sandbox::Resource::Lives)]{
+                if binds.pressed(key){if let Some(h)=hud.as_mut(){h.sandbox.edit_resource(kind,&game);}}
+            }
             for a in acts {
                 if matches!(a, sandbox::SandboxAction::ClearTowers) {
                     selected = None;
@@ -1591,7 +1640,8 @@ async fn game_main() {
             let back = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
             let next = order[(cur + if back { order.len() - 1 } else { 1 }) % order.len()];
             save_setting(&root, "mode", serde_json::json!(next));
-            game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key));
+            game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,coop_config.is_none()&&race_config.is_none()));
+            refresh_mod_models!(front);
             modding::apply_new_sandbox(&root,&mut game,coop_config.is_none()&&race_config.is_none());
             if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
             eprintln!("difficulty: {next}");
@@ -1612,7 +1662,8 @@ async fn game_main() {
                 let next = (cur + if back { ids.len() - 1 } else { 1 }) % ids.len();
                 hero = Some(ids[next].clone());
                 save_setting(&root, "hero", serde_json::json!(ids[next]));
-                game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key));
+                game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,coop_config.is_none()&&race_config.is_none()));
+            refresh_mod_models!(front);
                 modding::apply_new_sandbox(&root,&mut game,coop_config.is_none()&&race_config.is_none());
             if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
                 hud = load_work::complete_asset(Hud::load(&root, &game));
@@ -1620,7 +1671,7 @@ async fn game_main() {
                 selected = None;
             }
         }
-        if is_key_pressed(KeyCode::Escape) && placing.is_none() && selected.is_none()&&ability_pick.is_none()&&picking.is_none()&&item_pick.is_none() {
+        if !hud.as_ref().is_some_and(|h|h.sandbox.typing()) && is_key_pressed(KeyCode::Escape) && placing.is_none() && selected.is_none()&&ability_pick.is_none()&&picking.is_none()&&item_pick.is_none() {
             open_menu = Some(menus::Menu::Pause);
         }
         if is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right) {
@@ -1817,13 +1868,13 @@ async fn game_main() {
                         if !hero&&tw.tiers[path]>=5{continue;}
                         let mut tiers=tw.tiers;tiers[path]+=1;
                         if let Some(dir)=tier_index[tw.def].get(&format!("{}{}{}",tiers[0],tiers[1],tiers[2])){
-                            predicted_models.push(((tw.def,dir.clone()),root.join("models").join(&game.tower_defs[tw.def].0).join("tiers").join(dir)));
+                            predicted_models.push(((tw.def,dir.clone()),root.join("models").join(game.tower_model(tw.def)).join("tiers").join(dir)));
                         }
                     }
                 }
                 if let Some(d)=placing{
                     if let Some(dir)=tier_index[d].get("000").or(tier_index[d].get("100")){
-                        predicted_models.push(((d,dir.clone()),root.join("models").join(&game.tower_defs[d].0).join("tiers").join(dir)));
+                        predicted_models.push(((d,dir.clone()),root.join("models").join(game.tower_model(d)).join("tiers").join(dir)));
                     }
                 }
             }
@@ -1837,7 +1888,7 @@ async fn game_main() {
                 k[path] += 1;
                 if let Some(dir) = tier_index[tw.def].get(&format!("{}{}{}", k[0], k[1], k[2])) {
                     if !tier_anims.contains_key(&(tw.def, dir.clone())) {
-                        prefetch.request(root.join("models").join(&game.tower_defs[tw.def].0).join("tiers").join(dir));
+                        prefetch.request(root.join("models").join(game.tower_model(tw.def)).join("tiers").join(dir));
                     }
                 }
             }
@@ -1846,7 +1897,7 @@ async fn game_main() {
         if let Some(d) = placing {
             if let Some(dir) = tier_index[d].get("000").or(tier_index[d].get("100")).cloned() {
                 if !tier_anims.contains_key(&(d, dir.clone())) {
-                    let path = root.join("models").join(&game.tower_defs[d].0).join("tiers").join(&dir);
+                    let path = root.join("models").join(game.tower_model(d)).join("tiers").join(&dir);
                     tier_anims.insert((d, dir), prefetch.load(&path));
                 }
             }
@@ -1876,7 +1927,7 @@ async fn game_main() {
                 for (dir, _, _) in attack_index[t.def].get(&base).into_iter().flatten() {
                     let key = (t.def, dir.clone());
                     if !tier_anims.contains_key(&key) {
-                        let path = root.join("models").join(&game.tower_defs[t.def].0).join("tiers").join(dir);
+                        let path = root.join("models").join(game.tower_model(t.def)).join("tiers").join(dir);
                         tier_anims.insert(key, prefetch.load(&path));
                     }
                 }
@@ -1884,7 +1935,7 @@ async fn game_main() {
                     if let Some(dir) = tier_index[t.def].get(&k) {
                         let key = (t.def, dir.clone());
                         if !tier_anims.contains_key(&key) {
-                            let path = root.join("models").join(&game.tower_defs[t.def].0).join("tiers").join(dir);
+                            let path = root.join("models").join(game.tower_model(t.def)).join("tiers").join(dir);
                             tier_anims.insert(key, prefetch.load(&path));
                         }
                     }

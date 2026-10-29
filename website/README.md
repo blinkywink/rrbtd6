@@ -1,7 +1,8 @@
 # rusttd6.com
 
-A single static page: `public/index.html` and `public/styles.css`, with self-hosted
-Luckiest Guy (headings) and Inter (text). No build step, no JavaScript, no analytics and no
+Static home and mod documentation pages: `public/index.html` and `public/styles.css`, with self-hosted
+Luckiest Guy (headings) and Inter (text). Mod docs live at `public/mods/index.html`, with a downloadable SDK example.
+No build step, no JavaScript, no analytics and no
 game assets. Font licenses: `public/fonts/LuckiestGuy-LICENSE.txt` (Apache 2.0) and
 `public/fonts/Inter-OFL.txt` (SIL OFL).
 

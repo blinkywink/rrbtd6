@@ -78,16 +78,24 @@ places the clone is meant to differ, by the owner's request.
 
 ## 7. Mods
 
-- **Show Mods Button** in Advanced > UI is off by default and adds a Mods button on home.
-- The native menu-style manager has an installed-mod list, selected-mod details and effect
-  preview, explicit enable/disable, Open Mods Folder, reload, and validation/conflict messages.
-- Data-only mod API 1 is implemented: versioned JSON manifests in `mods/<folder>/mod.json`,
-  with a new-local-Sandbox hook for starting cash/lives. The included Practice Start example
-  is disabled by default. See `mods/README.md` and `mods/mod.schema.json`.
-- Manifests are read only on manager open/reload or new modded Sandbox creation; there are
-  no per-frame callbacks. Hiding the button does not disable previously enabled mods.
-- Normal games, events, co-op, account data and uploads are unchanged. Tower/projectile hooks,
-  scripting and co-op mod negotiation remain future work.
+- Show Mods Button in Advanced > UI is off by default. The manager installs/selects/toggles
+  file-authored mods and optional settings; it is not an in-game authoring editor.
+- API 1 supports cloned towers/bloons/modes, weapon/projectile/stat/round data edits,
+  changes to all existing modes, and load-time text/visibility edits on frontend nodes.
+- Authors can use tools/modsdk.py (Python SDK) or emit the manifest from another language.
+  No author scripts or injected native DLLs run in the game. See mods/README.md and /mods/
+  on the website. Existing Practice Start is only an optional Sandbox example.
+- Reload applies to new/restarted games without restarting the client. Already running
+  entities retain their definitions. Unsupported arbitrary behavior hooks, new scripted
+  widgets/profile counters, custom art imports and large co-op asset transfers are future work.
+- Private iroh rooms have a room-specific host-selected mod list. Data manifests transfer
+  P2P, are hash/size checked, stay in the room snapshot rather than installed folders, and
+  are compiled on every client. Guests inspect but cannot change the list. Changes reset
+  readiness. Room-provided custom modes appear in the host's mode dropdown.
+- Client executable/base game identity must match. The load barrier also verifies shared
+  initial state. Official-server interoperability remains unimplemented.
+- Local content mods bypass official events; co-op uses room mods rather than individual
+  local selections. The original Sandbox cash/lives hook remains Sandbox-only.
 
 ## 8. RustTD6 branding
 
@@ -95,3 +103,34 @@ places the clone is meant to differ, by the owner's request.
   player's BloonsTD6.exe during setup; the executable itself carries no icon (nothing of the
   game's art is shipped).
 - The title screen shows the original BTD6 logo, from the player's own game files.
+
+## 9. User requirements: mod platform, co-op and updates (2026-10-28)
+
+These are requested behavior, not a claim that everything below is implemented.
+
+- Sandbox: click cash or hearts/lives to enter testing values. Zero lives must never open
+  defeat; towers stop attacking and editing lives back above zero allows testing to resume.
+- Mods are a whole-client feature, not Sandbox-only: new modes, changes to one/all existing
+  modes, tower and projectile changes, custom towers/projectiles/bloons, UI/menu changes and
+  statistics extensions. Authoring should be simpler than BTD6 DLL injection.
+- Apply/reload supported mods without restarting the client. Compile definitions into existing
+  runtime structures, with no injected DLLs or mandatory per-frame scripting overhead.
+  Do not pretend data definitions implement arbitrary new simulation behavior.
+- Add a website mod documentation page explaining installation, manifest/API, examples,
+  reload lifecycle, game integration, supported hooks and limitations.
+- Private iroh co-op: the host chooses a room-specific mod list in a dedicated menu.
+  Show/toggle room mods; clients missing a selected version receive its data over P2P.
+  Validate bounded content and hashes, isolate it from local installed mods, never auto-run
+  native code, and require identical client/assets/mod/settings identities before starting.
+  Changing room mods invalidates readiness. Official-server rooms must not use this path.
+- Continue fleshing out playable co-op and the in-BTD6 setup/extractor DLL workflow.
+- On launch, check GitHub for a newer client build and install compatible updates.
+  If an update requires newly extracted assets, offer to keep playing the installed version
+  or rerun the setup DLL inside BTD6 to extract the required data. Preserve the older working
+  build/assets until the new extraction and update are complete; support offline fallback.
+- Co-op is only between identical client versions. Make incompatible builds/assets clear
+  in the room UI rather than allowing a desynchronized game.
+
+- Authoring clarification: mods are authored as code/data files against a documented API.
+  Do not build a cluttered in-game mod/tower editor. The in-game UI only manages installed
+  mods, optional author-defined settings, and host-selected co-op mods.

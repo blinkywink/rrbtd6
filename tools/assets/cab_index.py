@@ -19,7 +19,11 @@ AA = os.path.join(GAME, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWi
 OUT = os.path.join(os.path.dirname(__file__), "..", "..", "local_extracted", "cab_index.json")
 
 index = {}
-for f in sorted(glob.glob(os.path.join(AA, "*.bundle"))):
+# Plus the bundles that ship only in Half (asset_library_assets_all); exporters load them from there.
+HALF = os.path.join(os.path.dirname(AA), "Half")
+full = sorted(glob.glob(os.path.join(AA, "*.bundle")))
+names = {os.path.basename(f) for f in full}
+for f in full + sorted(f for f in glob.glob(os.path.join(HALF, "*.bundle")) if os.path.basename(f) not in names):
     try:
         env = UnityPy.load(f)
     except Exception as e:  # a broken bundle must not stop the index

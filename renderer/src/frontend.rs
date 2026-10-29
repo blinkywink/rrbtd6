@@ -276,6 +276,7 @@ pub struct FrontEnd {
     diff: Option<Node>,
     save_warning:save_warning::Warning,
     modes: Option<Node>,
+    mods_room:bool,mod_ui_dirty:bool,custom_modes:Vec<String>,custom_mode:usize,
     settings: Option<Node>,
     /// Where the settings screen goes back to.
     settings_from: Screen,
@@ -317,7 +318,11 @@ pub struct FrontEnd {
 
 /// Scene dumps wrap the Canvas, whose RectTransform the Canvas component sizes to the screen.
 fn scene(path: &Path) -> Option<Node> {
-    Some(scene_node(Node::load(path)?))
+    let mut node=scene_node(Node::load(path)?);
+    if let (Some(root),Some(page))=(path.parent().and_then(|p|p.parent()).and_then(|p|p.parent()),path.file_stem().and_then(|s|s.to_str())){
+        crate::modding::menu_edits(root,page,&mut node);
+    }
+    Some(node)
 }
 fn scene_node(mut n: Node) -> Node {
     for c in &mut n.children {
@@ -595,6 +600,7 @@ impl FrontEnd {
             diff: None,
             save_warning:Default::default(),
             modes: None,
+            mods_room:false,mod_ui_dirty:false,custom_modes:Vec::new(),custom_mode:0,
             settings: None,
             settings_from: Screen::Main,
             game_options_root: None,
@@ -725,6 +731,7 @@ impl FrontEnd {
                 self.modes = scene(&d.join("ModeSelectUI.json"));
                 if let Some(m) = self.modes.as_mut() {
                     m.hide_named(&["Medal", "Lock", "Stars", "Rewards"]);
+                    self.custom_modes=crate::modding::custom_mode_buttons(&self.root,m);self.custom_mode=0;
                 }
             }
             Screen::Settings if self.settings.is_none() => {
@@ -1150,7 +1157,7 @@ impl Hud {
                 if let Some(m) = fe.main.as_mut() {
                     // Our main menu toggles (Advanced settings, see DEVIATIONS.md).
                     m.set_active(&format!("{MAIN}/Mods"),fe.adv.show_mods);
-                    if m.clicked(&format!("{MAIN}/Mods/Button"))||m.clicked(&format!("{MAIN}/Mods/Button/Text")){next=Some(Screen::Menu(MenuPage::Mods));}
+                    if m.clicked(&format!("{MAIN}/Mods/Button"))||m.clicked(&format!("{MAIN}/Mods/Button/Text")){fe.mods_room=false;next=Some(Screen::Menu(MenuPage::Mods));}
                     m.set_active(&format!("{MAIN}/BottomButtonGroup/Legends"), !fe.adv.hide_legends);
                     m.set_active(&format!("{MAIN}/Store"), !fe.adv.hide_store);
                     // Without the Shop, the Trophy Store moves up into its slot.
@@ -1210,7 +1217,18 @@ impl Hud {
                 let mut back=back;
                 if let Some(menu) = fe.pages.get_mut(&page) {
                     if page==MenuPage::DailyReward && menu.node.clicked("Canvas/DailyRewardScreen/BgPanel/ImgClose"){back=true;}
-                    if let Some(ids)=menu.mods.as_mut().and_then(|m|m.pending.take()){out=Some(FrontAction::Mods(ids));}
+                    if let Some(browser)=&mut menu.mods {
+                        let room=if fe.mods_room{fe.net.room.as_ref().map(|r|(r.mods.as_slice(),fe.net.host))}else{None};
+                        browser.bind_room(&mut menu.node,room);
+                        if fe.mods_room&&fe.net.error{browser.report_error(&mut menu.node,fe.net.status.clone());}
+                    }
+                    if let Some(ids)=menu.mods.as_mut().and_then(|m|m.pending.take()){
+                        if fe.mods_room{fe.net.select_mods(&fe.root,ids);}
+                        else{
+                            out=Some(FrontAction::Mods(ids));
+                            fe.main=None;fe.maps=None;fe.modes=None;fe.diff=None;fe.settings=None;fe.mod_ui_dirty=true;
+                        }
+                    }
                     else if let Some(settings)=menu.mods.as_mut().and_then(|m|m.pending_settings.take()){out=Some(FrontAction::ModSettings(settings));}
                     if let Some(change)=menu.jukebox.as_mut().and_then(|j|j.pending.take()){out=Some(FrontAction::Jukebox(change));}
                     if back && menu.dismiss_search() {back=false;}
@@ -1220,6 +1238,7 @@ impl Hud {
                         wheel:if support {0.0} else {mouse_wheel().1},dt:get_frame_time(),scale:s });
                     if std::mem::take(&mut menu.home_requested){fe.net.leave();next=Some(Screen::Main);}
                     if page==MenuPage::CoopLobby{
+                        if menu.node.clicked("Canvas/CoopLobbyScreen/RoomMods"){fe.mods_room=true;next=Some(Screen::Menu(MenuPage::Mods));}
                         if menu.coop_changed(){if let Some((entry,_))=fe.list.get(fe.map){fe.net.send(rrbtd6_coop::Command::Settings(menu.coop_settings(entry.id.clone())));}}
                         menu.bind_coop(&fe.net);
                     }
@@ -1345,6 +1364,7 @@ impl Hud {
                     MenuPage::CoopLobby|MenuPage::QuickMatch|MenuPage::JoinMatch|MenuPage::Teams=>Screen::Menu(MenuPage::Social),
                     MenuPage::Friends|MenuPage::Perks=>fe.social_from,
                     MenuPage::Jukebox=>Screen::Settings,
+                    MenuPage::Mods if fe.mods_room=>Screen::Menu(MenuPage::CoopLobby),
                     p if p.event_spec().is_some()=>Screen::Menu(p.event_parent()),
                     _=>Screen::Main,
                 }); }
@@ -1949,6 +1969,13 @@ impl Hud {
                     let desc = loc.get(&format!("{d} Description")).cloned().unwrap_or_default();
                     m.set_text(&format!("{MODES}/DifficultyInfo/DifficultyDescription"), &desc);
                     m.set_sprite(&format!("{MODES}/MapInfo/DifficultyImage"), Some(["MedalBronze", "MedalSilver", "MedalGold"][fe.difficulty]));
+                    if !fe.custom_modes.is_empty(){
+                        if m.clicked(&format!("{MODES}/CustomPrev")){fe.custom_mode=(fe.custom_mode+fe.custom_modes.len()-1)%fe.custom_modes.len();}
+                        if m.clicked(&format!("{MODES}/CustomNext")){fe.custom_mode=(fe.custom_mode+1)%fe.custom_modes.len();}
+                        let custom=&fe.custom_modes[fe.custom_mode];
+                        m.set_text(&format!("{MODES}/CustomPlay/Text"),&format!("Play {custom}"));
+                        if m.clicked(&format!("{MODES}/CustomPlay")){if let Some((_,map))=fe.list.get(fe.map){out=Some(FrontAction::Play{map:map.clone(),mode:custom.clone()});}}
+                    }
                     for (button, mode) in MODE_BUTTONS[fe.difficulty] {
                         if m.clicked(&format!("{MODES}/{d}Modes/{button}")) {
                             if let Some((_, map)) = fe.list.get(fe.map) {
@@ -2001,6 +2028,7 @@ impl Hud {
             fore.set_active(&format!("{FORE}/ExtraSettings/SocialSeasonPerks"),false);
             if fe.adv.hide_perks{fore.set_active(&format!("{FORE}/PerksButton"),false);}
         }
+        if std::mem::take(&mut fe.mod_ui_dirty){fe.pages.retain(|page,_|matches!(page,MenuPage::Mods|MenuPage::CoopLobby));}
         if let Screen::Menu(page)=fe.screen{if let Some(page)=fe.pages.get_mut(&page){page.warm(&mut self.sprites);}}
         // Sandbox has no saves, so starting one never asks about the map's saved game.
         if let Some(FrontAction::Play{map,mode})=out.as_ref().filter(|a|!matches!(a,FrontAction::Play{mode,..} if mode.ends_with("Sandbox"))) {

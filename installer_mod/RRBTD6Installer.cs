@@ -50,7 +50,7 @@ public class Installer : MelonMod
         }
         if (Native.Message("Install rrbtd6?\n\nrrbtd6 is a separate, fan-made Rust remake of BTD6. It is built from GitHub and " +
                            "uses art and data extracted from THIS BTD6 install on your PC (nothing is downloaded from or " +
-                           "uploaded to Ninja Kiwi). It needs about 25 GB and the first setup takes a while.\n\n" +
+                           "uploaded to Ninja Kiwi). Storage depends on the extracted content; the first setup takes a while.\n\n" +
                            "Choose an install folder next.", Native.MB_YESNO | Native.MB_ICONQUESTION) != Native.IDYES)
             return;
         string folder = Native.PickFolder("Choose a folder to install rrbtd6 into");
@@ -92,7 +92,7 @@ public class Installer : MelonMod
     }
 
     static void Launch(string folder) =>
-        Process.Start(new ProcessStartInfo(Path.Combine(folder, LauncherName)) { WorkingDirectory = folder, UseShellExecute = true });
+        Process.Start(new ProcessStartInfo(Path.Combine(folder, LauncherName), "--refresh-assets") { WorkingDirectory = folder, UseShellExecute = true });
 
     /// Desktop shortcut "rrbtd6" to the launcher (WScript.Shell through PowerShell; no extra references).
     static void Shortcut(string folder)

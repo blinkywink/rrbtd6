@@ -22,7 +22,7 @@ impl Action{
         let point=|p:&[f32;2]|p.iter().all(|v|v.is_finite()&&v.abs()<=4096.0);
         match self{
             Self::Donate{to,amount}=>*to<MAX_PLAYERS as u8&&amount.is_finite()&&*amount>0.0,
-            Self::Place{kind,at}=>!kind.is_empty()&&kind.len()<=80&&kind.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'_')&&point(at),
+            Self::Place{kind,at}=>!kind.is_empty()&&kind.len()<=96&&kind.bytes().all(|b|b.is_ascii_alphanumeric()||b"._-".contains(&b))&&point(at),
             Self::Upgrade{path,..}=>*path<3,Self::Target{mode,..}=>*mode<32,
             Self::Point{at,..}|Self::Pointer{at}|Self::Collect{at}=>point(at),
             Self::Ability{index,at,target,..}=>*index<256&&at.as_ref().is_none_or(point)&&!(at.is_some()&&target.is_some()),Self::Speed{value}=>matches!(value,1|3),_=>true,

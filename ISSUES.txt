@@ -83,9 +83,11 @@ OPEN
 
 DONE
 ----
-- Optional Mods menu: Show Mods Button in Advanced > UI, native-style mod manager,
-  local enable/disable/reload, and data-only API 1 for new local Sandbox cash/lives.
-  Practice Start example is disabled by default; see mods/README.md. Tower hooks later.
+- Sandbox cash/hearts can be edited directly; zero lives stops attacks without defeat and
+  restoring lives resumes testing.
+- Optional Mods menu: native manager, code-authored SDK/content API, custom towers/bloons/
+  projectiles/modes, reload without restarting the client, and private room mod selection/P2P
+  data transfer. Native behavior/art limits are documented at /mods/ and mods/README.md.
 - Removed the home island's Bloons TV and its click target by request.
 - Perks is a navigation button without a checkbox; Hide Perks Button only hides it.
 - Profile avatar/banner tabs were transparent: keep their solid blue background under the

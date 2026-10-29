@@ -190,7 +190,7 @@ impl Runtime{
                 front.coop_send(rrbtd6_coop::Command::Ack{frame:self.replica.frame,digest});
                 if self.replica.frame==180&&std::env::var_os("RRBTD6_COOP_PLAYTEST").is_some(){
                     if let Some(path)=std::env::var_os("RRBTD6_COOP_RESULT_OUT"){
-                        let result=serde_json::json!({"frame":self.replica.frame,"digest":digest,"owners":self.replica.owners,"cash":g.cash,"wallets":g.coop_wallets.as_ref().map(|w|w.balances),"debts":g.coop_wallets.as_ref().map(|w|w.debts),"popped":g.popped,"round":g.round,"towers":g.towers.iter().map(|t|(&g.tower_defs[t.def].0,t.id,t.tiers)).collect::<Vec<_>>()});
+                        let result=serde_json::json!({"contentTowers":g.tower_defs.iter().filter(|(_,d)|d.model.is_some()).map(|(id,_)|id).collect::<Vec<_>>(),"frame":self.replica.frame,"digest":digest,"owners":self.replica.owners,"cash":g.cash,"wallets":g.coop_wallets.as_ref().map(|w|w.balances),"debts":g.coop_wallets.as_ref().map(|w|w.debts),"popped":g.popped,"round":g.round,"towers":g.towers.iter().map(|t|(&g.tower_defs[t.def].0,t.id,t.tiers)).collect::<Vec<_>>()});
                         std::fs::write(path,result.to_string()).map_err(|e|e.to_string())?;
                     }
                 }

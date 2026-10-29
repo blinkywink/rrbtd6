@@ -1,72 +1,118 @@
-# RustTD6 mods
+# RustTD6 mod API 1
 
-Turn on **Settings > Advanced > UI > Show Mods Button**, then open **Mods** on the main menu.
-The included Practice Start example is disabled until you enable it. Changes take effect in
-your next new local Sandbox, including restarting a Sandbox. Hiding the menu button does not
-disable mods; select a mod in the manager and press **Disable Mod** to disable it.
+[Website guide](https://rusttd6.com/mods/) · [Schema](mod.schema.json) · [SDK](../tools/modsdk.py)
 
-Put each mod in its own folder next to this file:
+Mods are authored in files, not an in-game editor. Author scripts run only on an explicit build
+command. The native client loads generated data, never Python scripts or injected DLLs.
+
+## Quick start
+
+Copy [the example](../website/public/mods/quickstart.py) to `mods/quickstart/mod.py`, then run:
 
 ```text
-mods/
-  practice-start/
-    mod.json
+python tools/modsdk.py build mods/quickstart/mod.py
 ```
 
-The manager lists installed mods on the left and their description and Sandbox effects on the
-right. Selecting a row does not enable it; press **Enable Mod** or **Disable Mod** below.
-**Open Mods Folder** opens the local installation directory.
-Mods may also expose **Mod Settings** in the details pane. Use **+** / **-** to adjust
-values, or **Reset to Defaults** to restore the author's values. Changes save locally
-on each click, including while the mod is disabled; enabling it is a separate action.
-The effects preview always uses the same values as a new local Sandbox.
+Enable Advanced > UI > Show Mods Button, open Mods, Reload Mods, select the mod and Enable Mod.
+Open Mods Folder opens the installation directory. Selecting a row only previews it.
+Changes apply to a new/restarted game without restarting the client. Live match entities keep
+the definitions they started with. Hiding the home button does not disable enabled mods.
 
-After adding or editing files, press **Reload Mods** (or reopen the manager). Restarting a
-game rereads enabled manifests too. The enabled ID list is local, in `local_extracted/settings.json` under `mods`.
-Removing a folder does not silently clear its enabled ID; the menu shows a missing entry you
-can switch off. If an enabled manifest is invalid or two mods set the same value, no mod
-rules apply and the menu explains the conflict. Disable one or fix its manifest.
+The included Practice Start example changes Sandbox cash/lives only. That optional hook does
+not define the scope of the content API: content mods can change ordinary local games too.
+Official events bypass local content mods. Private iroh rooms use the host's room mod set,
+not individual local enabled lists.
 
-## API 1
+## Manifest
 
-This first API is deliberately small and data-only. It does not load native libraries or
-scripts. There are no per-frame callbacks. Files are read only when opening/reloading the
-manager or creating a modded local Sandbox. Normal games, events and co-op ignore these rules.
+`mods/<folder>/mod.json` is strict JSON. `api_version: 1`, unique lowercase `id` (1-64 ASCII
+letters/digits/._-, starting alphanumeric), nonempty `name` (80 UTF-8 bytes), `version` (32
+bytes), optional `description` (1024 bytes), optional `content`, `on_new_sandbox`, `settings`.
+Text metadata has no control characters. Limit: 64 KiB per file, 256 operations per mod,
+256 installed mod folders. Duplicate IDs are invalid. Enabled IDs live in local settings
+under `mods`; missing/invalid enabled IDs are reported rather than silently removed.
 
-See [practice-start/mod.json](practice-start/mod.json) for a complete example and
-[mod.schema.json](mod.schema.json) for editor validation.
+## Content operations
 
-- `api_version`: `1`.
-- `id`: unique, 1–64 lowercase ASCII letters, digits, `.`, `_`, `-`; first character must
-  be a letter or digit. IDs do not depend on folder names.
-- `name`: nonempty, at most 80 UTF-8 bytes.
-- `version`: nonempty, at most 32 UTF-8 bytes.
-- `description`: optional, at most 1024 UTF-8 bytes. Text fields contain no control characters.
-- `on_new_sandbox`: optional hook with `starting_cash` (whole number 0–1,000,000,000,000) and
-  `starting_lives` (whole number 1–1,000,000,000). Omit either to keep the game's original value.
+Operations run in written order; enabled manifests compile in sorted ID order.
 
-Optional `settings` exposes bounded controls for hooks already present in `on_new_sandbox`:
+- `tower`: `{op,id,base,patch?}` clones a non-hero tower, tiers, shop entry and shared visual
+  references. `patch` changes existing base fields such as cost/range/icon. Use namespaced
+  IDs (the SDK prefixes the mod ID). No game assets are copied or distributed.
+- `bloon`: `{op,id,base,patch?}` clones a bloon and adds it to the Sandbox list. Camel-case
+  native fields include `maxHealth`, `isCamo`; children must exist and cannot form cycles.
+- `mode`: `{op,id,base,patch?}` clones a mode. New IDs appear in the mode screen's custom
+  selector; IDs are stable names, not indices.
+- `all_modes`: `{op,patch}` changes every mode present at this point in the operation list.
+- `set`: `{op,path,value}` replaces an existing JSON Pointer. Roots: `towers`, `tower_tiers`,
+  `bloons`, `modes`, `start`, `rounds`, `round_sets`, `freeplay`. Weapon/projectile/upgrade and
+  native statistics changes use these paths. Duplicate exact `set` paths conflict.
+- `copy`: `{op,from,path}` copies an existing native definition to another existing path.
+  The SDK uses this for reusable projectile templates, e.g.
+  `bomb = mod.projectile("bomb", base_tower="BombShooter", damage=10)` and
+  `tower.projectile(bomb, pierce=30)`. No runtime script or registry lookup is needed.
+- `menu`: `{op,page,path,text?,visible?}` changes an existing frontend scene node when loaded.
+  `page` is the prefab filename without `.json`, e.g. `MainMenuUI`; paths are Node-relative.
+  Dynamic UI bindings can replace a load-time edit. No arbitrary UI code executes.
+
+Inspect your local `local_extracted/game/game.json` and `ui/prefabs` for supported fields.
+Patches reject misspelled/missing fields. Definitions are deserialized before use; an invalid
+content transaction leaves the base data unchanged and reports its error in the client log.
+The native engine executes existing behavior types: arbitrary new behavior, scripted widgets,
+custom profile counters and a custom art importer remain future API work. This is not a
+MelonLoader compatibility layer. Do not bundle or redistribute extracted BTD6 content.
+
+## Python authoring helpers
+
+The SDK runner supplies `Mod` to the author script; leave your instance named `mod`.
+
+```python
+mod = Mod("example", "Example")
+tower = mod.tower("dart", base="DartMonkey", cost=100)
+tower.projectile(damage=3, pierce=4)
+tower.weapon(rate=0.5)
+mod.bloon("strong-red", base="Red", maxHealth=5)
+mod.mode("practice", base="Medium", cash=2000)
+# Optional global/edit examples:
+mod.all_modes(lives=500)
+mod.set("/modes/Medium/cash", 1500)
+```
+
+Projectile/weapon helpers default to tier `000`, attack 0, weapon 0. Pass `tier`, `attack` or
+`weapon` to edit others. Inherited upgrade tiers retain their original values unless edited.
+Other languages may emit the same JSON; there is no Python runtime dependency in gameplay.
+
+## Optional Sandbox settings
+
+`on_new_sandbox` may set whole-number `starting_cash` (0..1e12), `starting_lives` (1..1e9).
+Omit a value to retain the game's value. `settings` can expose bounded +/- controls:
 
 ```json
 "on_new_sandbox": { "starting_cash": 100000 },
-"settings": {
-  "starting_cash": { "min": 0, "max": 1000000, "step": 10000 }
-}
+"settings": { "starting_cash": { "min": 0, "max": 1000000, "step": 10000 } }
 ```
 
-Only `starting_cash` and `starting_lives` are configurable. A corresponding hook value
-is required and serves as the default. Bounds and step must be whole numbers within
-the hook's existing limits, `min <= max`, and `step >= 1`. Both bounds and the default
-must align with the step, measured from `min`. Old manifests without `settings` keep
-working unchanged. User overrides live under `mod_settings` by mod ID in the local
-settings file, separate from enabled IDs. Disabling or hiding the mod keeps its values.
-If an author changes bounds or removes a control, incompatible saved settings are
-reported; reset the mod to use its new defaults. Invalid settings in disabled mods do
-not block other mods. Reset remains available even after all controls are removed.
+Bounds, default and step are whole numbers. Step must be positive; both bounds and default
+align to it from `min`. Overrides live in local `mod_settings`, survive disable, and use the
+same resolver for preview/gameplay. Reset restores defaults, including after an author removes
+all controls. Invalid settings in a disabled mod do not block enabled mods. Sandbox rules
+only run in new local Sandboxes; two enabled mods setting the same Sandbox value conflict.
 
-Unknown fields and unsupported API versions are reported instead of silently ignored.
-Manifests are limited to 64 KiB and the catalogue to 256 folders. Duplicate IDs are invalid.
+## Private co-op
 
-Tower, projectile and damage hooks will be designed once their simulation interfaces settle.
-Co-op mod negotiation, arbitrary scripting, custom asset packs and progression hooks are not
-part of API 1. Mods do not edit an official account or upload saves.
+Open Room Mods in an iroh lobby. Only the host selects the set; guests can inspect it. The
+host sends hash-checked manifests over the existing encrypted P2P connection, including to
+clients without those mods installed. Room data is held in the room snapshot, isolated from
+local installed mods; author scripts/native code are never sent or executed. Initial compiled
+state is checked by the normal load barrier. Changes clear readiness; match start locks mods.
+Limits: 16 data mods / 24 KiB of source manifest text (40 KiB encoded). Art packs and large
+chunked transfers are not supported yet. Identical base client/build/data are required.
+
+## Updater
+
+Release `version.json` includes `assets_revision`; full extraction stamps the corresponding
+`local_extracted/assets_version.json`. Compatible code updates install through the launcher.
+An asset mismatch offers old-version play or rerunning the setup mod inside BTD6. New assets
+are staged before the recoverable release swap; preferences, local profiles and account cache
+are preserved. A failed extraction never replaces the working assets. Installed game EXEs
+route through the launcher; development builds without a release manifest stay direct.

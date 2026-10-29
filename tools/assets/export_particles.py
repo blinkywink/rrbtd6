@@ -18,6 +18,7 @@ root, and the modules the renderer simulates (src/particles.rs), in compact form
 Modules not simulated (noise, trails, collision, sub-emitters, lights...) are listed under
 "unsupported" so stand-ins are visible. Proprietary data: local use only.
 """
+import gc
 import glob
 import json
 import os
@@ -27,6 +28,15 @@ import UnityPy
 
 GAME, OUT, *PREFABS = sys.argv[1:]
 AA = os.path.join(GAME, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWindows64", "Full")
+# Some bundles ship only in the Half folder (asset_library_assets_all: map editor props, Adora's
+# YellowSolarSpark); the game loads those from there.
+AA_HALF = os.path.join(os.path.dirname(AA), "Half")
+
+
+def bpath(b):
+    """The installed file of bundle `b`: Full, else Half."""
+    f = os.path.join(AA, b)
+    return f if os.path.exists(f) or not os.path.exists(os.path.join(AA_HALF, b)) else os.path.join(AA_HALF, b)
 ROOT = os.path.dirname(os.path.abspath(__file__))
 INDEX = json.load(open(os.path.join(ROOT, "..", "..", "local_extracted", "all_container_paths.json")))
 _CAB_PATH = os.path.join(ROOT, "..", "..", "local_extracted", "cab_index.json")
@@ -245,7 +255,29 @@ def load_bundle(path):
                 if cab in CABS and CABS[cab] != name:
                     deps.add(CABS[cab])
     del probe
-    return UnityPy.load(*files + [os.path.join(AA, d) for d in sorted(deps)])
+    return UnityPy.load(*files + [bpath(d) for d in sorted(deps)])
+
+
+def find_prefab(env, prefab):
+    """The container entry `prefab`, else the one with its file name (a game update moved the
+    prefab within its bundle, as Adora's YellowSolarSpark), else None."""
+    if prefab in env.container:
+        return env.container[prefab]
+    base = "/" + os.path.basename(prefab).lower()
+    hit = next((v for k, v in env.container.items() if k.lower().endswith(base)), None)
+    if hit is not None:
+        return hit
+    # Bundles without a container table (asset_library_assets_all): a root GameObject of that name.
+    stem = os.path.splitext(os.path.basename(prefab))[0]
+    for o in env.objects:
+        if o.type.name == "GameObject" and o.assets_file is not None:
+            go = o.read()
+            if go.m_Name == stem:
+                tr = next((c.read() for c in (x if hasattr(x, "read") else x.component for x in go.m_Components)
+                           if c.type.name in ("Transform", "RectTransform")), None)
+                if tr is not None and not (tr.m_Father and tr.m_Father.path_id):
+                    return o
+    return None
 
 
 def export_scene(key):
@@ -327,25 +359,32 @@ def export_tiers(tower):
     """Particle systems inside a tower's tier prefabs (Ring of Fire's flames...): one effect per
     prefab with any, tier_<Tower>_<stem>, and <OUT>/tier_<Tower>.json {model dir: effect}."""
     plan = json.load(open(os.path.join(ROOT, "..", "..", "local_extracted", "display_plans", f"{tower}.json")))
-    out, seen = {}, set()
+    out, seen, jobs = {}, set(), []
     for t in plan["towers"].values():
         for p in [t] + t.get("attack_displays", []):
             stem = os.path.splitext(os.path.basename(p["prefab"]))[0].strip().replace(" ", "_")
             if stem in seen or p["prefab"] not in INDEX:
                 continue
             seen.add(stem)
-            b = INDEX[p["prefab"]]
-            if b not in ENVS:
-                ENVS[b] = load_bundle(os.path.join(AA, b))
-            env = ENVS[b]
-            root = env.container[p["prefab"]].read()
-            name = f"tier_{tower}_{stem}"
-            n = export_root(env, root, name, None, p["prefab"])
-            if n:
-                out[stem] = name
-            else:
-                import shutil
-                shutil.rmtree(os.path.join(OUT, name), ignore_errors=True)
+            jobs.append((INDEX[p["prefab"]], stem, p))
+    # Bundle by bundle, one loaded at a time: each env carries its dependency bundles, and
+    # keeping several (each with its own copy of the ~900 MB asset_references) ran out of memory.
+    for b, stem, p in sorted(jobs, key=lambda j: j[0]):
+        if b not in ENVS:
+            # Drop every reference to the previous env first, or both are alive while this loads.
+            env = root = obj = None
+            ENVS.clear()
+            gc.collect()
+            ENVS[b] = load_bundle(bpath(b))
+        env = ENVS[b]
+        root = env.container[p["prefab"]].read()
+        name = f"tier_{tower}_{stem}"
+        n = export_root(env, root, name, None, p["prefab"])
+        if n:
+            out[stem] = name
+        else:
+            import shutil
+            shutil.rmtree(os.path.join(OUT, name), ignore_errors=True)
     json.dump(out, open(os.path.join(OUT, f"tier_{tower}.json"), "w"), indent=1)
     print(tower, "->", len(out), "tier prefabs with particle effects")
 
@@ -365,12 +404,17 @@ def export_projectiles():
             continue
         b = INDEX[prefab]
         if b not in ENVS:
+            # Drop every reference to the previous env first, or both are alive while this loads.
+            env = root = obj = None
             ENVS.clear()
-            import gc
             gc.collect()
-            ENVS[b] = load_bundle(os.path.join(AA, b))
+            ENVS[b] = load_bundle(bpath(b))
         env = ENVS[b]
-        root = env.container[prefab].read()
+        obj = find_prefab(env, prefab)
+        if obj is None:
+            print(prefab, "-> not in", b, flush=True)
+            continue
+        root = obj.read()
         eff = f"proj_{name}"
         if export_root(env, root, eff, None, prefab):
             out[name] = eff
@@ -396,9 +440,12 @@ def export(prefab):
     # bundle below; asset_references_assets_all is ~900 MB and takes seconds to load).
     if bundle not in _ENVS:
         _ENVS.clear()
-        _ENVS[bundle] = load_bundle(os.path.join(AA, bundle))
+        _ENVS[bundle] = load_bundle(bpath(bundle))
     env = _ENVS[bundle]
-    obj = env.container[prefab] if prefab in env.container else next(v for k, v in env.container.items() if k == prefab)
+    obj = find_prefab(env, prefab)
+    if obj is None:
+        print(prefab, "-> not in", bundle, flush=True)
+        return
     root = obj.read()
     name = os.path.splitext(os.path.basename(prefab))[0]
     export_root(env, root, name, None, prefab)

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 
-const COMPONENTS: [&str; 4] = ["tools", "rrbtd6.exe", "rrbtd6-launcher.exe", "version.json"];
+const COMPONENTS: [&str; 5] = ["tools", "rrbtd6.exe", "rrbtd6-launcher.exe", "local_extracted", "version.json"];
 
 pub fn staging(dir: &Path) -> PathBuf {
     dir.join("update")
@@ -211,6 +211,7 @@ mod tests {
 
     fn check(dir: &Path, value: &str, launcher: bool) {
         for name in COMPONENTS {
+            if name == "local_extracted"{continue;}
             if name == "tools" {
                 assert_eq!(
                     fs::read_to_string(dir.join("tools/extract_all.py")).unwrap(),
@@ -222,6 +223,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn asset_tree_is_swapped_with_release_and_rolled_back_on_interruption(){
+        let temp=Temp::new();let dir=&temp.0;release(dir,"old",false);
+        fs::create_dir(dir.join("local_extracted")).unwrap();fs::write(dir.join("local_extracted/marker"),"old-assets").unwrap();
+        let payload=prepare(dir).unwrap();release(&payload,"new",false);
+        fs::create_dir(payload.join("local_extracted")).unwrap();fs::write(payload.join("local_extracted/marker"),"new-assets").unwrap();
+        let names=begin(dir).unwrap();for name in names{move_component(dir,name).unwrap();}
+        recover(dir).unwrap();check(dir,"old",false);
+        assert_eq!(fs::read_to_string(dir.join("local_extracted/marker")).unwrap(),"old-assets");
+        let payload=prepare(dir).unwrap();release(&payload,"new",false);
+        fs::create_dir(payload.join("local_extracted")).unwrap();fs::write(payload.join("local_extracted/marker"),"new-assets").unwrap();
+        install(dir).unwrap();check(dir,"new",false);
+        assert_eq!(fs::read_to_string(dir.join("local_extracted/marker")).unwrap(),"new-assets");
+    }
     #[test]
     fn installs_complete_release_and_preserves_user_files() {
         let temp = Temp::new();

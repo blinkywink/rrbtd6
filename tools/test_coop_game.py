@@ -15,6 +15,7 @@ import time
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
+    parser.add_argument("--mod-manifest", type=Path, help="Transfer and compile this data mod for all players")
     parser.add_argument("--players", type=int, choices=(2, 3, 4), default=2)
     parser.add_argument("--reduced-textures", action="store_true", help="Reduce texture memory when running several clients on one GPU")
     args = parser.parse_args()
@@ -36,6 +37,13 @@ def main():
     env.update(RRBTD6_FRONT="coop_lobby", RRBTD6_COOP_RELAY_ONLY="1",
                RRBTD6_COOP_PLAYTEST="1", RRBTD6_COOP_TEST_PLAYERS=str(args.players),
                RRBTD6_COOP_TEST_DONE=str(out / "done"), RRBTD6_COOP_PANEL="1", RRBTD6_TIMING="1", RRBTD6_FRAMES="100000")
+    if args.mod_manifest:
+        env["RRBTD6_COOP_TEST_MANIFEST"] = str(args.mod_manifest.resolve(strict=True))
+        manifest = json.loads(args.mod_manifest.read_text(encoding="utf-8"))
+        tower_ids = [e["id"] for e in manifest.get("content", []) if e["op"] == "tower"]
+        if tower_ids:
+            env["RRBTD6_COOP_TEST_TOWER"] = tower_ids[0]
+
     processes, logs = [], []
     startup = None
     if os.name == "nt":
@@ -82,6 +90,11 @@ def main():
         states = [json.loads(p.read_text()) for p in results]
         assert all(s == states[0] for s in states), "Simulation states differ"
         state = states[0]
+        if args.mod_manifest:
+            manifest = json.loads(args.mod_manifest.read_text(encoding="utf-8"))
+            expected = [e["id"] for e in manifest.get("content", []) if e["op"] == "tower"]
+            assert all(identifier in state["contentTowers"] for identifier in expected), "Room tower definitions were not compiled"
+
         assert state["frame"] == 180 and state["popped"] > 0, state
         assert len(state["towers"]) == args.players - 1, state
         assert all(t[2] == [1, 0, 0] for t in state["towers"]), state

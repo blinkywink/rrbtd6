@@ -2,6 +2,9 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::{HashSet,BTreeMap}, path::{Path, PathBuf}};
 
+#[path="mod_content.rs"]
+pub mod content;
+
 pub const API_VERSION:u32=1;
 const MAX_MANIFEST:u64=64*1024;
 const MAX_MODS:usize=256;
@@ -16,6 +19,7 @@ pub struct Manifest {
     #[serde(default)] pub description:String,
     #[serde(default)] pub on_new_sandbox:SandboxRules,
     #[serde(default)] pub settings:SandboxSettings,
+    #[serde(default)] pub content:Vec<content::Edit>,
 }
 #[derive(Clone,Debug,Default,Deserialize,Serialize,PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +99,8 @@ impl Manifest {
                 }
             }
         }
+        if m.content.len()>256{return Err("A mod may contain at most 256 content edits".into());}
+        for edit in &m.content{edit.validate()?;}
         Ok(m)
     }
 }
@@ -129,6 +135,7 @@ impl Catalog {
         Self{entries}
     }
     /// Conflicts fail explicitly rather than depending on directory enumeration order.
+    #[cfg(test)]
     pub fn compile(&self,enabled:&HashSet<String>)->Result<SandboxRules,String>{
         self.compile_with(enabled,&Overrides::new())
     }
@@ -145,6 +152,77 @@ impl Catalog {
         if enabled.iter().any(|id|!found.contains(id)){return Err("An enabled mod is missing or invalid. Disable it or fix its manifest to apply mods.".into());}
         Ok(rules)
     }
+}
+
+/// Compile at the game-loading boundary, never in a simulation/render frame.
+/// Explicit manifest IDs define stable ordering, independent of folder enumeration.
+pub fn game_json(root:&Path,json:&str,local:bool)->Result<Option<String>,String>{
+    if !local{return Ok(None);}
+    let ids=enabled(root);if ids.is_empty(){return Ok(None);}
+    let catalog=Catalog::scan(&directory(root));
+    if ids.iter().any(|id|!catalog.entries.iter().any(|e|e.manifest.as_ref().is_ok_and(|m|m.id==*id))){return Err("An enabled mod is missing or invalid".into());}
+    let mut mods:Vec<_>=catalog.entries.iter().filter_map(|e|e.manifest.as_ref().ok()).filter(|m|ids.contains(&m.id)).collect();
+    mods.sort_by(|a,b|a.id.cmp(&b.id));
+    if mods.iter().all(|m|m.content.is_empty()){return Ok(None);}
+    content::compile(json,&mods).map(Some)
+}
+
+pub fn custom_mode_buttons(root:&Path,node:&mut crate::uitree::Node)->Vec<String>{
+    use macroquad::prelude::*;
+    let ids=enabled(root);if ids.is_empty(){return Vec::new();}
+    let catalog=Catalog::scan(&directory(root));
+    let mut modes:Vec<_>=catalog.entries.iter().filter_map(|e|e.manifest.as_ref().ok()).filter(|m|ids.contains(&m.id))
+        .flat_map(|m|m.content.iter()).filter_map(|e|if let content::Edit::Mode{id,..}=e{Some(id.clone())}else{None}).collect();
+    modes.sort();modes.dedup();if modes.is_empty(){return modes;}
+    let Some(juke)=crate::uitree::Node::load(&root.join("ui/prefabs/JukeboxUI.json"))else{return Vec::new();};
+    let Some(template)=juke.find("Canvas/JukeboxScreen/AvailableTracks/AddAllBtn/AddAllBtn")else{return Vec::new();};
+    const BASE:&str="ModeSelectCanvas/ModeSelectScreen";
+    for (name,label,x,width) in [("CustomPrev","<",-800.0,180.0),("CustomPlay","Custom Modes",0.0,1350.0),("CustomNext",">",800.0,180.0)]{
+        let mut button=template.clone();button.name=name.into();button.active=true;
+        button.rt.amin=vec2(0.5,0.0);button.rt.amax=button.rt.amin;button.rt.pivot=vec2(0.5,0.0);
+        button.rt.pos=vec2(x,90.0);button.rt.size=vec2(width,170.0);button.rt.scale=Vec2::ONE;
+        button.set_text("Text",label);
+        if let Some(text)=button.find_mut("Text"){text.rt.size=vec2(width-30.0,150.0);if let Some(t)=&mut text.txt{t.auto=true;t.min=35.0;t.max=65.0;}}
+        if let Some(parent)=node.find_mut(BASE){parent.children.push(button);}
+    }
+    modes
+}
+
+pub fn menu_edits(root:&Path,page:&str,node:&mut crate::uitree::Node){
+    let ids=enabled(root);if ids.is_empty(){return;}
+    let catalog=Catalog::scan(&directory(root));
+    let mut manifests:Vec<_>=catalog.entries.iter().filter_map(|e|e.manifest.as_ref().ok()).filter(|m|ids.contains(&m.id)).collect();
+    manifests.sort_by(|a,b|a.id.cmp(&b.id));
+    for manifest in manifests{for edit in &manifest.content{
+        if let content::Edit::Menu{page:target,path,text,visible}=edit{
+            if target!=page{continue;}
+            if node.find(path).is_none(){eprintln!("{}: menu node not found: {page}/{path}",manifest.name);continue;}
+            if let Some(text)=text{node.set_text(path,text);}
+            if let Some(visible)=visible{node.set_active(path,*visible);}
+        }
+    }}
+}
+
+pub fn room_packages(root:&Path,ids:&[String])->Result<Vec<rrbtd6_coop::ModPackage>,String>{
+    let catalog=Catalog::scan(&directory(root));let overrides=overrides(root);let mut packages=Vec::new();
+    let mut sorted=ids.to_vec();sorted.sort();sorted.dedup();
+    for id in sorted{
+        let mut manifest=catalog.entries.iter().filter_map(|e|e.manifest.as_ref().ok()).find(|m|m.id==id)
+            .ok_or_else(||format!("Missing or invalid room mod: {id}"))?.clone();
+        manifest.on_new_sandbox=manifest.resolved(&overrides)?;
+        packages.push(rrbtd6_coop::ModPackage::new(serde_json::to_string(&manifest).map_err(|e|e.to_string())?)?);
+    }
+    rrbtd6_coop::mods::validate(&packages)?;
+    if !packages.is_empty(){
+        let original=std::fs::read_to_string(root.join("game/game.json")).map_err(|_|"Cannot validate room mods without base game data")?;
+        room_json(&original,&packages)?;
+    }
+    Ok(packages)
+}
+pub fn room_json(json:&str,packages:&[rrbtd6_coop::ModPackage])->Result<Option<String>,String>{
+    rrbtd6_coop::mods::validate(packages)?;if packages.is_empty(){return Ok(None);}
+    let manifests:Vec<_>=packages.iter().map(|p|Manifest::parse(p.manifest.as_bytes())).collect::<Result<_,_>>()?;
+    content::compile(json,&manifests.iter().collect::<Vec<_>>()).map(Some)
 }
 
 /// Called only while creating a fresh local Sandbox. Events and co-op never enter it.

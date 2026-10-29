@@ -232,6 +232,11 @@ class CacheCleanupTests(unittest.TestCase):
                     else:
                         driver.main()
                     self.assertEqual(cleanup.called, cleans)
+                    stamp = root / "local_extracted/assets_version.json"
+                    self.assertEqual(stamp.exists(), not fail and "--only" not in extra)
+                    if stamp.exists():
+                        self.assertEqual(json.loads(stamp.read_text())["revision"], driver.asset_revision())
+
 
 
 if __name__ == "__main__":

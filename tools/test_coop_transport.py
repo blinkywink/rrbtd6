@@ -16,6 +16,7 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
+    parser.add_argument("--mods", action="store_true", help="Transfer a host-selected data mod before room readiness")
     parser.add_argument("--match", action="store_true", help="Verify match loading and 120 ordered command batches")
     parser.add_argument("--desync", action="store_true", help="Verify different initial simulation checksums stop the match")
     parser.add_argument("--players", type=int, choices=(2, 3, 4), default=2)
@@ -28,6 +29,8 @@ def main():
         if args.desync:
             mode.append("--desync")
         mode.append(f"--players={args.players}")
+        if args.mods:
+            mode.append("--mods")
         host = subprocess.Popen([exe, "host", directory, "--relay-only", *mode],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 creationflags=flags)

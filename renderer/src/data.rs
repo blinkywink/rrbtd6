@@ -140,6 +140,8 @@ pub struct HealthMod {
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BloonDef {
+    #[serde(default)]
+    pub modded:bool,
     /// CollisionGroupData (MOAB-class): (offset x, offset y along the heading, radius), game frame.
     #[serde(default)]
     pub circles: Vec<[f32; 3]>,
@@ -275,6 +277,9 @@ fn one() -> f32 {
 
 #[derive(Deserialize, Clone)]
 pub struct TowerDef {
+    /// Shared visual model of a data-authored custom tower.
+    #[serde(default)]
+    pub model:Option<String>,
     /// TowerModel.areaTypes: where it can be placed (1 water, 2 land).
     #[serde(default)]
     pub areas: Vec<i32>,

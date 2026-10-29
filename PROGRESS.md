@@ -393,3 +393,37 @@ for stock-game comparisons, preserving their data for a later restore.
   simulation callbacks were added. Existing home button appearance is unchanged.
 - Seventeen targeted tests pass. An isolated actual launch read the saved override and
   logged new local Sandbox cash=120000 lives=321; installed settings were preserved.
+
+## Authored mods, room transfer, Sandbox counters and asset-aware updates (2026-10-28)
+
+- Recorded the complete user request and the no-in-game-editor clarification in DEVIATIONS.md.
+- Sandbox cash/hearts support direct numeric entry and set-cash/set-health hotkeys. Enter or
+  click-away commits, Escape cancels. Zero lives stops tower attacks without defeat; restoring
+  lives resumes them. Invalid/oversized values are rejected or bounded.
+- API 1 content definitions cover cloned towers/bloons/modes, native weapon/projectile/stat/
+  round changes, global mode patches, reusable copied projectile definitions, and static
+  frontend menu text/visibility. Author-side Python SDK emits strict JSON; no Python/DLL code
+  executes in the game. New content compiles at game load; existing matches retain their data.
+- Custom towers share their base visual assets, appear in the shop, and have inherited upgrade
+  tiers. Renderer caches refresh safely when the tower catalogue changes without a restart.
+  Custom bloons enter Sandbox, and new modes have local and host-lobby selectors.
+- Iroh room mods: host selector, guest inspection, hash/size validation, readiness invalidation,
+  room-isolated P2P manifest transfer and shared compilation. Host validation runs off the UI
+  thread. The existing executable/base-data identity and initial-state checks remain required.
+- Two-player relay probe transferred a mod and matched 120 command frames. Two rendered clients
+  compiled the received custom tower. Four rendered clients then placed/upgraded/fought/sold
+  custom towers and matched complete state at frame 180, including individual wallets.
+- Release manifests carry the extractor output revision. Full successful extraction stamps
+  it; partial/failed runs do not. Asset-incompatible updates offer installed-version play or
+  the setup mod, stage replacement assets, preserve preferences/profiles/account caches and
+  commit code/assets together through the rollback journal. Direct installed EXEs route through
+  the updater; compatible/offline installed assets no longer rerun extraction each launch.
+- Added /mods/ website documentation, downloadable author example, schema and SDK tests; verified
+  the page locally. Native custom-mode selector and rendered custom towers visually checked.
+- Limits remain explicit: native behavior types only, shared existing art, no arbitrary runtime
+  hooks/profile widgets or large art-pack P2P transfers. Some co-op gameplay (heroes/sacrifices/
+  nonstandard variants) remains unfinished. Installer C# edit requires CI's .NET SDK to build;
+  this host has a .NET runtime but no SDK. Launcher builds and recovery/asset-gate tests pass.
+- Asset refresh seeds independent copies of generated files and the previous extraction
+  checkpoints, so unchanged exporter steps can be skipped without hardlinking writes into the
+  playable install. The staged copy is deduplicated again before commit.

@@ -917,6 +917,7 @@ impl MenuPage {
         let (file, controller, clip) = self.spec();
         let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(format!("{file}.json"))).ok()?).ok()?;
         let mut node = if self==Self::Television {Node::from_json(&data)} else {scene_node(Node::from_json(&data))};
+        crate::modding::menu_edits(root,file,&mut node);
         let mut trophy_items=Vec::new();
         let mut power_items=Vec::new();
         let mut search=None;

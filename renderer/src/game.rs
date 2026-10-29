@@ -2963,6 +2963,9 @@ impl Game {
     }
 
     /// The icon sprite ("Bloons/Red", "UiBloonIcons/MoabIcon") of the bloon type called `name`.
+    pub fn custom_bloons(&self)->Vec<String>{
+        self.names.iter().zip(&self.defs).filter(|(_,def)|def.modded).map(|(name,_)|name.clone()).collect()
+    }
     pub fn bloon_sprite(&self, name: &str) -> Option<&str> {
         self.by_name.get(name).and_then(|&k| self.defs[k].sprite.as_deref())
     }
@@ -6519,6 +6522,7 @@ impl Game {
                                 }
                 }
             }
+            if self.sandbox&&self.lives<=0.0{continue;}
             let Some(mut tier) = self.tier(t).cloned() else { continue };
             // Submerge.UpdateAttackStates (VERIFIED-DISASM @0xdb9de0): the tower's attacks whose
             // name has "Submerge" in it are paused while it is surfaced, the others while it is
@@ -6611,7 +6615,7 @@ impl Game {
                     && !self.towers[t].paragon_kept.contains(&attack.model_name);
                 let paused = paused && (self.towers[t].paragon.is_none() || self.towers[t].paragon_kept.contains(&attack.model_name)
                     || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0);
-                if ((paused || fresh_attack || sub_paused.get(ai) == Some(&true)) && ai < tier.attacks.len()) || ai.checked_sub(tier.attacks.len()).is_some_and(|k| waiting.get(k) == Some(&true)) {
+                if (self.sandbox&&self.lives<=0.0) || ((paused || fresh_attack || sub_paused.get(ai) == Some(&true)) && ai < tier.attacks.len()) || ai.checked_sub(tier.attacks.len()).is_some_and(|k| waiting.get(k) == Some(&true)) {
                     wi += attack.weapons.len();
                     continue;
                 }
@@ -8781,6 +8785,10 @@ impl Game {
         }
     }
 
+    pub fn tower_model(&self,def:usize)->&str {
+        let (id,tower)=&self.tower_defs[def];tower.model.as_deref().unwrap_or(id)
+    }
+
     pub fn step(&mut self) {
         if self.game_over {
             return;
@@ -9817,7 +9825,7 @@ impl Game {
         }
         if self.lives <= 0.0 {
             self.lives = 0.0;
-            self.game_over = true;
+            self.game_over = !self.sandbox;
         }
         // DamageOverTime damage: in Bloon.Process after Bloon.Move (recording boomerang_500: the
         // MOAB its tick pops leaves its first Ceramic where the MOAB had moved to).
@@ -11788,6 +11796,20 @@ mod beast_tests {
 
     /// P-BARRAGE: MOAB Barrage puts its damage-over-time on the strongest MOAB-class bloon; P-BIOHACK:
     /// Biohack boosts the nearest towers' damage.
+    #[test]
+    fn sandbox_zero_lives_stops_attacks_without_defeat_and_can_resume(){
+        let mut g=game();g.sandbox=true;g.cash=1e9;
+        let dart=g.tower_defs.iter().position(|(id,_)|id=="DartMonkey").unwrap();
+        let t=place_near(&mut g,dart,300.0);
+        g.debug_spawn("Red",1,0.0);g.bloons[0].dist=300.0;g.bloons[0].pos=g.track.pos(300.0);
+        g.lives=0.0;let before=g.bloons[0].dist;
+        for _ in 0..10{g.step();}
+        assert!(!g.game_over);assert!(g.bloons[0].dist>before);assert_eq!(g.towers[t].pops,0);assert!(g.projectiles.is_empty());
+        crate::sandbox::SandboxAction::SetLives(100.0).apply(&mut g);
+        for _ in 0..120{g.step();}
+        assert!(g.towers[t].pops>0);assert!(!g.game_over);
+        g.sandbox=false;g.lives=0.0;g.step();assert!(g.game_over);
+    }
     #[test]
     fn hero_barrage_and_biohack() {
         let mut g = game();

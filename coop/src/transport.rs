@@ -112,6 +112,7 @@ async fn host(endpoint:&Endpoint,options:&Options,settings:Settings,mut commands
         let progress=flow.progress;
         tokio::select!{
             command=commands.recv()=>match command{
+                Some(Command::Mods(mods))=>{if flow.start.is_some(){emit(events,Event::Error("Match mods are locked".into()));}else if let Err(e)=state.mods(0,mods){emit(events,Event::Error(e));}},
                 Some(Command::Settings(settings))=>{if flow.start.is_some(){emit(events,Event::Error("Match settings are locked".into()));}else if let Err(e)=state.settings(0,settings){emit(events,Event::Error(e));}},
                 Some(Command::Ready(ready))=>{if flow.start.is_none(){state.ready(0,ready)?;}},
                 Some(Command::Start)=>{match flow.begin(&state.room){Ok(start)=>publish_match(&peers,events,Wire::Prepare(start))?,Err(e)=>emit(events,Event::Error(e))}},
@@ -235,7 +236,7 @@ async fn guest(endpoint:&Endpoint,options:&Options,invite:Invite,mut commands:ch
         result=&mut receiver=>{let _=result;emit(events,Event::Disconnected("Host disconnected".into()));break;},
         command=commands.recv()=>match command{
             Some(Command::Ready(ready))=>write(&mut send,&Wire::Ready(ready)).await?,
-            Some(Command::Settings(_))=>emit(events,Event::Error("Only the host can change the room".into())),
+            Some(Command::Settings(_)|Command::Mods(_))=>emit(events,Event::Error("Only the host can change the room".into())),
             Some(Command::Start|Command::Advance)=>emit(events,Event::Error("Only the host can start or advance the match".into())),
             Some(Command::Loaded(digest))=>write(&mut send,&Wire::Loaded(digest)).await?,
             Some(Command::Input{sequence,action})=>write(&mut send,&Wire::Input{sequence,action}).await?,

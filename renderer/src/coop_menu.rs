@@ -11,7 +11,7 @@ const MODES:[&[&str];3]=[
     &["Standard","Military Only","Apopalypse","Reverse"],
     &["Standard","Magic Only","Double HP MOABs","Half Cash","Alternate Bloons Rounds","Impoppable","CHIMPS"],
 ];
-pub(super) struct Lobby {difficulty:usize,mode:usize,open:Option<usize>,closed:[bool;4],division:usize,editable:bool,changed:bool,net_revision:u64,network_room:Option<rrbtd6_coop::Room>}
+pub(super) struct Lobby {custom_modes:Vec<String>,difficulty:usize,mode:usize,open:Option<usize>,closed:[bool;4],division:usize,editable:bool,changed:bool,net_revision:u64,network_room:Option<rrbtd6_coop::Room>}
 impl Lobby{
     pub fn new(node:&mut Node)->Self{
         node.hide_named(&["LoadingObject","DebugStartGame","DebugReadyPanel","CoopLobbyReconnectingPanel","BossSelectPanel","BossChallengeMapSelect","Jewel","HeroIconChangeFx","CopyCodeTick","GoldenBloon","MonkeyTeams","CollectionEventIcon","ChimpsGlintsFxGold","ChimpsSparklesFxHematite"]);
@@ -19,16 +19,25 @@ impl Lobby{
         node.set_active(&format!("{BASE}/BgPanel/StandardMatchUI"),true);
         node.set_text(&format!("{BASE}/BgPanel/CoopGameTypeBg/Text"),"Standard");
         node.set_text(&format!("{BASE}/SelectionButton/ReadyButton/ConfirmText"),"Not connected");
-        let mut lobby=Self{difficulty:1,mode:0,open:None,closed:[false;4],division:4,editable:true,changed:false,net_revision:u64::MAX,network_room:None};
+        if let Some(mut button)=node.find(&format!("{BASE}/SelectionButton/ReadyButton")).cloned(){
+            button.name="RoomMods".into();button.rt.amin=vec2(0.0,0.0);button.rt.amax=button.rt.amin;
+            button.rt.pivot=vec2(0.0,0.0);button.rt.pos=vec2(100.0,120.0);button.rt.size=vec2(650.0,200.0);
+            button.set_text("ConfirmText","Room Mods");
+            if let Some(root)=node.find_mut(BASE){root.children.push(button);}
+        }
+        let mut lobby=Self{custom_modes:Vec::new(),difficulty:1,mode:0,open:None,closed:[false;4],division:4,editable:true,changed:false,net_revision:u64::MAX,network_room:None};
         lobby.open=std::env::var("RRBTD6_COOP_DROPDOWN").ok().and_then(|s|s.parse::<usize>().ok()).filter(|&i|i<2);
         lobby.refresh(node);lobby
     }
-    fn choices(&self,which:usize)->&'static [&'static str]{if which==0{&DIFFICULTIES}else{MODES[self.difficulty]}}
+    fn choices(&self,which:usize)->Vec<String>{
+        if which==0{DIFFICULTIES.iter().map(|s|s.to_string()).collect()}
+        else{MODES[self.difficulty].iter().map(|s|s.to_string()).chain(self.custom_modes.iter().cloned()).collect()}
+    }
     fn refresh(&mut self,node:&mut Node){
         for which in 0..2{
             let path=format!("{SETTINGS}/{}",DROPS[which]);let choices=self.choices(which);
             let selected=if which==0{self.difficulty}else{self.mode};
-            node.set_text(&format!("{path}/Text"),choices[selected]);
+            node.set_text(&format!("{path}/Text"),&choices[selected]);
             let content=format!("{path}/Template/Viewport/Content");
             let template=node.find(&content).and_then(|n|n.children.first()).cloned();
             if let (Some(template),Some(group))=(template,node.find_mut(&content)){
@@ -68,15 +77,20 @@ impl Lobby{
             node.set_active(&format!("{path}/EmptySlot/CloseSlotBtn"),i>0);
         }
     }
-    pub fn settings(&self,map:String)->rrbtd6_coop::Settings{rrbtd6_coop::Settings{map,difficulty:self.difficulty as u8,mode:self.mode as u8,division:self.division as u8,closed:self.closed}}
+    pub fn settings(&self,map:String)->rrbtd6_coop::Settings{
+        let custom_mode=self.mode.checked_sub(MODES[self.difficulty].len()).and_then(|i|self.custom_modes.get(i)).cloned();
+        rrbtd6_coop::Settings{map,difficulty:self.difficulty as u8,mode:if custom_mode.is_some(){0}else{self.mode as u8},custom_mode,division:self.division as u8,closed:self.closed}
+    }
     pub fn take_changed(&mut self)->bool{std::mem::take(&mut self.changed)}
     pub fn bind_session(&mut self,node:&mut Node,session:&super::coop_session::Session){
         if self.net_revision!=session.revision{
             self.net_revision=session.revision;self.editable=!session.active()||session.host;
             self.network_room=session.room.clone();if !self.editable{self.open=None;}
-            if let Some(room)=&self.network_room{self.difficulty=room.settings.difficulty as usize;self.mode=room.settings.mode as usize;self.division=room.settings.division as usize;self.closed=room.settings.closed;}
+            if let Some(room)=&self.network_room{self.custom_modes=rrbtd6_coop::mods::mode_ids(&room.mods);self.difficulty=room.settings.difficulty as usize;self.mode=room.settings.custom_mode.as_ref().and_then(|id|self.custom_modes.iter().position(|m|m==id)).map_or(room.settings.mode as usize,|i|MODES[self.difficulty].len()+i);self.division=room.settings.division as usize;self.closed=room.settings.closed;}
             self.refresh(node);
         }
+        node.set_active(&format!("{BASE}/RoomMods"),session.room.is_some());
+        node.set_text(&format!("{BASE}/RoomMods/ConfirmText"),&format!("Room Mods ({})",session.room.as_ref().map_or(0,|r|r.mods.len())));
         let waiting=session.active()&&session.room.is_none();let failed=session.error;
         node.set_active(&format!("{BASE}/LoadingObject"),waiting||failed);
         node.set_text(&format!("{BASE}/LoadingObject/LoadingGame/Text"),&session.status);
