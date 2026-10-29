@@ -3,7 +3,7 @@
 Turn on **Settings > Advanced > UI > Show Mods Button**, then open **Mods** on the main menu.
 The included Practice Start example is disabled until you enable it. Changes take effect in
 your next new local Sandbox, including restarting a Sandbox. Hiding the menu button does not
-disable mods; use each mod's toggle to disable it.
+disable mods; select a mod in the manager and press **Disable Mod** to disable it.
 
 Put each mod in its own folder next to this file:
 
@@ -13,8 +13,12 @@ mods/
     mod.json
 ```
 
-After adding or editing files, press **Reload Mods**. Restarting a game rereads enabled
-manifests too. The enabled ID list is local, in `local_extracted/settings.json` under `mods`.
+The manager lists installed mods on the left and their description and Sandbox effects on the
+right. Selecting a row does not enable it; press **Enable Mod** or **Disable Mod** below.
+**Open Mods Folder** opens the local installation directory.
+
+After adding or editing files, press **Reload Mods** (or reopen the manager). Restarting a
+game rereads enabled manifests too. The enabled ID list is local, in `local_extracted/settings.json` under `mods`.
 Removing a folder does not silently clear its enabled ID; the menu shows a missing entry you
 can switch off. If an enabled manifest is invalid or two mods set the same value, no mod
 rules apply and the menu explains the conflict. Disable one or fix its manifest.

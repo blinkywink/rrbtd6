@@ -151,6 +151,7 @@ impl Page {
     pub(super) fn warm(&mut self,sprites:&mut crate::ui::Sprites){if self.first_presentation{super::button_motion::warm_visible(&self.node,sprites);}}
     pub(super) fn presented(&mut self){if let Some(profile)=&mut self.profile{profile.presented();}if self.first_presentation{self.first_presentation=false;if let Some(animation)=&mut self.animation{animation.began=Some(get_time());}}}
     pub(super) fn reopen(&mut self) {
+        if !self.first_presentation{if let Some(mods)=&mut self.mods{mods.reopen(&mut self.node);}}
         self.first_presentation=true;
         self.buttons.reset();
         if let Some(animation)=&mut self.animation {animation.began=Some(get_time());}
@@ -282,7 +283,15 @@ impl Page {
         if input.released {
             let clicked=self.pointer_start.take().is_some() && !self.pointer_dragged;
             if clicked && self.daily_reward.as_mut().is_some_and(|d|d.click(&mut self.node,input.pointer)){return;}
-            if clicked && self.mods.as_mut().is_some_and(|m|m.click(&mut self.node,input.pointer)){return;}
+            if clicked && self.mods.as_mut().is_some_and(|m|m.click(&mut self.node,input.pointer)){
+                if self.mods.as_mut().is_some_and(|m|std::mem::take(&mut m.reset_details)){
+                    for scroll in &mut self.scrolls{if scroll.content=="Canvas/JukeboxScreen/Playlist/Scroll/Container/Content"{
+                        scroll.offset=Vec2::ZERO;scroll.velocity=Vec2::ZERO;scroll.drag=None;
+                        if let Some(content)=self.node.find_mut(&scroll.content){content.rt.pos=scroll.origin;}
+                    }}
+                }
+                return;
+            }
             if clicked && self.jukebox.as_mut().is_some_and(|j|j.click(&mut self.node,input.pointer)){return;}
             if clicked && self.profile.as_mut().is_some_and(|p|p.click(&mut self.node,input.pointer)){
                 if self.profile.as_mut().is_some_and(|p|std::mem::take(&mut p.stats_changed)){
@@ -879,7 +888,7 @@ impl MenuPage {
             Self::SocialSeason => ("SocialSeasonsEventUI","SocialSeasonsEventUI","Open"),
             Self::Profile => ("PlayerStatsUI","PlayerStats","Open"),
             Self::Jukebox => ("JukeboxUI","JukeboxAnimation","Open"),
-            Self::Mods => ("AccessibilitySettingsUI","PopupWithBgAnim","PopupWithBgOpen"),
+            Self::Mods => ("JukeboxUI","JukeboxAnimation","Open"),
             Self::DailyReward => ("DailyRewardUI","DailyRewardsAnimation","Open"),
             Self::Quests => ("QuestBrowserUI","QuestBrowserAnim","Open"),
             Self::Gift => ("TowerGiftBoxUI","TowerGiftBoxPopUp","Open"),

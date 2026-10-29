@@ -1208,7 +1208,6 @@ impl Hud {
             Screen::Menu(page) => {
                 let mut back=back;
                 if let Some(menu) = fe.pages.get_mut(&page) {
-                    if page==MenuPage::Mods && menu.node.clicked("Canvas/AccessibilitySettings/Panel/OkBtn"){back=true;}
                     if page==MenuPage::DailyReward && menu.node.clicked("Canvas/DailyRewardScreen/BgPanel/ImgClose"){back=true;}
                     if let Some(ids)=menu.mods.as_mut().and_then(|m|m.pending.take()){out=Some(FrontAction::Mods(ids));}
                     if let Some(change)=menu.jukebox.as_mut().and_then(|j|j.pending.take()){out=Some(FrontAction::Jukebox(change));}

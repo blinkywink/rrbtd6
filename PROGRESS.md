@@ -367,3 +367,16 @@ for stock-game comparisons, preserving their data for a later restore.
 - Mods caption now inherits the native 90-unit text metrics and bottom-menu scale, with
   its icon tucked above the label. Layout dump confirms the Mods and Knowledge caption
   boxes have the same vertical position and height; screenshot visually checked.
+
+## Mods manager polish (2026-10-28)
+
+- Replaced the settings-row shell with the native Jukebox two-panel menu and entrance animation:
+  installed mods on the left, description/version/status and exact Sandbox effects on the right.
+- Selecting a mod previews it; the fixed green/red action enables/disables it. Missing enabled
+  entries can be removed, invalid files cannot be enabled, and conflicts show actionable messages.
+- Open Mods Folder, Reload Mods and refresh-on-reopen are wired. Selection is preserved across
+  reloads; selecting another mod returns its detail scroll to the top.
+- Long names wrap and long descriptions scroll without moving the action button. Offscreen
+  list rows stay clipped. Assets are shared/cached; no per-frame mod scans were introduced.
+- Thirteen targeted tests pass. Normal, empty, invalid and long-list/description layouts checked
+  with isolated local fixtures; installed mods and user settings were preserved.

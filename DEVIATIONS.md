@@ -79,8 +79,8 @@ places the clone is meant to differ, by the owner's request.
 ## 7. Mods
 
 - **Show Mods Button** in Advanced > UI is off by default and adds a Mods button on home.
-- The native settings-style manager lists installed mods, enables/disables them locally,
-  reloads manifests and reports validation errors or conflicts.
+- The native menu-style manager has an installed-mod list, selected-mod details and effect
+  preview, explicit enable/disable, Open Mods Folder, reload, and validation/conflict messages.
 - Data-only mod API 1 is implemented: versioned JSON manifests in `mods/<folder>/mod.json`,
   with a new-local-Sandbox hook for starting cash/lives. The included Practice Start example
   is disabled by default. See `mods/README.md` and `mods/mod.schema.json`.
