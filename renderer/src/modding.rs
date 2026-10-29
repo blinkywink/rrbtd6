@@ -1,6 +1,6 @@
 //! Versioned, data-only local mods. No work runs on the frame/simulation loop.
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, path::{Path, PathBuf}};
+use std::{collections::{HashSet,BTreeMap}, path::{Path, PathBuf}};
 
 pub const API_VERSION:u32=1;
 const MAX_MANIFEST:u64=64*1024;
@@ -15,12 +15,51 @@ pub struct Manifest {
     pub version:String,
     #[serde(default)] pub description:String,
     #[serde(default)] pub on_new_sandbox:SandboxRules,
+    #[serde(default)] pub settings:SandboxSettings,
 }
 #[derive(Clone,Debug,Default,Deserialize,Serialize,PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SandboxRules {
     pub starting_cash:Option<f64>,
     pub starting_lives:Option<f64>,
+}
+/// Optional editor controls for the existing Sandbox hooks, not new simulation hooks.
+#[derive(Clone,Debug,Default,Deserialize,Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxSettings {
+    pub starting_cash:Option<NumberSetting>,
+    pub starting_lives:Option<NumberSetting>,
+}
+#[derive(Clone,Debug,Deserialize,Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NumberSetting {pub min:f64,pub max:f64,pub step:f64}
+pub type Overrides=BTreeMap<String,serde_json::Value>;
+pub fn overrides(root:&Path)->Overrides {
+    serde_json::from_value(crate::read_settings(root)["mod_settings"].clone()).unwrap_or_default()
+}
+impl Manifest {
+    pub fn resolved(&self,overrides:&Overrides)->Result<SandboxRules,String>{
+        let Some(value)=overrides.get(&self.id) else{return Ok(self.on_new_sandbox.clone());};
+        let saved:SandboxRules=serde_json::from_value(value.clone()).map_err(|_|format!("{}: invalid settings. Reset this mod's settings.",self.name))?;
+        let mut rules=self.on_new_sandbox.clone();
+        for (key,control,value,target) in [
+            ("starting_cash",&self.settings.starting_cash,saved.starting_cash,&mut rules.starting_cash),
+            ("starting_lives",&self.settings.starting_lives,saved.starting_lives,&mut rules.starting_lives)] {
+            if let Some(value)=value {
+                let valid=control.as_ref().is_some_and(|c|c.accepts(value));
+                if !valid{return Err(format!("{}: {key} settings are no longer valid. Reset this mod's settings.",self.name));}
+                *target=Some(value);
+            }
+        }
+        Ok(rules)
+    }
+}
+impl NumberSetting {
+    pub fn accepts(&self,value:f64)->bool {
+        value.is_finite()&&value.fract()==0.0&&value>=self.min&&value<=self.max
+            &&(value-self.min)%self.step==0.0
+    }
+    pub fn adjust(&self,value:f64,direction:f64)->f64 {(value+direction*self.step).clamp(self.min,self.max)}
 }
 impl SandboxRules {
     fn apply(&self,local:bool,sandbox:bool,cash:&mut f64,lives:&mut f64){
@@ -44,6 +83,17 @@ impl Manifest {
         for (key,value,min,max) in [("starting_cash",m.on_new_sandbox.starting_cash,0.0,1e12),
             ("starting_lives",m.on_new_sandbox.starting_lives,1.0,1e9)]{
             if value.is_some_and(|v|!v.is_finite()||v<min||v>max||v.fract()!=0.0){return Err(format!("{key} must be a whole number from {min} to {max}"));}
+        }
+        for (key,control,default,min,max) in [
+            ("starting_cash",&m.settings.starting_cash,m.on_new_sandbox.starting_cash,0.0,1e12),
+            ("starting_lives",&m.settings.starting_lives,m.on_new_sandbox.starting_lives,1.0,1e9)] {
+            if let Some(c)=control {
+                if ![c.min,c.max,c.step].iter().all(|v|v.is_finite()&&v.fract()==0.0)
+                    ||c.min<min||c.max>max||c.min>c.max||c.step<1.0||c.step>max
+                    ||(c.max-c.min)%c.step!=0.0||!default.is_some_and(|v|c.accepts(v)) {
+                    return Err(format!("{key} settings need whole-number bounds and a positive step; bounds and hook default must align with the step"));
+                }
+            }
         }
         Ok(m)
     }
@@ -80,11 +130,15 @@ impl Catalog {
     }
     /// Conflicts fail explicitly rather than depending on directory enumeration order.
     pub fn compile(&self,enabled:&HashSet<String>)->Result<SandboxRules,String>{
+        self.compile_with(enabled,&Overrides::new())
+    }
+    pub fn compile_with(&self,enabled:&HashSet<String>,overrides:&Overrides)->Result<SandboxRules,String>{
         let mut rules=SandboxRules::default();let mut found=HashSet::new();
         for m in self.entries.iter().filter_map(|e|e.manifest.as_ref().ok()).filter(|m|enabled.contains(&m.id)){
             found.insert(m.id.clone());
-            for (name,target,value) in [("starting cash",&mut rules.starting_cash,m.on_new_sandbox.starting_cash),
-                ("starting lives",&mut rules.starting_lives,m.on_new_sandbox.starting_lives)]{
+            let effective=m.resolved(overrides)?;
+            for (name,target,value) in [("starting cash",&mut rules.starting_cash,effective.starting_cash),
+                ("starting lives",&mut rules.starting_lives,effective.starting_lives)]{
                 if let Some(value)=value{if target.replace(value).is_some(){return Err(format!("More than one enabled mod sets {name}. Disable one to apply mods."));}}
             }
         }
@@ -97,7 +151,7 @@ impl Catalog {
 pub fn apply_new_sandbox(root:&Path,game:&mut crate::game::Game,local:bool){
     if !local||!game.sandbox{return;}
     let selected=enabled(root);if selected.is_empty(){return;}
-    match Catalog::scan(&directory(root)).compile(&selected){
+    match Catalog::scan(&directory(root)).compile_with(&selected,&overrides(root)){
         Ok(rules)=>{
             rules.apply(local,game.sandbox,&mut game.cash,&mut game.lives);
             eprintln!("mods: {} enabled; new local Sandbox cash={} lives={}",selected.len(),game.cash,game.lives);
@@ -139,6 +193,42 @@ mod tests{
         let (mut cash,mut lives)=(650.0,100.0);
         SandboxRules{starting_cash:Some(42.0),starting_lives:None}.apply(true,true,&mut cash,&mut lives);
         assert_eq!((cash,lives),(42.0,100.0));
+    }
+
+    fn configurable()->Manifest {
+        Manifest::parse(include_bytes!("../../mods/practice-start/mod.json")).unwrap()
+    }
+    #[test]
+    fn mod_settings_use_one_resolver_for_preview_and_runtime_and_reset_to_defaults(){
+        let m=configurable();let enabled=HashSet::from([m.id.clone()]);
+        let mut saved=Overrides::from([(m.id.clone(),json!({"starting_cash":120000,"starting_lives":321}))]);
+        let expected=m.resolved(&saved).unwrap();
+        let catalog=Catalog{entries:vec![Entry{folder:"practice".into(),manifest:Ok(m.clone())}]};
+        assert_eq!(catalog.compile_with(&enabled,&saved).unwrap(),expected);
+        assert_eq!(expected,SandboxRules{starting_cash:Some(120000.0),starting_lives:Some(321.0)});
+        let roundtrip:Overrides=serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert_eq!(m.resolved(&roundtrip).unwrap(),expected);
+        saved.remove(&m.id);assert_eq!(m.resolved(&saved).unwrap(),m.on_new_sandbox);
+    }
+    #[test]
+    fn mod_settings_reject_invalid_definitions_and_stale_overrides(){
+        for settings in [json!({"starting_cash":{"min":0,"max":1000000,"step":0}}),
+            json!({"starting_cash":{"min":0,"max":999999,"step":10000}}),
+            json!({"starting_lives":{"min":0,"max":1000,"step":1}}),
+            json!({"starting_lives":{"min":1,"max":1000,"step":1}}),
+            json!({"damage":{"min":0,"max":10,"step":1}})] {
+            let mut v=manifest("practice");v["settings"]=settings;
+            assert!(Manifest::parse(&serde_json::to_vec(&v).unwrap()).is_err());
+        }
+        let m=configurable();
+        for saved in [json!({"starting_cash":100001}),json!({"starting_lives":0}),json!({"damage":2}),json!({"starting_cash":"oops"})] {
+            let overrides=Overrides::from([(m.id.clone(),saved)]);
+            assert!(m.resolved(&overrides).is_err());
+            let c=Catalog{entries:vec![Entry{folder:"practice".into(),manifest:Ok(m.clone())}]};
+            assert_eq!(c.compile_with(&HashSet::new(),&overrides).unwrap(),SandboxRules::default());
+        }
+        assert_eq!(m.settings.starting_cash.as_ref().unwrap().adjust(0.0,-1.0),0.0);
+        assert_eq!(m.settings.starting_lives.as_ref().unwrap().adjust(1000.0,1.0),1000.0);
     }
     #[test]
     fn duplicate_ids_are_all_rejected(){

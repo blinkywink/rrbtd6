@@ -3,9 +3,21 @@
   "id": "practice-start",
   "name": "Practice Start",
   "version": "1.0.0",
-  "description": "Start your Sandbox with $100,000 and 200 lives.",
+  "description": "Choose the cash and lives for your next local Sandbox.",
   "on_new_sandbox": {
     "starting_cash": 100000,
     "starting_lives": 200
+  },
+  "settings": {
+    "starting_cash": {
+      "min": 0,
+      "max": 1000000,
+      "step": 10000
+    },
+    "starting_lives": {
+      "min": 1,
+      "max": 1000,
+      "step": 1
+    }
   }
 }

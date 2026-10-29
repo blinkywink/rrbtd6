@@ -1,5 +1,5 @@
 //! Native menu widgets for the client's data-only mod catalogue.
-use crate::{modding::{self,Catalog,SandboxRules},uitree::Node};
+use crate::{modding::{self,Catalog,SandboxRules,SandboxSettings,Overrides},uitree::Node};
 use macroquad::prelude::*;
 use std::{collections::HashSet,path::{Path,PathBuf}};
 const MODS_BUTTON_SPRITE:&str="MainMenuUiAtlas/CreateChallengeIcon";
@@ -11,23 +11,23 @@ const MUTED:Color=Color::new(0.66,0.82,0.82,1.0);
 const GOOD:Color=Color::new(0.57,1.0,0.25,1.0);
 const BAD:Color=Color::new(1.0,0.69,0.36,1.0);
 #[derive(Clone)]
-struct Card {key:String,id:Option<String>,name:String,version:String,description:String,error:Option<String>,rules:SandboxRules,missing:bool}
-fn cards(catalog:&Catalog,enabled:&HashSet<String>)->Vec<Card>{
+struct Card {key:String,id:Option<String>,name:String,version:String,description:String,error:Option<String>,rules:SandboxRules,settings:SandboxSettings,missing:bool}
+fn cards(catalog:&Catalog,enabled:&HashSet<String>,overrides:&Overrides)->Vec<Card>{
     let mut found=HashSet::new();
     let mut rows:Vec<_>=catalog.entries.iter().map(|e|match &e.manifest{
         Ok(m)=>{found.insert(m.id.clone());Card{key:m.id.clone(),id:Some(m.id.clone()),name:m.name.clone(),version:m.version.clone(),
-            description:m.description.clone(),error:None,rules:m.on_new_sandbox.clone(),missing:false}},
+            description:m.description.clone(),error:None,rules:m.resolved(overrides).unwrap_or_else(|_|m.on_new_sandbox.clone()),settings:m.settings.clone(),missing:false}},
         Err(error)=>Card{key:format!("invalid:{}",e.folder),id:None,name:e.folder.clone(),version:String::new(),description:String::new(),
-            error:Some(error.clone()),rules:Default::default(),missing:false},
+            error:Some(error.clone()),rules:Default::default(),settings:Default::default(),missing:false},
     }).collect();
     let mut missing:Vec<_>=enabled.difference(&found).cloned().collect();missing.sort();
     for id in missing{rows.push(Card{key:format!("missing:{id}"),id:Some(id.clone()),name:id,version:String::new(),description:String::new(),
-        error:Some("This enabled mod is missing or invalid. Restore its files, or remove it from the enabled list below.".into()),rules:Default::default(),missing:true});}
+        error:Some("This enabled mod is missing or invalid. Restore its files, or remove it from the enabled list below.".into()),rules:Default::default(),settings:Default::default(),missing:true});}
     rows
 }
 pub(super) struct Browser {
-    root:PathBuf,catalog:Catalog,selected:HashSet<String>,rows:Vec<Card>,focus:Option<usize>,
-    template:Node,button:Node,body:Node,title:Node,notice:Option<String>,pub reset_details:bool,pub pending:Option<Vec<String>>,
+    root:PathBuf,catalog:Catalog,selected:HashSet<String>,overrides:Overrides,rows:Vec<Card>,focus:Option<usize>,
+    template:Node,button:Node,body:Node,title:Node,notice:Option<String>,pub reset_details:bool,pub pending:Option<Vec<String>>,pub pending_settings:Option<Overrides>,
 }
 fn text_all(node:&mut Node,text:&str){if let Some(t)=&mut node.txt{t.text=text.into();}for child in &mut node.children{text_all(child,text);}}
 fn place(node:&mut Node,anchor:Vec2,pivot:Vec2,pos:Vec2,size:Vec2){
@@ -47,12 +47,12 @@ impl Browser {
             if let Some(b)=node.find_mut(&format!("{BASE}/{path}")){text_all(b,text);b.rt.size.x=600.0;
                 if let Some(t)=b.find_mut("Text"){t.rt.size.x=550.0;}}
         }
-        let mut browser=Self{root:root.to_owned(),catalog:Catalog::scan(&modding::directory(root)),selected:modding::enabled(root),
-            rows:Vec::new(),focus:None,template,button,body,title,notice:None,reset_details:false,pending:None};
+        let mut browser=Self{root:root.to_owned(),catalog:Catalog::scan(&modding::directory(root)),selected:modding::enabled(root),overrides:modding::overrides(root),
+            rows:Vec::new(),focus:None,template,button,body,title,notice:None,reset_details:false,pending:None,pending_settings:None};
         browser.rebuild(node);Some(browser)
     }
     pub fn reopen(&mut self,node:&mut Node){
-        self.catalog=Catalog::scan(&modding::directory(&self.root));self.selected=modding::enabled(&self.root);
+        self.catalog=Catalog::scan(&modding::directory(&self.root));self.selected=modding::enabled(&self.root);self.overrides=modding::overrides(&self.root);
         self.notice=None;self.rebuild(node);
     }
     fn text(&self,name:&str,value:&str,height:f32,title:bool)->Node{
@@ -64,7 +64,7 @@ impl Browser {
     }
     fn rebuild(&mut self,node:&mut Node){
         let key=self.focus.and_then(|i|self.rows.get(i)).map(|r|r.key.clone());
-        self.rows=cards(&self.catalog,&self.selected);
+        self.rows=cards(&self.catalog,&self.selected,&self.overrides);
         self.focus=key.and_then(|k|self.rows.iter().position(|r|r.key==k)).or_else(||(!self.rows.is_empty()).then_some(0));
         let mut list=Vec::new();
         for (i,card) in self.rows.iter().enumerate(){
@@ -108,28 +108,66 @@ impl Browser {
             let mut sub=self.text("Version",&version,90.0,false);
             place(&mut sub,vec2(0.0,1.0),vec2(0.0,0.5),vec2(310.0,-245.0),vec2(1270.0,90.0));header.children.push(sub);children.push(header);
             let on=card.id.as_ref().is_some_and(|id|self.selected.contains(id));
-            let mut state=self.text("Status",if card.error.is_some(){"Needs attention"}else if on{"Enabled for your next Sandbox"}else{"Disabled"},100.0,false);
+            let mut state=self.text("Status",if card.error.is_some(){"Needs attention"}else if on{"Enabled for your next Sandbox"}else{"Disabled"},80.0,false);
             if let Some(t)=&mut state.txt{t.color=if card.error.is_some(){BAD}else if on{GOOD}else{MUTED};}children.push(state);
             let description=card.error.as_deref().unwrap_or(&card.description);
             if !description.is_empty(){
-                let height=((description.chars().count()/45+1) as f32*70.0).max(160.0);
+                let height=((description.chars().count()/60+1) as f32*70.0).max(110.0);
                 let mut desc=self.text("Description",description,height,false);if let Some(t)=&mut desc.txt{t.v=256;}if card.error.is_some(){if let Some(t)=&mut desc.txt{t.color=BAD;}}children.push(desc);
             }
             if card.error.is_none(){
-                children.push(self.text("EffectsTitle","WHAT IT CHANGES",110.0,true));
                 let mut effects=Vec::new();
-                if let Some(cash)=card.rules.starting_cash{effects.push(format!("Starting cash: ${}",super::account_preview::number(cash)));}
-                if let Some(lives)=card.rules.starting_lives{effects.push(format!("Starting lives: {}",super::account_preview::number(lives)));}
-                if effects.is_empty(){effects.push("No gameplay changes in this mod.".into());}
-                let height=effects.len() as f32*85.0;children.push(self.text("Effects",&effects.join("\n"),height,false));
+                if let Some(cash)=card.rules.starting_cash.filter(|_|card.settings.starting_cash.is_none()){effects.push(format!("Starting cash: ${}",super::account_preview::number(cash)));}
+                if let Some(lives)=card.rules.starting_lives.filter(|_|card.settings.starting_lives.is_none()){effects.push(format!("Starting lives: {}",super::account_preview::number(lives)));}
+                if effects.is_empty()&&card.rules==SandboxRules::default(){effects.push("No gameplay changes in this mod.".into());}
+                if !effects.is_empty(){
+                    children.push(self.text("EffectsTitle","WHAT IT CHANGES",110.0,true));
+                    let height=effects.len() as f32*85.0;children.push(self.text("Effects",&effects.join("\n"),height,false));
+                }
+                let controls=[("starting_cash","Starting cash",&card.settings.starting_cash,card.rules.starting_cash),
+                    ("starting_lives","Starting lives",&card.settings.starting_lives,card.rules.starting_lives)];
+                if controls.iter().any(|(_,_,control,_)|control.is_some())||card.id.as_ref().is_some_and(|id|self.overrides.contains_key(id)) {
+                    children.push(self.text("SettingsTitle","MOD SETTINGS",90.0,true));
+                    if let Some(error)=self.catalog.entries.iter().filter_map(|e|e.manifest.as_ref().ok())
+                        .find(|m|Some(&m.id)==card.id.as_ref()).and_then(|m|m.resolved(&self.overrides).err()) {
+                        let mut warning=self.text("SettingsError",&error,260.0,false);
+                        if let Some(t)=&mut warning.txt{t.color=BAD;}children.push(warning);
+                    }
+
+                    for (key,label,control,value) in controls {
+                        let (Some(control),Some(value))=(control,value) else{continue;};
+                        let mut row=block();row.name=key.into();row.rt.size=vec2(1600.0,165.0);row.le_pref=row.rt.size;
+                        let mut label=self.text("Value",&format!("{label}\n{}",super::account_preview::number(value)),160.0,false);
+                        place(&mut label,vec2(0.0,0.5),vec2(0.0,0.5),vec2(0.0,0.0),vec2(1030.0,160.0));row.children.push(label);
+                        for (name,text,x,allowed) in [("Minus","-",1120.0,value>control.min),("Plus","+",1430.0,value<control.max)] {
+                            let mut button=self.control_button(name,text,vec2(230.0,140.0));
+                            place(&mut button,vec2(0.0,0.5),vec2(0.5,0.5),vec2(x,0.0),vec2(230.0,140.0));
+                            if !allowed{button.alpha=0.45;}row.children.push(button);
+                        }
+                        children.push(row);
+                    }
+                    let mut reset=self.control_button("ResetSettings","Reset to Defaults",vec2(950.0,170.0));
+                    reset.le_pref=vec2(1600.0,180.0);children.push(reset);
+                }
+
             }
         }else{children.push(self.text("EmptyDetails","Select a mod to see its description and effects.",300.0,false));}
         if let Some(content)=node.find_mut(DETAILS){content.children=children;}
     }
+    fn control_button(&self,name:&str,text:&str,size:Vec2)->Node {
+        let mut button=self.button.clone();button.name=name.into();button.active=true;
+        place(&mut button,vec2(0.5,1.0),vec2(0.5,1.0),Vec2::ZERO,size);
+        text_all(&mut button,text);
+        if let Some(label)=button.find_mut("Text") {
+            label.rt.size=vec2(size.x-40.0,size.y-20.0);
+            if let Some(t)=&mut label.txt{t.size=64.0;t.min=42.0;t.max=64.0;t.auto=true;}
+        }
+        button
+    }
     fn footer(&self,node:&mut Node){
         let installed=self.catalog.entries.len();
         let invalid=self.catalog.entries.iter().filter(|e|e.manifest.is_err()).count();
-        let issue=self.notice.clone().or_else(||self.catalog.compile(&self.selected).err());
+        let issue=self.notice.clone().or_else(||self.catalog.compile_with(&self.selected,&self.overrides).err());
         let status=issue.clone().unwrap_or_else(||format!("{installed} installed  ·  {} enabled{}\nChanges apply when you start a new Sandbox.",self.selected.len(),if invalid>0{format!("  ·  {invalid} needs attention")}else{String::new()}));
         let mut status_node=self.text("Status",&status,210.0,false);
         place(&mut status_node,vec2(0.0,0.5),vec2(0.0,0.5),vec2(75.0,0.0),vec2(1900.0,220.0));
@@ -152,6 +190,33 @@ impl Browser {
         }
         if hit(&format!("{BASE}/Playlist/RemoveAllBtn/RemoveAllBtn")){
             self.catalog=Catalog::scan(&modding::directory(&self.root));self.notice=None;self.reset_details=true;self.rebuild(node);return true;
+        }
+        if let Some(card)=self.focus.and_then(|i|self.rows.get(i)).cloned().filter(|c|c.error.is_none()) {
+            if hit(&format!("{DETAILS}/ResetSettings")) {
+                if let Some(id)=&card.id{self.overrides.remove(id);}
+                self.pending_settings=Some(self.overrides.clone());self.notice=None;self.rebuild(node);return true;
+            }
+            for (key,control,value) in [("starting_cash",&card.settings.starting_cash,card.rules.starting_cash),
+                ("starting_lives",&card.settings.starting_lives,card.rules.starting_lives)] {
+                let (Some(control),Some(value))=(control,value) else{continue;};
+                for (action,direction) in [("Minus",-1.0),("Plus",1.0)] {
+                    if hit(&format!("{DETAILS}/{key}/{action}")) {
+                        let next=control.adjust(value,direction);
+                        if next!=value {
+                            let id=card.id.as_ref().unwrap();
+                            // Normalize stale settings through the same resolver used by gameplay.
+                            let mut rules=card.rules.clone();
+                            match key{"starting_cash"=>rules.starting_cash=Some(next),_=>rules.starting_lives=Some(next)}
+                            let saved=serde_json::json!({
+                                "starting_cash":card.settings.starting_cash.as_ref().and(rules.starting_cash),
+                                "starting_lives":card.settings.starting_lives.as_ref().and(rules.starting_lives)});
+                            self.overrides.insert(id.clone(),saved);
+                            self.pending_settings=Some(self.overrides.clone());self.notice=None;self.rebuild(node);
+                        }
+                        return true;
+                    }
+                }
+            }
         }
         if hit(&format!("{FOOTER}/Action")){
             let Some(id)=self.focus.and_then(|i|self.rows.get(i)).and_then(|r|r.id.clone()) else{return true;};
@@ -246,8 +311,8 @@ mod tests {
         let body=Node::from_json(&json!({"name":"Text","active":true,"comps":[{"type":"TextMeshProUGUI","enabled":true,"m_text":"","m_fontSize":55}]}));
         let mut template=block();template.children=vec![body.clone()];template.children[0].name="TrackName".into();
         let button=block();
-        let mut browser=Browser{root:PathBuf::new(),catalog:Catalog{entries},selected,rows:Vec::new(),focus:None,
-            template,button,body:body.clone(),title:body,notice:None,reset_details:false,pending:None};
+        let mut browser=Browser{root:PathBuf::new(),catalog:Catalog{entries},selected,overrides:Overrides::new(),rows:Vec::new(),focus:None,
+            template,button,body:body.clone(),title:body,notice:None,reset_details:false,pending:None,pending_settings:None};
         let mut node=node;browser.rebuild(&mut node);(browser,node)
     }
     fn entry(id:&str)->Entry{
@@ -284,4 +349,30 @@ mod tests {
         let (_,node)=fixture(vec![Entry{folder:"broken".into(),manifest:Err("Invalid JSON".into())}],HashSet::new());
         assert!(!node.find(&format!("{FOOTER}/Action")).unwrap().active);
     }
+    #[test]
+    fn mod_settings_buttons_update_preview_and_emit_persistence_without_enabling(){
+        let manifest=Manifest::parse(include_bytes!("../../mods/practice-start/mod.json")).unwrap();
+        let (mut browser,mut node)=fixture(vec![Entry{folder:"practice".into(),manifest:Ok(manifest.clone())}],HashSet::new());
+        click(&mut browser,&mut node,&format!("{DETAILS}/starting_cash/Plus"));
+        assert!(browser.pending.is_none());assert!(browser.selected.is_empty());
+        let saved=browser.pending_settings.take().unwrap();
+        assert_eq!(saved["practice-start"]["starting_cash"].as_f64(),Some(110000.0));
+        assert_eq!(browser.rows[0].rules,manifest.resolved(&saved).unwrap());
+        assert!(node.find(&format!("{DETAILS}/starting_cash/Value")).unwrap().txt.as_ref().unwrap().text.contains("110,000"));
+        click(&mut browser,&mut node,&format!("{DETAILS}/starting_lives/Minus"));
+        assert_eq!(browser.pending_settings.take().unwrap()["practice-start"]["starting_lives"].as_f64(),Some(199.0));
+        click(&mut browser,&mut node,&format!("{DETAILS}/ResetSettings"));
+        assert!(browser.pending_settings.take().unwrap().is_empty());
+        assert_eq!(browser.rows[0].rules,manifest.on_new_sandbox);
+    }
+    #[test]
+    fn mod_settings_can_recover_after_author_removes_controls(){
+        let (mut browser,mut node)=fixture(vec![entry("a")],HashSet::from(["a".into()]));
+        browser.overrides.insert("a".into(),json!({"starting_cash":200000}));browser.rebuild(&mut node);
+        assert!(node.find(&format!("{DETAILS}/SettingsError")).is_some());
+        click(&mut browser,&mut node,&format!("{DETAILS}/ResetSettings"));
+        assert!(browser.overrides.is_empty());
+        assert!(browser.catalog.compile_with(&browser.selected,&browser.overrides).is_ok());
+    }
+
 }

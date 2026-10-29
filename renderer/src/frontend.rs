@@ -106,6 +106,7 @@ pub enum FrontAction {
     Quit,
     Jukebox(jukebox::Change),
     Mods(Vec<String>),
+    ModSettings(crate::modding::Overrides),
     ReturnToPause,
     SelectHero(String),
     SelectSkin { hero: String, skin: String },
@@ -1210,6 +1211,7 @@ impl Hud {
                 if let Some(menu) = fe.pages.get_mut(&page) {
                     if page==MenuPage::DailyReward && menu.node.clicked("Canvas/DailyRewardScreen/BgPanel/ImgClose"){back=true;}
                     if let Some(ids)=menu.mods.as_mut().and_then(|m|m.pending.take()){out=Some(FrontAction::Mods(ids));}
+                    else if let Some(settings)=menu.mods.as_mut().and_then(|m|m.pending_settings.take()){out=Some(FrontAction::ModSettings(settings));}
                     if let Some(change)=menu.jukebox.as_mut().and_then(|j|j.pending.take()){out=Some(FrontAction::Jukebox(change));}
                     if back && menu.dismiss_search() {back=false;}
                     menu.animate();

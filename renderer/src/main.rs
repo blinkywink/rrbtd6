@@ -1295,6 +1295,7 @@ async fn game_main() {
                     save_settings(&root, v);
                 }
                 Some(frontend::FrontAction::Mods(ids))=>{save_setting(&root,"mods",serde_json::json!(ids));}
+                Some(frontend::FrontAction::ModSettings(settings))=>{save_setting(&root,"mod_settings",serde_json::json!(settings));}
                 Some(frontend::FrontAction::Jukebox(change))=>{
                     save_setting(&root,"jukebox",serde_json::json!(change.tracks.iter().map(|(id,_)|id).collect::<Vec<_>>()));
                     audio.set_jukebox(&change);

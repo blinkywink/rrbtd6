@@ -380,3 +380,16 @@ for stock-game comparisons, preserving their data for a later restore.
   list rows stay clipped. Assets are shared/cached; no per-frame mod scans were introduced.
 - Thirteen targeted tests pass. Normal, empty, invalid and long-list/description layouts checked
   with isolated local fixtures; installed mods and user settings were preserved.
+
+## Per-mod Sandbox settings (2026-10-28)
+
+- API 1 accepts optional bounded numeric controls for existing starting cash/lives hooks.
+  Older manifests remain valid. Bounds, increments, defaults and saved values are validated.
+- Mods manager uses native +/- controls and Reset to Defaults. Settings are local, survive
+  disabling a mod, and preview through the same resolver used by new local Sandboxes.
+- Invalid settings after an author update are actionable; reset works even if all controls
+  were removed. Disabled mods with stale settings do not block enabled mods.
+- Normal games, events and co-op still bypass mod hooks. No frame-loop file reads or
+  simulation callbacks were added. Existing home button appearance is unchanged.
+- Seventeen targeted tests pass. An isolated actual launch read the saved override and
+  logged new local Sandbox cash=120000 lives=321; installed settings were preserved.
