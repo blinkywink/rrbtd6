@@ -51,7 +51,7 @@ class TextureTests(unittest.TestCase):
             a,ta,_=model(d,"a");b,tb,_=model(d,"b")
             real=storage.atomic_write
             def write(path,data):
-                if path==b:raise OSError("simulated disk failure")
+                if path.resolve()==b.resolve():raise OSError("simulated disk failure")
                 return real(path,data)
             with patch.object(storage,"atomic_write",side_effect=write):
                 with self.assertRaises(OSError):storage.compact(d)

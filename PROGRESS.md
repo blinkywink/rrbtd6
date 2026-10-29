@@ -427,3 +427,7 @@ for stock-game comparisons, preserving their data for a later restore.
 - Asset refresh seeds independent copies of generated files and the previous extraction
   checkpoints, so unchanged exporter steps can be skipped without hardlinking writes into the
   playable install. The staged copy is deduplicated again before commit.
+
+- Release CI follow-up: normalize the metadata fixture path in the simulated disk-failure
+  test, so Windows runner short-name/canonical temp paths still trigger the intended error.
+  The test continues to verify original texture data remains readable after write failure.
