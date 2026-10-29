@@ -91,6 +91,12 @@ fn on_query(ctx) {
     }
     edits
 }</code></pre><p>Query kinds: <code>towers</code>, <code>bloons</code>, <code>projectiles</code>. Responses include <code>tag</code>, <code>offset</code>, <code>total</code> and <code>items</code>. Pages contain up to 128 items; eight requests are serviced per simulation step. Use IDs, not array positions, as references.</p><p>Edit bloon current HP, projectile damage/pierce/velocity/remaining lifetime, or supported tower targeting modes/points. Missing entities and stale layer IDs are ignored. To deal native damage rather than assign HP, return <code>#{op:"damage_bloon", id:b.id, layer:b.layer, amount:5}</code>; it runs at the next simulation boundary.</p></details>
+<details><summary>Enable hooks only while needed</summary><pre><code>fn on_toggle(ctx) {
+    this.enabled = !this.enabled;
+    [#{op:"listen", event:"before_fire", enabled:this.enabled}]
+}
+// Apply the last shield charge, then stop receiving damage callbacks:
+fn before_damage(ctx) { #{cancel:true, unsubscribe:true} }</code></pre><p>Callbacks start subscribed. A listen command pauses or resumes a declared callback in the same script without clearing state or widgets. UI buttons can turn it back on. Interceptors can unsubscribe only their current hook after its final decision. Other mods stay subscribed.</p><p>When no owner listens, the native hook skips script execution and entity snapshots. Entity Lab turns attack hooks on only while their features are enabled, and stops its periodic refresh when closed. An unknown callback name rejects the whole command batch.</p></details>
 <details><summary>Change or cancel behavior</summary><pre><code>fn before_damage(ctx) { #{damage:ctx.event.damage*2} }
 fn before_fire(ctx) { #{damage:ctx.event.damage*2, count:3} }
 fn before_place(ctx) {

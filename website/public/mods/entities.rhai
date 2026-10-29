@@ -15,7 +15,11 @@ fn button(name,text,x,y,w,ax,ay) {
 fn flag(value) {if value {return "ON";} "OFF"}
 fn on_new_game(ctx) {
     this.boost=false;this.shield=false;this.block_farms=false;this.charges=5;this.panel=false;
-    [#{op:"ui",widget:#{id:"launcher",tree:button("Open","ENTITY LAB",-650.0,-300.0,550.0,0.5,1.0),actions:#{"":"on_open"},modal:false}}]
+    [#{op:"listen",event:"before_fire",enabled:false},
+     #{op:"listen",event:"before_damage",enabled:false},
+     #{op:"listen",event:"before_place",enabled:false},
+     #{op:"listen",event:"on_tick",enabled:false},
+     #{op:"ui",widget:#{id:"launcher",tree:button("Open","ENTITY LAB",-650.0,-300.0,550.0,0.5,1.0),actions:#{"":"on_open"},modal:false}}]
 }
 fn on_open(ctx) {
     this.panel=true;
@@ -29,7 +33,8 @@ fn on_open(ctx) {
             button("Rule","BLOCK FARM PURCHASES: "+flag(this.block_farms),0.0,-300.0,1300.0,0.5,0.5),
             label("Status","Shield charges: "+this.charges,-460.0),
             button("Close","CLOSE",0.0,-630.0,600.0,0.5,0.5)]};
-    [#{op:"ui",widget:#{id:"panel",tree:tree,actions:#{Inspect:"on_inspect",Heal:"on_heal",Boost:"on_boost",Shield:"on_shield",Rule:"on_rule",Close:"on_close"},modal:true}}]
+    [#{op:"listen",event:"on_tick",enabled:true},
+     #{op:"ui",widget:#{id:"panel",tree:tree,actions:#{Inspect:"on_inspect",Heal:"on_heal",Boost:"on_boost",Shield:"on_shield",Rule:"on_rule",Close:"on_close"},modal:true}}]
 }
 fn on_inspect(ctx) { [#{op:"inspect",query:#{kind:"towers",offset:0,limit:4,tag:"list"}}] }
 fn on_heal(ctx) { [#{op:"inspect",query:#{kind:"bloons",offset:0,limit:1,tag:"heal"}}] }
@@ -44,13 +49,13 @@ fn on_query(ctx) {
     for t in ctx.event.items {body+="\n"+t.tower+" (ID "+t.id+")";}
     [#{op:"popup",title:"Entity snapshot",body:body}]
 }
-fn on_boost(ctx) { this.boost=!this.boost;this.on_open(ctx) }
-fn on_shield(ctx) { this.shield=!this.shield;this.charges=5;this.on_open(ctx) }
-fn on_rule(ctx) { this.block_farms=!this.block_farms;this.on_open(ctx) }
-fn on_close(ctx) {this.panel=false;[#{op:"remove_ui",id:"panel"}]}
+fn on_boost(ctx) { this.boost=!this.boost;let out=this.on_open(ctx);out.push(#{op:"listen",event:"before_fire",enabled:this.boost});out }
+fn on_shield(ctx) { this.shield=!this.shield;this.charges=5;let out=this.on_open(ctx);out.push(#{op:"listen",event:"before_damage",enabled:this.shield});out }
+fn on_rule(ctx) { this.block_farms=!this.block_farms;let out=this.on_open(ctx);out.push(#{op:"listen",event:"before_place",enabled:this.block_farms});out }
+fn on_close(ctx) {this.panel=false;[#{op:"remove_ui",id:"panel"},#{op:"listen",event:"on_tick",enabled:false}]}
 fn on_tick(ctx) {if this.panel {return this.on_open(ctx);} []}
 fn before_fire(ctx) {if this.boost && ctx.event.damage>0 {return #{damage:ctx.event.damage*2};} #{}}
 fn before_damage(ctx) {
-    if this.shield && this.charges>0 && ctx.event.damage>0 {this.charges-=1;return #{cancel:true};} #{}
+    if this.shield && this.charges>0 && ctx.event.damage>0 {this.charges-=1;if this.charges==0 {this.shield=false;} return #{cancel:true,unsubscribe:this.charges==0};} #{}
 }
 fn before_place(ctx) {#{cancel:this.block_farms && ctx.event.tower=="BananaFarm"}}

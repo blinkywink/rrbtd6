@@ -420,6 +420,31 @@ share a 100,000-operation budget per simulation tick across all scripts; the exi
 30,000-operation per-call limit still applies. This avoids multiplying the execution
 budget by thousands of damage events. Callback output is capped at 256 KiB.
 
+### Turn callbacks off without losing state
+
+All declared one-argument callbacks start subscribed for compatibility. Return a
+`listen` command from an ordinary callback to pause or resume one of your own callbacks:
+
+```rhai
+fn on_toggle(ctx) {
+    this.enabled = !this.enabled;
+    [#{op:"listen", event:"before_fire", enabled:this.enabled}]
+}
+```
+
+The callback must exist in the same script. Changes apply after the current callback;
+muting a callback preserves script state and widgets. UI action callbacks can re-enable
+it later. An invalid callback name rejects the entire command batch and disables the
+script, like other invalid commands.
+
+An interceptor can return `#{cancel:true, unsubscribe:true}` to apply its final decision
+and then mute only its current hook. This does not mute other scripts or issue game
+commands during a collision. Use it for a shield's last charge or a one-shot effect.
+When the last owner unsubscribes, the native hook mask is cleared, avoiding callback
+execution and entity snapshots. Re-enabling restores the hook without recompiling.
+Entity Lab leaves damage, emission and purchase hooks off until their toggles are on,
+and stops its periodic UI refresh when its panel closes.
+
 ### Working example
 
 ```powershell
