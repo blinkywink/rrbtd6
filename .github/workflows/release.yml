@@ -34,6 +34,10 @@ jobs:
         with:
           key: game
 
+      - name: Install storage test dependencies
+        shell: bash
+        run: python -m pip install soundfile==0.13.1 numpy==2.5.4 zstandard==0.25.0
+
       - name: Test tooling and updater
         shell: bash
         run: |
@@ -58,7 +62,6 @@ jobs:
       - name: Test lossless storage
         shell: bash
         run: |
-          python -m pip install soundfile==0.13.1 numpy==2.5.4 zstandard==0.25.0
           python -I tools/test_word_anims.py
           python -I tools/test_compact_json.py
           cargo test --release -p btd6-game animation_storage:: --locked
