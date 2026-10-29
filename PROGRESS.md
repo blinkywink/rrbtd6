@@ -363,3 +363,7 @@ for stock-game comparisons, preserving their data for a later restore.
 
 - Mods caption/padding polish: moved the icon inward, added a smaller native outlined MODS
   label below it, and made the caption clickable. Menu screenshot checked at 1280x720.
+
+- Mods caption now inherits the native 90-unit text metrics and bottom-menu scale, with
+  its icon tucked above the label. Layout dump confirms the Mods and Knowledge caption
+  boxes have the same vertical position and height; screenshot visually checked.
