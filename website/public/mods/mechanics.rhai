@@ -19,7 +19,7 @@ fn on_new_game(ctx) {
 }
 fn on_open(ctx) {
     let panel=#{name:"Workshop",active:true,rect:rect(0.0,0.0,1400.0,1000.0,0.5,0.5),
-        comps:[#{type:"Image",enabled:true,color:[0.05,0.18,0.32,0.98]}],children:[
+        comps:[#{type:"Image",enabled:true,sprite:"MainBGPanelBlue",m_Type:1,color:[1.0,1.0,1.0,1.0]}],children:[
             label("Title","MECHANICS WORKSHOP",360.0),
             label("Reward","Round bonus: $"+this.bonus,200.0),
             button("Wave","SEND 30 BLUE BLOONS",0.0,20.0,1100.0,0.5,0.5),
