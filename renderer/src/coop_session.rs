@@ -16,6 +16,10 @@ impl Session{
         let mut options=Options::new(super::account_preview::player_name().unwrap_or_else(||"Player".into()),"rrbtd6-private-coop-1");
         options.identity_files.push(root.join("game/game.json"));
         if let Ok(exe)=std::env::current_exe(){options.identity_files.push(exe);}
+        for path in [root.parent().unwrap_or(root).join("version.json"),root.join("assets_version.json")]{
+            if path.is_file(){options.identity_files.push(path);}
+        }
+
         options.force_relay=std::env::var_os("RRBTD6_COOP_RELAY_ONLY").is_some();options
     }
     pub fn active(&self)->bool{self.client.is_some()}

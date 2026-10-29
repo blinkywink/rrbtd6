@@ -431,3 +431,7 @@ for stock-game comparisons, preserving their data for a later restore.
 - Release CI follow-up: normalize the metadata fixture path in the simulated disk-failure
   test, so Windows runner short-name/canonical temp paths still trigger the intended error.
   The test continues to verify original texture data remains readable after write failure.
+- Verified the real embedded-Python launcher bootstrap: an interrupted pip setup recovered,
+  all extraction packages imported, and a second launch reused the installed setup.
+- Co-op identity includes optional installed release/asset manifests as well as executable
+  and base simulation data, so a build-number mismatch is rejected even for identical code.
