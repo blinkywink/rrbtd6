@@ -7,93 +7,244 @@
 <meta name="description" content="RustTD6 is Bloons TD 6 on a new engine written in Rust. Free, open source and fan-made. Needs your own copy of BTD6.">
 <title>RustTD6 — Bloons TD 6 on a new engine</title>
 <link rel="canonical" href="https://rusttd6.com/">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RustTD6">
+<meta property="og:title" content="RustTD6 — Bloons TD 6 on a new engine">
+<meta property="og:description" content="A free, fan-made Rust client for BTD6: co-op, mods and everything unlocked. Bring your own copy of the game.">
+<meta property="og:url" content="https://rusttd6.com/">
+<meta property="og:image" content="https://rusttd6.com/logo.png">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="/logo.png" type="image/png">
+<link rel="apple-touch-icon" href="/logo.png">
 <link rel="preload" href="/fonts/LuckiestGuy-Regular.ttf" as="font" type="font/ttf" crossorigin>
 <link rel="preload" href="/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="/fonts/ComicNeue-Bold.ttf" as="font" type="font/ttf" crossorigin>
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 
 <header class="top">
   <a class="brand" href="/">RustTD6</a>
-  <nav aria-label="Sections">
-    <a href="#different">What's different</a>
+  <nav class="nav-desktop" aria-label="Sections">
+    <a href="#features">Features</a>
+    <a href="#accuracy">Accuracy</a>
     <a href="#install">Install</a>
+    <a href="#platforms">Platforms</a>
     <a href="#faq">FAQ</a>
-    <a href="/mods/">Modding</a>
+    <a href="/docs/">Mod API</a>
     <a class="gh" href="https://github.com/blinkywink/rrbtd6">GitHub</a>
   </nav>
+  <details class="menu">
+    <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
+    <nav aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#whats-in">What's in it</a>
+      <a href="#accuracy">Accuracy</a>
+      <a href="#install">Install</a>
+      <a href="#platforms">Platforms</a>
+      <a href="#requirements">Requirements</a>
+      <a href="#faq">FAQ</a>
+      <a href="/docs/">Mod API</a>
+      <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+    </nav>
+  </details>
 </header>
 
-<main>
+<main id="main">
 
   <section class="hero">
     <h1>Bloons TD 6,<br><span>on a new engine.</span></h1>
-    <p class="lede">A fan-made Rust client for co-op, mods and late-game experiments. Bring your own copy of BTD6, with everything unlocked and no account required.</p>
-    <a class="download" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">
-      Download for Windows
-      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </a>
+    <p class="lede">A free, fan-made client for co-op, mods and late-game experiments. Everything unlocked, no account needed. Just bring your own copy of BTD6.</p>
+    <div class="cta">
+      <a class="download" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">
+        Download for Windows
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+    </div>
+    <p class="fine">Windows · <a href="#platforms">macOS &amp; Linux</a></p>
   </section>
 
-  <section id="different" class="block">
+  <section id="features" class="block">
     <h2>What's different</h2>
     <ul class="list">
       <li>
-        <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 18a8 8 0 1 1 16 0M12 18l4-6"/></svg></span>
-        <strong>No frame cap</strong>
+        <div class="card-head"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4.5-5.5"/><path d="M12 9v1M7.5 11.5l.7.7M16.5 11.5l-.7.7"/></svg></span><strong>No frame cap</strong></div>
         Play at your monitor's full refresh rate, or set your own limit.
       </li>
       <li>
-        <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M16 4v6M8 14v6"/></svg></span>
-        <strong>More graphics settings</strong>
+        <div class="card-head"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg></span><strong>More graphics settings</strong></div>
         Render scale, sharpening, anti-aliasing, VSync and an FPS limit.
       </li>
       <li>
-        <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h9"/></svg></span>
-        <strong>A tidier main menu</strong>
+        <div class="card-head"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h4"/></svg></span><strong>A tidier main menu</strong></div>
         Hide the buttons you never use and skip straight past the startup screens.
       </li>
       <li>
-        <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></span>
-        <strong>Plays like the real thing</strong>
+        <div class="card-head"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".6"/></svg></span><strong>Plays like the real thing</strong></div>
         Each tower is recorded in BTD6 and compared frame by frame until RustTD6 matches it exactly.
       </li>
       <li>
-        <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 7h8a5 5 0 0 1 0 10H8A5 5 0 0 1 8 7zM16 12h.01"/></svg></span>
-        <strong>Built-in mods</strong>
-        Enable local mods from the main menu. Rebuild a mod and start a new match without restarting the client.
+        <div class="card-head"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 7.6-1.8"/><path d="M12 15v2"/></svg></span><strong>Everything unlocked</strong></div>
+        Every tower, upgrade and hero is available from the start. Monkey XP still counts up, so you can see which towers you use most.
       </li>
       <li>
-        <span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 0 1-10 0zM12 16v5"/></svg></span>
-        <strong>Code your own changes</strong>
-        Towers, projectiles, mechanics, shop layouts and scripted in-match UI. <a href="/mods/">Explore the API.</a>
+        <div class="card-head"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.6-3 2.8-5 5.5-5s4.9 2 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.8 14.2c2.4.2 4.2 2 4.7 4.8"/></svg></span><strong>Private co-op</strong></div>
+        Play with friends over an encrypted peer-to-peer room. The host can even share their mods with everyone in it.
       </li>
     </ul>
   </section>
 
-  <section id="install" class="block">
-    <h2>Install</h2>
-    <ol class="steps">
-      <li>
-        <span class="num">1</span>
-        <span>Install <a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> into BTD6 and launch the game once.</span>
-      </li>
-      <li>
-        <span class="num">2</span>
-        <span>Put the downloaded <code>RRBTD6Installer.dll</code> in BTD6's <code>Mods</code> folder.</span>
-      </li>
-      <li>
-        <span class="num">3</span>
-        <span>Open BTD6 and choose a folder for RustTD6. The launcher sets up the rest.</span>
-      </li>
-    </ol>
-    <p class="aside">The first setup copies art and sound from your game, so it takes a little while.</p>
+  <section id="whats-in" class="block">
+    <h2>What's in it</h2>
+    <div class="split">
+      <div class="panel">
+        <span class="tag">Included</span>
+        <ul class="ticks">
+          <li>Towers, heroes and Paragons, all unlocked</li>
+          <li>Maps, difficulties and freeplay</li>
+          <li>Sandbox mode</li>
+          <li>Boss events and custom boss matches</li>
+          <li>Private co-op rooms</li>
+          <li>A local profile with Monkey XP per tower</li>
+        </ul>
+      </div>
+      <div class="panel panel-soft">
+        <span class="tag tag-soft">Left out on purpose</span>
+        <ul class="crosses">
+          <li>The store and in-game purchases</li>
+          <li>Races, Boss Rush and Contested Territory</li>
+          <li>Odyssey and daily challenges</li>
+          <li>Social seasons, teams and friends</li>
+          <li>The Legends DLC modes</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" class="band">
+    <div class="band-inner">
+      <h2>Install in three steps</h2>
+      <ol class="steps">
+        <li>
+          <span class="num">1</span>
+          <span>Install <a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> into BTD6 and launch the game once.</span>
+        </li>
+        <li>
+          <span class="num">2</span>
+          <span>Put the downloaded <code>RRBTD6Installer.dll</code> in BTD6's <code>Mods</code> folder.</span>
+        </li>
+        <li>
+          <span class="num">3</span>
+          <span>Open BTD6 and choose a folder for RustTD6. The launcher sets up the rest, and keeps RustTD6 up to date from then on.</span>
+        </li>
+      </ol>
+      <p class="aside">The first setup prepares compressed assets from your game and can take a while. Keep BTD6 open and follow the MelonLoader terminal for progress and the estimated time remaining.</p>
+    </div>
   </section>
 
   <section class="block">
     <h2>How it works</h2>
-    <p>RustTD6 isn't a mod that changes BTD6. It's a separate program. The installer reads the art, sounds and tower stats from <em>your</em> BTD6 install, and RustTD6 runs them on its own engine. None of Ninja Kiwi's files are hosted or shared, which is why you need to own the game.</p>
+    <div class="how">
+      <div><span class="step-tag">Your PC</span><strong>Your BTD6 install</strong><p>The art, sounds and tower stats come from your own copy of the game.</p></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></div>
+      <div><span class="step-tag">Installer</span><strong>Extracted locally</strong><p>Nothing from Ninja Kiwi is hosted or shared, which is why you need to own the game.</p></div>
+      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></div>
+      <div><span class="step-tag">RustTD6</span><strong>A new engine</strong><p>A separate program written in Rust plays them. It isn't a mod, and it never changes BTD6 or your save.</p></div>
+    </div>
+  </section>
+
+  <section id="accuracy" class="block">
+    <h2>Built to match</h2>
+    <div class="method">
+      <div><span class="big">1</span><strong>Read the game's code</strong><p>Every mechanic is taken from the original game's own logic, not guessed from videos.</p></div>
+      <div><span class="big">2</span><strong>Record the real game</strong><p>A recorder mod plays scripted scenarios in BTD6 and logs every bloon, tower and projectile, frame by frame.</p></div>
+      <div><span class="big">3</span><strong>Replay and compare</strong><p>RustTD6 replays the same scenario and reports every frame that differs until there are none.</p></div>
+    </div>
+    <p class="verified-title">Already verified against recordings</p>
+    <ul class="chips">
+      <li>Weapon timing</li><li>Bloon spawns &amp; leaks</li><li>Round emission timing</li><li>Targeting range</li>
+      <li>Line of sight</li><li>MOAB targeting</li><li>Knockback</li><li>Pops &amp; children</li>
+      <li>Frame order</li><li>Monkey XP</li><li>End-of-game stats</li>
+    </ul>
+    <p class="aside">Towers are matched one at a time. The checklist lives in <a href="https://github.com/blinkywink/rrbtd6/blob/main/TOWERS.md">TOWERS.md</a>.</p>
+  </section>
+
+  <section id="settings" class="block">
+    <h2>Your settings</h2>
+    <ul class="list">
+      <li><strong>Advanced options</strong>Default, Graphics and UI sections, closed until you need them.</li>
+      <li><strong>Skip the startup screens</strong>Go straight to the main menu.</li>
+      <li><strong>FPS where it belongs</strong>The frame rate shows in the window's title bar, not over the game.</li>
+      <li><strong>Hide what you don't use</strong>Hide the boss button, and the Double Cash and Fast Track buttons.</li>
+      <li><strong>Drag &amp; Drop or Lock &amp; Drop</strong>Both of the game's placement styles, from the pause menu.</li>
+      <li><strong>Show the Mods button</strong>Turn on the Mods menu when you want it.</li>
+    </ul>
+  </section>
+
+  <section id="mods" class="block">
+    <h2>Make it yours</h2>
+    <div class="mods">
+      <div class="mods-text">
+        <p>Write mods as plain files: new towers, projectiles, bloons, modes, shop layouts, upgrades and custom models. Add event scripts with their own in-match UI. Reload them from the Mods menu without restarting the client.</p>
+        <a class="pill-link" href="/docs/">Read the Mod API docs <span aria-hidden="true">→</span></a>
+      </div>
+<pre class="snippet"><code><span class="c"># mods/quickstart/mod.py</span>
+mod = Mod(<span class="s">"quickstart"</span>, <span class="s">"Quick Start"</span>)
+
+dart = mod.tower(<span class="s">"dart"</span>, base=<span class="s">"DartMonkey"</span>, cost=<span class="n">100</span>)
+dart.projectile(damage=<span class="n">3</span>, pierce=<span class="n">4</span>)
+dart.weapon(rate=<span class="n">0.5</span>)
+
+mod.mode(<span class="s">"training"</span>, base=<span class="s">"Medium"</span>, cash=<span class="n">2000</span>)</code></pre>
+    </div>
+  </section>
+
+  <section id="platforms" class="block">
+    <h2>Platforms</h2>
+    <div class="platforms">
+      <div class="platform">
+        <span class="tag">Installer</span>
+        <strong>Windows</strong>
+        <p>Download the installer above. The launcher installs and updates everything.</p>
+      </div>
+      <div class="platform">
+        <span class="tag tag-soft">Build it yourself</span>
+        <strong>macOS</strong>
+        <p>Copy your game data from a Windows install, then run <code>tools/build_macos.sh</code> to build <code>RustTD6.app</code>. Apple Silicon.</p>
+      </div>
+      <div class="platform">
+        <span class="tag tag-soft">Build it yourself</span>
+        <strong>Linux</strong>
+        <p>Copy your game data from a Windows install, then run <code>tools/build_linux.sh</code>. Needs the X11, OpenGL and ALSA development packages.</p>
+      </div>
+    </div>
+    <p class="aside">macOS and Linux builds are for personal use and aren't distributed. Instructions are in the <a href="https://github.com/blinkywink/rrbtd6#building-developers">README</a>.</p>
+  </section>
+
+  <section id="requirements" class="block">
+    <h2>Requirements &amp; privacy</h2>
+    <div class="split">
+      <div class="panel">
+        <span class="tag">You need</span>
+        <ul class="ticks">
+          <li>Windows 10 or 11 (64-bit)</li>
+          <li>Bloons TD 6 on PC</li>
+          <li><a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> for the one-time setup</li>
+          <li>Several gigabytes of free disk space for the extracted assets</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <span class="tag">Your data</span>
+        <ul class="ticks">
+          <li>No account and no sign-in</li>
+          <li>Progress stays in a local profile on your PC</li>
+          <li>The installer and launcher only talk to GitHub, python.org and PyPI</li>
+          <li>Co-op connects players directly, encrypted</li>
+          <li>This website has no analytics or trackers</li>
+        </ul>
+      </div>
+    </div>
   </section>
 
   <section id="faq" class="block">
@@ -108,12 +259,20 @@
         <p>No, it's early. Towers are being matched to the real game one at a time, and some modes and features aren't in yet. Progress is tracked on <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>.</p>
       </details>
       <details>
+        <summary>Does it change my BTD6 save or account?<span class="plus" aria-hidden="true"></span></summary>
+        <p>No. RustTD6 keeps its own local progress. The installer and launcher only contact GitHub, python.org and PyPI; they never contact Ninja Kiwi and never change BTD6, your save or your account.</p>
+      </details>
+      <details>
+        <summary>Can I play it on a Mac or Linux?<span class="plus" aria-hidden="true"></span></summary>
+        <p>Yes, with a personal build. Set it up on Windows first, copy the extracted game data across, and run the build script for your system. See <a href="#platforms">Platforms</a>.</p>
+      </details>
+      <details>
         <summary>Is it safe?<span class="plus" aria-hidden="true"></span></summary>
         <p>The code is open source, so anyone can read exactly what it does. It's still unofficial software, so use it at your own discretion.</p>
       </details>
       <details>
         <summary>Does it cost anything?<span class="plus" aria-hidden="true"></span></summary>
-        <p>No. It's free.</p>
+        <p>No. It's free. If you want to support Ninja Kiwi, buy things through the official game or their webstore.</p>
       </details>
       <details>
         <summary>Is this from Ninja Kiwi?<span class="plus" aria-hidden="true"></span></summary>
@@ -125,11 +284,25 @@
 </main>
 
 <footer>
-  <nav aria-label="Project links">
-    <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
-    <a href="https://github.com/blinkywink/rrbtd6/releases/latest">Releases</a>
-  </nav>
-  <p>Unofficial fan project. Not affiliated with Ninja Kiwi. Bloons TD 6 is a trademark of Ninja Kiwi.</p>
+  <div class="foot">
+    <div class="foot-brand">
+      <a class="brand" href="/">RustTD6</a>
+      <p>Bloons TD 6 on a new engine. Free, open source and fan-made.</p>
+    </div>
+    <nav aria-label="Project links">
+      <strong>Project</strong>
+      <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+      <a href="https://github.com/blinkywink/rrbtd6/releases/latest">Releases</a>
+      <a href="https://github.com/blinkywink/rrbtd6/issues">Report a bug</a>
+    </nav>
+    <nav aria-label="Modding links">
+      <strong>Modding</strong>
+      <a href="/docs/">Mod API docs</a>
+      <a href="/docs/quick-start/">Quick start</a>
+      <a href="/docs/scripts/">Event scripts</a>
+    </nav>
+  </div>
+  <p class="legal">Unofficial fan project. Not affiliated with Ninja Kiwi. Bloons TD 6 is a trademark of Ninja Kiwi.</p>
 </footer>
 </body>
 </html>

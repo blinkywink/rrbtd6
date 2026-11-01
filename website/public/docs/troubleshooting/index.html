@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2f80f5">
+<title>Troubleshooting — RustTD6 mod API</title>
+<meta name="description" content="What to check when a mod doesn&#x27;t show up, load or behave.">
+<link rel="canonical" href="https://rusttd6.com/docs/troubleshooting/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RustTD6">
+<meta property="og:title" content="Troubleshooting — RustTD6 mod API">
+<meta property="og:description" content="What to check when a mod doesn&#x27;t show up, load or behave.">
+<meta property="og:url" content="https://rusttd6.com/docs/troubleshooting/">
+<meta property="og:image" content="https://rusttd6.com/logo.png">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="/logo.png" type="image/png">
+<link rel="apple-touch-icon" href="/logo.png">
+<link rel="preload" href="/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar"><div class="bar-inner">
+  <a class="logo" href="/docs/">RustTD6 <span>Mod API</span></a>
+  <nav class="bar-links" aria-label="Site">
+    <a href="/">Home</a>
+    <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+    <a class="pill" href="/docs/quick-start/">Get started</a>
+  </nav>
+  <details class="menu">
+    <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
+    <nav class="menu-panel" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/" aria-current="page">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul><p class="side-group">Site</p><ul><li><a href="/">Home</a></li><li><a href="https://github.com/blinkywink/rrbtd6">GitHub</a></li></ul></nav>
+  </details>
+</div></header>
+<div class="layout">
+  <nav class="side" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/" aria-current="page">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul></nav>
+  <main class="content">
+    <p class="crumb">Reference</p>
+    <h1>Troubleshooting</h1>
+    <p class="summary">What to check when a mod doesn't show up, load or behave.</p>
+    
+<h2 id="missing">My mod isn't in the list</h2>
+<ul>
+  <li>Its folder must be inside <code>mods/</code> next to the game, with a <code>mod.json</code> (build it with the SDK first).</li>
+  <li>Press <strong>Reload Mods</strong> after adding or rebuilding.</li>
+  <li>Check the manifest rules: lowercase ID, required fields, 64 KiB and 256 operations at most.</li>
+</ul>
+
+<h2 id="no-button">There's no Mods button</h2>
+<p>Turn on <strong>Settings → Advanced → UI → Show Mods Button</strong>. Hiding the button doesn't disable enabled mods.</p>
+
+<h2 id="no-change">My changes don't appear</h2>
+<ul>
+  <li>Changes apply to the next new or restarted game. A match in progress keeps its definitions.</li>
+  <li>Make sure the mod's switch is on; selecting a row only previews it.</li>
+  <li>Official events ignore local content mods.</li>
+</ul>
+
+<h2 id="errors">It fails to load</h2>
+<p>An invalid content transaction leaves the base data unchanged and writes its error to the client log. Common causes:</p>
+<ul>
+  <li>A misspelled or missing field in a patch (patches never add new fields).</li>
+  <li>Two operations writing the same exact <code>set</code> path, or two mods setting the same Sandbox value.</li>
+  <li>A bloon's children referring to something missing, or forming a cycle.</li>
+  <li>A content root other than <code>towers</code>, <code>tower_tiers</code>, <code>bloons</code>, <code>modes</code>, <code>start</code>, <code>rounds</code>, <code>round_sets</code> or <code>freeplay</code>.</li>
+</ul>
+
+<h2 id="script-stopped">My script stopped working mid-match</h2>
+<p>A script disables itself for the rest of the match when it errors, goes over its operation budget, returns an invalid
+command batch, returns a bad interceptor decision, or listens for a callback that doesn't exist. Its widgets are removed
+too. Fix it, rebuild, reload and start a new match.</p>
+
+<h2 id="coop">A co-op room rejects my mod</h2>
+<p>Rooms take data mods only: runtime scripts and custom art aren't supported in co-op yet, and the set is limited to
+16 mods and 24 KiB of manifests.</p>
+
+<h2 id="settings">A setting won't save</h2>
+<p>Values outside the setting's bounds, or not on its step, are rejected without changing the saved value.</p>
+
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/units/"><span>Previous</span>Units & coordinates</a><a class="next" href="/docs/faq/"><span>Next</span>Modder FAQ</a></nav>
+    <footer class="foot">Unofficial fan project. Not affiliated with Ninja Kiwi. <a href="/">rusttd6.com</a></footer>
+  </main>
+  <aside class="toc"><p>On this page</p><ul><li><a href="#missing">My mod isn't in the list</a></li><li><a href="#no-button">There's no Mods button</a></li><li><a href="#no-change">My changes don't appear</a></li><li><a href="#errors">It fails to load</a></li><li><a href="#script-stopped">My script stopped working mid-match</a></li><li><a href="#coop">A co-op room rejects my mod</a></li><li><a href="#settings">A setting won't save</a></li></ul></aside>
+</div>
+<script src="/docs/nav.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2f80f5">
+<title>Entities &amp; hooks — RustTD6 mod API</title>
+<meta name="description" content="Inspect live towers, bloons and projectiles, edit them by ID, and intercept native behaviour.">
+<link rel="canonical" href="https://rusttd6.com/docs/entities/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RustTD6">
+<meta property="og:title" content="Entities &amp; hooks — RustTD6 mod API">
+<meta property="og:description" content="Inspect live towers, bloons and projectiles, edit them by ID, and intercept native behaviour.">
+<meta property="og:url" content="https://rusttd6.com/docs/entities/">
+<meta property="og:image" content="https://rusttd6.com/logo.png">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="/logo.png" type="image/png">
+<link rel="apple-touch-icon" href="/logo.png">
+<link rel="preload" href="/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar"><div class="bar-inner">
+  <a class="logo" href="/docs/">RustTD6 <span>Mod API</span></a>
+  <nav class="bar-links" aria-label="Site">
+    <a href="/">Home</a>
+    <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+    <a class="pill" href="/docs/quick-start/">Get started</a>
+  </nav>
+  <details class="menu">
+    <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
+    <nav class="menu-panel" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/" aria-current="page">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul><p class="side-group">Site</p><ul><li><a href="/">Home</a></li><li><a href="https://github.com/blinkywink/rrbtd6">GitHub</a></li></ul></nav>
+  </details>
+</div></header>
+<div class="layout">
+  <nav class="side" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/" aria-current="page">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul></nav>
+  <main class="content">
+    <p class="crumb">Scripting</p>
+    <h1>Entities & hooks</h1>
+    <p class="summary">Inspect live towers, bloons and projectiles, edit them by ID, and intercept native behaviour.</p>
+    
+<p>These interfaces are local-only, like the rest of the script runtime. When nothing listens, the native path is
+unchanged: no entity snapshots or script calls are made.</p>
+
+<h2 id="inspect">Inspect live entities</h2>
+<pre class="code" data-lang="rhai"><code>fn on_new_game(ctx) {
+    [#{op: &quot;inspect&quot;, query: #{kind: &quot;towers&quot;, offset: 0, limit: 8, tag: &quot;my-list&quot;}}]
+}
+fn on_query(ctx) {
+    for tower in ctx.event.items {
+        // tower.id is a stable entity ID, not an array index.
+    }
+    []
+}</code></pre>
+<ul>
+  <li>Kinds: <code>towers</code>, <code>bloons</code>, <code>projectiles</code>.</li>
+  <li>Responses arrive through the requesting script's <code>on_query</code> at a simulation boundary, with <code>kind</code>, <code>tag</code>, <code>offset</code>, <code>total</code> and <code>items</code>.</li>
+  <li>Pages hold 1–128 items. At most eight queries are serviced per step, with up to 64 pending.</li>
+  <li>Paging uses current storage order, so entities can appear, disappear or reorder between pages. Deduplicate by ID.</li>
+</ul>
+
+<h2 id="snapshots">Snapshot fields</h2>
+<div class="table"><table><thead><tr><th>Kind</th><th>Fields</th></tr></thead><tbody><tr><td>Tower</td><td><code>id</code>, <code>tower</code> (definition ID), <code>position</code>, <code>tiers</code>, <code>pops</code>, <code>damage</code>, <code>target</code>, <code>point</code></td></tr><tr><td>Bloon</td><td><code>id</code>, <code>layer</code>, <code>bloon</code> (definition ID), <code>hp</code>, <code>position</code>, <code>distance</code>, <code>path</code></td></tr><tr><td>Projectile</td><td><code>id</code>, <code>owner</code> (tower ID or 0), <code>position</code>, <code>velocity</code>, <code>damage</code>, <code>pierce</code>, <code>remaining</code></td></tr></tbody></table></div>
+<p>Positions are native world coordinates. Projectile velocity is world units per step; <code>remaining</code> is seconds.
+Position and remaining can be null for native infinities.</p>
+
+<h2 id="patch">Edit by ID</h2>
+<pre class="code" data-lang="rhai"><code>#{op: &quot;entity_patch&quot;, patch: #{kind: &quot;bloons&quot;, id: b.id, layer: b.layer, fields: #{hp: 50}}}
+#{op: &quot;entity_patch&quot;, patch: #{kind: &quot;projectiles&quot;, id: p.id, fields: #{damage: 10, pierce: 20, remaining: 2.0, velocity: [1.0, 0.0]}}}
+#{op: &quot;entity_patch&quot;, patch: #{kind: &quot;towers&quot;, id: t.id, fields: #{target: &quot;Strong&quot;}}}
+#{op: &quot;damage_bloon&quot;, id: b.id, layer: b.layer, amount: 5}</code></pre>
+<ul>
+  <li>HP edits set positive current HP directly. Use <code>damage_bloon</code> for real damage: child spawning, cash, pops and damage hooks. It runs at the next simulation boundary and doesn't credit a tower.</li>
+  <li><code>layer</code> is optional but recommended: a first child can reuse its parent's object ID with a new layer ID.</li>
+  <li>Tower targets: First, Last, Close, Strong or Point, when that tower allows them. <code>point: [x, y]</code> moves a point target.</li>
+  <li>Missing entities and mismatched layers are ignored. IDs are per match.</li>
+  <li>Projectile movement controllers can overwrite velocity changes.</li>
+</ul>
+
+<h2 id="intercept">Change or cancel native behaviour</h2>
+<p>Interceptors return a <strong>map</strong> (event callbacks return arrays):</p>
+<pre class="code" data-lang="rhai"><code>fn before_damage(ctx) {
+    if ctx.event.bloon.bloon == &quot;Red&quot; { return #{cancel: true}; }
+    #{damage: ctx.event.damage * 2}
+}
+fn before_fire(ctx) { #{damage: ctx.event.damage * 2, count: 3} }
+fn before_place(ctx) { #{cancel: ctx.event.tower == &quot;BananaFarm&quot;} }
+fn before_sell(ctx) { #{cancel: ctx.event.tower == &quot;DartMonkey&quot;} }
+fn before_upgrade(ctx) { #{cancel: ctx.event.paragon} }</code></pre>
+<div class="table"><table><thead><tr><th>Interceptor</th><th>Event</th><th>Can return</th></tr></thead><tbody><tr><td><code>before_damage</code></td><td><code>bloon</code> snapshot, <code>damage</code></td><td><code>damage</code> (rounded to native integer), <code>cancel</code></td></tr><tr><td><code>before_fire</code></td><td><code>owner</code>, <code>position</code>, <code>direction</code> (radians), <code>count</code>, <code>damage</code>, <code>speed</code>, <code>pierce</code>, <code>tiers</code></td><td>any of those, or <code>cancel</code></td></tr><tr><td><code>before_place</code></td><td><code>tower</code>, <code>position</code>, <code>cost</code></td><td><code>cancel</code></td></tr><tr><td><code>before_sell</code></td><td>tower snapshot</td><td><code>cancel</code></td></tr><tr><td><code>before_upgrade</code></td><td><code>tower</code>, <code>paragon</code>, <code>path</code>/<code>cost</code> or <code>extra</code></td><td><code>cancel</code></td></tr></tbody></table></div>
+<ul>
+  <li>An empty map <code>#{}</code> keeps native behaviour. <code>cancel: true</code> stops later scripts for that action.</li>
+  <li>Scripts compose in stable order; later scripts see earlier overrides.</li>
+  <li>Interceptors can read <code>ctx</code> and update <code>this</code>, but can't return game commands.</li>
+  <li><code>before_damage</code> runs once per top-level health hit, not for child overflow. Cancelling prevents health loss only, not other hit effects or pierce use. Whole-bloon destruction that bypasses health damage doesn't enter it.</li>
+  <li><code>before_fire</code> also sees emitted sub-projectiles. Cancelling doesn't refund the cooldown.</li>
+  <li>Forced dependent cleanup when a parent tower is sold bypasses child sell vetoes.</li>
+</ul>
+
+<h2 id="listen">Turn hooks on and off</h2>
+<pre class="code" data-lang="rhai"><code>fn on_toggle(ctx) {
+    this.enabled = !this.enabled;
+    [#{op: &quot;listen&quot;, event: &quot;before_fire&quot;, enabled: this.enabled}]
+}
+// Apply the last shield charge, then stop receiving damage callbacks:
+fn before_damage(ctx) { #{cancel: true, unsubscribe: true} }</code></pre>
+<p>All declared callbacks start subscribed. <code>listen</code> pauses or resumes one of your own callbacks after the
+current one, keeping state and widgets. An interceptor can return <code>unsubscribe: true</code> to mute only itself
+after its decision. When nobody listens, the native hook skips script execution and snapshots entirely.</p>
+<p>See <a href="/docs/examples/#entity-lab">Entity Lab</a> for a complete example.</p>
+
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/ui/"><span>Previous</span>Custom UI</a><a class="next" href="/docs/coop/"><span>Next</span>Co-op</a></nav>
+    <footer class="foot">Unofficial fan project. Not affiliated with Ninja Kiwi. <a href="/">rusttd6.com</a></footer>
+  </main>
+  <aside class="toc"><p>On this page</p><ul><li><a href="#inspect">Inspect live entities</a></li><li><a href="#snapshots">Snapshot fields</a></li><li><a href="#patch">Edit by ID</a></li><li><a href="#intercept">Change or cancel native behaviour</a></li><li><a href="#listen">Turn hooks on and off</a></li></ul></aside>
+</div>
+<script src="/docs/nav.js" defer></script>
+</body>
+</html>

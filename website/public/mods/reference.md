@@ -1,6 +1,6 @@
 # RustTD6 mod API 1
 
-[Website guide](https://rusttd6.com/mods/) · [Schema](mod.schema.json) · [SDK](../tools/modsdk.py)
+[Website guide](https://rusttd6.com/docs/) · [Schema](mod.schema.json) · [SDK](../tools/modsdk.py)
 
 Mods are authored in files, not an in-game editor. Author scripts run only on an explicit build
 command. The native client loads generated data and optional embedded Rhai event scripts, never Python or injected DLLs.
@@ -85,12 +85,16 @@ Other languages may emit the same JSON; there is no Python runtime dependency in
 ## Optional Sandbox settings
 
 `on_new_sandbox` may set whole-number `starting_cash` (0..1e12), `starting_lives` (1..1e9).
-Omit a value to retain the game's value. `settings` can expose bounded +/- controls:
+Omit a value to retain the game's value. `settings` can expose bounded numeric inputs with quick +/- controls:
 
 ```json
 "on_new_sandbox": { "starting_cash": 100000 },
 "settings": { "starting_cash": { "min": 0, "max": 1000000, "step": 10000 } }
 ```
+
+Click a setting value to type a number. Enter saves, Escape cancels, and Ctrl+A /
+paste are supported. Out-of-range values or values that do not match the step are
+rejected without changing the saved setting.
 
 Bounds, default and step are whole numbers. Step must be positive; both bounds and default
 align to it from `min`. Overrides live in local `mod_settings`, survive disable, and use the
@@ -455,3 +459,18 @@ Enable **Entity Lab** and start a new local match. Its panel inspects live tower
 adds HP to a specific bloon, toggles double projectile damage, absorbs five health
 hits, and blocks Farm purchases. It demonstrates these hooks without altering any
 base data. The example uses ordinary native UI; authors can replace its layout.
+
+### Mod menu artwork
+
+Put an optional `icon.png` beside your mod's `mod.json`. Use a transparent or opaque
+PNG, at most 512 x 512 pixels and 1 MiB. The Mods list and details use the same icon,
+keeping its aspect ratio. Missing/invalid images fall back to the standard mod icon.
+Press Reload Mods after changing artwork. Icons are local presentation assets;
+this convention does not add artwork transfer to co-op packages.
+
+### Finding installed mods
+
+The Mods screen searches names, IDs and descriptions as you type. All, Enabled and
+Disabled filter buttons combine with the search. The gold outline identifies the mod
+whose details you are viewing; its switch controls whether it is enabled. Filtering
+never changes activation. Use the search clear button to return to the current filter.

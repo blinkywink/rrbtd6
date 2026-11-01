@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2f80f5">
+<title>Custom models — RustTD6 mod API</title>
+<meta name="description" content="Original meshes and animations for towers and projectiles.">
+<link rel="canonical" href="https://rusttd6.com/docs/models/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RustTD6">
+<meta property="og:title" content="Custom models — RustTD6 mod API">
+<meta property="og:description" content="Original meshes and animations for towers and projectiles.">
+<meta property="og:url" content="https://rusttd6.com/docs/models/">
+<meta property="og:image" content="https://rusttd6.com/logo.png">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="/logo.png" type="image/png">
+<link rel="apple-touch-icon" href="/logo.png">
+<link rel="preload" href="/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar"><div class="bar-inner">
+  <a class="logo" href="/docs/">RustTD6 <span>Mod API</span></a>
+  <nav class="bar-links" aria-label="Site">
+    <a href="/">Home</a>
+    <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+    <a class="pill" href="/docs/quick-start/">Get started</a>
+  </nav>
+  <details class="menu">
+    <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
+    <nav class="menu-panel" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/" aria-current="page">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul><p class="side-group">Site</p><ul><li><a href="/">Home</a></li><li><a href="https://github.com/blinkywink/rrbtd6">GitHub</a></li></ul></nav>
+  </details>
+</div></header>
+<div class="layout">
+  <nav class="side" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/" aria-current="page">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul></nav>
+  <main class="content">
+    <p class="crumb">Assets</p>
+    <h1>Custom models</h1>
+    <p class="summary">Original meshes and animations for towers and projectiles.</p>
+    
+<h2 id="template">Start from the template</h2>
+<pre class="code" data-lang="shell"><code>python tools/mod_model.py template mods/throwbot
+python tools/modsdk.py build mods/throwbot/mod.py</code></pre>
+<p>Enable Throwbot and start a new game: a blue animated robot with a gold custom projectile and a release socket.
+Everything in it is original art; no game art is included.</p>
+
+<h2 id="use">Use a model</h2>
+<pre class="code" data-lang="python"><code>mod = Mod(&quot;my-mod&quot;, &quot;My mod&quot;)
+tower = mod.tower(&quot;robot&quot;, base=&quot;DartMonkey&quot;)
+tower.model(&quot;robot&quot;)
+tower.projectile(display=mod.model(&quot;bolt&quot;), damage=3, pierce=4)</code></pre>
+<p>Put baked models in <code>mods/my-mod/assets/robot/</code> and <code>assets/bolt/</code>; the folder name must match the mod ID.
+<code>tower.model</code> reads the baked socket and applies the primary muzzle and release lead to every inherited upgrade tier.
+Secondary weapons keep their original sockets.</p>
+
+<h2 id="obj">Import an OBJ mesh</h2>
+<pre class="code" data-lang="shell"><code>python tools/mod_model.py import robot.obj --texture atlas.png --out mods/my-mod/assets/robot --muzzle 4 8 6 --release 0.15</code></pre>
+<ul>
+  <li>Y up, +Z forward, feet at the origin, in game units (the starter is about 14 units tall).</li>
+  <li><code>--muzzle X HEIGHT FORWARD</code> is the hand/barrel release point; <code>--release</code> is seconds into Attack.</li>
+  <li>Add <code>--attack frame01.obj frame02.obj …</code> (identical topology and face order) to bake a throw, and <code>--fps</code> for the sample rate.</li>
+  <li>Without attack frames, the model aims and fires but has no throwing motion.</li>
+</ul>
+
+<h2 id="blender">Bake a rigged Blender animation</h2>
+<pre class="code" data-lang="shell"><code>blender --background robot.blend --python tools/blender_mod_model.py -- --out mods/my-mod/assets/robot --idle 1 60 --attack 61 90 --release 70 --texture atlas.png</code></pre>
+<ul>
+  <li>Blender is Z up, −Y forward.</li>
+  <li>Add an Empty named <code>Muzzle</code>, parented to the throwing hand or barrel.</li>
+  <li>Put the meshes to export in a collection named <code>RustTD6</code>.</li>
+  <li>Rigs and modifiers are baked into vertex poses. Use one PNG atlas; Blender material shaders aren't imported. Keep topology stable.</li>
+</ul>
+
+<div class="callout warn"><strong>Limit</strong><p>At most 60,000 split vertices, 600 frames per clip and 128 MiB of uncompressed poses per model. Lower-poly models and fewer samples load faster.</p></div>
+<p>Blender and Python never run during gameplay; meshes and poses go through the native renderer. Models don't add
+simulation behaviour: the cloned tower and weapon supply targeting and projectile rules. Custom models are local-only
+for now; co-op rooms reject custom-art mods with a clear message.</p>
+
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/menus/"><span>Previous</span>Menus</a><a class="next" href="/docs/scripts/"><span>Next</span>Event scripts</a></nav>
+    <footer class="foot">Unofficial fan project. Not affiliated with Ninja Kiwi. <a href="/">rusttd6.com</a></footer>
+  </main>
+  <aside class="toc"><p>On this page</p><ul><li><a href="#template">Start from the template</a></li><li><a href="#use">Use a model</a></li><li><a href="#obj">Import an OBJ mesh</a></li><li><a href="#blender">Bake a rigged Blender animation</a></li></ul></aside>
+</div>
+<script src="/docs/nav.js" defer></script>
+</body>
+</html>

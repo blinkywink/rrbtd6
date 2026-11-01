@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2f80f5">
+<title>Event scripts — RustTD6 mod API</title>
+<meta name="description" content="Real running code: Rhai callbacks that react to the match and return commands.">
+<link rel="canonical" href="https://rusttd6.com/docs/scripts/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RustTD6">
+<meta property="og:title" content="Event scripts — RustTD6 mod API">
+<meta property="og:description" content="Real running code: Rhai callbacks that react to the match and return commands.">
+<meta property="og:url" content="https://rusttd6.com/docs/scripts/">
+<meta property="og:image" content="https://rusttd6.com/logo.png">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="/logo.png" type="image/png">
+<link rel="apple-touch-icon" href="/logo.png">
+<link rel="preload" href="/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar"><div class="bar-inner">
+  <a class="logo" href="/docs/">RustTD6 <span>Mod API</span></a>
+  <nav class="bar-links" aria-label="Site">
+    <a href="/">Home</a>
+    <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+    <a class="pill" href="/docs/quick-start/">Get started</a>
+  </nav>
+  <details class="menu">
+    <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
+    <nav class="menu-panel" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/" aria-current="page">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul><p class="side-group">Site</p><ul><li><a href="/">Home</a></li><li><a href="https://github.com/blinkywink/rrbtd6">GitHub</a></li></ul></nav>
+  </details>
+</div></header>
+<div class="layout">
+  <nav class="side" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/" aria-current="page">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul></nav>
+  <main class="content">
+    <p class="crumb">Scripting</p>
+    <h1>Event scripts</h1>
+    <p class="summary">Real running code: Rhai callbacks that react to the match and return commands.</p>
+    
+<p>Rhai is a small embedded language with functions, loops, conditions, arrays and maps. Embed a script from your
+build script, and it compiles once when a match loads.</p>
+<pre class="code" data-lang="python"><code>mod.script(&quot;mechanics&quot;, file=&quot;mechanics.rhai&quot;, tick_interval=60)</code></pre>
+
+<h2 id="first">Your first script</h2>
+<pre class="code" data-lang="rhai"><code>fn on_new_game(ctx) { this.reward = 100; [] }
+fn on_round_end(ctx) {
+    if ctx.sandbox { return []; }
+    this.reward += 10;
+    [#{op: &quot;cash&quot;, amount: this.reward}]
+}</code></pre>
+<p>Define only the callbacks you need. Each receives <code>ctx</code> and returns an array of commands.
+<code>this</code> is a per-script, per-match map for your state (not a save file). Top-level statements don't run;
+put helpers in functions, and call ones that use state as <code>this.helper(ctx)</code> so <code>this</code> stays bound.</p>
+
+<h2 id="hooks">Hooks</h2>
+<div class="table"><table><thead><tr><th>Callback</th><th>Runs</th></tr></thead><tbody><tr><td><code>on_new_game</code></td><td>When the match starts</td></tr><tr><td><code>on_round_start</code> / <code>on_round_end</code></td><td>At each round boundary</td></tr><tr><td><code>on_tower_placed</code></td><td>After a placement; <code>ctx.event</code> is the tower snapshot</td></tr><tr><td><code>on_tower_sold</code></td><td>After a sale; <code>ctx.event</code> is the pre-removal snapshot</td></tr><tr><td><code>on_towers_changed</code></td><td>When the tower list changes</td></tr><tr><td><code>on_pop</code></td><td>Once per simulation step, aggregating that step's pops</td></tr><tr><td><code>on_tick</code></td><td>Every <code>tick_interval</code> simulation steps (60 per simulated second)</td></tr><tr><td><code>on_query</code></td><td>When an <a href='/docs/entities/'>inspect</a> request is answered</td></tr></tbody></table></div>
+<p>No callbacks run while paused, except explicit UI actions.</p>
+
+<h2 id="ctx">The <code>ctx</code> snapshot</h2>
+<div class="table"><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody><tr><td><code>cash</code></td><td>Current cash</td></tr><tr><td><code>lives</code></td><td>Current lives</td></tr><tr><td><code>round</code></td><td>Completed rounds</td></tr><tr><td><code>tick</code></td><td>Simulation step</td></tr><tr><td><code>popped</code></td><td>Pops (in <code>on_pop</code>, this step's)</td></tr><tr><td><code>tower_count</code>, <code>bloon_count</code></td><td>Live counts</td></tr><tr><td><code>sandbox</code></td><td>Whether this is a Sandbox match</td></tr><tr><td><code>event</code></td><td>Hook-specific data, when present</td></tr></tbody></table></div>
+
+<h2 id="commands">Commands</h2>
+<pre class="code" data-lang="rhai"><code>#{op: &quot;cash&quot;, amount: 100}                       // add (negative subtracts)
+#{op: &quot;lives&quot;, value: 200}                       // set; doesn&#x27;t revive an ended game
+#{op: &quot;spawn&quot;, name: &quot;Blue&quot;, count: 30, spacing: 0.2}
+#{op: &quot;clear_bloons&quot;}
+#{op: &quot;reset_cooldowns&quot;}
+#{op: &quot;popup&quot;, title: &quot;Hello&quot;, body: &quot;Your message&quot;}
+#{op: &quot;ui&quot;, widget: #{id: &quot;panel&quot;, tree: node, actions: #{&quot;Button&quot;: &quot;on_click&quot;}, modal: true}}
+#{op: &quot;remove_ui&quot;, id: &quot;panel&quot;}
+#{op: &quot;inspect&quot;, query: #{kind: &quot;towers&quot;, offset: 0, limit: 8, tag: &quot;list&quot;}}
+#{op: &quot;entity_patch&quot;, patch: #{kind: &quot;bloons&quot;, id: b.id, layer: b.layer, fields: #{hp: 50}}}
+#{op: &quot;damage_bloon&quot;, id: b.id, layer: b.layer, amount: 5}
+#{op: &quot;listen&quot;, event: &quot;before_fire&quot;, enabled: true}</code></pre>
+<p>Commands in one callback are validated together before any apply. An invalid batch or an over-budget script disables
+that script for the match.</p>
+
+<h2 id="limits">Limits</h2>
+<div class="table"><table><thead><tr><th>Limit</th><th>Value</th></tr></thead><tbody><tr><td>Operations per callback</td><td>30,000</td></tr><tr><td>Operations per simulation tick (all scripts)</td><td>100,000</td></tr><tr><td>Call depth</td><td>16</td></tr><tr><td>Commands per callback</td><td>32</td></tr><tr><td>Persistent <code>this</code> state</td><td>64 KiB</td></tr><tr><td>Script source</td><td>32 KiB (inside the 64 KiB manifest)</td></tr><tr><td>Callback output</td><td>256 KiB</td></tr></tbody></table></div>
+<div class="callout warn"><strong>Limit</strong><p>Scripts have no filesystem, network or process APIs. Runtime script mods work in local matches and are rejected in co-op until their state protocol exists.</p></div>
+<p>A complete example is <a href="/docs/examples/#workshop">Mechanics Workshop</a>.</p>
+
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/models/"><span>Previous</span>Custom models</a><a class="next" href="/docs/ui/"><span>Next</span>Custom UI</a></nav>
+    <footer class="foot">Unofficial fan project. Not affiliated with Ninja Kiwi. <a href="/">rusttd6.com</a></footer>
+  </main>
+  <aside class="toc"><p>On this page</p><ul><li><a href="#first">Your first script</a></li><li><a href="#hooks">Hooks</a></li><li><a href="#ctx">The ctx snapshot</a></li><li><a href="#commands">Commands</a></li><li><a href="#limits">Limits</a></li></ul></aside>
+</div>
+<script src="/docs/nav.js" defer></script>
+</body>
+</html>

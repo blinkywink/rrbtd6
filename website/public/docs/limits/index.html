@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2f80f5">
+<title>Limits &amp; roadmap — RustTD6 mod API</title>
+<meta name="description" content="Every limit in one place, and what isn&#x27;t implemented yet.">
+<link rel="canonical" href="https://rusttd6.com/docs/limits/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RustTD6">
+<meta property="og:title" content="Limits &amp; roadmap — RustTD6 mod API">
+<meta property="og:description" content="Every limit in one place, and what isn&#x27;t implemented yet.">
+<meta property="og:url" content="https://rusttd6.com/docs/limits/">
+<meta property="og:image" content="https://rusttd6.com/logo.png">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="/logo.png" type="image/png">
+<link rel="apple-touch-icon" href="/logo.png">
+<link rel="preload" href="/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar"><div class="bar-inner">
+  <a class="logo" href="/docs/">RustTD6 <span>Mod API</span></a>
+  <nav class="bar-links" aria-label="Site">
+    <a href="/">Home</a>
+    <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+    <a class="pill" href="/docs/quick-start/">Get started</a>
+  </nav>
+  <details class="menu">
+    <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
+    <nav class="menu-panel" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/" aria-current="page">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul><p class="side-group">Site</p><ul><li><a href="/">Home</a></li><li><a href="https://github.com/blinkywink/rrbtd6">GitHub</a></li></ul></nav>
+  </details>
+</div></header>
+<div class="layout">
+  <nav class="side" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/" aria-current="page">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul></nav>
+  <main class="content">
+    <p class="crumb">Reference</p>
+    <h1>Limits & roadmap</h1>
+    <p class="summary">Every limit in one place, and what isn't implemented yet.</p>
+    
+<h2 id="limits">Limits</h2>
+<div class="table"><table><thead><tr><th>What</th><th>Limit</th></tr></thead><tbody><tr><td>Manifest size</td><td>64 KiB</td></tr><tr><td>Operations per mod</td><td>256</td></tr><tr><td>Installed mod folders</td><td>256</td></tr><tr><td>Mod ID</td><td>1–64 characters</td></tr><tr><td>Script source</td><td>32 KiB</td></tr><tr><td>Operations per callback / per tick</td><td>30,000 / 100,000</td></tr><tr><td>Commands per callback</td><td>32</td></tr><tr><td>Persistent script state</td><td>64 KiB</td></tr><tr><td>UI widgets / nodes / depth / bindings</td><td>64 / 128 / 12 / 32</td></tr><tr><td>Entity query page</td><td>128 items; 8 per step; 64 pending</td></tr><tr><td>Model</td><td>60,000 vertices; 600 frames per clip; 128 MiB poses</td></tr><tr><td>Mod icon</td><td>512 × 512 px, 1 MiB</td></tr><tr><td>Co-op room</td><td>16 data mods, 24 KiB of manifests</td></tr></tbody></table></div>
+
+<h2 id="not-yet">Not implemented yet</h2>
+<ul>
+  <li>Fourth (and further) upgrade paths</li>
+  <li>Arbitrary new frontend screens (in-match overlays and menu edits work)</li>
+  <li>Custom map registration and import</li>
+  <li>Arbitrary new native behaviour types and unrestricted engine writes</li>
+  <li>Script mods and custom art in co-op</li>
+  <li>New profile counters</li>
+</ul>
+
+<h2 id="direction">Direction</h2>
+<p>The goal is a general mod platform: arbitrary upgrade graphs, complete per-upgrade behaviour and art, custom maps
+with scripted interactions, custom UI with actions, and validated co-op dependency and asset sharing, all through
+documented code APIs that reload safely, with no in-game editor and no per-frame Python or DLL injection.</p>
+
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/examples/"><span>Previous</span>Examples & downloads</a><a class="next" href="/docs/units/"><span>Next</span>Units & coordinates</a></nav>
+    <footer class="foot">Unofficial fan project. Not affiliated with Ninja Kiwi. <a href="/">rusttd6.com</a></footer>
+  </main>
+  <aside class="toc"><p>On this page</p><ul><li><a href="#limits">Limits</a></li><li><a href="#not-yet">Not implemented yet</a></li><li><a href="#direction">Direction</a></li></ul></aside>
+</div>
+<script src="/docs/nav.js" defer></script>
+</body>
+</html>

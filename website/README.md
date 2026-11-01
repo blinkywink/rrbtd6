@@ -1,10 +1,16 @@
 # rusttd6.com
 
-Static home and mod documentation pages: `public/index.html` and `public/styles.css`, with self-hosted
-Luckiest Guy (headings) and Inter (text). Mod docs live at `public/mods/index.html`, with a downloadable SDK example.
-No build step, no JavaScript, no analytics and no
-game assets. Font licenses: `public/fonts/LuckiestGuy-LICENSE.txt` (Apache 2.0) and
-`public/fonts/Inter-OFL.txt` (SIL OFL).
+Static home page (`public/index.html`, `public/styles.css`) and a separate mod API docs site
+(`public/docs/`, its own `docs.css`), with self-hosted Luckiest Guy (headings), Inter (text) and Comic Neue (the wordmark, where Comic Sans
+isn't installed).
+Almost no JavaScript: the only script is `docs/nav.js`, which keeps the docs sidebar's scroll
+between pages (the CSP allows same-origin scripts only). Menus are CSS-only `<details>`. No
+analytics and no game assets.
+
+The docs pages are generated from `build_docs.py` and committed as plain HTML; after editing a
+page there, run `python website/build_docs.py`. `/mods/` redirects to `/docs/`; the example
+downloads stay under `public/mods/`. Font licenses: `public/fonts/LuckiestGuy-LICENSE.txt` (Apache 2.0),
+`public/fonts/Inter-OFL.txt` and `public/fonts/ComicNeue-OFL.txt` (SIL OFL).
 
 ## Vercel
 

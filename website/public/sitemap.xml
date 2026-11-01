@@ -1,3 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>https://rusttd6.com/</loc></url>  <url><loc>https://rusttd6.com/mods/</loc></url>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://rusttd6.com/</loc></url>
+  <url><loc>https://rusttd6.com/docs/</loc></url>
+  <url><loc>https://rusttd6.com/docs/bloons-rounds-modes/</loc></url>
+  <url><loc>https://rusttd6.com/docs/content/</loc></url>
+  <url><loc>https://rusttd6.com/docs/coop/</loc></url>
+  <url><loc>https://rusttd6.com/docs/entities/</loc></url>
+  <url><loc>https://rusttd6.com/docs/examples/</loc></url>
+  <url><loc>https://rusttd6.com/docs/faq/</loc></url>
+  <url><loc>https://rusttd6.com/docs/limits/</loc></url>
+  <url><loc>https://rusttd6.com/docs/manifest/</loc></url>
+  <url><loc>https://rusttd6.com/docs/menus/</loc></url>
+  <url><loc>https://rusttd6.com/docs/models/</loc></url>
+  <url><loc>https://rusttd6.com/docs/mods-menu/</loc></url>
+  <url><loc>https://rusttd6.com/docs/python-sdk/</loc></url>
+  <url><loc>https://rusttd6.com/docs/quick-start/</loc></url>
+  <url><loc>https://rusttd6.com/docs/recipes/</loc></url>
+  <url><loc>https://rusttd6.com/docs/scripts/</loc></url>
+  <url><loc>https://rusttd6.com/docs/shop/</loc></url>
+  <url><loc>https://rusttd6.com/docs/troubleshooting/</loc></url>
+  <url><loc>https://rusttd6.com/docs/ui/</loc></url>
+  <url><loc>https://rusttd6.com/docs/units/</loc></url>
+  <url><loc>https://rusttd6.com/docs/upgrades/</loc></url>
 </urlset>

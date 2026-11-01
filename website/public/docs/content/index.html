@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2f80f5">
+<title>Content operations — RustTD6 mod API</title>
+<meta name="description" content="Every operation a manifest&#x27;s content list can contain.">
+<link rel="canonical" href="https://rusttd6.com/docs/content/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RustTD6">
+<meta property="og:title" content="Content operations — RustTD6 mod API">
+<meta property="og:description" content="Every operation a manifest&#x27;s content list can contain.">
+<meta property="og:url" content="https://rusttd6.com/docs/content/">
+<meta property="og:image" content="https://rusttd6.com/logo.png">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="/logo.png" type="image/png">
+<link rel="apple-touch-icon" href="/logo.png">
+<link rel="preload" href="/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar"><div class="bar-inner">
+  <a class="logo" href="/docs/">RustTD6 <span>Mod API</span></a>
+  <nav class="bar-links" aria-label="Site">
+    <a href="/">Home</a>
+    <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
+    <a class="pill" href="/docs/quick-start/">Get started</a>
+  </nav>
+  <details class="menu">
+    <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
+    <nav class="menu-panel" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/" aria-current="page">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul><p class="side-group">Site</p><ul><li><a href="/">Home</a></li><li><a href="https://github.com/blinkywink/rrbtd6">GitHub</a></li></ul></nav>
+  </details>
+</div></header>
+<div class="layout">
+  <nav class="side" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/" aria-current="page">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul></nav>
+  <main class="content">
+    <p class="crumb">Content API</p>
+    <h1>Content operations</h1>
+    <p class="summary">Every operation a manifest's content list can contain.</p>
+    
+<p>The <code>content</code> list is the heart of a mod. Each entry is one operation, applied in order.</p>
+
+<h2 id="tower"><code>tower</code></h2>
+<pre class="code" data-lang="json"><code>{&quot;op&quot;: &quot;tower&quot;, &quot;id&quot;: &quot;quickstart.dart&quot;, &quot;base&quot;: &quot;DartMonkey&quot;, &quot;patch&quot;: {&quot;cost&quot;: 100}}</code></pre>
+<p>Clones a non-hero tower: its upgrade tiers, shop entry and shared visual references. <code>patch</code> changes existing
+base fields such as cost, range or icon. No game assets are copied or distributed. Heroes can't be clone bases.</p>
+
+<h2 id="bloon"><code>bloon</code></h2>
+<pre class="code" data-lang="json"><code>{&quot;op&quot;: &quot;bloon&quot;, &quot;id&quot;: &quot;quickstart.durable-red&quot;, &quot;base&quot;: &quot;Red&quot;, &quot;patch&quot;: {&quot;maxHealth&quot;: 5}}</code></pre>
+<p>Clones a bloon and adds it to the Sandbox list. Native camel-case fields include <code>maxHealth</code>,
+<code>isCamo</code>, <code>speed</code>, <code>radius</code> and <code>children</code>. Children must exist and can't form cycles.</p>
+
+<h2 id="mode"><code>mode</code> and <code>all_modes</code></h2>
+<pre class="code" data-lang="json"><code>{&quot;op&quot;: &quot;mode&quot;, &quot;id&quot;: &quot;quickstart.training&quot;, &quot;base&quot;: &quot;Medium&quot;, &quot;patch&quot;: {&quot;cash&quot;: 2000}}
+{&quot;op&quot;: &quot;all_modes&quot;, &quot;patch&quot;: {&quot;lives&quot;: 500}}</code></pre>
+<p><code>mode</code> clones a mode; new IDs appear in the mode screen's custom selector (IDs are stable names, not indices).
+<code>all_modes</code> patches every mode present at that point in the list.</p>
+
+<h2 id="set"><code>set</code></h2>
+<pre class="code" data-lang="json"><code>{&quot;op&quot;: &quot;set&quot;, &quot;path&quot;: &quot;/modes/Medium/cash&quot;, &quot;value&quot;: 1500}
+{&quot;op&quot;: &quot;set&quot;, &quot;path&quot;: &quot;/towers/DartMonkey/cost&quot;, &quot;value&quot;: 100}</code></pre>
+<p>Replaces an existing field addressed by a JSON Pointer. Roots:</p>
+<div class="table"><table><thead><tr><th>Root</th><th>Contains</th></tr></thead><tbody><tr><td><code>towers</code></td><td>Tower definitions (shop cost, range, footprint…)</td></tr><tr><td><code>tower_tiers</code></td><td>Per-tier attacks, weapons, projectiles and upgrades</td></tr><tr><td><code>bloons</code></td><td>Bloon definitions</td></tr><tr><td><code>modes</code></td><td>Difficulties and modes</td></tr><tr><td><code>start</code></td><td>Starting values</td></tr><tr><td><code>rounds</code>, <code>round_sets</code></td><td>Round groups and round sets</td></tr><tr><td><code>freeplay</code></td><td>Freeplay round groups</td></tr></tbody></table></div>
+<p>Inspect your own <code>local_extracted/game/game.json</code> for native field names and supported behaviours.</p>
+
+<h2 id="copy"><code>copy</code></h2>
+<p><code>{"op": "copy", "from": &lt;pointer&gt;, "path": &lt;pointer&gt;}</code> copies an existing native definition to another
+existing path. The SDK's <a href="/docs/python-sdk/#templates">projectile templates</a> use it, so you rarely write it by hand.</p>
+
+<h2 id="arrays"><code>insert</code> and <code>remove</code></h2>
+<p>Change arrays, including attacks, weapons, abilities and round groups. Values must match native data types; adding an
+array entry doesn't create a new native behaviour type.</p>
+
+<h2 id="menu"><code>menu</code></h2>
+<pre class="code" data-lang="json"><code>{&quot;op&quot;: &quot;menu&quot;, &quot;page&quot;: &quot;MainMenuUI&quot;, &quot;path&quot;: &quot;&lt;node path from ui/prefabs/MainMenuUI.json&gt;&quot;, &quot;text&quot;: &quot;Hello&quot;}</code></pre>
+<p>Changes an existing frontend node's <code>text</code> or <code>visible</code> state when that scene loads. <code>page</code>
+is the prefab filename without <code>.json</code>; paths are relative to the node hierarchy in your local
+<code>ui/prefabs</code> export. Values the game updates dynamically may overwrite a load-time edit.</p>
+
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/manifest/"><span>Previous</span>The manifest</a><a class="next" href="/docs/python-sdk/"><span>Next</span>Python SDK</a></nav>
+    <footer class="foot">Unofficial fan project. Not affiliated with Ninja Kiwi. <a href="/">rusttd6.com</a></footer>
+  </main>
+  <aside class="toc"><p>On this page</p><ul><li><a href="#tower">tower</a></li><li><a href="#bloon">bloon</a></li><li><a href="#mode">mode and all_modes</a></li><li><a href="#set">set</a></li><li><a href="#copy">copy</a></li><li><a href="#arrays">insert and remove</a></li><li><a href="#menu">menu</a></li></ul></aside>
+</div>
+<script src="/docs/nav.js" defer></script>
+</body>
+</html>
