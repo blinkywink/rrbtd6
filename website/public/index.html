@@ -31,7 +31,7 @@
   <a class="brand" href="/">RustTD6</a>
   <nav class="nav-desktop" aria-label="Sections">
     <a href="#features">Features</a>
-    <a href="#accuracy">Accuracy</a>
+    <a href="#progress">Progress</a>
     <a href="#install">Install</a>
     <a href="#platforms">Platforms</a>
     <a href="#faq">FAQ</a>
@@ -43,10 +43,9 @@
     <nav aria-label="Sections">
       <a href="#features">Features</a>
       <a href="#whats-in">What's in it</a>
-      <a href="#accuracy">Accuracy</a>
+      <a href="#progress">Progress</a>
       <a href="#install">Install</a>
       <a href="#platforms">Platforms</a>
-      <a href="#requirements">Requirements</a>
       <a href="#faq">FAQ</a>
       <a href="/docs/">Mod API</a>
       <a href="https://github.com/blinkywink/rrbtd6">GitHub</a>
@@ -146,44 +145,57 @@
     </div>
   </section>
 
-  <section class="block">
-    <h2>How it works</h2>
-    <div class="how">
-      <div><span class="step-tag">Your PC</span><strong>Your BTD6 install</strong><p>The art, sounds and tower stats come from your own copy of the game.</p></div>
-      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></div>
-      <div><span class="step-tag">Installer</span><strong>Extracted locally</strong><p>Nothing from Ninja Kiwi is hosted or shared, which is why you need to own the game.</p></div>
-      <div class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></div>
-      <div><span class="step-tag">RustTD6</span><strong>A new engine</strong><p>A separate program written in Rust plays them. It isn't a mod, and it never changes BTD6 or your save.</p></div>
+  <!-- progress:start -->
+  <section id="progress" class="block">
+    <h2>Progress</h2>
+    <p class="progress-lede">Every tower is checked against recordings of the real game: a recorder mod plays a scenario in BTD6, RustTD6 replays it, and a square fills in when every bloon and projectile matches frame by frame.</p>
+    <div class="progress-total">
+      <div><span class="pnum">387</span><span class="of">of 755</span><p>recorded scenarios match</p></div>
+      <div><span class="pnum">3</span><span class="of">of 25</span><p>towers fully matched</p></div>
     </div>
-  </section>
-
-  <section id="accuracy" class="block">
-    <h2>Built to match</h2>
-    <div class="method">
-      <div><span class="big">1</span><strong>Read the game's code</strong><p>Every mechanic is taken from the original game's own logic, not guessed from videos.</p></div>
-      <div><span class="big">2</span><strong>Record the real game</strong><p>A recorder mod plays scripted scenarios in BTD6 and logs every bloon, tower and projectile, frame by frame.</p></div>
-      <div><span class="big">3</span><strong>Replay and compare</strong><p>RustTD6 replays the same scenario and reports every frame that differs until there are none.</p></div>
+    <div class="towers-grid">
+      <div class="tower-card done"><div class="tower-head"><strong>Dart Monkey</strong><span>70/70</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i></div></div>
+      <div class="tower-card done"><div class="tower-head"><strong>Boomerang Monkey</strong><span>99/99</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Bomb Shooter</strong><span>28/34</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Tack Shooter</strong><span>17/25</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Ice Monkey</strong><span>20/25</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Glue Gunner</strong><span>33/34</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Desperado</strong><span>6/34</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Sniper Monkey</strong><span>19/34</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Monkey Sub</strong><span>16/32</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Monkey Buccaneer</strong><span>0/33</span></div><div class="squares"><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Monkey Ace</strong><span>0/25</span></div><div class="squares"><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card none"><div class="tower-head"><strong>Heli Pilot</strong><span>not recorded yet</span></div><div class="squares"><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Mortar Monkey</strong><span>0/24</span></div><div class="squares"><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Dartling Gunner</strong><span>0/23</span></div><div class="squares"><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Wizard Monkey</strong><span>29/34</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card none"><div class="tower-head"><strong>Super Monkey</strong><span>not recorded yet</span></div><div class="squares"><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i></div></div>
+      <div class="tower-card done"><div class="tower-head"><strong>Ninja Monkey</strong><span>34/34</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Alchemist</strong><span>0/34</span></div><div class="squares"><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Druid</strong><span>0/34</span></div><div class="squares"><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Mermonkey</strong><span>0/34</span></div><div class="squares"><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Banana Farm</strong><span>0/25</span></div><div class="squares"><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card none"><div class="tower-head"><strong>Spike Factory</strong><span>not recorded yet</span></div><div class="squares"><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i></div></div>
+      <div class="tower-card none"><div class="tower-head"><strong>Monkey Village</strong><span>not recorded yet</span></div><div class="squares"><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i><i class="sq ghost"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Engineer Monkey</strong><span>7/34</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
+      <div class="tower-card "><div class="tower-head"><strong>Beast Handler</strong><span>9/34</span></div><div class="squares"><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq on"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i><i class="sq"></i></div></div>
     </div>
-    <p class="verified-title">Already verified against recordings</p>
-    <ul class="chips">
-      <li>Weapon timing</li><li>Bloon spawns &amp; leaks</li><li>Round emission timing</li><li>Targeting range</li>
-      <li>Line of sight</li><li>MOAB targeting</li><li>Knockback</li><li>Pops &amp; children</li>
-      <li>Frame order</li><li>Monkey XP</li><li>End-of-game stats</li>
-    </ul>
-    <p class="aside">Towers are matched one at a time. The checklist lives in <a href="https://github.com/blinkywink/rrbtd6/blob/main/docs/dev/TOWERS.md">TOWERS.md</a>.</p>
+    <h3 class="progress-sub">Everything else <span>(rough estimates)</span></h3>
+    <div class="areas">
+      <div class="area"><strong>Bloons &amp; MOABs</strong><div class="squares"><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big"></i><i class="sq big"></i></div></div>
+      <div class="area"><strong>Rounds &amp; spawning</strong><div class="squares"><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big"></i></div></div>
+      <div class="area"><strong>Targeting &amp; projectiles</strong><div class="squares"><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big"></i><i class="sq big"></i></div></div>
+      <div class="area"><strong>Heroes</strong><div class="squares"><i class="sq big on"></i><i class="sq big on"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i></div></div>
+      <div class="area"><strong>Bosses</strong><div class="squares"><i class="sq big on"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i></div></div>
+      <div class="area"><strong>Maps</strong><div class="squares"><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i></div></div>
+      <div class="area"><strong>Game modes</strong><div class="squares"><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i></div></div>
+      <div class="area"><strong>Menus &amp; UI</strong><div class="squares"><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i></div></div>
+      <div class="area"><strong>Co-op</strong><div class="squares"><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i></div></div>
+      <div class="area"><strong>Visuals &amp; effects</strong><div class="squares"><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big on"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i><i class="sq big"></i></div></div>
+    </div>
+    <p class="aside">Updated 2026-11-01. Towers are matched one at a time; the details live in <a href="https://github.com/blinkywink/rrbtd6/blob/main/docs/dev/TOWERS.md">TOWERS.md</a>.</p>
   </section>
-
-  <section id="settings" class="block">
-    <h2>Your settings</h2>
-    <ul class="list">
-      <li><strong>Advanced options</strong>Default, Graphics and UI sections, closed until you need them.</li>
-      <li><strong>Skip the startup screens</strong>Go straight to the main menu.</li>
-      <li><strong>FPS where it belongs</strong>The frame rate shows in the window's title bar, not over the game.</li>
-      <li><strong>Hide what you don't use</strong>Hide the boss button, and the Double Cash and Fast Track buttons.</li>
-      <li><strong>Drag &amp; Drop or Lock &amp; Drop</strong>Both of the game's placement styles, from the pause menu.</li>
-      <li><strong>Show the Mods button</strong>Turn on the Mods menu when you want it.</li>
-    </ul>
-  </section>
+  <!-- progress:end -->
 
   <section id="mods" class="block">
     <h2>Make it yours</h2>
@@ -223,31 +235,6 @@ mod.mode(<span class="s">"training"</span>, base=<span class="s">"Medium"</span>
       </div>
     </div>
     <p class="aside">macOS and Linux builds are for personal use and aren't distributed. Instructions are in the <a href="https://github.com/blinkywink/rrbtd6#building-developers">README</a>.</p>
-  </section>
-
-  <section id="requirements" class="block">
-    <h2>Requirements &amp; privacy</h2>
-    <div class="split">
-      <div class="panel">
-        <span class="tag">You need</span>
-        <ul class="ticks">
-          <li>Windows 10 or 11 (64-bit)</li>
-          <li>Bloons TD 6 on PC</li>
-          <li><a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> for the one-time setup</li>
-          <li>Several gigabytes of free disk space for the extracted assets</li>
-        </ul>
-      </div>
-      <div class="panel">
-        <span class="tag">Your data</span>
-        <ul class="ticks">
-          <li>No account and no sign-in</li>
-          <li>Progress stays in a local profile on your PC</li>
-          <li>The installer and launcher only talk to GitHub, python.org and PyPI</li>
-          <li>Co-op connects players directly, encrypted</li>
-          <li>This website has no analytics or trackers</li>
-        </ul>
-      </div>
-    </div>
   </section>
 
   <section id="faq" class="block">

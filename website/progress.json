@@ -1,0 +1,43 @@
+{
+  "_how": "Edit the numbers, then run: python website/build_progress.py. Towers: recorded scenarios that match the real game frame by frame / all recorded. Areas: rough estimates out of 10.",
+  "updated": "2026-11-01",
+  "towers": [
+    ["Dart Monkey", 70, 70],
+    ["Boomerang Monkey", 99, 99],
+    ["Bomb Shooter", 28, 34],
+    ["Tack Shooter", 17, 25],
+    ["Ice Monkey", 20, 25],
+    ["Glue Gunner", 33, 34],
+    ["Desperado", 6, 34],
+    ["Sniper Monkey", 19, 34],
+    ["Monkey Sub", 16, 32],
+    ["Monkey Buccaneer", 0, 33],
+    ["Monkey Ace", 0, 25],
+    ["Heli Pilot", 0, 0],
+    ["Mortar Monkey", 0, 24],
+    ["Dartling Gunner", 0, 23],
+    ["Wizard Monkey", 29, 34],
+    ["Super Monkey", 0, 0],
+    ["Ninja Monkey", 34, 34],
+    ["Alchemist", 0, 34],
+    ["Druid", 0, 34],
+    ["Mermonkey", 0, 34],
+    ["Banana Farm", 0, 25],
+    ["Spike Factory", 0, 0],
+    ["Monkey Village", 0, 0],
+    ["Engineer Monkey", 7, 34],
+    ["Beast Handler", 9, 34]
+  ],
+  "areas": [
+    ["Bloons & MOABs", 8],
+    ["Rounds & spawning", 9],
+    ["Targeting & projectiles", 8],
+    ["Heroes", 2],
+    ["Bosses", 1],
+    ["Maps", 3],
+    ["Game modes", 4],
+    ["Menus & UI", 6],
+    ["Co-op", 4],
+    ["Visuals & effects", 5]
+  ]
+}

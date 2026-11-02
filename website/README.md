@@ -12,6 +12,13 @@ page there, run `python website/build_docs.py`. `/mods/` redirects to `/docs/`; 
 downloads stay under `public/mods/`. Font licenses: `public/fonts/LuckiestGuy-LICENSE.txt` (Apache 2.0),
 `public/fonts/Inter-OFL.txt` and `public/fonts/ComicNeue-OFL.txt` (SIL OFL).
 
+## Progress section
+
+The home page's Progress squares come from `progress.json` (towers: recorded scenarios that match the
+real game / recorded; other areas: rough estimates out of 10). Edit the numbers, then run
+`python website/build_progress.py`; it rewrites the part of `public/index.html` between the
+`progress:start` and `progress:end` markers.
+
 ## Images
 
 `public/social.png` is the link preview, from `social-card.html`; `sh tools/site_social_card.sh` regenerates it.
