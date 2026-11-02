@@ -1,6 +1,6 @@
 {
   "_how": "Edit the numbers, then run: python website/build_progress.py. Towers: recorded scenarios that match the real game frame by frame / all recorded. Areas: rough estimates out of 10.",
-  "updated": "2026-11-01",
+  "updated": "2026-11-02",
   "towers": [
     ["Dart Monkey", 70, 70],
     ["Boomerang Monkey", 99, 99],
@@ -16,7 +16,7 @@
     ["Heli Pilot", 0, 0],
     ["Mortar Monkey", 0, 24],
     ["Dartling Gunner", 0, 23],
-    ["Wizard Monkey", 29, 34],
+    ["Wizard Monkey", 34, 34],
     ["Super Monkey", 0, 0],
     ["Ninja Monkey", 34, 34],
     ["Alchemist", 0, 34],
