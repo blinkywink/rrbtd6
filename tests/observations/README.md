@@ -19,7 +19,7 @@ Values have to be read from the running game's simulation objects, for example `
 
 Constraints:
 - offline single-player only
-- no Epic or Ninja Kiwi online services
+- no Ninja Kiwi online services
 - you launch the game yourself
 
 ## Planned experiments

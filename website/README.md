@@ -12,6 +12,11 @@ page there, run `python website/build_docs.py`. `/mods/` redirects to `/docs/`; 
 downloads stay under `public/mods/`. Font licenses: `public/fonts/LuckiestGuy-LICENSE.txt` (Apache 2.0),
 `public/fonts/Inter-OFL.txt` and `public/fonts/ComicNeue-OFL.txt` (SIL OFL).
 
+## Images
+
+`public/social.png` is the link preview, from `social-card.html`. `sh tools/site_screenshots.sh` regenerates it
+and the README's screenshots. They show our own site only: no game assets go on the site or in the repository.
+
 ## Vercel
 
 Import `blinkywink/rrbtd6` and set Root Directory to `website`. `vercel.json` serves `public`

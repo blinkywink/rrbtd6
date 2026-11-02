@@ -922,8 +922,11 @@ def render(i, p):
 <meta property="og:title" content="{html.escape(title)}">
 <meta property="og:description" content="{html.escape(p["summary"])}">
 <meta property="og:url" content="https://rusttd6.com{href(p)}">
-<meta property="og:image" content="https://rusttd6.com/logo.png">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://rusttd6.com/social.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="RustTD6: Bloons TD 6, on a new engine.">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/logo.png" type="image/png">
 <link rel="apple-touch-icon" href="/logo.png">
 <link rel="preload" href="/fonts/Inter.ttf" as="font" type="font/ttf" crossorigin>

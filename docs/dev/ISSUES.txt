@@ -7,8 +7,6 @@ or "CAN'T FIX YET" (with why). A screenshot of the real game next to ours helps 
 
 OPEN
 ----
-- Double Cash / Fast Track: foreground toggles save client preferences, and their
-  UI hide options switch those preferences off first. Gameplay effects still need native
   implementation / validation; these controls do not upload changes to the official account.
 - Daily chest: native calendar, cached server 50-day reward cycle, saved reward index, daily reset,
   and session-only opening preview wired. No reward credit, persistent claim or cloud upload yet.
@@ -83,6 +81,18 @@ OPEN
 
 DONE
 ----
+- Sandbox round control now reaches generated late rounds (including round 200)
+  and restores early-round bloon stats when returning to round 1. Custom round
+  sets without a generator retain their fixed upper bound.
+- Reset Damage now clears both the damage and pops counters for every tower.
+- Sandbox/freeplay HUD shows the current round without a fixed end denominator.
+- Shop: double-clicking an ordinary tower tile opens its upgrades page; scrolling
+  or dragging cancels the double-click sequence. Works even when unaffordable.
+- Sandbox: zero lives now pauses ordinary and temporary attack shots; restoring
+  health resumes attacks. The zero-health regression test passes.
+- Late-game simulation: reuse segment visibility within each target search and
+  avoid allocating tier-name strings for model lookups. Matched runs use about
+  67% less step time and 57% lower worst steps; unchanged performance guard passes.
 - Sandbox cash/hearts can be edited directly; zero lives stops attacks without defeat and
   restoring lives resumes testing.
 - Optional Mods menu: native manager, code-authored SDK/content API, custom towers/bloons/

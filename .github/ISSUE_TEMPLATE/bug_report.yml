@@ -1,0 +1,30 @@
+name: Bug report
+description: Something plays differently from BTD6, breaks or crashes
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: And what does the real game do in the same situation?
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Map, mode and round
+      placeholder: Monkey Meadow, Hard, round 42
+  - type: input
+    id: towers
+    attributes:
+      label: Towers involved
+      placeholder: Dart Monkey 0-2-5
+  - type: input
+    id: version
+    attributes:
+      label: RustTD6 and BTD6 versions
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots or logs
+      description: Please don't attach game files.

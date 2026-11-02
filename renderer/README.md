@@ -1,6 +1,6 @@
-# btd6-game: playable local prototype
+# btd6-game
 
-This prototype plays Monkey Meadow on Medium with the Dart Monkey, Boomerang Monkey, Bomb Shooter, Tack Shooter, Ice Monkey, Glue Gunner, Desperado, Sniper Monkey, Mortar Monkey, Dartling Gunner, Wizard Monkey, Super Monkey, Ninja Monkey, Alchemist, Druid, Banana Farm, Spike Factory and Monkey Village. All data and art are loaded at runtime from `local_extracted/`, which is built from your own BTD6 install and git-ignored. Nothing proprietary is in the source.
+The playable game: the simulation (`src/game.rs`), graphics, menus, audio and mods, on macroquad. It loads the data that `tools/extract_all.py` extracts from your own BTD6 install. Per-tower accuracy is tracked in [TOWERS](../docs/dev/TOWERS.md); intended differences are in [DEVIATIONS](../docs/DEVIATIONS.md). The sections below are detailed notes on each system, added as it was built, so some describe earlier stages.
 
 ## Run
 
@@ -384,6 +384,9 @@ frontend extraction recipe), and loaded only when selected.
 
 ### Live event/menu follow-up (2026-10-24)
 
+(Superseded 2026-10-28: Races, Boss Rush, Contested Territory, Social Seasons with Teams /
+Perks, and Friends were removed by user request; see DEVIATIONS.md. Bosses and co-op stay.)
+
 - Home Race opens the current Race detail directly; its timer uses the live event name.
 - Profile veteran rank replaces the normal rank display. Map tiles use native cumulative
   bronze/silver/gold backgrounds and the black-CHIMPS flag for the hematite background.
@@ -580,17 +583,11 @@ overlap during captures, and rejects/retries affected captures (five attempts).
 Other desktop activity can still affect results. Frozen game data stays local
 and git-ignored alongside raw captures.
 
-Cloud reads remain enabled; uploads remain disabled. Ninja Kiwi's published flagging
-policy includes third-party modifications/mods and restrictions on public co-op.
-A correct serializer or accepted storage request does not establish anti-cheat safety.
-Before enabling writes: preserve encrypted server backup, retain same-account identity,
-produce a reviewable save delta, and verify download-after-upload. Never remove or
-rewrite server account restrictions, fabricate earned rewards, or substitute another
-account's save. No guarantee of an unflagged account can be made for this client.
+RustTD6 uses local profiles only. Sign-in, linking codes, cloud imports and uploads are removed.
 
 Co-op asset preparation: `export_coop_ui.py GAME EXTRACTED`. Source lobby dropdowns
 reset incompatible modes when difficulty changes; area previews remain configuration
-only until area restrictions are implemented. Cloud uploads remain disabled.
+only until area restrictions are implemented. No official account is used.
 
 Combat asset preparation: the renderer reads the current round's queued bloon
 types and descendants without emitting anything or advancing RNG, then prepares
@@ -717,40 +714,23 @@ when `RRBTD6_AUTOTEST` is set. Pair it with `RRBTD6_PRESENTATION_CHECK` and
 `RRBTD6_STARTUP_TRANSITION_OUT` captures the beginning, middle and end of the
 exit into an existing directory.
 
-The title player label polls the same asynchronous cached profile as the home
-menu. TMP font-color animation channels now apply the original name reveal after
-the plane intro (4.5167–4.7667 seconds), including older exports with hashed bindings.
-Clicking the signed-out prompt or current name opens the account panel.
-Typing/paste and Sign in/Enter launch one explicit login on a worker, followed by
-read-only profile downloads. The code travels over child stdin, never argv/logs;
-sessions stay Windows-encrypted. New online login is enabled for that child only,
-so opening the game does not enable background service polling or uploads.
-Back/Escape closes the screen; an in-flight result still updates the cached UI.
-Autotests cannot submit real credentials. `RRBTD6_STARTUP_ACCOUNT=1` with
-`RRBTD6_AUTOTEST` opens the panel after the title animation for visual verification.
+The title screen, Settings > Profile, home screen and private co-op use the same local name.
+Settings > Profile supports name editing and a two-click progression reset. Profiles persist
+atomically in local_extracted/local-profile.json with a backup. The setup DLL optionally
+seeds a new profile from the loaded display name only, via player-name.json. It never copies
+an account session or official progression. Existing local names take precedence.
 
-Settings > Account and the title account label now share one account panel and
-background job. Signed-in state shows the username and Log out; signed-out state
-shows one code field and Sign in. Back/Escape closes the panel without losing an
-in-flight result. The Settings background is captured once rather than redrawn
-under the modal. Logout removes this client's local sessions/pending code and
-persists a signed-out marker, preventing saved snapshots from restoring login.
-Downloaded progress stays encrypted and untouched. A successful new login clears
-the marker; account-dependent menu trees are rebuilt after an account change.
-`RRBTD6_SETTINGS_ACCOUNT=1` with `RRBTD6_FRONT=settings` and `RRBTD6_AUTOTEST`
-opens the Settings account panel for offline visual checks.
+All towers, upgrades, heroes and maps are available immediately; tower XP and gift unlocks
+are removed. Standard mode restrictions and in-match prices remain. Levels are cosmetic
+(100 XP per completed non-Sandbox round, 1,000 XP per level). Local profiles store wins,
+losses, highest round and independent solo/co-op map medals. Native-mode map wins
+award local medals, including modded runs; custom modes and challenges do not. Black CHIMPS awaits verified
+no-retry tracking. Reset clears progression while keeping the name, settings, mods and
+extracted assets. Mid-game simulation snapshots/resume are not implemented.
 
-The account card now presents local identity and optional Ninja Kiwi sign-in as
-separate sections. The network notice identifies account downloads as well as
-sign-in and GitHub client updates; it does not promise account safety.
-Local profiles persist in `local_extracted/local-profile.json`, with an atomic
-replacement and backup copy. Names (1–24 characters), installed avatar/banner
-choices, highest completed round and win/loss totals are local-only. Round/end
-saves run off the render thread, and downloaded Ninja Kiwi profiles remain
-separate. Signing out restores the complete local profile instead of an empty
-account object. Mid-game simulation snapshots/resume are not implemented.
-`RRBTD6_LOCAL_PROFILE=1` with `RRBTD6_AUTOTEST` suppresses the encrypted-account
-reader for offline local-profile visual checks without signing the user out.
+RRBTD6_SETTINGS_ACCOUNT=1 with RRBTD6_FRONT=settings and RRBTD6_AUTOTEST opens the
+local profile panel for visual checks. No credential or account reader runs in this mode
+or during normal startup.
 
 Native menu motion now includes the map screen and its separate MapGroup card
 sequence, map page/tab Next motion, difficulty/mode selection, Settings,
@@ -793,9 +773,8 @@ rows and category-specific public sharing remain incomplete.
 Imported savedMaps metadata drives MapButton.Continue and ContinueGamePanel.
 Starting fresh shows a CommonPopup and retains the imported official save;
 full simulation restore and real local-save overwrite are not implemented.
-Friends' map records have bindings for the native badge/panel and a hide option
-under Advanced > UI, but the service adapter has not supplied actual records.
-Missing records stay hidden rather than showing the prefab's sample scores.
+Friends (map records, the friends page and its buttons) are removed by user request
+(DEVIATIONS.md); the native badge and panel stay hidden.
 
 The extracted Maps entrance has six staggered scale channels (MapGroup.Open,
 0.7 s); it does not contain horizontal position channels for those six tiles.
@@ -858,3 +837,8 @@ Button animation feedback restores the authored image color on state changes.
 This prevents pressed-only color channels from leaving the settings gear dimmed
 when the shared Normal clip omits its corresponding color bindings. A regression
 check covers both release and reopening a screen.
+
+Sandbox round controls support generated freeplay beyond the exported fixed round
+set (for example 200). Returning to an early round restores its original bloon
+models. Custom round sets without freeplay groups stay bounded. Reset Damage
+clears both displayed damage and pops; Sandbox/freeplay HUD shows the round alone.

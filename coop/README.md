@@ -68,11 +68,11 @@ official-game co-op rooms. Official cloud uploads remain disabled.
 ```
 cargo test --profile game -p rrbtd6-coop
 cargo build --profile game -p rrbtd6-coop --bin coop-probe
-python -I tools/test_coop_transport.py path/to/coop-probe.exe
-python -I tools/test_coop_transport.py path/to/coop-probe.exe --match --players 4
-python -I tools/test_coop_transport.py path/to/coop-probe.exe --desync
+python -I tools/tests/test_coop_transport.py path/to/coop-probe.exe
+python -I tools/tests/test_coop_transport.py path/to/coop-probe.exe --match --players 4
+python -I tools/tests/test_coop_transport.py path/to/coop-probe.exe --desync
 cargo test --profile game -p btd6-game coop_replay_tests
-python -I tools/test_coop_game.py path/to/btd6-game.exe --players 4
+python -I tools/tests/test_coop_game.py path/to/btd6-game.exe --players 4
 cargo test --profile game -p btd6-game coop_digest_benchmark -- --ignored --nocapture
 ```
 

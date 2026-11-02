@@ -42,7 +42,7 @@ and imported UnityPy/Pillow/NumPy. The extraction test stub deliberately exited
 A second start reused the dependencies without downloads. The embedded runtime
 also exported a real map and terrain from the local game successfully.
 
-`python -I tools/test_launcher_bootstrap.py <built-launcher.exe>` runs the
+`python -I tools/tests/test_launcher_bootstrap.py <built-launcher.exe>` runs the
 embedded-runtime recovery/reuse check with a synthetic game fixture. It needs
 Windows and downloads Python/PyPI packages. The release workflow runs it after
 building; no proprietary game files, user account or game service are used.

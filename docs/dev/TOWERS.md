@@ -76,22 +76,25 @@ Towers:
   it), and the Orbit's keep test is 3D (MOAB-class bloons ride at 120, others at 20, a popped
   bloon keeping its height until it moves). All recordings match.
 
-- [ ] Bomb Shooter: 22 of 34 recordings (research/dumps/recordings/pending/bomb) match frame for
+- [ ] Bomb Shooter: 28 of 34 recordings (research/dumps/recordings/pending/bomb) match frame for
   frame: base with First / Last / Close / Strong, 1-0-0..4-0-0 lines, 3-0-0, 3-2-0, 4-0-0, 4-2-0 with
-  every targeting. Verified: map line of sight blocks blast hits (canCollisionBeBlockedByMapLos),
-  immune hits destroy shots only on Lead / Purple / Frozen, projectile heights against blockers,
-  PushBack onlyIfDamaged, abilities firing at activation (Game::towers_phase). Open: (2) cluster
-  bomblets (0-0-3+) end 1-2 frames early in some directions, cause unknown; (3) frag directions off
-  by float rounding (0-3-2, 5-0-2; no bloon affected).
+  every targeting, 0-0-2, 0-5-2, 5-0-2 (all targetings). Verified: map line of sight blocks blast
+  hits (canCollisionBeBlockedByMapLos), immune hits destroy shots only on Lead / Purple / Frozen,
+  projectile heights against blockers, PushBack onlyIfDamaged, abilities firing at activation
+  (Game::towers_phase), CreateProjectileOnContact.Collide emitting from the projectile's own rotation
+  through Vector2.Rotate (the frag directions' float steps). Open: (2) frags (0-0-3+, 0-2-5) flying
+  through TreeSectionEntrance (isBlocker, height 100, frag z 20, vsBlockerRadius 0) in the game but
+  stopped by it in the clone (bomb_003 rt 28, frame-start point 11.66 from a 12.27 circle): the
+  game's CollisionChecker map test needs decompiling; (3) 0-0-4 / 0-3-2 positions, not looked at.
 
-- [ ] Tack Shooter: 16 of 25 recordings (pending/tack) match: base, every 1-4 tier line with
+- [ ] Tack Shooter: 17 of 25 recordings (pending/tack) match: base, every 1-4 tier line with
   exact ArcEmission directions (degrees from the tower's rotation), Ring of Fire (eject point,
   radius = range + projectileRadiusOffset). Inferno Ring's meteor now follows the game's
   TrackTarget (turn after the first move, 5-frame target search, Vector2.AngleBetween /
   Vector3Boxed.Rotate). Open: abilities (Blade Maelstrom, same as Bomb), the meteor's blast spot
   (made at the meteor in the game though dontCreateAtBloon is off), 0-3-0 at rt 2754.
 
-- [ ] Ice Monkey: 19 of 25 recordings (pending/ice) match. Verified: FilterOveridingMutatedTarget,
+- [ ] Ice Monkey: 20 of 25 recordings (pending/ice) match. Verified: FilterOveridingMutatedTarget,
   Frigid immunities (12), EmitOnPop (ignoreSameFrameDegrade, once per Bloon.Damage), slow zones
   (bloonTag / inclusive, centre in range, multiplying, one per id), frozen MOAB-class speeds (5 /
   2.25), SlowMutator / Freeze modifier rules, applyAfterDamage freezes (bloon + its new children),
@@ -122,6 +125,37 @@ Towers:
   dead MOAB's bloon object, and an Instant missile targeting it reads the recycled object's
   position (sub_050 rt 528, 052 rt 506); (3) sub_001 rt 1291, 030 rt 955, 032 rt 591, 040 rt 816,
   upgrades_r30 rt 901 not looked at yet.
+
+- [ ] Desperado: 6 of 34 match (000 with every targeting, 001, 010). Verified: BurstWeaponBehavior
+  (ProjectilesCreated @0xc75760: currentCount - 1, lastEmission = now + intervalFrames -
+  rateFrames while shots are left, after the shot's CalcRateFrames; OnRoundEnd @0xc75370:
+  lastEmission = now - intervalFrames, burst full), InstantDamageEmission (Emit @0xc61020 puts the
+  projectile on the target; Process @0xc61370 collides the two the same frame, no distance test:
+  the clone runs its collision pass again for these after the towers act),
+  VagrantWeaponBehavior.GetRate (@0xcb69e0: rate / (max(0, noTowersRateBonus - towers x
+  towerRangeBonusReduction) + 1) / (min(bloons x bloonInRangeAttackSpeedBuff,
+  maxBloonAttackSpeedBuff) + 1); bloons within range + 2, from the zone as last updated),
+  VigilanteTowerBehavior (OnLivesLost @0xde0080, VigilanteMutator @0x126e830: rate x 0.6, range
+  + 16 for 900 frames, rateFrames recalculated at the leak). Open: desperado_002 rt 1614 (a pair
+  one frame off), the 0x28 float in Vigilante's cooldown (INFERRED 0), the higher tiers'
+  behaviours (Bounty Hunter, Standoff, Blazing Sun, marked-to-pop, Desperado targeting).
+
+- [ ] Not started or barely (recordings compared 2026-10-29): Monkey Ace 0/25 (the recorder doesn't
+  log the plane or its weapon; needs SimRecorder support first), Alchemist 0/34 (throws match;
+  potion hits differ from rt 132), Buccaneer 0/33, Dartling 0/23, Mortar 0/24, Beast Handler 9/34,
+  Engineer 7/34, Ninja 6/34, Sniper 14/34, Wizard 13/34 (Shimmer's FilterOnlyCamoIn, decamo swaps
+  the model, the Necromancer waits for a round end; open: 5-0-0's Guided Magic steers at its
+  target's previous-frame spot at rt 114 (a Yellow that just entered the map) and rt 2891 (a White
+  child just spawned off it); "pre-move spot for new targets", "always", and "when it was off the
+  map" each break 1-0-0 / 2-0-0 / 5-0-2, so the rule isn't found yet; the clone steers at the live spot), Druid 0/34 (the harness looped on
+  Jungle's Bounty, an ability with no cooldown; now activated at most once per tower).
+- [ ] Banana Farm: 0/25, but every bloon frame matches (the harness now places it in CHIMPS as
+  InputManager.CreateTowerAt does). Open: EmissionsPerRoundFilter (RoundStart @0xc7f2e0, Process
+  @0xc7ee40): per round, `count` bananas at (int)(i x roundDuration / (count - 1) + start)
+  (Spawner.GetRoundDuration); the clone throws its per-round count at once (farm_000: the game
+  every 57 frames from 43).
+- [x] Jungle's Bounty (Druid x-4-x): activateOnRoundEnd abilities go off at round end;
+  CashPerTowerInRange.Activate (@0xe3c330) and BonusLivesOnAbility (cash isn't in the comparison).
 
 - [ ] Game RNG: Simulation.Initialise makes syncedRandom / unsyncedRandom = BufferedRandom(
   GameModel.randomSeed) (System.Random inside, NextDouble = next x 1/int.MaxValue, one value

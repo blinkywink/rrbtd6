@@ -1,6 +1,6 @@
 # Compatibility specification and matrix
 
-Target: BTD6 build **57.2.12199** (Epic), Unity 6000.3.23f1, IL2CPP. Evidence for every *verified-disasm* row is in `research/04-native-analysis.md`.
+Evidence below was taken on BTD6 build **57.2.12199** (Epic), Unity 6000.3.23f1, IL2CPP; the game is now read from a Steam install, currently 57.4, where native addresses differ. Evidence for every *verified-disasm* row is in `research/04-native-analysis.md`.
 
 ## Status vocabulary
 

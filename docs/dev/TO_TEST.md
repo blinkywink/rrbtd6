@@ -2,6 +2,57 @@
 
 Added without a hands-on check. Tick them off (or note what's wrong) when you play. Newest at the top.
 
+## Setup and install (Claude, 2026-11-01)
+
+Checked from files and tests, not yet in a real install from a release:
+
+- [ ] Installer in BTD6: welcome dialog looks sharp, Comic Sans titles, "Create a desktop shortcut" works
+      ticked and unticked.
+- [ ] Progress window during setup: bar, stage, time left and tips change; it closes when the game starts.
+- [ ] Full setup in one run on the final code finishes. Note the time, and how much memory was free.
+- [ ] New player: Geraldo's shop items have models; the profile page opens from the main-menu avatar; map
+      cards and rewards show; hero icons and event medals show.
+- [ ] Placement Cancel and Lock & Drop buttons animate on a fresh install (RightPanel).
+- [ ] After a BTD6 update, setup re-exports models, maps and audio.
+
+## In-game fixes (Claude, 2026-11-01)
+
+- [ ] Paragons animate instead of T-posing, at every degree: Glaive Dominus, Ascended Shadow, Navarch, Sniper
+      Paragon, Magus Perfectus. Also Dan D Monke and Druid's tree. Their poses look natural.
+- [ ] Bloons are the right size: plain ones about 5% smaller than before, Regrow ones no longer wide.
+- [ ] Sandbox test bloons: Test Bloon is a normal-sized dashed outline; Test MOAB is the right size and faces
+      along the track (check it isn't backwards).
+- [ ] Sandbox: with the bloon menu open, clicking the map closes it and doesn't select a tower.
+- [ ] Tower "i" button shows a description for all 3 paths at once, on any crosspath (try a 4-2-0).
+- [ ] Holding the mouse on an owned upgrade icon shows its description; releasing hides it; no press animation.
+- [ ] Sounds and music play as normal (now Ogg).
+- [ ] Scrollbars, input fields and dropdowns draw their real sprites instead of plain boxes, and masked lists
+      still clip properly (Unity's built-in UISprite, Background, InputFieldBackground, UIMask).
+- [ ] Victory screen: award callouts show their own icon, not the fallback.
+- [ ] Geraldo's Genie Bottle: the genie floats above the bottle and its shots show their effect, both versions.
+- [ ] Adora's three BFB warning lines play (base, Joan, Void skins).
+- [ ] Map spawning: Chutes or Ravine change path by round; on Quiet Street or Sunset Gulch MOABs take their own
+      path while bloons don't; Adora's Temple changes group each round. Nothing spawns off a path or stalls.
+- [ ] Bloody Puddles, Chutes, Kart's n Darts, Rake, Streambed: no helicopter rotors floating at the map centre.
+- [ ] Removeables: click Bazaar's palm trees: a red "Remove for $500" button shows; red text and no effect without the
+      cash; with it, $500 goes, the trees vanish and towers can be placed there. A new game brings them back.
+      Clicking elsewhere closes the button. Try Chutes' statues and Quiet Street's cars too (these just vanish for
+      now: their animations don't play yet).
+- [ ] Cargo: after round 40, or at the first MOAB before that, the second path turns on and MOABs use it; its two
+      $500 removeables can then be bought.
+- [ ] Placement on maps with areas that start off (One Two Tree, Spa Pits, Dark Path, Encrypted): spots that were wrongly
+      blocked are free now, until an event creates the area.
+
+Known, low priority: the scarf on Ace 0-3-1 / 1-3-0, Ezili's totem and the Inferno Ring base still don't animate.
+
+## Tower placement: Drag & Drop / Lock & Drop (Claude)
+
+- [ ] Drag & Drop (pause menu default): drag a tower out of the shop and let go on a free spot: it's placed. Pick one up with its hotkey and click the map: it's placed when the button is released, not pressed.
+- [ ] Drag & Drop: let go on the track (red): the tower stays where it was dropped. Press on it (within ~10 units) and it follows the cursor again; press anywhere else and dragging nudges it at a third of the mouse's speed. Releasing tries again.
+- [ ] While a tower is in hand, a red X slides in left of the shop (left of the bottom bar on 4:3); clicking it cancels. Letting go over the HUD cancels too.
+- [ ] Lock & Drop: letting go never places; the tower stays put and a green tick slides in below the X. The tick places it (on a valid spot). Note what the real game does when the tick is clicked on a red (invalid) spot: the clone follows the code and drops the tower (the release lands off the world).
+- [ ] Not done yet: Accessibility "Tower Placement Snapping" (snap back to the last valid spot, its ghost and sound) is not implemented, so placement behaves as with it off.
+
 ## Difficulties (Claude, session 5)
 
 - [ ] Press D at the start (Shift+D back) to pick Easy / Medium / Hard / Impoppable / CHIMPS. Check the starting cash and lives (Easy 200 lives, Medium 150, Hard 100, Impoppable / CHIMPS 1), the first round (Hard starts at 3, Impoppable / CHIMPS at 6) and the last (40 / 60 / 80 / 100).
@@ -284,3 +335,222 @@ Added without a hands-on check. Tick them off (or note what's wrong) when you pl
 ## Keys
 
 - [ ] 1-9 and 0 pick Dart, Boomerang, Bomb, Tack, Ice, Glue, Desperado, Sniper, Wizard and Super (shop order; the Desperado sits before the Sniper in the shop, so Sniper moved to 8 and Ninja is shop-only).
+
+## Mod entity API and performance follow-up (2026-10-29)
+
+- Entity ID/layer patching, damage overflow interception, fire overrides, purchase vetoes,
+  and invalid-decision fallback pass the local integration checks.
+- Historical performance failure (resolved by the segment/key work below): late_game_load(4,6000,1800) measured 5.382 ms average /
+  20.480 ms worst through Game::step and 5.529 / 23.683 ms calling step_native directly.
+  The extracted game.json SHA256 was identical for both runs. Both exceed the existing
+  2.6 ms average / 10 ms worst guard. Bypassing the step event wrapper did not resolve it;
+  this is not an A/B measurement of every per-hit/emission branch. Keep the guard unchanged.
+- These historical timings are not an official-game comparison. See the matched
+  reference/optimized measurements in benchmarks/README.md for the fix.
+
+## Runtime subscription controls (2026-10-29)
+
+- Passed 21 mod-related Rust checks (including local asset integration) and 6 SDK checks.
+- Muted hooks preserve owner state and UI; UI callbacks re-enable them. Other owners'
+  subscriptions remain active. Invalid names reject the whole command batch.
+- Entity Lab starts with no interception hooks, stops panel ticks when closed, and
+  removes the shield hook immediately after its fifth cancelled hit.
+- This verifies the native fast-path masks, not an FPS improvement measurement.
+  The native late-game finding above is resolved by the subsequent measured fix.
+
+## Simulation and shop fixes (2026-10-29)
+
+- Passed: 164 default renderer tests (28 deliberately ignored), 21 mod checks including
+  local integration, and the 1,800-frame reference/optimized state comparison.
+- Passed unchanged performance guard after the final Sandbox fix: 1.306 ms average,
+  8.143 ms worst against 2.6 / 10 ms limits. Paired measurements are in benchmarks/README.md.
+- Shop taps: the same ordinary tower twice within 0.3 seconds opens that tower's existing
+  upgrades screen, including when unaffordable. Scrolls, pull drags and other tiles cancel
+  the pair. This does not attempt to show a tower upgrade tree for heroes.
+- Sandbox: base and temporary ability attacks stop at zero health; simulation continues
+  and attacks resume after health is restored. The existing regression test now passes.
+
+## Sandbox controls follow-up (2026-10-29)
+
+- Four Sandbox checks pass: zero-health stop/resume, both tower counters reset,
+  generated round selection/scaling reversal, and Sandbox-only content hooks.
+- Round selection no longer clamps generated freeplay to the fixed exported list.
+  Round 200 starts; returning to round 1 restores ordinary Ceramic health/children.
+  Custom round sets without generated groups keep their existing bound.
+- Freeplay budget arithmetic uses f64 before multiplication, preserving ordinary
+  round budgets and preventing intermediate i32 overflow for large entered rounds.
+- Sandbox/freeplay round labels omit the fixed-mode end round.
+
+- Existing freeplay-generator regression passed; optimized build passed. Sandbox
+  screenshot confirms the single round number and open bloon panel; no script errors.
+  BTD6.exe was replaced and its SHA256 matches the tested build.
+
+## Mod terminal and co-op entry (2026-10-29)
+
+- Seven mod-browser checks and two co-op-menu checks pass; optimized build passed.
+- Mod rows have immediate switches separate from row selection. Selecting a row shows
+  its properties/settings; guest room selection remains read-only.
+- Verified native screenshots: mod-terminal-final.png (Practice Start settings visible)
+  and coop-terminal-final.png (real locally hosted lobby), in local_extracted/ui-cleanup-check.
+- Hosted lobby shows Mods at bottom-right, clear of the bottom-left hero picker and Ready.
+- Benjamin artwork/native fonts and green terminal panels reuse existing assets; no
+  per-frame filesystem scans or additional texture decoding were added.
+
+## Simplified Mods UI (2026-10-29)
+
+- Nine mod-browser checks pass, including independent switches, conflict reporting,
+  host/guest permissions, settings persistence, bounded local icon paths, and tinted
+  native button clips retaining their original scale motion.
+- Normal enabled-state captions/ON/OFF labels and the persistent footer are removed.
+  The error notification remains available for invalid/conflicting selections.
+- Custom icon fixture verifies list/details artwork, with an intentionally corrupt
+  PNG falling back to the normal mod icon without a crash. Assets stay in the ignored
+  ui-cleanup-check case directory. No user mod/settings files were changed by this check.
+- Documentation for the optional local icon.png convention is in mods/README.md and
+  website/public/mods/reference.md. Icon decoding remains lazy; the faint header signal
+  uses existing native sprites, with no per-frame asset work or fullscreen effects.
+- Final optimized build passed. mods-polished-final.png verifies the matching green
+  utility buttons after native animation, enlarged panes, descriptions/settings, custom
+  icons and corrupt-image fallback. BTD6.exe replaced; installed/build SHA256 matched.
+
+## Native Mods menu and direct numeric entry (2026-10-29)
+
+- Nine targeted mod-browser checks pass using an unoptimized renderer test crate
+  with optimized dependencies (temporary command-line profile override to reduce
+  compiler memory pressure). No permanent build-profile change was made.
+- Direct setting entry checks cover typed values, persistence without enabling a
+  mod, rejection of step-misaligned values, empty input, cancellation, and recovery.
+- Existing selection/switch, invalid/missing mod, settings reset and guest checks pass.
+- Click processing retains field/row hit rectangles while committing and rebuilding,
+  so a click that saves one field can also focus the next field or select a mod.
+- Final validation: 10 mod-browser tests and 2 co-op-menu tests pass. The extra
+  regression verifies a click commits one numeric field and focuses the next, or
+  commits the field and toggles a mod, without requiring a second click.
+- Optimized build passed with a temporary single-codegen-unit override for the
+  renderer to fit alongside concurrent asset extraction. Native UI screenshot
+  mods-native-final.png reviewed; BTD6.exe replaced and build/install hashes matched.
+- Phone-viewable screenshot: https://files.catbox.moe/3j2jxt.png
+
+## Consistent Mods visual reference (2026-10-29)
+
+- Ten mod-browser behavior tests pass after the styling changes.
+- Standard optimized game build passed; mods-consistent-final.png reviewed at 1600x900.
+- Extras/Advanced reference: round BlueBtnCircleSmall toggle geometry/endpoints,
+  rectangular panel cards instead of pill list rows, rounded blue insets throughout,
+  and compact inline title/icon. Numeric entry and its existing regression checks remain.
+- BTD6.exe replaced and its SHA256 matched the reviewed build. The screenshot case
+  now uses default mod icons; previous custom/corrupt fixture icons were removed only
+  from that ignored case, leaving the user's real mods untouched.
+
+## Mods header spacing and list descriptions (2026-10-29)
+
+- Ten mod-browser checks pass. Standard optimized game build passed.
+- Reviewed mods-header-final.png at 1600x900: title/icon and utility buttons share an
+  inset header baseline; descriptions sit below mod titles and fit without touching
+  the switches. Full descriptions remain in the right pane; long previews truncate.
+- Installed BTD6.exe and verified its SHA256 against the reviewed build. Summary text
+  is generated only during list rebuilds, preserving the existing rendering pipeline.
+
+## Mod settings fields and compact reset (2026-10-29)
+
+- Ten behavior tests pass, including resetting during an invalid uncommitted edit.
+- Standard optimized build passed. mods-fields-final.png reviewed at 1600x900:
+  compact reset beside version, complete rounded input borders with darker fill,
+  matching native square steppers aligned with the fields, no large bottom button.
+- BTD6.exe replaced and its hash matched the reviewed build. Focus uses a gold frame;
+  input fields retain typing/Enter/Escape/paste behavior without button press scaling.
+
+## Mods selection, search and status filters (2026-10-29)
+
+- Thirteen mod-browser checks pass: previous behaviors plus case-insensitive multiword
+  search across names/IDs/descriptions, clear/no-results, combined status/query filters,
+  preserving hidden enabled mods during toggles, long-query display bounds, and keyboard
+  focus moving from search into numeric settings without dropping the query.
+- List and details scroll reset when changed results select a different visible mod.
+  Text search refreshes cached cards without rescanning the mod directory per keystroke.
+- Standard optimized build passed. Reviewed mods-search-final.png: native gold card
+  selection, search bar and icon-labelled All/Enabled/Disabled filters fit above the list.
+- BTD6.exe replaced; its SHA256 matched the reviewed optimized executable.
+
+
+## Achievement browsing and Mods outline (2026-10-29)
+
+- Selected mod cards retain their blue interior with an inset gold outline.
+- Achievement viewport now clips cards; offscreen fixed-size cards skip descendant
+  layout, texture loading and drawing, and clear stale descendant hit rectangles.
+- Audited the installed GameData achievement references against the exported catalogue:
+  162 source entries, 162 exported, no missing or extra IDs. Verified the final row
+  (Marshmallow Maxing / Power Creep) via RRBTD6_ACHIEVEMENT_BOTTOM=1 in an autotest.
+- Reviewed optimized top, bottom and Mods screenshots under
+  local_extracted/ui-cleanup-check/. All 13 mod-browser, 2 grid and 2 catalogue
+  checks passed. Production optimized build passed.
+
+
+## Menu opening work and co-op header (2026-10-29)
+
+- Co-op room Mods moved inside BgPanel at its top right, beside the Standard header.
+  The button retains its mod count and host/guest flow; frontend clicks use the new
+  shared path constant. Offline visual fixture: RRBTD6_COOP_MODS_PREVIEW=1 with
+  RRBTD6_AUTOTEST (does not create or simulate a network room).
+- Menu snapshots now average 8x8 framebuffer pixels on the GPU before readback,
+  retaining the existing CPU blur, vignette and tint. Physical framebuffer sizes
+  include Windows DPI. RRBTD6_CPU_MENU_SNAPSHOT=1 retains the reference path.
+- Actual-context RRBTD6_MENU_SNAPSHOT_CHECK passed at default, 1301x733, 960x960,
+  and 1800x800 windows: maximum CPU/GPU output channel difference 1/255.
+- Opening sprites decode on the existing bounded four-job loader; uploads remain
+  on the render thread and finish before entrance animation. Reference switch:
+  RRBTD6_SERIAL_UI_WARM=1. First-group texture count remains bounded.
+- Nineteen targeted tests passed: 2 co-op controls, 13 Mods, 2 catalogue, 2 grid.
+  Reviewed Mods, Heroes, Maps, Profile and co-op header screenshot smoke captures.
+- RRBTD6_FRONT_OPEN_AFTER=100:achievements (with screenshot autotest) exercises
+  normal Home -> Achievements separately from loading directly into the page.
+
+The GPU snapshot pipeline is exercised during loading before the first menu click,
+including when startup is skipped. This avoids paying driver shader compilation
+during the first Achievements/Maps/Profile transition.
+
+Final optimized build passed; optimized pixel guard, co-op header and pause
+smoke captures passed. Root BTD6.exe replaced and SHA256 matched the tested build:
+D4666D5BD3EEC27865ECEA06C66AA320961CC08F9BAFBC66C261ADC1F777FF0F.
+Home -> Achievements opening measured 50.453 ms reference vs 38.249 / 36.000 ms
+optimized; see benchmarks/README.md for setup and remaining-hitch limits.
+
+
+## Achievement card pooling (2026-10-29)
+
+Only viewport cards plus two buffered rows are instantiated; the normal 2160-unit
+viewport retains 10 card trees rather than 162. Full metadata/search remain loaded.
+Grid logical ranges preserve native layout and full scroll extent. Existing cards
+are recycled on scroll/search; nearby sprites prefetch using bounded workers and
+cooperative render-thread uploads. Progress binds by catalogue ID, and the header
+counts the full catalogue even during search. Verified top, final row, one/no
+results and reset; 3 achievement checks and 2 existing grid checks passed. Final
+optimized build passed and BTD6.exe was replaced (SHA256
+1B06F1A8175216559374D61A71311D08CED8009A12C21F58960DBBF54B4BD09E).
+This reduces instantiated card trees by 94%; no additional FPS improvement is
+claimed from the single final capture (concurrent asset work affects timings).
+
+### Steam fresh setup test (2026-10-29)
+- Launch Steam BTD6 with the updated RRBTD6Installer.dll. Choose a new empty parent folder when prompted; setup creates rrbtd6 beneath it. Keep BTD6 open and follow the MelonLoader terminal bar, percentage and ETA. Time the full preparation; do not reuse prepared assets for the first-run measurement.
+- Preview payload is Mods/RustTD6SetupPreview (launcher, client, tools ZIP and SHA256 manifest). Removing that optional preview folder restores the ordinary GitHub-download path; do not remove it before this test.
+- Verified: optimized game build, main-menu screenshot with Trophy Store in the Achievements slot, installer C# build (0 errors), progress/helper tests 8/8, extraction-plan tests 15/15, launcher recovery tests 14 passed/1 ignored. Full clean extraction and native prompt interaction remain to be tested in Steam.
+- Achievements is removed entirely, superseding earlier virtualized-menu test instructions.
+
+### Parallel installer timing (2026-10-29)
+- Steam preview now includes memory-aware parallel model batches. Repeat setup from Steam BTD6 to pick up the new tools payload. Use a new empty folder for a comparable clean first-run time. Inspect the terminal's worker count/model progress when it reaches tower preparation.
+- Early ETA (e.g. 54 minutes at 1.4%) extrapolates a small sample of startup stages and is not a measured full-install time. Do not claim the under-30-minute target until a complete clean run is timed.
+
+### Updated Steam setup test (2026-10-29, parallel maps)
+- Relaunch Steam BTD6 to use the shorter setup dialog and updated tools. Map preparation now runs in parallel as well as model preparation. Allow setup to finish and record full elapsed time; component timings do not establish the full-install target.
+
+### Setup cache test (2026-10-29)
+- Next Steam setup attempt includes bounded prefab/PNG/decoded-clip reuse. Runtime performance and memory are unaffected. Already-running extraction processes keep their existing tools. Full installation time still requires a complete clean run.
+
+### Artwork setup batching (2026-10-29)
+- Next Steam setup attempt batches upgrade and later tower/hero icon/portrait exports. Sample improved 70.0 s to 10.4 s with 64 identical files. Measure the complete fresh setup to establish actual total duration; existing running installations retain their original tooling.
+
+### Invariant animation data (2026-10-29)
+- Next Steam setup uses precomputed static matrices and vertex helper arrays during animation baking. Twelve-model sample is another 10% faster with 91 identical output files; exact reference-math checks cover rotating and animated cases. Existing running extraction tools are untouched.
+
+### Indexed clip sampling (2026-10-29)
+- The next Steam setup attempt includes faster streamed-key lookup, precomputed clip binding offsets and scalar dense-sampling bounds. Twelve-model sample improved another 15%, with 91 identical files; full clean installation duration remains unmeasured.
