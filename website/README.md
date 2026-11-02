@@ -14,8 +14,8 @@ downloads stay under `public/mods/`. Font licenses: `public/fonts/LuckiestGuy-LI
 
 ## Images
 
-`public/social.png` is the link preview, from `social-card.html`. `sh tools/site_screenshots.sh` regenerates it
-and the README's screenshots. They show our own site only: no game assets go on the site or in the repository.
+`public/social.png` is the link preview, from `social-card.html`; `sh tools/site_social_card.sh` regenerates it.
+No game assets go on the site or in the repository.
 
 ## Vercel
 

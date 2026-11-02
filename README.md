@@ -16,10 +16,6 @@
   <a href="docs/README.md">Documentation</a>
 </p>
 
-<p align="center">
-  <a href="https://rusttd6.com"><img src="docs/images/website-home.png" alt="The RustTD6 website home page" width="760"></a>
-</p>
-
 > **This repository contains code only.** It ships no Ninja Kiwi art, audio, maps or game data.
 > Everything the game needs is extracted on your own PC from your own legitimately owned copy of
 > Bloons TD 6, and nothing extracted from the game is ever committed or redistributed.
