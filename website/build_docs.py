@@ -906,7 +906,7 @@ def render(i, p):
     pager += f'<a class="prev" href="{href(prev)}"><span>Previous</span>{prev["title"]}</a>' if prev else "<span></span>"
     pager += f'<a class="next" href="{href(nxt)}"><span>Next</span>{nxt["title"]}</a>' if nxt else "<span></span>"
     pager += "</nav>"
-    title = "Mod API docs — RustTD6" if not p["slug"] else f'{p["title"]} — RustTD6 mod API'
+    title = "Mod Docs | RustTD6" if not p["slug"] else f'{p["title"]} | RustTD6 Mod Docs'
     nav = sidebar(p)
     return f"""<!doctype html>
 <html lang="en">
