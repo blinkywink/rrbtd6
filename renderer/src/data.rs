@@ -1633,6 +1633,9 @@ pub struct Proj {
     /// CreateTowerModel.positionAtTarget: the sub-tower goes on the projectile's target point.
     #[serde(default)]
     pub create_at_target: bool,
+    /// CreateTowerModel.useParentTargetPriority: the sub-tower takes its parent's target type.
+    #[serde(default)]
+    pub create_parent_target: bool,
     #[serde(default)]
     pub eat: Option<Eat>,
     /// ScaleDamageWithTimeModel [baseDamage, scalePerSecond, maxDamage].

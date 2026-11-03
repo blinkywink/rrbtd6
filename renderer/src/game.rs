@@ -11029,7 +11029,7 @@ impl Game {
     /// A projectile going (pierce or lifespan run out): its sounds, its exhaust and expire
     /// projectiles (with whether it ran out of pierce) and the sub-tower it makes.
     #[allow(clippy::type_complexity)]
-    fn retire_projectile(&mut self, pr: &Projectile) -> (Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32), bool)>, Option<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>)>) {
+    fn retire_projectile(&mut self, pr: &Projectile) -> (Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32), bool)>, Option<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)>) {
         let (mut out, mut sub) = (Vec::new(), None);
             // HYPOTHESIS P-EXPIRESOUND: expire sounds play whenever the projectile goes,
             // exhaust sounds only when its pierce ran out.
@@ -11079,7 +11079,7 @@ impl Game {
                     (true, Some((_, _, tg))) => tg,
                     _ => pr.pos,
                 };
-                sub = Some((spec, at, pr.owner, pr.grot));
+                sub = Some((spec, at, pr.owner, pr.grot, pr.spec.create_parent_target));
             }
         (out, sub)
     }
@@ -12743,8 +12743,15 @@ impl Game {
             }
         }
         self.spawn_exhausted(exhausted);
-        for (spec, pos, parent, rot) in subs {
+        for (spec, pos, parent, rot, parent_target) in subs {
+            let made = self.towers.len();
             self.spawn_sub(spec, pos, parent, false);
+            // CreateTower.Exhausted (VERIFIED-DISASM @0xcaef70, +0x3f useParentTargetPriority):
+            // Tower.SetTargetType from the live tower that emitted it (recording
+            // engineer_502_strong: a Strong Engineer's Sentry targets Strong).
+            if let (true, true, Some(m)) = (parent_target, self.towers.len() > made, self.towers.iter().find(|t| t.id == parent).map(|t| t.target)) {
+                self.towers[made].target = m;
+            }
             // CreateTowerModel.useProjectileRotation: the tower takes the projectile's rotation,
             // its turret aiming relative to it (RotateToTarget.ApplyRotation stores rotation -
             // the tower's; recording engineer_200: a Sentry at 97.260574 fires at -55.11087).

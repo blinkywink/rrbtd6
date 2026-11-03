@@ -855,6 +855,8 @@ def main():
         # CreateTowerModel.positionAtTarget (VERIFIED-DISASM CreateTower.Exhausted @0xcaef70, +0x3c):
         # the tower goes on the projectile's Target position, not where the projectile ended.
         out["create_at_target"] = any(ct["f"].get("positionAtTarget") for ct in pb.get("CreateTowerModel", []))
+        # CreateTowerModel.useParentTargetPriority (+0x3f): Tower.SetTargetType from the emitter.
+        out["create_parent_target"] = any(ct["f"].get("useParentTargetPriority") for ct in pb.get("CreateTowerModel", []))
         # EatBloonModel (Bloon Trap): swallows bloons up to rbeCapacity, then pays out.
         eat = (pb.get("EatBloonModel") or [None])[0]
         out["eat"] = {"capacity": eat["f"]["rbeCapacity"], "cash_mult": eat["f"]["rbeCashMultiplier"]} if eat else None

@@ -137,7 +137,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
 | Beast Handler | 9/34 | |
-| Engineer | 18/34 | re-recorded with seeds 2026-11-03; see Engineer notes (Tower parity 0.) |
+| Engineer | 21/34 | re-recorded with seeds 2026-11-03; see Engineer notes (Tower parity 0.) |
 | Ninja | 34/34 | done (all R-line recordings) |
 | Alchemist | 0/34 | throws match; potion hits differ from rt 132 |
 | Ace | 0/25 | recorder doesn't log the plane yet |
@@ -244,7 +244,7 @@ TOWERS.md has the longer per-tower notes.
    paragons, Dan D Monke, Druid's tree and others.
 
 ### Tower parity (the main goal)
-0. **Engineer 18/34 (re-recorded with seeds 2026-11-03)**, next to work on. Done: RandomTargetSpread exact
+0. **Engineer 21/34 (re-recorded with seeds 2026-11-03)**, next to work on. Done: RandomTargetSpread exact
    (Vector3.RandomOffsetFromRadius on syncedRandom), ArriveAtTarget with timeToTake 0 (3D distance from the eject
    point to the ground target / altSpeed, then its curve), SlowOnPopModel (Pin: a Slow only when
    Bloon.WillPopBloon). HYPOTHESIS P-SLOWONPOPUNIQUE: a SlowOnPop re-applied over its own stun keeps the time
@@ -265,8 +265,8 @@ TOWERS.md has the longer per-tower notes.
    CreateTowerModel.positionAtTarget puts the Sentry on the projectile's Target point. TowerExpire counts
    round time ((int)(lifespan x 60) <= roundTime - made at). Sentry Champion sentries (SentryParagon) fire
    CreateProjectileOnTowerDestroyModel's BeforeExplosion at their base rotation on expiry; the explosion's
-   radius is the sentry's range (LinkProjectileRadiusToTowerRange). 100/200/250/300/500/502/520 match;
-   502_last / 502_strong are close. Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
+   radius is the sentry's range (LinkProjectileRadiusToTowerRange). useParentTargetPriority gives the Sentry
+   the Engineer's target type. 100/200/250/300/500/502*/520 match. Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
    upgrades_r30 groups.
 0. **Sub 21/32 (re-recorded with seeds 2026-11-03)**: Airburst's split angles are k x step + (rotation +
    startingOffset), the sum grouped (002 / 004 / 502_* match). Open groups:
