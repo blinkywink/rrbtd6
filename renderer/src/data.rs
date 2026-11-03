@@ -1324,6 +1324,15 @@ pub struct LineFx {
 }
 
 #[derive(Deserialize, Clone)]
+pub struct OnDestroy {
+    pub projectile: Proj,
+    pub emission: Emission,
+    /// useTowerRotation: each projectile takes the tower's rotation.
+    #[serde(default)]
+    pub use_rot: bool,
+}
+
+#[derive(Deserialize, Clone)]
 pub struct Exhaust {
     pub projectile: Proj,
     pub emission: Emission,
@@ -1621,6 +1630,9 @@ pub struct Proj {
     /// sentries); typed ones take turns.
     #[serde(default)]
     pub create_tower: Vec<std::sync::Arc<SubTowerSpec>>,
+    /// CreateTowerModel.positionAtTarget: the sub-tower goes on the projectile's target point.
+    #[serde(default)]
+    pub create_at_target: bool,
     #[serde(default)]
     pub eat: Option<Eat>,
     /// ScaleDamageWithTimeModel [baseDamage, scalePerSecond, maxDamage].
@@ -2008,6 +2020,9 @@ pub struct SubTowerSpec {
     /// TowerExpireOnParentDestroyedModel: goes when its parent is sold.
     #[serde(default)]
     pub with_parent: bool,
+    /// CreateProjectileOnTowerDestroyModel: fired at the tower when it expires.
+    #[serde(default)]
+    pub on_destroy: Vec<OnDestroy>,
     /// PathMovementFromScreenCenterModel: circles the map centre.
     #[serde(default)]
     pub circle: Option<Circle>,

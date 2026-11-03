@@ -272,6 +272,10 @@ def main():
                     "ignore": ignore}
         return None
 
+    # LinkProjectileRadiusToTowerRange.OnRangeChanged (VERIFIED-DISASM @0xd34730): the linked
+    # ProjectileModel's radius is the tower model's range + projectileRadiusOffset.
+    radius_link = {}
+
     def projectile(pobj, depth=0):
         """Generic projectile description (recursive for sub-projectiles)."""
         f = pobj["f"]
@@ -564,7 +568,7 @@ def main():
                     "only_if_damaged": bool(pf.get("onlyIfDamaged", False)),
                     "mult": {k: pf.get("multiplier" + k, 1.0) for k in ("MOAB", "BFB", "DDT", "ZOMG")}}
         out = {
-            "pierce": f["pierce"], "max_pierce": f.get("maxPierce", 0.0), "radius": f["radius"],
+            "pierce": f["pierce"], "max_pierce": f.get("maxPierce", 0.0), "radius": radius_link.get(pobj["i"], f["radius"]),
             "pid": f.get("id") or "",
             # ProjectileModel ctor: checkCollisionIntervalFrames = (int)(interval x 60), truncated.
             "check_frames": int(struct.unpack("<f", struct.pack("<f", float(f.get("checkCollisionInterval") or 0.0) * 60.0))[0]),
@@ -848,6 +852,9 @@ def main():
             for kind in ("crushing", "boom", "cold", "energy"):
                 subs.append(sub_tower(deref(ct["f"].get(kind + "Tower")), ct["f"].get(kind + "Display")))
         out["create_tower"] = [s for s in subs if s]
+        # CreateTowerModel.positionAtTarget (VERIFIED-DISASM CreateTower.Exhausted @0xcaef70, +0x3c):
+        # the tower goes on the projectile's Target position, not where the projectile ended.
+        out["create_at_target"] = any(ct["f"].get("positionAtTarget") for ct in pb.get("CreateTowerModel", []))
         # EatBloonModel (Bloon Trap): swallows bloons up to rbeCapacity, then pays out.
         eat = (pb.get("EatBloonModel") or [None])[0]
         out["eat"] = {"capacity": eat["f"]["rbeCapacity"], "cash_mult": eat["f"]["rbeCashMultiplier"]} if eat else None
@@ -1909,6 +1916,17 @@ def main():
         expire = next((b["f"].get("lifespan", 0.0) for b in bs if b["type"] == "TowerExpireModel"), 0.0)
         round_end = any(b["f"].get("expireOnRoundComplete") for b in bs if b["type"] == "TowerExpireModel")
         foot = next((b["f"] for b in bs if b["type"] == "CircleFootprintModel"), {})
+        for b in bs:
+            if b["type"] == "LinkProjectileRadiusToTowerRangeModel" and isinstance(b["f"].get("projectileModel"), dict):
+                radius_link[b["f"]["projectileModel"]["$ref"]] = f.get("range", 0.0) + b["f"].get("projectileRadiusOffset", 0.0)
+        # CreateProjectileOnTowerDestroyModel (VERIFIED-DISASM OnExpire @0xd15050, CreateProjectile
+        # @0xd14910): on expiry (all conditions true) the emission fires projectileModel at the
+        # tower; useTowerRotation gives each the tower's rotation.
+        on_destroy = [{"projectile": projectile(deref(b["f"]["projectileModel"]), 1),
+                       "emission": emission(deref(b["f"].get("emissionModel"))),
+                       "use_rot": bool(b["f"].get("useTowerRotation"))}
+                      for b in bs if b["type"] == "CreateProjectileOnTowerDestroyModel" and deref(b["f"].get("projectileModel"))
+                      and not items(b["f"].get("conditions"))]
         # The tower display is the stand (SentryGunLegs); the attack's DisplayModel the turret.
         turret = next((x["f"].get("display") for b in bs if b["type"] == "AttackModel"
                        for x in items(b["f"].get("behaviors")) if x and x.get("type") == "DisplayModel"), None)
@@ -1919,6 +1937,7 @@ def main():
                 "credit_parent": any(b["type"] == "CreditPopsToParentTowerModel" for b in bs),
                 "id": f.get("baseId") or f["_name"],
                 "with_parent": any(b["type"] == "TowerExpireOnParentDestroyedModel" for b in bs),
+                "on_destroy": on_destroy,
                 # CreateEffectOnPlaceModel / CreateEffectOnExpireModel (mini Sun Avatar): (effect, scale).
                 "place_fx": next(([prefab_name((deref(b["f"].get("effectModel")) or {}).get("f", {}).get("assetId")),
                                    (deref(b["f"].get("effectModel")) or {}).get("f", {}).get("scale", 1.0)]

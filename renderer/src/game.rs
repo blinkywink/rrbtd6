@@ -1597,6 +1597,8 @@ pub struct SubTower {
     /// Its height: PathMovementFromScreenCenter moves it in 3D toward z 250. HYPOTHESIS
     /// P-PHOENIXZ0: made at 250 (recording wizard_050: 0, 240, 249.9 or 260 are off at rt 31).
     pub z: f32,
+    /// The round time it was made at (Tower +0x17c, TowerExpire.Process's start).
+    pub born: i64,
 }
 
 #[derive(Clone)]
@@ -5069,7 +5071,7 @@ impl Game {
             idle_t: 0.0,
             bank: 0.0,
             brews: Vec::new(),
-            sub: Some(SubTower { frames_left: if spec.lifespan > 0.0 { spec.lifespan * FPS } else { f32::INFINITY }, age: 0.0, rounds_left: spec.rounds, pet, spec, parent, path_index: None, z: 250.0 }),
+            sub: Some(SubTower { frames_left: if spec.lifespan > 0.0 { spec.lifespan * FPS } else { f32::INFINITY }, age: 0.0, rounds_left: spec.rounds, pet, spec, parent, path_index: None, z: 250.0, born: self.round_clock }),
             air: None,
             ability_cd: HashMap::new(),
             ability_round: HashMap::new(),
@@ -5340,7 +5342,8 @@ impl Game {
 
     /// Removes expired sub-towers (indices go to `removed`).
     fn expire_subs(&mut self, round_end: bool) {
-        for t in (0..self.towers.len()).rev() {
+        let mut gone = Vec::new();
+        for t in 0..self.towers.len() {
             let Some(s) = &mut self.towers[t].sub else { continue };
             if !round_end {
                 s.frames_left -= 1.0;
@@ -5351,16 +5354,47 @@ impl Game {
                 s.rounds_left -= 1;
                 rounds_up = s.rounds_left == 0;
             }
-            if s.frames_left <= 0.0 || (round_end && s.spec.round_end) || rounds_up {
+            // TowerExpire.Process (VERIFIED-DISASM @0xda7f50): gone once lifespanFrames
+            // ((int)(lifespan x 60)) <= round time - the round time it was made at (recording
+            // engineer_520: a Sentry made at 10 goes, firing its BeforeExplosion, at 1510, though
+            // a frame between rounds came in between).
+            let timed_out = s.spec.lifespan > 0.0 && ((s.spec.lifespan * 60.0) as i64) <= self.round_clock - s.born;
+            if timed_out || (round_end && s.spec.round_end) || rounds_up {
                 if let Some((Some(fx), k)) = s.spec.expire_fx.clone() {
                     let p = self.towers[t].pos;
                     self.place_fx.push((p, fx, k));
                 }
-                // TowerManager's list swap-removes (recording engineer_100: an expired Sentry's
-                // place taken by the newest).
-                let last = self.towers.len() - 1;
-                self.towers.swap_remove(t);
-                self.removed.push((t, last));
+                gone.push(t);
+            }
+        }
+        for &t in &gone {
+            // CreateProjectileOnTowerDestroy.OnExpire / CreateProjectile (VERIFIED-DISASM
+            // @0xd15050 / @0xd14910): its emission fires at the tower, owned by its parent; with
+            // useTowerRotation each shot takes the tower's rotation (recording engineer_520: a
+            // Sentry Champion sentry's BeforeExplosion at its base rotation -114.71555).
+            let Some(sub) = self.towers[t].sub.as_ref() else { continue };
+            let (spec, parent) = (sub.spec.clone(), sub.parent);
+            let (pos, rot, tiers, id) = (self.towers[t].pos, self.towers[t].base_rot, self.towers[t].tiers, self.towers[t].id);
+            for od in &spec.on_destroy {
+                let start = self.projectiles.len();
+                self.emit_rot = Some(rot);
+                self.emit(pos, (rot - 90.0) * DEG2RAD, &od.emission, &od.projectile, None, tiers, if parent != 0 { parent } else { id });
+                self.emit_rot = None;
+                if od.use_rot {
+                    for pr in &mut self.projectiles[start..] {
+                        pr.grot = Some(rot);
+                    }
+                }
+            }
+        }
+        for t in gone.into_iter().rev() {
+            {
+                // RootObject.Destroy (VERIFIED-DISASM @0xf414c0) takes it off the Simulation's
+                // process list with an ordered RemoveAt (@0x1d996a0), so the towers keep processing
+                // in creation order (recording engineer_300 rt 2771: Sentry 1708 fires before
+                // 1741). (The factory list a recording walks swap-removes it ~30 frames later.)
+                self.towers.remove(t);
+                self.removed.push((t, usize::MAX));
             }
         }
     }
@@ -11038,7 +11072,14 @@ impl Game {
             if n > 0 {
                 let spec = pr.spec.create_tower[self.typed_made % n].clone();
                 self.typed_made += 1;
-                sub = Some((spec, pr.pos, pr.owner, pr.grot));
+                // CreateTower.Exhausted: positionAtTarget puts it on the projectile's Target
+                // (recording engineer_200: a Sentry on its point (-101.07, -1.13), not the
+                // arrive lerp's float off it).
+                let at = match (pr.spec.create_at_target, pr.arrive_at) {
+                    (true, Some((_, _, tg))) => tg,
+                    _ => pr.pos,
+                };
+                sub = Some((spec, at, pr.owner, pr.grot));
             }
         (out, sub)
     }
