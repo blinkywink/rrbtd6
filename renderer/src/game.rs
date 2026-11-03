@@ -10498,6 +10498,12 @@ impl Game {
             // applyOnlyIfDamaged, a chance > 0 draws Simulation.syncedRandom.NextDouble and puts
             // nothing on when chance < the draw (recording ice_005: Icicle Impale's 25% Icicles
             // left the MOAB it hit at 81 without one).
+            // Bloon.WillPopBloon (VERIFIED-DISASM @0x180fb8150): it will damage the bloon and
+            // health - the modified damage < 1 (recording engineer_002: Pin stops the Pink a nail
+            // pops a Black into).
+            if e.only_if_pop && !(spec.damage_model && spec.immune & props == 0 && (self.bloons[i].hp as f32) - dmg < 1.0) {
+                continue;
+            }
             if e.chance > 0.0 && (e.chance as f64) < self.synced_double() {
                 continue;
             }
@@ -10582,7 +10588,7 @@ impl Game {
                     add.push((
                         Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Cooldown, id: format!("{}Cooldown", e.id), frames_left: (lifespan + e.cooldown) * FPS, total: (lifespan + e.cooldown) * FPS, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false },
                         false,
-                        false,
+                        (false, false),
                     ));
                     EffectKind::Trance {
                         centre: c,
@@ -10634,7 +10640,7 @@ impl Game {
             // (recording ninja_005 rt 204: a 0.325 s stun on a MOAB, 19.5 in f32, lasts 19
             // frames; no other recording changes).
             let lf = { let f = lifespan * FPS; if f.is_finite() && f < 1e9 { f.trunc() } else { f } };
-            add.push((Effect { kind, id: e.id.clone(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: e.layers.max(1), owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into(), seq: 0 }, e.refresh, e.replace));
+            add.push((Effect { kind, id: e.id.clone(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: e.layers.max(1), owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into(), seq: 0 }, e.refresh, (e.replace, e.kind == "slow" && e.unique && !e.cascade && e.only_if_pop)));
         }
         let kind = self.bloons[i].kind;
         add.retain(|(e, _, _)| !self.bad_immune_to(kind, &e.id));
@@ -10645,7 +10651,7 @@ impl Game {
             (EffectKind::Slow { mult: a, glue: g }, EffectKind::Slow { mult: m, glue: h }) => a == m && g == h && x.total == e.total,
             _ => true,
         };
-        for (eff, refresh, replace) in add {
+        for (eff, refresh, (replace, unique)) in add {
             // removeMutatorIfNotMatching: one another model put on goes (INFERRED: a model told
             // by its slow, glue level and lifespan; recording glue_upgrades_r30, Corrosive Glue's
             // level 2 over the level 1 it was upgraded from, so the glob skips it).
@@ -10668,6 +10674,15 @@ impl Game {
                 // (VERIFIED-DISASM @0xfced00) then resets its layer charges
                 // (ResetMutatorChargeCountForId; recording ice_100: a Permafrosted Green's Blue
                 // keeps the slow). INFERRED: to the new count (the same model's).
+                // HYPOTHESIS P-SLOWONPOPUNIQUE: a SlowOnPop (isUnique, no cascadeMutators) over a
+                // mutator with its id keeps that one's time left, only its layer charges reset
+                // (AddMutatorForNumLayers; recording engineer_002: a pinned Pink a nail pops stays
+                // pinned until the first stun ends). Super Glue's "Stun" (also isUnique, no cascade)
+                // does refresh (recordings glue_025 / 205_*): what tells them apart in
+                // Mutable.AddMutator / Slow.Collide isn't found yet.
+                Some(x) if unique => {
+                    x.layers = eff.layers;
+                }
                 Some(x) if refresh => {
                     // FilterGlueLevel reads the bloon's glue level, which a higher-level glue
                     // raises though its mutator isn't added (INFERRED: recording

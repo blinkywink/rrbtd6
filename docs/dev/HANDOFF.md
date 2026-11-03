@@ -117,7 +117,7 @@ Ground rules follow.
 ## Regression baseline (must not drop)
 
 Last full run (2026-11-02, every set): dart 70/70, boomerang 99/99, wizard 34/34, ninja 34/34, bomb 33/34,
-glue 34/34, ice 25/25, sniper 19/34, tack 21/25, sub 21/32, beast 9/34, engineer 9/34, desperado 6/34, and 0
+glue 34/34, ice 25/25, sniper 19/34, tack 21/25, sub 21/32, beast 9/34, engineer 11/34, desperado 6/34, and 0
 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar, spike, super, village.
 Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -137,7 +137,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
 | Beast Handler | 9/34 | |
-| Engineer | 9/34 | re-recorded with seeds 2026-11-03; RandomTargetSpread and ArriveAtTarget altSpeed exact |
+| Engineer | 11/34 | re-recorded with seeds 2026-11-03; see Engineer notes (Tower parity 0.) |
 | Ninja | 34/34 | done (all R-line recordings) |
 | Alchemist | 0/34 | throws match; potion hits differ from rt 132 |
 | Ace | 0/25 | recorder doesn't log the plane yet |
@@ -244,6 +244,14 @@ TOWERS.md has the longer per-tower notes.
    paragons, Dan D Monke, Druid's tree and others.
 
 ### Tower parity (the main goal)
+0. **Engineer 11/34 (re-recorded with seeds 2026-11-03)**, next to work on. Done: RandomTargetSpread exact
+   (Vector3.RandomOffsetFromRadius on syncedRandom), ArriveAtTarget with timeToTake 0 (3D distance from the eject
+   point to the ground target / altSpeed, then its curve), SlowOnPopModel (Pin: a Slow only when
+   Bloon.WillPopBloon). HYPOTHESIS P-SLOWONPOPUNIQUE: a SlowOnPop re-applied over its own stun keeps the time
+   left (only layer charges reset); Super Glue's "Stun" (same isUnique / no cascade) does refresh, so find what
+   tells them apart in Mutable.AddMutator / Slow.Collide (isExclusiveInMutationList and AddMutatorForNumLayers'
+   cascade-as-refresh switch were the leads). Open: engineer_100 / 200 diverge from rt 1-15 (start there), then
+   003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 / upgrades_r30.
 0. **Sub 21/32 (re-recorded with seeds 2026-11-03)**: Airburst's split angles are k x step + (rotation +
    startingOffset), the sum grouped (002 / 004 / 502_* match). Open groups:
    - 040 / 050 / 052 / 250 fire their first shot one frame early (clone 476, game 477, the same aim

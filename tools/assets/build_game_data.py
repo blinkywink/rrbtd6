@@ -339,7 +339,7 @@ def main():
         effects, effect_mods = [], []
         # SlowMinusAbilityDurationModel (Sabotage): a SlowModel whose lifespan
         # (GetLifespanFrames @0xcddc50) is lifespanFrames + the ability's activation time - now.
-        for s in pb.get("SlowModel", []) + pb.get("SlowForBloonModel", []) + pb.get("SlowMinusAbilityDurationModel", []):
+        for s in pb.get("SlowModel", []) + pb.get("SlowForBloonModel", []) + pb.get("SlowMinusAbilityDurationModel", []) + pb.get("SlowOnPopModel", []):
             sf = s["f"]
             tags = []
             bloon_id, bloon_ids = "", []
@@ -363,7 +363,14 @@ def main():
                             # Slow.Collide (VERIFIED-DISASM @0xcfce70): removeMutatorIfNotMatching
                             # takes off a same-id mutator another SlowModel put on.
                             "replace": bool(sf.get("removeMutatorIfNotMatching", False)),
-                            "minus_age": s["type"] == "SlowMinusAbilityDurationModel"})
+                            # isUnique: the mutator is isExclusiveInMutationList (Mutable.AddMutator adds
+                            # nothing over one with its id; AddMutatorForNumLayers still resets the layers).
+                            "unique": bool(sf.get("isUnique", False)),
+                            # cascadeMutators: passed to AddMutator as its refresh switch.
+                            "cascade": bool(sf.get("cascadeMutators", False)),
+                            "minus_age": s["type"] == "SlowMinusAbilityDurationModel",
+                            # SlowOnPop.Collide (VERIFIED-DISASM @0x180cde190): only when Bloon.WillPopBloon.
+                            "only_if_pop": s["type"] == "SlowOnPopModel"})
         for s in pb.get("FreezeModel", []):
             sf = s["f"]
             effects.append({"kind": "freeze", "id": sf.get("mutationId") or "", "mult": sf.get("speed", 0.0),

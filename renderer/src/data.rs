@@ -2292,6 +2292,12 @@ pub struct EffectSpec {
     /// SlowModel.removeMutatorIfNotMatching: a same-id slow from another model is replaced.
     #[serde(default)]
     pub replace: bool,
+    /// SlowModel.isUnique.
+    #[serde(default)]
+    pub unique: bool,
+    /// SlowModel.cascadeMutators.
+    #[serde(default)]
+    pub cascade: bool,
     /// SlowMinusAbilityDurationModel: the lifespan less the time since the ability went off.
     #[serde(default)]
     pub minus_age: bool,
@@ -2314,6 +2320,9 @@ pub struct EffectSpec {
     pub interval: f32,
     #[serde(default)]
     pub immune: u32,
+    /// SlowOnPopModel: only on a hit Bloon.WillPopBloon says pops it.
+    #[serde(default)]
+    pub only_if_pop: bool,
     /// AddBehaviorToBloonModel.chance (0: always).
     #[serde(default)]
     pub chance: f32,
