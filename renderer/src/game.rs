@@ -8481,11 +8481,11 @@ impl Game {
                         prio += 10.0;
                     }
                     let key = if mode == TargetMode::Close && seg_in {
-                        let rank = close_rank.get(&(b.path, (b.dist / 7.0).max(0.0) as usize)).map_or(1e6, |&r| r as f64);
+                        let rank = close_rank.get(&(b.path, seg_idx)).map_or(1e6, |&r| r as f64);
                         prio * 1e12 - rank * 1e3 - self.path_rank.get(&b.id).map_or(999.0, |r| r.1 as f64).min(999.0)
                     } else if mode == TargetMode::Strong && seg_in {
                         let len = self.tracks[b.path as usize].length() as f64;
-                        let until_leak = len - ((b.dist / 7.0).max(0.0) as usize as f64 * 7.0 + 3.5);
+                        let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         // TargetStrong.GetTarget (VERIFIED-DISASM @0xe0dfa0): over Attack
                         // .GetVisibleTargets, the first with a strictly higher danger (recording
                         // boomerang_000_strong: an in-range Blue over a Red further along). It
@@ -8496,14 +8496,17 @@ impl Game {
                         prio * 1e12
                             + if (attack.prio_camo || self.towers[t].camo_prio) && strong_lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e10 } else if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { d.danger as f64 * 1e8 + 1e4 } else { d.danger as f64 * 1e8 - until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
                     } else if mode == TargetMode::First && seg_in {
+                        // (Segments in the order of the ones the bloons were filed on at frame
+                        // start: recording engineer_320 rt 2452, a Sentry's First is a Red on segment
+                        // 63, not a Blue at 441.3 still filed on 62.)
                         // (prio is the camo / MOAB priority count: the f32 score near 1e12 can't
                         // order bloons; recording dart_002_camo_r37.)
                         let len = self.tracks[b.path as usize].length() as f64;
-                        let until_leak = len - ((b.dist / 7.0).max(0.0) as usize as f64 * 7.0 + 3.5);
+                        let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e9 } else { -until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
                     } else if mode == TargetMode::Last && seg_in {
                         let len = self.tracks[b.path as usize].length() as f64;
-                        let until_leak = len - ((b.dist / 7.0).max(0.0) as usize as f64 * 7.0 + 3.5);
+                        let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e9 } else { until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
                     } else {
                         prio * 1e12 + base as f64
