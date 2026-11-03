@@ -147,7 +147,7 @@ impl Game {
                         if rabbits.len() as u32 >= n.max(1) {
                             for &t in rabbits.iter().rev() {
                                 self.towers.remove(t);
-                                self.removed.push(t);
+                                self.removed.push((t, usize::MAX));
                             }
                             self.spawn_sub(were, p, gid, false);
                         }

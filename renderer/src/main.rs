@@ -2099,11 +2099,12 @@ async fn game_main() {
             }
             acc -= 1.0 / FPS;
         }
-        // Expired sentries shift the indices after them.
-        for r in game.removed.drain(..) {
+        // Expired sentries: the last tower takes the slot (or the later ones shift down).
+        for (r, moved) in game.removed.drain(..) {
             let fix = |s: Option<usize>| match s {
                 Some(s) if s == r => None,
-                Some(s) if s > r => Some(s - 1),
+                Some(s) if moved == usize::MAX && s > r => Some(s - 1),
+                Some(s) if moved != usize::MAX && s == moved => Some(r),
                 s => s,
             };
             selected = fix(selected);

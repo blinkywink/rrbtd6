@@ -137,7 +137,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
 | Beast Handler | 9/34 | |
-| Engineer | 11/34 | re-recorded with seeds 2026-11-03; see Engineer notes (Tower parity 0.) |
+| Engineer | 12/34 | re-recorded with seeds 2026-11-03; see Engineer notes (Tower parity 0.) |
 | Ninja | 34/34 | done (all R-line recordings) |
 | Alchemist | 0/34 | throws match; potion hits differ from rt 132 |
 | Ace | 0/25 | recorder doesn't log the plane yet |
@@ -244,7 +244,7 @@ TOWERS.md has the longer per-tower notes.
    paragons, Dan D Monke, Druid's tree and others.
 
 ### Tower parity (the main goal)
-0. **Engineer 11/34 (re-recorded with seeds 2026-11-03)**, next to work on. Done: RandomTargetSpread exact
+0. **Engineer 12/34 (re-recorded with seeds 2026-11-03)**, next to work on. Done: RandomTargetSpread exact
    (Vector3.RandomOffsetFromRadius on syncedRandom), ArriveAtTarget with timeToTake 0 (3D distance from the eject
    point to the ground target / altSpeed, then its curve), SlowOnPopModel (Pin: a Slow only when
    Bloon.WillPopBloon). HYPOTHESIS P-SLOWONPOPUNIQUE: a SlowOnPop re-applied over its own stun keeps the time
@@ -253,12 +253,16 @@ TOWERS.md has the longer per-tower notes.
    cascade-as-refresh switch were the leads). Sentries (2026-11-03): RandomPosition (Land) is now the game's
    algorithm (VERIFIED-DISASM: rings, syncedRandom shuffle, CheckPositions' four lists, GetTargets' index + 1),
    so engineer_100's first Sentry lands at the game's (-82.31, -40.56); a sub-tower turret aimed at a bloon
-   ejects along its aim (HYPOTHESIS P-SUBEJECT). Open in engineer_100: the Sentry fires at 28, the game at 29.
-   The game's aim (-58.44653) is exactly RotateToTarget from the Sentry (+10 height) to the Pink's position
-   after 29's move, so the Sentry acts after the bloons (creation order, as the clone does) but doesn't count
-   the Pink in range at 28 (45.39 at 27's end, 43.72 at 28's): find what the in-range test reads (not the
-   bloon's path segment from frame start: tried). Then 200 and the 003 / 032 / 052 / 250 / 300 / 320 / 400 /
-   420_* / 500 / 502_* / 520 / upgrades_r30 groups.
+   ejects along its aim (HYPOTHESIS P-SUBEJECT). Targeting files bloons on the path segment of the distance
+   they had when the frame began (prev_dist), in both the target index and the per-bloon segment test: a
+   tower processed after the bloons (a Sentry) fires the frame after one comes in range, aimed at where it
+   is now (by recording: all six Sentries of engineer_100). engineer_100 now first differs at rt 601 (a
+   projectile). A projectile-made Sentry's turret angle is stored relative to its rotation (the projectile's,
+   e.g. 97.260574), so its shot rotation is base + (aim - base) in f32 (engineer_200 rt 17: -55.11087); expired
+   sub-towers are swap-removed (TowerManager); RandomPosition blocking ignores sub-towers. engineer_200 now
+   first differs at rt 2722 (a new shot's spawn y 1.2914629 vs the game's 1.2914621, rotation 13.170388). Then
+   the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
+   upgrades_r30 groups.
 0. **Sub 21/32 (re-recorded with seeds 2026-11-03)**: Airburst's split angles are k x step + (rotation +
    startingOffset), the sum grouped (002 / 004 / 502_* match). Open groups:
    - 040 / 050 / 052 / 250 fire their first shot one frame early (clone 476, game 477, the same aim

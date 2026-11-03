@@ -1371,6 +1371,8 @@ pub struct Tower {
     /// by RotateToTarget.ApplyRotation: aim - Tower.Rotation; the turret turns with the base), and
     /// (pausedRotation, elapsedPaused, rotateToTarget, rotationTargetAngle).
     pub base_rot: f32,
+    /// A projectile-made sub-tower's rotation (CreateTowerModel.useProjectileRotation).
+    pub sub_base: Option<f32>,
     pub turret_rel: f32,
     pub base_state: (bool, u64, bool, f32),
     /// Per attack: its last aim (radians) and target (display only): each of Robo Monkey's
@@ -2839,9 +2841,10 @@ pub struct Game {
     pub pointer: Option<[f32; 2]>,
     pub(crate) coop_pointers: HashMap<u64, Option<[f32; 2]>>,
     pub(crate) coop_wallets: Option<rrbtd6_coop::economy::Wallets>,
-    /// Indices of towers removed during `step` (expired sub-towers), in removal order, so the
-    /// caller can fix indices it holds.
-    pub removed: Vec<usize>,
+    /// Towers removed during `step` (expired sub-towers), in removal order, so the caller can fix
+    /// indices it holds: (index, where the tower now at that index came from; usize::MAX when
+    /// the later ones shifted down instead).
+    pub removed: Vec<(usize, usize)>,
     /// Typed sub-towers made so far (they take turns).
     typed_made: usize,
 }
@@ -3709,7 +3712,7 @@ impl Game {
     pub fn clear_towers(&mut self) {
         while let Some(t) = self.towers.len().checked_sub(1) {
             self.towers.swap_remove(t);
-            self.removed.push(t);
+            self.removed.push((t, t));
         }
     }
 
@@ -4252,7 +4255,8 @@ impl Game {
                 if !self.land_clear(pc, m.radius) {
                     continue;
                 }
-                let clear = self.towers.iter().all(|o| {
+                // (Towers whose footprint doesntBlockTowerPlacement, the Sentries, don't count.)
+                let clear = self.towers.iter().filter(|o| o.sub.is_none()).all(|o| {
                     let rr = m.radius + self.tower_defs[o.def].1.radius;
                     rr * rr <= (o.pos[0] - pc[0]).powi(2) + (o.pos[1] - pc[1]).powi(2)
                 });
@@ -4534,6 +4538,7 @@ impl Game {
             spin: Vec::new(),
             randpos: Vec::new(),
             base_rot: 0.0,
+            sub_base: None,
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
             aims: Vec::new(),
@@ -5056,6 +5061,7 @@ impl Game {
             spin: Vec::new(),
             randpos: Vec::new(),
             base_rot: 0.0,
+            sub_base: None,
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
             aims: Vec::new(),
@@ -5215,7 +5221,7 @@ impl Game {
         for i in (0..self.towers.len()).rev() {
             if self.towers[i].sub.as_ref().is_some_and(|s| s.pet && s.parent == id) {
                 self.towers.remove(i);
-                self.removed.push(i);
+                self.removed.push((i, usize::MAX));
             }
         }
         for pet in pets {
@@ -5350,8 +5356,11 @@ impl Game {
                     let p = self.towers[t].pos;
                     self.place_fx.push((p, fx, k));
                 }
-                self.towers.remove(t);
-                self.removed.push(t);
+                // TowerManager's list swap-removes (recording engineer_100: an expired Sentry's
+                // place taken by the newest).
+                let last = self.towers.len() - 1;
+                self.towers.swap_remove(t);
+                self.removed.push((t, last));
             }
         }
     }
@@ -8305,7 +8314,8 @@ impl Game {
                     // Attack targets the bloons on its in-range path segments (PathSegment.IsInRange:
                     // the segment's point within range; Path.AddBloon: a bloon is on segment
                     // (int)(distance / 7)), not by the bloon's own distance.
-                    let seg_idx = (b.wind_seg.unwrap_or(b.dist) / 7.0).max(0.0) as usize;
+                    // (Filed by the distance it had when the frame began: see target_index_mut.)
+                    let seg_idx = (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize;
                     let seg_ok = self.track_seg_ok.get(b.path as usize).and_then(|v| v.get(seg_idx)).copied().unwrap_or(false);
                     // Attack.GetPathSegmentsInRangeFast (VERIFIED-DISASM @0xdcbbb0) lists the targetable
                     // segments (PathSegment.canTargetSegment) within range, + 40 when the attack can
@@ -8825,6 +8835,10 @@ impl Game {
                             // frame (Vector2.get_Rotation); the eject point and the shots' directions are
                             // turned from it (Vector2.Rotate by -rotation).
                             let mut grot = (attack.rotate && !turning && weapon.aim_offset.is_none() && extra_rot == 0.0).then(|| RAD2DEG * crt_atan2(target[0] - aim_from[0], -(target[1] - aim_from[1])));
+                            // (A projectile-made sub-tower's turret: relative to its rotation, back.)
+                            if let (Some(b), true) = (tw.sub_base, target_id != 0) {
+                                grot = grot.map(|g| b + (g - b));
+                            }
                             if let (true, Some(_), Some(g)) = (lost, grot, tw.game_rot) {
                                 grot = Some(g);
                                 dir = (g - 90.0) * DEG2RAD;
@@ -9422,7 +9436,10 @@ impl Game {
                 if b.wind.is_some() {
                     continue;
                 }
-                let k = (b.wind_seg.unwrap_or(b.dist) / 7.0).max(0.0) as usize;
+                // (Its segment as of the frame's start: a tower processed after the bloons moved
+                // still finds them where Path filed them; recording engineer_100, every Sentry
+                // fires the frame after a bloon came in range, aimed at where it is now.)
+                let k = (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize;
                 let Some(path) = segs.get_mut(b.path as usize) else { continue };
                 if path.len() <= k {
                     path.resize(k + 1, Vec::new());
@@ -10978,7 +10995,7 @@ impl Game {
     /// A projectile going (pierce or lifespan run out): its sounds, its exhaust and expire
     /// projectiles (with whether it ran out of pierce) and the sub-tower it makes.
     #[allow(clippy::type_complexity)]
-    fn retire_projectile(&mut self, pr: &Projectile) -> (Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32), bool)>, Option<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64)>) {
+    fn retire_projectile(&mut self, pr: &Projectile) -> (Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32), bool)>, Option<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>)>) {
         let (mut out, mut sub) = (Vec::new(), None);
             // HYPOTHESIS P-EXPIRESOUND: expire sounds play whenever the projectile goes,
             // exhaust sounds only when its pierce ran out.
@@ -11021,7 +11038,7 @@ impl Game {
             if n > 0 {
                 let spec = pr.spec.create_tower[self.typed_made % n].clone();
                 self.typed_made += 1;
-                sub = Some((spec, pr.pos, pr.owner));
+                sub = Some((spec, pr.pos, pr.owner, pr.grot));
             }
         (out, sub)
     }
@@ -12685,8 +12702,15 @@ impl Game {
             }
         }
         self.spawn_exhausted(exhausted);
-        for (spec, pos, parent) in subs {
+        for (spec, pos, parent, rot) in subs {
             self.spawn_sub(spec, pos, parent, false);
+            // CreateTowerModel.useProjectileRotation: the tower takes the projectile's rotation,
+            // its turret aiming relative to it (RotateToTarget.ApplyRotation stores rotation -
+            // the tower's; recording engineer_200: a Sentry at 97.260574 fires at -55.11087).
+            if let (Some(r), Some(t)) = (rot, self.towers.len().checked_sub(1)) {
+                self.towers[t].base_rot = r;
+                self.towers[t].sub_base = Some(r);
+            }
         }
         for (pos, dir, c, tiers, owner, skip, z) in contacts {
             let start = self.projectiles.len();
@@ -13738,6 +13762,7 @@ mod tests {
         let mut game_ids: Vec<u64> = Vec::new();
         let mut throws_game: std::collections::BTreeMap<(usize, usize), Vec<i64>> = Default::default();
         let mut throws_clone: std::collections::BTreeMap<(usize, usize), Vec<i64>> = Default::default();
+        let mut clone_ids: Vec<u64> = Vec::new();
         let mut time_off: Option<(i64, i64, u64)> = None;
         let mut idled = false;
         let (mut lists_diff, mut first_list): (usize, Option<(i64, Vec<(String, f32)>, Vec<(String, f32)>)>) = (0, None);
@@ -13797,7 +13822,15 @@ mod tests {
                 }
                 // The ability's one-shot weapons fire now and are gone after the next frame:
                 // their throws count here.
-                for (ti, tw) in g.towers.iter().enumerate() {
+                for tw in g.towers.iter() {
+                    // (Keyed by the tower's order of first appearance, as the game's are.)
+                    let ti = match clone_ids.iter().position(|x| *x == tw.id) {
+                        Some(i) => i,
+                        None => {
+                            clone_ids.push(tw.id);
+                            clone_ids.len() - 1
+                        }
+                    };
                     for (wi, st) in tw.weapons.iter().enumerate() {
                         let v = throws_clone.entry((ti, wi)).or_default();
                         if v.last() != Some(&st.last) && st.last > NEVER {
@@ -13871,7 +13904,14 @@ mod tests {
                     v.push(*last);
                 }
             }
-            for (ti, tw) in g.towers.iter().enumerate() {
+            for tw in g.towers.iter() {
+                let ti = match clone_ids.iter().position(|x| *x == tw.id) {
+                    Some(i) => i,
+                    None => {
+                        clone_ids.push(tw.id);
+                        clone_ids.len() - 1
+                    }
+                };
                 for (wi, st) in tw.weapons.iter().enumerate() {
                     let v = throws_clone.entry((ti, wi)).or_default();
                     if v.last() != Some(&st.last) && st.last > NEVER {
