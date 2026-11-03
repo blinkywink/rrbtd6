@@ -2002,6 +2002,8 @@ pub struct Projectile {
     moving: f32,
     /// ArriveAtTarget: (startFrame, origPos, targetPos).
     arrive_at: Option<(u64, [f32; 2], [f32; 2])>,
+    /// ArriveAtTarget's timeToTake (seconds) for this shot.
+    arrive_time: f32,
     /// Round ends it still survives (AgeModel.rounds).
     rounds_left: u32,
     /// Cash projectiles (bananas): what collecting it pays.
@@ -2198,6 +2200,8 @@ fn moab_class(name: &str) -> Option<&'static str> {
 pub struct Buff {
     /// Damage multiplier (Sub Commander), applied before `damage_add`.
     pub damage_mult: f32,
+    /// Pierce added to every projectile, sub-projectiles too (SubCommanderSupport).
+    pub pierce_all: f32,
     /// Projectile radius multiplier (Long Arm of Light).
     pub radius_mult: f32,
     pub range_mult: f32,
@@ -2232,6 +2236,7 @@ impl Default for Buff {
     fn default() -> Self {
         Self {
             damage_mult: 1.0,
+            pierce_all: 0.0,
             radius_mult: 1.0,
             range_mult: 0.0,
             range_add: 0.0,
@@ -2310,7 +2315,7 @@ impl Buff {
     /// The projectile as fired under these buffs (None if unchanged). Damage-type support reaches
     /// sub-projectiles too (explosions); pierce and speed only the shot itself.
     fn projectile(&self, p: &Proj) -> Option<Proj> {
-        if self.pierce_add == 0.0 && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.immune.is_none() && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
+        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.immune.is_none() && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
             return None;
         }
         let mut q = p.clone();
@@ -2333,6 +2338,18 @@ impl Buff {
             pct(&mut q, m, n);
         }
         q.pierce += self.pierce_add;
+        if self.pierce_all != 0.0 {
+            fn all(p: &mut Proj, add: f32) {
+                p.pierce += add;
+                for c in &mut p.on_contact {
+                    all(&mut c.projectile, add);
+                }
+                for e in &mut p.on_exhaust {
+                    all(&mut e.projectile, add);
+                }
+            }
+            all(&mut q, self.pierce_all);
+        }
         q.radius *= self.radius_mult;
         if let Some(fc) = &self.fan {
             q.radius = fc.projectile_radius;
@@ -2358,9 +2375,21 @@ impl Buff {
         q.speed *= 1.0 + self.speed_mult;
         // HYPOTHESIS P-BREW: brew damage reaches every damaging (sub-)projectile the tower fires.
         if self.damage_add != 0.0 || self.damage_mult != 1.0 || !self.tag_mods.is_empty() {
+            // SubCommanderSupport.MutatorTower.Mutate (VERIFIED-DISASM @0x180d910d0): a
+            // DamageModel not named FirstStrike gets damage x damageScale + damageIncrease, and
+            // every DamageModifierForTag / ForBloonType's additive x damageScale (recording sub_005:
+            // a dart on a MOAB (2 + 2) x 2).
             fn boost(p: &mut Proj, mult: f32, add: f32, mods: &[TagMod]) {
                 if p.damage > 0.0 {
-                    p.damage = p.damage * mult + add;
+                    p.damage = if p.first_strike_dm { p.damage + add } else { p.damage * mult + add };
+                    if mult != 1.0 {
+                        for m in &mut p.tag_mods {
+                            m.add *= mult;
+                        }
+                        for m in &mut p.type_mods {
+                            m.add *= mult;
+                        }
+                    }
                     p.tag_mods.extend(mods.iter().cloned());
                 }
                 for c in &mut p.on_contact {
@@ -6516,7 +6545,10 @@ impl Game {
                         "ability_cd" => b.ability_cd_mult *= sp.mult.powi(n as i32),
                         "unfilter" => b.unfilter = true,
                         "damage" => b.damage_add += sp.add * k,
-                        // HYPOTHESIS P-SUBCOMMANDER: x damageScale then +damageIncrease.
+                        // SubCommanderSupport (VERIFIED-DISASM @0x180d910d0): +pierceIncrease on every
+                        // ProjectileModel of the tower, its sub-projectiles too (recording sub_005:
+                        // Airburst's splits at 9).
+                        "pierce_all" => b.pierce_all += sp.add * k,
                         "damage_mult" => {
                             b.damage_mult *= sp.mult.powi(n as i32);
                             b.damage_add += sp.add * k;
@@ -7687,7 +7719,7 @@ impl Game {
             // (One that has already moved this frame is placed again from the new Target, as
             // its Process would: recording boomerang_paragon_r63, the same frame.)
             if let (true, Some(ar)) = (cursor == usize::MAX || q <= cursor, pr.spec.arrive.as_ref()) {
-                let perc = (((now - *t0) as f32) * (1.0f32 / 60.0) / ar.time).min(1.0);
+                let perc = (((now - *t0) as f32) * (1.0f32 / 60.0) / pr.arrive_time).min(1.0);
                 let e = curve_eval(&ar.samples, perc);
                 let np = [o[0] + (at[0] - o[0]) * e, o[1] + (at[1] - o[1]) * e];
                 pr.vel = [np[0] - pr.pos[0], np[1] - pr.pos[1]];
@@ -8844,11 +8876,19 @@ impl Game {
                                 dir += ((self.rand() * 2.0 - 1.0) * spread).to_radians();
                                 grot = None;
                             }
-                            // HYPOTHESIS P-TARGETSPREAD: RandomTargetSpreadModel moves the aim point
-                            // uniformly within a disc of radius `spread`.
+                            // RandomTargetSpread.Emit -> Vector3.RandomOffsetFromRadius (VERIFIED-DISASM
+                            // @0x180f47ff0) on Simulation.syncedRandom: d = NextDouble, then the angle
+                            // NextDouble x 360; the point + (d x r, 0) turned by -angle (UCRT sinf / cosf),
+                            // game frame (recording engineer_040: Bloon Trap lands 0.01 off its point).
                             if emission.target_spread > 0.0 {
-                                let (a, r) = (self.rand() * std::f32::consts::TAU, emission.target_spread * self.rand().sqrt());
-                                target = [target[0] + r * a.cos(), target[1] + r * a.sin()];
+                                let d = self.synced_double() as f32;
+                                let deg = self.synced_double() as f32 * 360.0;
+                                let (sn, cs) = crt_sin_cos(DEG2RAD * -deg);
+                                let r = emission.target_spread;
+                                let gy = -target[1];
+                                let gx = (cs * d * r - sn * 0.0) + target[0];
+                                let gy = (sn * d * r + cs * 0.0) + gy;
+                                target = [gx, -gy];
                             }
                             // Launch from the weapon's eject point. HYPOTHESIS P-EJECT: x is to the
                             // tower's right and y forward, as for sprites facing +y.
@@ -9067,10 +9107,21 @@ impl Game {
                                     // (time - startFrame) x 1/60 / timeToTake (at most 1), the position
                                     // origPos + (targetPos - origPos) x Curve.Evaluate(perc); it
                                     // arrives on the first frame perc reaches 1.
-                                    if ar.time > 0.0 && !ar.samples.is_empty() {
+                                    // With timeToTake 0 it takes altSpeed: the 3D distance from the
+                                    // eject point to the target on the ground / altSpeed (recording
+                                    // engineer_040: Bloon Trap eases in over 3 frames, 0.584 and
+                                    // 0.916 of the way).
+                                    let t_take = if ar.time > 0.0 {
+                                        ar.time
+                                    } else {
+                                        let (dx, dy, dz) = (target[0] - pr.pos[0], target[1] - pr.pos[1], pr.z);
+                                        (dx * dx + dy * dy + dz * dz).sqrt() / ar.alt_speed
+                                    };
+                                    if t_take > 0.0 && !ar.samples.is_empty() {
                                         pr.arrive_at = Some((now, pr.pos, target));
-                                        let mut k = (ar.time * FPS).floor().max(1.0);
-                                        while (k * (1.0f32 / 60.0)) / ar.time < 1.0 {
+                                        pr.arrive_time = t_take;
+                                        let mut k = (t_take * FPS).floor().max(1.0);
+                                        while (k * (1.0f32 / 60.0)) / t_take < 1.0 {
                                             k += 1.0;
                                         }
                                         pr.vel = [0.0, 0.0];
@@ -11077,6 +11128,7 @@ impl Game {
                 bolt_from: None,
                 moving: 0.0,
                 arrive_at: None,
+                arrive_time: 0.0,
                 rounds_left: spec.rounds,
                 value,
                 cash_base,
@@ -11379,7 +11431,7 @@ impl Game {
                         // burst comes from its last position).
                         let last_frame = pr.spec.speed > 0.0 && pr.spec.seek.is_none() && pr.frames_left <= 1.0;
                         if let (Some((t0, o, tg)), Some(ar)) = (pr.arrive_at, pr.spec.arrive.as_ref()) {
-                            let perc = ((($sim_now - t0) as f32) * (1.0f32 / 60.0) / ar.time).min(1.0);
+                            let perc = ((($sim_now - t0) as f32) * (1.0f32 / 60.0) / pr.arrive_time).min(1.0);
                             let e = curve_eval(&ar.samples, perc);
                             let np = [o[0] + (tg[0] - o[0]) * e, o[1] + (tg[1] - o[1]) * e];
                             pr.vel = [np[0] - pr.pos[0], np[1] - pr.pos[1]];
@@ -11396,7 +11448,10 @@ impl Game {
                             }
                         }
                     }
-                    if !pr.spec.round_time || $s.round_active {
+                    // (Not in the instant pass: a shot made this frame isn't processed until the next, so
+                    // its Age doesn't count yet; recording sub_030, Ballistic Missile's 0.6 s blast
+                    // waits 36 frames.)
+                    if (!pr.spec.round_time || $s.round_active) && $only.is_none() {
                         pr.frames_left -= 1.0;
                     }
                     pr.age += 1.0;

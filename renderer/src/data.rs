@@ -1391,6 +1391,9 @@ pub struct Proj {
     /// It has a DamageModel.
     #[serde(default)]
     pub damage_model: bool,
+    /// Its DamageModel's name contains "FirstStrike".
+    #[serde(default)]
+    pub first_strike_dm: bool,
     /// DamageModel.distributeToChildren / overrideDistributeBlocker: whether damage past a
     /// layer goes on to its children (with the bloon's distributeDamageToChildren, or regardless).
     #[serde(default = "yes")]

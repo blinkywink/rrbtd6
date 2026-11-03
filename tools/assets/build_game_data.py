@@ -572,6 +572,8 @@ def main():
             "immune_keep": bool(dmg.get("ignoreImmunityDestroy", False)),
             # Whether it has a DamageModel at all (AddBehaviorToBloon's applyOnlyIfDamaged asks it).
             "damage_model": bool(pb.get("DamageModel")),
+            # Its DamageModel's name has "FirstStrike": SubCommanderSupport doesn't scale its damage.
+            "first_strike_dm": any("FirstStrike" in (d["f"].get("_name") or "") for d in pb.get("DamageModel", [])),
             "speed": ts.get("speed", 0.0), "lifespan": ts.get("lifespan") or age.get("lifespan", 0.0),
             "random_range": random_range,
             # Its AgeModel's lifespan (Projectile.lifespan for the exhaust duration fraction).
@@ -1521,7 +1523,7 @@ def main():
               if b["type"] == "SupportShinobiTacticsModel":
                   extra = [("pierce_pct", mult, 0.0)]
               if b["type"] == "SubCommanderSupportModel":
-                  kind, add = "pierce", sf.get("pierceIncrease", 0)
+                  kind, add = "pierce_all", sf.get("pierceIncrease", 0)
                   extra = [("damage_mult", sf.get("damageScale", 1.0), sf.get("damageIncrease", 0))]
               if not kind:
                   continue

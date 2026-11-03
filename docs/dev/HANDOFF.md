@@ -117,7 +117,7 @@ Ground rules follow.
 ## Regression baseline (must not drop)
 
 Last full run (2026-11-02, every set): dart 70/70, boomerang 99/99, wizard 34/34, ninja 34/34, bomb 33/34,
-glue 34/34, ice 25/25, sniper 19/34, tack 21/25, sub 21/32, beast 9/34, engineer 7/34, desperado 6/34, and 0
+glue 34/34, ice 25/25, sniper 19/34, tack 21/25, sub 21/32, beast 9/34, engineer 9/34, desperado 6/34, and 0
 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar, spike, super, village.
 Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -137,7 +137,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
 | Beast Handler | 9/34 | |
-| Engineer | 7/34 | |
+| Engineer | 9/34 | re-recorded with seeds 2026-11-03; RandomTargetSpread and ArriveAtTarget altSpeed exact |
 | Ninja | 34/34 | done (all R-line recordings) |
 | Alchemist | 0/34 | throws match; potion hits differ from rt 132 |
 | Ace | 0/25 | recorder doesn't log the plane yet |
@@ -250,7 +250,20 @@ TOWERS.md has the longer per-tower notes.
      -27.256102): the bloon is in range from 474, so it's the line-of-sight test (map Logs). The only data
      difference from 030 (which fires right) is the eject point (y 25 vs 19.5): check whether
      Map.IsTargetLineClear runs from the eject point, or the tower position plus something.
-   - 005 / 025 / 205: diverge later now; look again from their new first difference.
+   - SubCommanderSupport (VERIFIED-DISASM @0x180d910d0) now exact: DamageModels not named FirstStrike x damageScale
+     + damageIncrease, every DamageModifierForTag / ForBloonType additive x damageScale, +pierceIncrease on every
+     ProjectileModel (sub-projectiles too). 005 / 025 are bloon-exact; open: five Airburst splits at rt 664
+     start at z 100 in the game (CreateProjectileOnExhaustFraction emits at the parent's 3D position, so the
+     parent dart was at z 100 when its pierce ran out on the MOAB, though recorded at 8.7): a low split then
+     meets a height-100 log in the clone. 205 still diverges (look from its first difference).
+   - 030: instant shots made this frame no longer age in the instant pass (Ballistic Missile's 0.6 s = 36
+     frames). Now first differs at rt 955: an Instant missile whose target went at 946 holds still, then at 955
+     jumps back to its first target point (Target.Position falls back to the stored point some frames after
+     the bloon goes: find what marks the bloon destroyed then).
+   - 040 / 050 / 052 / 250: the first shot is a frame early with the same aim (game 477, clone 476). Not line
+     of sight (no blocker near the line) and not range (in range from 474). All four used First Strike
+     (a one-shot processOnActivate ActivateAttack) at 120: check whether that reorders the tower's attack and
+     weapon processing (weapon reading the attack's target from the frame before).
    - 001 / upgrades_r30: bloon-exact, projectile positions only.
 0. **Tack 21/25 (2026-11-03)**, re-recorded with seeds. Spin (VERIFIED-DISASM @0x180c92af0 / b30): every
    SpinModel weapon of the tier (ability attacks' too) has an angle from when the tower has the model,
