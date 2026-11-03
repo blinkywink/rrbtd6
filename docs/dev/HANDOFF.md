@@ -117,7 +117,7 @@ Ground rules follow.
 ## Regression baseline (must not drop)
 
 Last full run (2026-11-02, every set): dart 70/70, boomerang 99/99, wizard 34/34, ninja 34/34, bomb 33/34,
-glue 34/34, ice 25/25, sniper 19/34, tack 21/25, sub 16/32, beast 9/34, engineer 7/34, desperado 6/34, and 0
+glue 34/34, ice 25/25, sniper 19/34, tack 21/25, sub 21/32, beast 9/34, engineer 7/34, desperado 6/34, and 0
 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar, spike, super, village.
 Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -129,7 +129,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Dart | 70/70 | done |
 | Boomerang | 99/99 | done (paragon too) |
 | Tack | 21/25 | re-recorded with seeds 2026-11-03; open: 500/502 (meteor 1 ulp at rt 522), 520, upgrades_r30 |
-| Sub | 16/32 | re-recorded with seeds 2026-11-03; see Sub notes (Tack section) |
+| Sub | 21/32 | re-recorded with seeds 2026-11-03; see Sub notes (Tack section) |
 | Wizard | 34/34 | all re-recorded with R lines; done |
 | Glue | 34/34 | done (mutator order, PostDegrade) |
 | Ice | 25/25 | done (re-recorded with seeds 2026-11-02) |
@@ -244,16 +244,14 @@ TOWERS.md has the longer per-tower notes.
    paragons, Dan D Monke, Druid's tree and others.
 
 ### Tower parity (the main goal)
-0. **Sub 16/32 (re-recorded with seeds 2026-11-03)**, next to work on. Groups:
+0. **Sub 21/32 (re-recorded with seeds 2026-11-03)**: Airburst's split angles are k x step + (rotation +
+   startingOffset), the sum grouped (002 / 004 / 502_* match). Open groups:
    - 040 / 050 / 052 / 250 fire their first shot one frame early (clone 476, game 477, the same aim
      -27.256102): the bloon is in range from 474, so it's the line-of-sight test (map Logs). The only data
      difference from 030 (which fires right) is the eject point (y 25 vs 19.5): check whether
      Map.IsTargetLineClear runs from the eject point, or the tower position plus something.
-   - 005 / 025 / 205: Airburst's split angles are k x 25 + r + start in the game (exact 25 steps from
-     r = -37.498184); the clone's r (the parent dart's direction rotation, Projectile::dir_rot) is a float
-     step off. Not atan2's precision (an AMD libm atan2f port changed nothing anywhere) and not a missing
-     direction: compare the dart's direction vector to the game's frame by frame.
-   - 001 / 002 / 004 / 502_* / upgrades_r30: bloon-exact, projectile positions only.
+   - 005 / 025 / 205: diverge later now; look again from their new first difference.
+   - 001 / upgrades_r30: bloon-exact, projectile positions only.
 0. **Tack 21/25 (2026-11-03)**, re-recorded with seeds. Spin (VERIFIED-DISASM @0x180c92af0 / b30): every
    SpinModel weapon of the tier (ability attacks' too) has an angle from when the tower has the model,
    + rotationPerSecond x 1/60 per frame, wrapped only at >= 360; a shot reads it before that frame's step and

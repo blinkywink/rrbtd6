@@ -10945,7 +10945,9 @@ impl Game {
             // Airburst dart's three at -25, 0, +25 off where it flies, not the tower's facing).
             let off_dir = em.dir_off.zip(self.emit_dir_rot).map(|([start, step, centre], r)| {
                 let start = if centre != 0.0 { -((n as f32 - 1.0) * step * 0.5) } else { start };
-                k as f32 * step + r + start
+                // (The rotation and the start offset are summed first: recordings sub_002 / 004 /
+                // 502_*, Airburst splits exactly 25 apart from -48.56562.)
+                k as f32 * step + (r + start)
             });
             let grot = off_dir.or_else(|| self.emit_rot.and_then(|r| match em.kind.as_str() {
                 "Arc" if n > 1 => {
