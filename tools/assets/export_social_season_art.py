@@ -1,5 +1,5 @@
 """Export native Social Season theme artwork for the local menu renderer."""
-import glob,json,sys
+import json, sys
 from collections import defaultdict
 from pathlib import Path
 import UnityPy

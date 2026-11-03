@@ -109,6 +109,18 @@ Copy `local_extracted` from a Windows install into this checkout, install Rust a
 OpenGL / ALSA development packages (listed in the script), then run `sh tools/build_linux.sh`
 and start `./RustTD6-linux`.
 
+### iPhone and iPad (personal builds, sideloaded)
+
+Built on Windows with [Zig](https://ziglang.org) as the linker and an iPhoneOS SDK folder:
+
+```sh
+rustup target add aarch64-apple-ios
+sh tools/build_ios.sh path/to/iPhoneOS.sdk
+```
+
+This makes an unsigned `RustTD6.ipa` (git-ignored, about 3 GB) for a sideloading tool to sign and
+install. Taps act as mouse clicks. Mods and custom music go in the app's folder in the Files app.
+
 macOS and Linux builds are for personal use and aren't distributed.
 
 ## License

@@ -1,0 +1,1 @@
+{"name": "dartling_050", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "DartlingGunner-050", "x": -112.815414, "y": -30.9, "point": [-130.0, -22.9], "target": "Point"}], "ability": 120}

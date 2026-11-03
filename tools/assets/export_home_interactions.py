@@ -1,5 +1,5 @@
 """Export original home interaction clips and their native BoxColliders. Local assets only."""
-import glob,json,os,subprocess,sys
+import glob, json, sys
 from pathlib import Path
 import UnityPy
 
@@ -34,8 +34,11 @@ for obj in af.objects.values():
         'duration':m['m_StopTime']-m['m_StartTime'],'no_interrupt':bool(settings['noInterrupt']),'clip':clip['m_Name']})
 entries.sort(key=lambda x:x['collider_path'])
 for i,entry in enumerate(entries):
-    entry['directory']=f'interact_{i}';dest=root/'models/mainmenu_anim'/entry['directory']
-    subprocess.run([sys.executable,str(Path(__file__).with_name('export_animated.py')),game,str(dest),'ui_scenes_all_',f'scene:{cab}|'+entry['path'],'60'],
-        env={**os.environ,'RRBTD6_ANIM_INTERACT':'1','RRBTD6_ANIM_CLIP':entry['clip']},check=True)
+    entry['directory']=f'interact_{i}'
+# One load of the scene bundle for all of them.
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from model_batch import run as run_models
+run_models(game,[[str(root/'models/mainmenu_anim'/e['directory']),'ui_scenes_all_',f'scene:{cab}|'+e['path'],
+                  {'RRBTD6_ANIM_INTERACT':'1','RRBTD6_ANIM_CLIP':e['clip']}] for e in entries])
 (root/'models/mainmenu_anim/interactions.json').write_text(json.dumps(entries,indent=1))
 print('Exported',len(entries),'original home interactions')

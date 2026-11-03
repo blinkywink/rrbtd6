@@ -17,9 +17,7 @@ import os
 import sys
 
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 
-TypeTreeHelper.read_typetree_boost = False
 
 
 def qrot(q, v):
@@ -45,7 +43,9 @@ def main():
     game, key, out = sys.argv[1:4]
     aa = os.path.join(game, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWindows64", "Full")
     env = UnityPy.load(glob.glob(os.path.join(aa, f"map_{key}_*.bundle"))[0])
-    objs = {o.path_id: o for o in env.objects}
+    # A map bundle is the scene plus its .sharedAssets, whose path ids overlap the scene's; a
+    # reference with file id 0 always means the scene.
+    objs = {o.path_id: o for o in env.objects if not o.assets_file.name.endswith(".sharedAssets")}
     cache = {}
 
     def tt(pid):
@@ -176,7 +176,8 @@ def main():
         mf = next(af.objects[c["component"]["m_PathID"]] for c in go["m_Component"]
                   if af.objects[c["component"]["m_PathID"]].type.name == "MeshFilter")
         ref = mf.read_typetree()["m_Mesh"]
-        cab = af.externals[ref["m_FileID"] - 1].path.split("/")[-1] if ref["m_FileID"] else None
+        # cab_index.json's keys are lower case.
+        cab = af.externals[ref["m_FileID"] - 1].path.split("/")[-1].lower() if ref["m_FileID"] else None
         if cab is not None and cab not in cab_index:
             # A built-in mesh (Castle Revenge's scrolling terrain plane): no fixed terrain
             # rectangle; the renderer uses the 3D scene and the world bounds.
@@ -255,6 +256,8 @@ def main():
     json.dump({"key": key, "raw_path": raw_path, "path": path_pts, "paths": paths, "path_length": length, "areas": areas, "terrain": terrain,
                "terrain_size": [tex.m_Width, tex.m_Height] if tex else [0, 0]}, open(os.path.join(d, "map.json"), "w"), indent=0)
     print(f"{key}: {len(paths)} paths ({sum(q['active'] for q in paths)} active), first {len(path_pts)} pts, length {length:.1f}; {len(areas)} areas; terrain {terrain}")
+
+    return env
 
 
 if __name__ == "__main__":

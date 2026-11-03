@@ -31,6 +31,8 @@ work next, so they're detailed and change often.
 |---|---|
 | [HANDOFF](dev/HANDOFF.md) | Current state and what to do next |
 | [TOWERS](dev/TOWERS.md) | Tower-by-tower accuracy checklist |
+| [BOSSES](dev/BOSSES.md) | How boss fights work, and the plan to build them |
+| [NOT_BUILT](dev/NOT_BUILT.md) | What the game has that we don't yet |
 | [TO_TEST](dev/TO_TEST.md) | Changes still to be checked in-game |
 | [PROGRESS](dev/PROGRESS.md) | Project history |
 | [UI_HANDOFF](dev/UI_HANDOFF.md) | UI work notes |

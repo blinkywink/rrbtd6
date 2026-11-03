@@ -30,11 +30,14 @@ fn relative_runtime_paths(value: &mut serde_json::Value) {
         _ => {}
     }
 }
+/// Long enough for the second press of a double-click.
+const DOUBLE_CLICK_SECONDS: f64 = 0.4;
+
 /// The bloon buttons, in the game's order (BloonMenu: base types; the toggles add variants).
-/// TestBloon / TestBloonMoab (999999 / 100000000 health, no leak damage) close the list.
+/// TestBloon / TestBloonMoab (999999 / 100000000 health, no leak damage) open the list (owner, from the game).
 pub const BLOONS: [&str; 19] = [
-    "Red", "Blue", "Green", "Yellow", "Pink", "Black", "White", "Purple", "Lead", "Zebra", "Rainbow", "Ceramic",
-    "Moab", "Bfb", "Zomg", "Ddt", "Bad", "TestBloon", "TestBloonMoab",
+    "TestBloon", "TestBloonMoab", "Red", "Blue", "Green", "Yellow", "Pink", "Black", "White", "Purple", "Lead", "Zebra", "Rainbow", "Ceramic",
+    "Moab", "Bfb", "Zomg", "Ddt", "Bad",
 ];
 
 /// What the menu asks the game to do.
@@ -56,8 +59,10 @@ impl SandboxAction {
                 game.sandbox_spawn(&bloon, camo, regrow, fortified, count, spacing);
             }
             SandboxAction::SetRound(n) => game.set_round(n),
-            SandboxAction::SetCash(n) if game.sandbox && n.is_finite() => game.cash=n.clamp(0.0,1e12).trunc(),
-            SandboxAction::SetLives(n) if game.sandbox && n.is_finite() => {game.lives=n.clamp(0.0,1e9).trunc();game.game_over=false;},
+            // InGame.OnSetCash / OnSetSandboxHealth (UnityToSimulation.SetCash / SetSandboxHealth):
+            // the value as typed, and health's becomes what it refills to.
+            SandboxAction::SetCash(n) if game.sandbox => game.cash=n,
+            SandboxAction::SetLives(n) if game.sandbox => {game.lives=n;game.last_set_health=n;game.game_over=false;},
             SandboxAction::SetCash(_) | SandboxAction::SetLives(_) => {},
             SandboxAction::ClearBloons => game.clear_bloons(),
             SandboxAction::ClearTowers => game.clear_towers(),
@@ -76,19 +81,35 @@ enum Field {
 
 #[derive(Clone,Copy,Debug,PartialEq)]
 pub enum Resource {Cash,Lives}
-struct ResourceEdit {kind:Resource,text:String,replace:bool}
+/// The open SetValuePopup (PopupScreen.ShowSetValuePopup): its InputField's text.
+struct ResourceEdit {kind:Resource,text:String,replace:bool,opened:f64}
 impl ResourceEdit {
-    fn action(&self)->Option<SandboxAction> {
-        let value=self.text.parse::<f64>().ok()?;
-        if !value.is_finite()||value<0.0||value.fract()!=0.0{return None;}
-        Some(match self.kind{Resource::Cash=>SandboxAction::SetCash(value.min(1e12)),Resource::Lives=>SandboxAction::SetLives(value.min(1e9))})
+    /// ShowSetValuePopup's confirm: Int32.TryParse of the text, 0 when it doesn't parse.
+    fn value(&self)->i32 {self.text.parse::<i32>().unwrap_or(0)}
+    fn action(&self)->SandboxAction {
+        let value=self.value() as f64;
+        match self.kind{Resource::Cash=>SandboxAction::SetCash(value),Resource::Lives=>SandboxAction::SetLives(value)}
     }
 }
+/// InGame.lastSetCash / lastSetHealth before anything is set (InGame..ctor).
+const LAST_SET_DEFAULT: i32 = 9999999;
+/// The InputField's m_CharacterLimit (SetValuePopup).
+const VALUE_LIMIT: usize = 7;
+const POPUP: &str = "AnimatedObject";
+/// Popup.TransitionAnim.Scale: seconds the popup takes to scale in (as the Sun Temple popup).
+const POPUP_OPEN_SECS: f64 = 0.25;
 pub struct SandboxUi {
     menu: Option<Node>,
     resource:Option<ResourceEdit>,
+    /// SetValuePopup prefab.
+    popup: Option<Node>,
+    /// InGame.lastSetCash / lastSetHealth: the popup's starting value.
+    last_cash: i32,
+    last_health: i32,
     bloons:Vec<String>,
     pub open: bool,
+    /// When the menu was last open, so the rest of a double-click that closed it doesn't reach the map.
+    last_open: f64,
     camo: bool,
     regrow: bool,
     fortified: bool,
@@ -119,6 +140,11 @@ fn bloon_icon(game: &crate::game::Game, name: &str, camo: bool, regrow: bool, fo
 
 impl SandboxUi {
     /// BloonMenu.Initialise subscribes this to InputManager.OnSceneHit.
+    /// The menu is open, or closed so recently that this press is the same double-click.
+    pub fn owns_map_press(&self, now: f64) -> bool {
+        self.open || now - self.last_open < DOUBLE_CLICK_SECONDS
+    }
+
     pub fn scene_hit(&mut self) {
         self.open = false;
         self.editing = None;
@@ -137,8 +163,6 @@ impl SandboxUi {
             // "Place crosspaths" and the variants list aren't part of the plain sandbox menu.
             m.set_active("PlaceCrosspthsBtn", false);
             m.set_active("SandboxContainer/ShowVariants", false);
-            // SBPowersBtn: Powers aren't in this game yet.
-            m.set_active("Mask/ButtonStack/SBPowersBtnContainer", false);
             if let (Some(list), Some(b)) = (m.find_mut(LIST), button) {
                 list.children = BLOONS
                     .iter()
@@ -156,8 +180,12 @@ impl SandboxUi {
         Self {
             menu,
             resource:None,
+            popup: Node::load(&prefabs.join("SetValuePopup.json")),
+            last_cash: LAST_SET_DEFAULT,
+            last_health: LAST_SET_DEFAULT,
             bloons:BLOONS.iter().map(|s|s.to_string()).collect(),
             open: false,
+            last_open: f64::NEG_INFINITY,
             camo: false,
             regrow: false,
             fortified: false,
@@ -172,10 +200,14 @@ impl SandboxUi {
         }
     }
 
+    /// InGame.CheatSetCash / CheatSetHealth: the Set Cash / Set Health popup, starting from the
+    /// value last set (not the current one). InputFieldPopup.Init selects the field, so typing
+    /// replaces that value.
     pub fn edit_resource(&mut self,kind:Resource,game:&crate::game::Game){
-        if !game.sandbox{return;}
+        if !game.sandbox||self.popup.is_none(){return;}
         self.editing=None;
-        self.resource=Some(ResourceEdit{kind,text:format!("{:.0}",match kind{Resource::Cash=>game.cash,Resource::Lives=>game.lives}),replace:true});
+        let last=match kind{Resource::Cash=>self.last_cash,Resource::Lives=>self.last_health};
+        self.resource=Some(ResourceEdit{kind,text:last.to_string(),replace:true,opened:get_time()});
     }
     /// Spawning `bloon` with the menu's current toggles, count and spacing (the Send hotkeys).
     pub fn spawn(&self, bloon: &str) -> SandboxAction {
@@ -200,14 +232,24 @@ mod runtime_tests {
     use super::*;
 
     #[test]
-    fn sandbox_resource_values_are_bounded_and_invalid_edits_do_not_commit(){
-        let edit=|kind,text:&str|ResourceEdit{kind,text:text.into(),replace:false};
-        assert!(edit(Resource::Cash,"").action().is_none());
-        assert!(edit(Resource::Lives,"-1").action().is_none());
-        assert!(edit(Resource::Cash,"NaN").action().is_none());
-        assert!(edit(Resource::Cash,"1.5").action().is_none());
-        assert!(matches!(edit(Resource::Lives,"0").action(),Some(SandboxAction::SetLives(0.0))));
-        assert!(matches!(edit(Resource::Cash,"9999999999999").action(),Some(SandboxAction::SetCash(1e12))));
+    fn a_double_click_that_closes_the_menu_stays_off_the_map() {
+        let mut ui = SandboxUi::load(Path::new("no-such-folder"));
+        assert!(!ui.owns_map_press(100.0), "never opened");
+        ui.open = true;
+        assert!(ui.owns_map_press(100.0));
+        ui.last_open = 100.0;
+        ui.scene_hit();
+        assert!(ui.owns_map_press(100.2), "second press of the double-click");
+        assert!(!ui.owns_map_press(100.5), "a later click selects as usual");
+    }
+
+    #[test]
+    fn set_value_popup_parses_like_int32_try_parse(){
+        let edit=|kind,text:&str|ResourceEdit{kind,text:text.into(),replace:false,opened:0.0};
+        assert!(matches!(edit(Resource::Cash,"").action(),SandboxAction::SetCash(v) if v==0.0));
+        assert!(matches!(edit(Resource::Cash,"-").action(),SandboxAction::SetCash(v) if v==0.0));
+        assert!(matches!(edit(Resource::Lives,"-25").action(),SandboxAction::SetLives(v) if v==-25.0));
+        assert!(matches!(edit(Resource::Lives,"9999999").action(),SandboxAction::SetLives(v) if v==9999999.0));
     }
     #[test]
     fn animation_bindings_are_independent_of_json_whitespace() {
@@ -237,42 +279,74 @@ fn field_path(f: Field) -> &'static str {
 }
 
 impl Hud {
-    /// Edit the HUD counters directly. No simulation/account changes until commit.
-    pub fn sandbox_resources(&mut self,game:&crate::game::Game,out:&mut Vec<Action>){
+    /// Sandbox: clicking the cash / health counters opens Set Cash / Set Health.
+    pub fn sandbox_resources(&mut self,game:&crate::game::Game,_out:&mut Vec<Action>){
         if !game.sandbox{self.sandbox.resource=None;return;}
-        const CASH:&str="LeftGroup/LayoutGroup/CashGroup";
-        const LIVES:&str="LeftGroup/LayoutGroup/HealthGroup";
-        let hit=[(CASH,Resource::Cash),(LIVES,Resource::Lives)].into_iter().find(|(path,_)|self.left.clicked(path));
-        if is_mouse_button_pressed(MouseButton::Left){
-            if let Some((_,kind))=hit{
-                if self.sandbox.resource.as_ref().is_none_or(|edit|edit.kind!=kind){
-                    if let Some(action)=self.sandbox.resource.as_ref().and_then(ResourceEdit::action){out.push(Action::Sandbox(action));}
-                    self.sandbox.edit_resource(kind,game);
-                }
-            }else if let Some(edit)=self.sandbox.resource.take(){
-                if let Some(action)=edit.action(){out.push(Action::Sandbox(action));}
-            }
+        if self.sandbox.resource.is_some(){return;}
+        // Each group's Button also takes clicks on its raycast-target children: the number
+        // (TextMeshPro, its whole rect) and the coin icon.
+        const HITS:[(&str,Resource);5]=[
+            ("LeftGroup/LayoutGroup/CashGroup",Resource::Cash),("LeftGroup/LayoutGroup/CashGroup/Cash",Resource::Cash),
+            ("LeftGroup/LayoutGroup/CashGroup/CashIcon",Resource::Cash),
+            ("LeftGroup/LayoutGroup/HealthGroup",Resource::Lives),("LeftGroup/LayoutGroup/HealthGroup/Health",Resource::Lives)];
+        if let Some((_,kind))=HITS.into_iter().find(|(path,_)|self.left.clicked(path)){
+            self.sandbox.edit_resource(kind,game);
         }
-        let Some(edit)=&mut self.sandbox.resource else{return;};
+    }
+    /// The open SetValuePopup over everything (modal: other HUD actions this frame are dropped).
+    /// Title / Description are "Set Cash" / "Set Cash Description" (or Health), the buttons OK /
+    /// Cancel. The InputField takes an integer (m_CharacterValidation Integer: digits, a leading
+    /// minus) of at most 7 characters. OK gives the value to InGame.OnSetCash / OnSetSandboxHealth,
+    /// which remember it for next time.
+    pub fn draw_set_value(&mut self, full: R, canvas_h: f32, s: f32, out: &mut Vec<Action>) {
+        let Some(edit)=self.sandbox.resource.as_mut() else{return};
+        out.clear();
         while let Some(c)=get_char_pressed(){
-            if c.is_ascii_digit(){
+            if c.is_ascii_digit()||c=='-'{
                 if edit.replace{edit.text.clear();edit.replace=false;}
-                if edit.text.len()<13{edit.text.push(c);}
+                if edit.text.len()<VALUE_LIMIT&&(c!='-'||edit.text.is_empty()){edit.text.push(c);}
             }
         }
         if is_key_pressed(KeyCode::Backspace){if edit.replace{edit.text.clear();edit.replace=false;}else{edit.text.pop();}}
-        if is_key_pressed(KeyCode::Escape){self.sandbox.resource=None;return;}
-        if is_key_pressed(KeyCode::Enter)||is_key_pressed(KeyCode::KpEnter){
-            if let Some(action)=edit.action(){out.push(Action::Sandbox(action));self.sandbox.resource=None;return;}
+        let (kind,opened)=(edit.kind,edit.opened);
+        let caret=if !edit.replace&&(get_time()*2.0) as i64%2==0{"|"}else{""};
+        let field=format!("{}{caret}",edit.text);
+        let (title,body)=match kind{Resource::Cash=>("Set Cash","Set Cash Description"),Resource::Lives=>("Set Health","Set Health Description")};
+        let text=|k:&str|self.menus.loc.get(k).cloned().unwrap_or_else(||k.to_string()).replace("\\n","\n");
+        let (title,body,ok,cancel)=(text(title),text(body),text("OK"),text("Cancel"));
+        let k=((get_time()-opened)/POPUP_OPEN_SECS).clamp(0.0,1.0) as f32;
+        let Some(n)=self.sandbox.popup.as_mut() else{self.sandbox.resource=None;return};
+        n.set_text(&format!("{POPUP}/Title"),&title);
+        n.set_text(&format!("{POPUP}/Description"),&body);
+        n.set_text(&format!("{POPUP}/Confirm/Text"),&ok);
+        n.set_text(&format!("{POPUP}/Cancel/Text"),&cancel);
+        n.set_text(&format!("{POPUP}/InputField/Text Area/Text"),&field);
+        // Scale in with a little overshoot.
+        let back=1.70158;
+        let e=1.0+(back+1.0)*(k-1.0).powi(3)+back*(k-1.0).powi(2);
+        if let Some(a)=n.find_mut(POPUP){a.rt.scale=vec2(e,e);}
+        if k>=1.0{
+            // Enter also confirms (DEVIATIONS.md: the game's InputField doesn't submit on Enter).
+            if n.clicked(&format!("{POPUP}/Confirm"))||is_key_pressed(KeyCode::Enter)||is_key_pressed(KeyCode::KpEnter){
+                if let Some(edit)=self.sandbox.resource.take(){
+                    match edit.kind{Resource::Cash=>self.sandbox.last_cash=edit.value(),Resource::Lives=>self.sandbox.last_health=edit.value()}
+                    out.push(Action::Sandbox(edit.action()));
+                }
+            }else if n.clicked(&format!("{POPUP}/Cancel"))||is_key_pressed(KeyCode::Escape){
+                self.sandbox.resource=None;
+            }
         }
-        let path=match edit.kind{Resource::Cash=>"LeftGroup/LayoutGroup/CashGroup/Cash",Resource::Lives=>"LeftGroup/LayoutGroup/HealthGroup/Health"};
-        let caret=if (get_time()*2.0) as i64%2==0{"|"}else{""};
-        self.left.set_text(path,&format!("{}{caret}",edit.text));
+        draw_rectangle(0.0,0.0,screen_width(),screen_height(),Color::new(0.0,0.0,0.0,0.5*k));
+        let mut ctx=Ctx{sprites:&mut self.sprites,fonts:&self.fonts,scale:s,canvas_h,clip:None};
+        draw_tree(n,full,&mut ctx);
     }
     /// The sandbox bloon menu over the shop; returns the game actions clicked.
     /// `hide` is temporary placement blocking, preserving the user's open state.
     pub fn draw_sandbox(&mut self, game: &crate::game::Game, full: R, canvas_h: f32, s: f32, hide: bool, out: &mut Vec<Action>) {
         let ui = &mut self.sandbox;
+        if ui.open {
+            ui.last_open = get_time();
+        }
         // BloonMenu.Update: shown while toggled on and not hidden by another menu; the Open clip
         // runs forward to show and back to hide.
         let shown = ui.open && !hide;
@@ -377,6 +451,9 @@ impl Hud {
         if m.clicked(&format!("{}/Go", field_path(Field::Round))) {
             acts.push(SandboxAction::SetRound(ui.round.parse().unwrap_or(1)));
         }
+        // BloonMenu.TogglePowers (@0x180b5e500): SBPowersBtn opens or closes the Powers menu.
+        // Not done: its powersAnimator icon flip.
+        let powers = m.clicked("Mask/ButtonStack/SBPowersBtnContainer/SBPowersBtn");
         for (b, a) in [
             ("Mask/ButtonStack/DestroyBloonsBtn", SandboxAction::ClearBloons),
             ("Mask/ButtonStack/DestroyMonkeysBtn", SandboxAction::ClearTowers),
@@ -391,11 +468,11 @@ impl Hud {
         // reports 120 per notch), over a 3-column grid of 180-unit cells.
         let view = m.rect("SandboxContainer/Layout/BloonsScroll");
         let over = view.is_some_and(|r| r.contains(mouse_position().into()));
-        let (_, wheel) = mouse_wheel();
+        let wheel = crate::hud::wheel_notches();
         if over && wheel != 0.0 {
             let content = ui.bloons.len().div_ceil(3) as f32 * 180.0;
             let max = view.map_or(0.0, |r| (content - r.h / s).max(0.0));
-            ui.scroll = (ui.scroll - wheel / 120.0 * 100.0).clamp(0.0, max);
+            ui.scroll = (ui.scroll - wheel * 100.0).clamp(0.0, max);
         }
         if let Some(l) = m.find_mut(LIST) {
             l.rt.pos.y = ui.scroll;
@@ -405,6 +482,9 @@ impl Hud {
             draw_tree(m, full, &mut ctx);
         }
         out.extend(acts.into_iter().map(Action::Sandbox));
+        if powers {
+            self.toggle_powers();
+        }
     }
 
     /// Screen rect of the open sandbox menu (map clicks under it are ignored).

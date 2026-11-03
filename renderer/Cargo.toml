@@ -15,4 +15,8 @@ rrbtd6-coop = { path = "../coop" }
 blake3 = "1"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 zstd = { version = "0.13.3", default-features = false }
+# MP3s in the jukebox's custom music folder (quad-snd's decoder has WAV, FLAC and Ogg only).
+symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 
+
+rhai = { version = "1.23", features = ["sync", "serde"] }

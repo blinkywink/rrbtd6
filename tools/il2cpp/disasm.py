@@ -16,11 +16,11 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from codegen import PE64  # noqa: E402
+from codegen import PE64, game_dir  # noqa: E402
 from calls import pdata  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-GAME = r"C:\Program Files\Epic Games\BloonsTD6"
+GAME = game_dir()
 DUMPBIN = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe"
 
 # BinaryReader vtable offsets (Il2CppClass vtable entries are 16 bytes:

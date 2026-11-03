@@ -14,9 +14,7 @@ import os
 import sys
 
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 
-TypeTreeHelper.read_typetree_boost = False
 
 GAME, OUT, *PATHS = sys.argv[1:]
 AA = os.path.join(GAME, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWindows64", "Full")
@@ -113,7 +111,10 @@ KEEP = {
     "RawImage": ["m_UVRect"],
     "TextMeshProUGUI": ["m_text", "m_fontSize", "m_fontSizeMin", "m_fontSizeMax", "m_enableAutoSizing", "m_fontStyle",
                         "m_HorizontalAlignment", "m_VerticalAlignment", "m_textAlignment", "m_characterSpacing",
-                        "m_lineSpacing", "m_enableWordWrapping", "m_TextWrappingMode", "m_overflowMode", "m_margin"],
+                        "m_lineSpacing", "m_enableWordWrapping", "m_TextWrappingMode", "m_overflowMode", "m_margin",
+                        # NK_TextMeshProUGUI: Start -> LocalizationUtils.LocalizeText sets the text to
+                        # LocalizationManager.GetText(localizeKey) when the key isn't empty.
+                        "localizeKey"],
     "HorizontalLayoutGroup": ["m_Padding", "m_ChildAlignment", "m_Spacing", "m_ChildForceExpandWidth", "m_ChildForceExpandHeight",
                               "m_ChildControlWidth", "m_ChildControlHeight", "m_ChildScaleWidth", "m_ChildScaleHeight", "m_ReverseArrangement"],
     "VerticalLayoutGroup": ["m_Padding", "m_ChildAlignment", "m_Spacing", "m_ChildForceExpandWidth", "m_ChildForceExpandHeight",
@@ -181,6 +182,10 @@ def component(owner, t, cls):
                 out[k] = v
             elif isinstance(v, dict) and set(v) == {"m_FileID", "m_PathID"} and v["m_PathID"]:
                 out[k] = "->" + str(v["m_PathID"])
+                # A Sprite field (CalloutUiData.sprite): its name too, as Images give theirs.
+                o = resolve(owner, v)
+                if o is not None and o.type.name == "Sprite":
+                    out[k + "_name"] = asset_name(owner, v)
             elif isinstance(v, dict) and set(v) == {"r", "g", "b", "a"}:
                 out[k] = [v["r"], v["g"], v["b"], v["a"]]
             elif isinstance(v, dict) and set(v) in ({"x", "y"}, {"x", "y", "z"}, {"x", "y", "z", "w"}):
@@ -241,9 +246,19 @@ def node(go_obj):
         rot_z = math.degrees(2 * math.atan2(q["z"], q["w"]))
         s = tr["m_LocalScale"]
         if tr_obj.type.name == "RectTransform":
+            # The rotation as the screen sees it: its x/y block. A half turn about Y or X (how
+            # the UI mirrors an icon, e.g. the jukebox's previous-track arrow) is a mirror in
+            # 2D: the x scale's sign, and the remaining z angle.
+            x, y, z, w = q["x"], q["y"], q["z"], q["w"]
+            r00, r01 = 1 - 2 * (y * y + z * z), 2 * (x * y - z * w)
+            r10, r11 = 2 * (x * y + z * w), 1 - 2 * (x * x + z * z)
+            sx = s["x"]
+            if r00 * r11 - r01 * r10 < 0:
+                sx, r00, r10 = -sx, -r00, -r10
+            rot_z = math.degrees(math.atan2(r10, r00))
             v2 = lambda d: [round(d["x"], 3), round(d["y"], 3)]
             n["rect"] = {"anchor_min": v2(tr["m_AnchorMin"]), "anchor_max": v2(tr["m_AnchorMax"]), "pos": v2(tr["m_AnchoredPosition"]),
-                         "size": v2(tr["m_SizeDelta"]), "pivot": v2(tr["m_Pivot"]), "scale": [round(s["x"], 3), round(s["y"], 3)],
+                         "size": v2(tr["m_SizeDelta"]), "pivot": v2(tr["m_Pivot"]), "scale": [round(sx, 3), round(s["y"], 3)],
                          "rot_z": round(rot_z, 2)}
         else:
             # Plain Transform (world-space objects): full local position, rotation and scale.

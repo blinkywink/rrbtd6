@@ -9,6 +9,12 @@ __pycache__/
 /tools/.venv/
 # The one playable build (tools/build_exe.sh).
 /BTD6.exe
+# The macOS build (tools/build_macos.sh).
+/RustTD6.app/
+# The personal iOS build (tools/build_ios.sh): it holds game data, so it's never published.
+/RustTD6.ipa
+# The Linux build (tools/build_linux.sh).
+/RustTD6-linux
 # Installed local mods are user content; keep only the shipped API docs and example.
 /mods/*
 !/mods/README.md
@@ -16,3 +22,11 @@ __pycache__/
 !/mods/practice-start/
 /mods/practice-start/*
 !/mods/practice-start/mod.json
+
+# The jukebox's player music folder (renderer/src/jukebox.rs).
+/Custom Music/
+
+# JVM crash dumps (Ghidra) and local session settings.
+hs_err_pid*.log
+replay_pid*.log
+/.claude/

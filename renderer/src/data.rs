@@ -15,6 +15,10 @@ pub struct BloonMutatorData {
 
 #[derive(Deserialize)]
 pub struct GameData {
+    #[serde(default)]
+    pub mod_scripts: Vec<crate::mod_runtime::Definition>,
+    #[serde(default)]
+    pub mod_maps: HashMap<String,crate::mod_maps::Definition>,
     /// CollisionGrid.orderedNeighborOffsets: (dx, dy) cell offsets in the order a collision
     /// query visits them (from a SimRecorder dump; empty: storage order).
     #[serde(default)]
@@ -37,6 +41,12 @@ pub struct GameData {
     /// Geraldo's shop items (GeraldoItemModel).
     #[serde(default)]
     pub geraldo: Vec<GeraldoItem>,
+    /// The projectile a Power puts down, by Power id (Cash Drop's crate).
+    #[serde(default)]
+    pub power_projectiles: HashMap<String, Proj>,
+    /// The tower a Power places, by Power id.
+    #[serde(default)]
+    pub power_towers: HashMap<String, PowerTower>,
     /// EndRoundModModel of the difficulty (Medium: 60).
     #[serde(default)]
     pub end_round: Option<usize>,
@@ -52,6 +62,11 @@ pub struct GameData {
     /// The chosen one (set by the caller; Medium if unknown).
     #[serde(default)]
     pub mode: String,
+    /// The map's MapModel.mapDifficulty (Beginner 0 .. Expert 3; set by the caller from
+    /// mapset.json). None for the clone's mod maps, which earn no XP, as the game's creation-mode
+    /// maps don't (ReadonlyInGameData.CanEarnPlayerAndTowerXp).
+    #[serde(default)]
+    pub map_difficulty: Option<usize>,
     /// ParagonDegreeDataModel.
     #[serde(default)]
     pub paragon_degree: Option<ParagonDegree>,
@@ -148,6 +163,10 @@ pub struct BloonDef {
     /// BloonModel.rotateToFollowPath: turns towards the path's heading as it moves.
     #[serde(default)]
     pub rotate_to_follow_path: bool,
+    /// BloonModel.overlayClass's name ("White", "WhiteRegrow", "Moab"...; empty: none): with a
+    /// mutator's overlayType, the overlay prefab shown on it.
+    #[serde(default)]
+    pub overlay_class: String,
     /// BloonModel.distributeDamageToChildren.
     #[serde(default)]
     pub distribute_damage_to_children: bool,
@@ -265,6 +284,9 @@ pub struct DisplayLayer {
     pub png: String,
     pub w: f32,
     pub h: f32,
+    /// Where the tight art's centre sits from the sprite rect's pivot (sprite plane: x, y up).
+    #[serde(default)]
+    pub trim: [f32; 2],
 }
 
 fn minus_one() -> f32 {
@@ -308,6 +330,9 @@ pub struct Group {
 pub struct Grow {
     pub to: String,
     pub rate: f32,
+    /// GrowModel.overrideChildWithColor: on a bloon of this colour later, grow into its parent's.
+    #[serde(default)]
+    pub child_color: Option<String>,
 }
 
 /// GeraldoItemModel: price, stock rules, the hero level that unlocks it, and what it does
@@ -364,10 +389,22 @@ pub struct MapData {
     /// scene model).
     #[serde(default)]
     pub terrain: Option<Terrain>,
+    /// The spawner's splitter, when it isn't a plain one (map_routes.rs).
+    #[serde(default)]
+    pub spawner: Option<crate::map_routes::SpawnerDef>,
+    /// Removeables and map events (map_logic.rs).
+    #[serde(default)]
+    pub logic: Option<crate::game::map_logic::LogicDef>,
 }
 
 #[derive(Deserialize, Clone)]
 pub struct ParagonDef {
+    /// TowerModel.portrait: the upgrade panel's portrait sprite.
+    #[serde(default)]
+    pub portrait: String,
+    /// The Paragon UpgradeModel.icon.
+    #[serde(default)]
+    pub icon: String,
     /// ParagonTowerModel.displayDegreePaths count: display levels.
     #[serde(default = "one_usize")]
     pub levels: usize,
@@ -380,6 +417,8 @@ pub struct ParagonDef {
     /// ParagonTowerModel.endAnimationState (-1: none).
     #[serde(default = "minus_one_i32")]
     pub end_anim: i32,
+    #[serde(default)]
+    pub sacrifice: Option<SacrificeFx>,
 }
 
 /// ParagonDegreeDataModel fields (camelCase as in the game).
@@ -453,6 +492,9 @@ pub struct BlockerRebound {
 
 #[derive(Deserialize, Clone)]
 pub struct Area {
+    /// The Area script's id, what map events name it by (0: not from a scene).
+    #[serde(default)]
+    pub id: i64,
     #[serde(rename = "type")]
     pub kind: i32,
     pub points: Vec<[f32; 2]>,
@@ -484,9 +526,24 @@ pub const AREA_LAND: i32 = 2;
 /// Area type that `Map.CanPlace` skips entirely.
 pub const AREA_SKIPPED: i32 = 5;
 
+/// The tower a Power places (GameData.power_towers).
+#[derive(Deserialize, Clone)]
+pub struct PowerTower {
+    /// Its TowerModel name (the def's name).
+    pub name: String,
+    pub tower: TowerDef,
+    pub tiers: TowerTiers,
+    /// Its TowerModel behaviours the clone doesn't simulate for it yet.
+    #[serde(default)]
+    pub unmodelled: Vec<String>,
+}
+
 /// Every Dart Monkey tier combination ("000".."520") from its decoded TowerModel.
 #[derive(Deserialize, Clone)]
 pub struct TowerTiers {
+    /// Optional author-owned visual overrides, keyed by the native tier state.
+    #[serde(default)]
+    pub visuals: HashMap<String,String>,
     /// The Paragon: its TowerModel's tier data and its upgrade.
     #[serde(default)]
     pub paragon: Option<ParagonDef>,
@@ -527,6 +584,9 @@ pub struct Tier {
     #[serde(default)]
     pub pets: Vec<std::sync::Arc<SubTowerSpec>>,
     pub range: f32,
+    /// OverrideCamoDetectionModel.detectCamo (Monkey Sense): it and its sub-towers see camo.
+    #[serde(default)]
+    pub detect_camo: bool,
     #[serde(default)]
     pub global: bool,
     /// AirUnitModel (Heli Pilot): the attacks fire from a flying unit, not the tower.
@@ -589,6 +649,10 @@ pub struct Tier {
     /// StartOfRoundRateBuffModel: weapon intervals times `mult` for the first `duration` seconds of a round.
     #[serde(default)]
     pub round_start_rate: Option<RoundStartRate>,
+    /// VigilanteTowerBehaviorModel: loseLifeAttackSpeedBuff, loseLifeRangeBuff,
+    /// loseLifeBuffDurationFrames, loseLifeBuffCooldownFrames.
+    #[serde(default)]
+    pub vigilante: Option<[f32; 4]>,
     /// PerRoundCashBonusTowerModel.cashPerRound: paid at each round end.
     #[serde(default)]
     pub round_cash: f64,
@@ -626,6 +690,9 @@ pub struct Tier {
     /// TowerModel.towerSelectionMenuThemeId: which upgrade panel theme it uses.
     #[serde(default)]
     pub tsm_theme: String,
+    /// TowerModel.portrait: the upgrade panel's portrait sprite.
+    #[serde(default)]
+    pub portrait: String,
     /// MonkeyCityModel: one tower of this kind a round costs x `mult` (a free Dart Monkey).
     #[serde(default)]
     pub free_tower: Option<FreeTower>,
@@ -671,6 +738,28 @@ pub struct Support {
     pub lifespan: f32,
 }
 
+/// ParagonTowerModel's purchase effects: [effect, scale] of the investment orb (and its tier-5
+/// version), the Paragon's effect during the sacrifice and at its end, and their timing.
+#[derive(Deserialize, Clone, Debug)]
+pub struct SacrificeFx {
+    pub invest: Option<(String, f32)>,
+    pub invest_t5: Option<(String, f32)>,
+    pub during: Option<(String, f32)>,
+    pub end: Option<(String, f32)>,
+    /// ParagonTowerModel.degreeTextEffectId (its effect) and degreeTextEffectLifespan (seconds).
+    #[serde(default)]
+    pub degree_text: Option<(String, f32)>,
+    /// The model's numeric fields as serialized (build_game_data.py "raw").
+    #[serde(default)]
+    pub raw: std::collections::HashMap<String, f32>,
+}
+
+impl SacrificeFx {
+    pub fn get(&self, k: &str) -> f32 {
+        self.raw.get(k).copied().unwrap_or(0.0)
+    }
+}
+
 fn minus_one_i32() -> i32 {
     -1
 }
@@ -690,6 +779,9 @@ pub struct Orbit {
     pub count: u32,
     pub range: f32,
     pub display: Option<String>,
+    /// The glaives' RotateModel.angle (degrees a second; Glaive Lord -720).
+    #[serde(default)]
+    pub spin: f32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -744,11 +836,19 @@ pub struct Necro {
     pub decay_rounds: u32,
     #[serde(rename = "maxPathRandomRange")]
     pub path_range: f32,
+    /// NecromancerEmissionModel.maxPathOffset: each undead bloon's random offset from the track.
+    #[serde(default, rename = "maxPathOffset")]
+    pub path_offset: f32,
     /// PrinceOfDarknessEmissionModel.alternateProjectile: sent when the graveyard is empty.
     #[serde(default)]
     pub prince: Option<Box<Proj>>,
     #[serde(default, rename = "princePierce")]
     pub prince_pierce: f32,
+    /// PrinceOfDarknessEmissionModel.maxPathRandomRange / maxPathOffset: the ghost's own.
+    #[serde(default, rename = "princeRange")]
+    pub prince_range: f32,
+    #[serde(default, rename = "princeOffset")]
+    pub prince_offset: f32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -778,6 +878,9 @@ pub struct Attack {
     /// FilterWithTagModel / FilterOutTagModel tags (MOAB Press only targets "Moabs", never "Bad").
     #[serde(default)]
     pub require_tags: Vec<String>,
+    /// FilterOnlyCamoInModel: targets camo bloons only (Shimmer).
+    #[serde(default)]
+    pub only_camo: bool,
     #[serde(default)]
     pub exclude_tags: Vec<String>,
     /// AttackModel.fireWithoutTarget: fires on its own timer, target or not (Glaive Lord's orbit hits).
@@ -786,6 +889,9 @@ pub struct Attack {
     /// AttackModel.attackThroughWalls: targets aren't checked for a clear line (Map.IsTargetLineClear).
     #[serde(default)]
     pub through_walls: bool,
+    /// TargetSelectedPointModel.startWithClosestTrackPoint (Wall of Fire past 3-x-x).
+    #[serde(default)]
+    pub point_start_track: bool,
     #[serde(default)]
     pub glue_filter: u32,
     #[serde(default)]
@@ -800,6 +906,12 @@ pub struct Attack {
     /// Target*PrioCamoModel: camo bloons are picked before any others (Ninja Monkey).
     #[serde(default)]
     pub prio_camo: bool,
+    /// TargetDesperado*Model.canPrioritiseCamo / canTargetMarked: the upgrade panel's camo and
+    /// bounty hunter toggles.
+    #[serde(default)]
+    pub desperado_camo: bool,
+    #[serde(default)]
+    pub desperado_marked: bool,
     /// FilterMutatedTargetModel: skips bloons carrying an effect with one of these ids.
     #[serde(default)]
     pub skip_effects: Vec<String>,
@@ -810,9 +922,15 @@ pub struct Attack {
     /// (Wall of Fire).
     #[serde(default)]
     pub track_closest: bool,
+    /// The track spot comes from TargetTrackOrDefault (forceTargetTrack), not CloseTargetTrack.
+    #[serde(default)]
+    pub track_default: bool,
     /// RandomPositionBasicModel min/max radius: aims at a random spot around the tower (bananas).
     #[serde(default)]
     pub random_position: Option<[f32; 2]>,
+    /// RandomPositionBasicModel.mapBorder, when the random position is that model's.
+    #[serde(default)]
+    pub random_basic: Option<f32>,
     /// RandomPositionModel (areaType Land): the random spot must be placeable land, clear by this radius.
     #[serde(default)]
     pub random_land: Option<f32>,
@@ -867,6 +985,10 @@ pub struct Weapon {
     /// BloonDistanceRateBonusModel: (rateBonusPerRange, rangeMax).
     #[serde(default)]
     pub dist_rate: Option<(f32, f32)>,
+    /// VagrantWeaponBehaviorModel: noTowersRateBonus, towerRangeBonusReduction,
+    /// bloonInRangeAttackSpeedBuff, maxBloonAttackSpeedBuff.
+    #[serde(default)]
+    pub vagrant: Option<[f32; 4]>,
     /// WeaponModel.animationOffset: the attack animation starts this many seconds before the shot.
     #[serde(default)]
     pub animation_offset: f32,
@@ -923,6 +1045,14 @@ pub struct Weapon {
     /// plus this, not at the target (Buccaneer broadsides).
     #[serde(default)]
     pub aim_offset: Option<f32>,
+    /// EmissionRotationOffBloonDirectionModel: shots head for the target bloon from the eject
+    /// point ("eject", OnEmit) or the tower ("tower", dontSetAfterEmit), whatever the facing;
+    /// "air" (useAirUnitPosition: from the plane, Monkey Ace) isn't applied yet.
+    #[serde(default)]
+    pub bloon_dir: Option<String>,
+    /// PrinceOfDarknessEmissionModel: the weapon sends the Prince of Darkness's ghost.
+    #[serde(default)]
+    pub prince: bool,
     /// FireWhenAlternateWeaponIsReadyModel.weaponId: fires only when the weapon with this
     /// FireAlternateWeaponModel id fires, ignoring its own rate.
     #[serde(default)]
@@ -1003,6 +1133,9 @@ pub struct TrackTravel {
     pub lifespan: f32,
     #[serde(default)]
     pub reverse: bool,
+    /// TravelAlongPathModel.disableRotateWithPathDirection: the display keeps its starting rotation.
+    #[serde(default)]
+    pub fixed_rotation: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1053,6 +1186,9 @@ pub struct MaxSubs {
 pub struct BurstFire {
     pub count: u32,
     pub frames: f32,
+    /// EmissionOverTimeModel (`count` shots per throw), not BurstWeaponBehaviorModel.
+    #[serde(default)]
+    pub over_time: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1216,6 +1352,10 @@ pub struct Contact {
     /// dontCreateAtBloon: made where the shot is instead of on the bloon.
     #[serde(default)]
     pub at_shot: bool,
+    /// Runs after the hit's damage (a later collisionPass than the DamageModel, or after it in
+    /// the same pass): made where the shot is when that destroyed the bloon.
+    #[serde(default)]
+    pub after_damage: bool,
     /// EmitOnDamageModel (Shrapnel Shot): only on hits that deal damage.
     #[serde(default)]
     pub on_damage: bool,
@@ -1236,6 +1376,9 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// RandomRangeTravelStraitModel (minRange, maxRange, speed): its lifespan is drawn when made.
+    #[serde(default)]
+    pub random_range: Option<[f32; 3]>,
     /// ProjectileModel.checkCollisionIntervalFrames ((int)(checkCollisionInterval x 60)).
     #[serde(default)]
     pub check_frames: i32,
@@ -1258,6 +1401,9 @@ pub struct Proj {
     #[serde(default)]
     pub age_lifespan: Option<f32>,
     pub pierce: f32,
+    /// Shinobi Tactics' base: the pierce of the tower's first projectile with this one's id.
+    #[serde(default)]
+    pub shinobi_base: Option<f32>,
     pub radius: f32,
     /// ProjectileModel.vsBlockerRadius / ignoreBlockers: its radius against map blockers, and
     /// whether they stop it.
@@ -1290,6 +1436,9 @@ pub struct Proj {
     /// CollideExtraPierceReductionModel: pierce each hit uses (1 + extraAmount).
     #[serde(default = "one")]
     pub pierce_cost: f32,
+    /// ProjectileModel.ignorePierceExhaustion: stays at 0 pierce instead of being exhausted.
+    #[serde(default)]
+    pub keep_spent: bool,
     /// CreateProjectileOnContactModel: sub-projectiles spawned at each bloon hit (bomb explosions, frags).
     #[serde(default)]
     pub on_contact: Vec<Contact>,
@@ -1348,6 +1497,14 @@ pub struct Proj {
     /// FilterAllModel: hits nothing (a Mortar shell in flight; its explosion does the damage).
     #[serde(default)]
     pub no_hit: bool,
+    /// ProjectileModel.dontUseCollisionChecker: never in CollisionChecker.Process (Bomb Blitz's
+    /// Cluster fragments; instant shots hit through their own path).
+    #[serde(default)]
+    pub no_checker: bool,
+    /// LightningModel: Lightning.Process hits the bloons itself (VERIFIED-DISASM @0x180cc84d0:
+    /// BloonManager.GetTargets, then Projectile.CollideBloons), dontUseCollisionChecker or not.
+    #[serde(default)]
+    pub lightning: bool,
     /// RotateModel.angle: display spin in degrees per second.
     #[serde(default)]
     pub spin: f32,
@@ -1360,6 +1517,10 @@ pub struct Proj {
     /// FilterFrozenBloonsModel: skips frozen bloons.
     #[serde(default)]
     pub skip_frozen: bool,
+    /// ProjectileFilterModel's filter types (FilterInvisibleModel: no camo bloons without
+    /// camo detection).
+    #[serde(default)]
+    pub filters: Vec<String>,
     /// FilterBloonIfDamageTypeModel.ifCantHitBloonProperties: bloons with these properties
     /// that the damage is immune to are skipped.
     #[serde(default)]
@@ -1468,6 +1629,15 @@ pub struct Eat {
 /// AbilityModel: a button that, off cooldown, turns on extra attacks and / or a rate boost.
 #[derive(Deserialize, Clone)]
 pub struct Ability {
+    /// AbilityModel.activateOnRoundEnd: used by itself as each round ends.
+    #[serde(default)]
+    pub round_end: bool,
+    /// CashPerTowerInRangeModel (Jungle's Bounty).
+    #[serde(default)]
+    pub bounty: Option<Bounty>,
+    /// BonusLivesOnAbilityModel.amount.
+    #[serde(default)]
+    pub lives: f64,
     /// CreateProjectileOnAbilityActivateModel: fired from the tower when it's used.
     #[serde(default)]
     pub on_activate: Vec<Contact>,
@@ -1509,10 +1679,26 @@ pub struct Ability {
     /// AbilityModel.startOffCooldown.
     #[serde(default)]
     pub ready: bool,
+    /// AbilityModel.activateOnPreLeak: it goes off (if ready) when a bloon is about to leak.
+    #[serde(default)]
+    pub pre_leak: bool,
+    /// AbilityModel.maxActivationsPerRound (0 or less: no limit).
+    #[serde(default)]
+    pub per_round: i32,
+    /// AbilityModel.resetCooldownOnTierUpgrade: it starts on its full cooldown.
+    #[serde(default)]
+    pub full_start: bool,
+    /// A ToggleableAbilityBehavior that starts toggled off: Ability.CanUseAbility is false for it.
+    #[serde(default)]
+    pub toggled_off: bool,
     #[serde(default)]
     pub activate: Vec<ActivateAttack>,
     #[serde(default)]
     pub turbo: Option<Turbo>,
+    /// AbilityDamageAllModel (Bomb Blitz's Bomb Storm): damage to every bloon with (inclusive) or
+    /// without one of the tags.
+    #[serde(default)]
+    pub damage_all: Vec<AbilityDamageAll>,
     /// Timed support zones (Call to Arms, Absolute Zero's attack-speed boost...).
     #[serde(default)]
     pub supports: Vec<Support>,
@@ -1653,6 +1839,16 @@ pub struct ActivateAttack {
     /// Seconds before the attacks start (MarkedToPopModel's marking time).
     #[serde(default)]
     pub delay: f32,
+}
+
+/// One AbilityDamageAllModel (see Ability::damage_all).
+#[derive(Deserialize, Clone)]
+pub struct AbilityDamageAll {
+    pub damage: i32,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub inclusive: bool,
 }
 
 /// TurboModel: weapon intervals x `mult`, +`extra_damage`, for `lifespan` seconds.
@@ -2000,7 +2196,9 @@ pub struct Seek {
     pub lifetime: bool,
     /// constantlyAquireNewTarget: a new pick on every look, not only once it has none.
     #[serde(default)]
-    pub constantly: bool,
+    pub constantly: bool,    /// TrackTargetWithinTimeModel.timeInFrames: the clamped turn is divided by this / elapsed.
+    #[serde(default)]
+    pub within: Option<f32>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2012,6 +2210,14 @@ pub struct Wind {
     /// Distance multiplier for bloons with one of `tags` (0 = unused).
     pub tag_scale: f32,
     pub tags: Vec<String>,
+    /// WindModel.speedMultiplier: MoveWithWind carries the bloon at speedFrames x this.
+    #[serde(default = "one")]
+    pub speed_mult: f32,
+    /// WindModel.tagFilter / tagInclusive (Wind.Collide's filter).
+    #[serde(default)]
+    pub tag_filter: Vec<String>,
+    #[serde(default)]
+    pub tag_inclusive: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2027,6 +2233,13 @@ pub struct StateMod {
 pub struct EffectSpec {
     pub kind: String,
     pub id: String,
+    /// The mutator's overlayType ("GlueBasic", "Ice", "Bleed"...; empty: none): the bloon shows
+    /// "<its overlay class><this>" while it has it (display only).
+    #[serde(default)]
+    pub overlay: String,
+    /// "pop_fx": CreateEffectOnPopModel's effect (name, scale), where the bloon pops.
+    #[serde(default)]
+    pub fx: Option<(String, f32)>,
     #[serde(default = "one")]
     pub mult: f32,
     pub lifespan: f32,
@@ -2064,6 +2277,9 @@ pub struct EffectSpec {
     /// SlowModel.removeMutatorIfNotMatching: a same-id slow from another model is replaced.
     #[serde(default)]
     pub replace: bool,
+    /// SlowMinusAbilityDurationModel: the lifespan less the time since the ability went off.
+    #[serde(default)]
+    pub minus_age: bool,
     /// SlowForBloonModel: only bloons with one of these tags.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -2197,4 +2413,20 @@ pub struct Knockback {
     pub moab: f32,
     #[serde(default)]
     pub lifespan: f32,
+}
+
+/// CashPerTowerInRangeModel: baseCash, plus extraCashPerTier[tier] for each tower in range with
+/// one of `towers`' base ids, up to maxCashGeneration.
+#[derive(Deserialize, Clone, Debug)]
+pub struct Bounty {
+    #[serde(default)]
+    pub towers: Vec<String>,
+    #[serde(default)]
+    pub base: f32,
+    #[serde(default)]
+    pub per_tier: Vec<f32>,
+    #[serde(default)]
+    pub max: f32,
+    #[serde(default)]
+    pub range_add: f32,
 }

@@ -6,7 +6,7 @@ import UnityPy
 from export_sprites import full_rect
 
 game,root=map(Path,sys.argv[1:3]);base=game/'BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full'
-env=UnityPy.load(glob.glob(str(base/'game_data_assets_all_*.bundle'))[0],glob.glob(str(base/'*_monoscripts_*.bundle'))[0])
+env=UnityPy.load(*(glob.glob(str(base/'game_data_assets_all_*.bundle')) + glob.glob(str(base/'*_monoscripts_*.bundle'))))
 gd=env.container['Assets/Data/GameData.asset'];gd=gd.deref() if hasattr(gd,'deref') else gd
 store=gd.assets_file.objects[gd.read_typetree()['storeItems']['m_PathID']].read_typetree()
 loc={t.attrib['id']:''.join(t.itertext()).replace('\\n','\n') for t in ET.parse(root/'text/English.xml').iter('T') if 'id' in t.attrib}

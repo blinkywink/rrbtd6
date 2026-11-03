@@ -14,9 +14,7 @@ import os
 import sys
 
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 
-TypeTreeHelper.read_typetree_boost = False
 
 
 def main():
@@ -70,14 +68,16 @@ def main():
         root = next(o for o in env.objects if o.path_id == v["asset"]["m_PathID"])
         af = root.assets_file
         layers = []
-        stack = [(root.read_typetree(), (0.0, 0.0, 0.0), 1.0)]
+        stack = [(root.read_typetree(), (0.0, 0.0, 0.0), 1.0, 1.0)]
         while stack:
-            go, off, scale = stack.pop()
+            go, off, scale, scale_y = stack.pop()
             comps = [af.objects[c["component"]["m_PathID"]] for c in go["m_Component"]]
             tr = next(c for c in comps if c.type.name == "Transform").read_typetree()
             lp, ls = tr["m_LocalPosition"], tr["m_LocalScale"]
-            o2 = (off[0] + lp["x"] * scale, off[1] + lp["y"] * scale, off[2] + lp["z"] * scale)
+            o2 = (off[0] + lp["x"] * scale, off[1] + lp["y"] * scale_y, off[2] + lp["z"] * scale)
+            # Scale per axis: Test MOAB's isn't uniform (1.95 x 1.69).
             s2 = scale * ls["x"]
+            sy = scale_y * ls["y"]
             for c in comps:
                 if c.type.name != "SpriteRenderer":
                     continue
@@ -100,20 +100,25 @@ def main():
                 except Exception as e:
                     print("sprite image fail", name, sp.m_Name, e)
                     continue
-                # SpriteRenderer.m_Size is the drawn size of the (tight) sprite in local units.
-                sz = r.get("m_Size")
-                if sz and sz["x"] > 0:
-                    w, h = sz["x"] * s2, sz["y"] * s2
-                else:
-                    w, h = sp.m_Rect.width / sp.m_PixelsToUnits * s2, sp.m_Rect.height / sp.m_PixelsToUnits * s2
+                # Every bloon renderer is DrawMode Simple, which draws the sprite's own rect and
+                # ignores m_Size (stale here: 18% too wide on Regrow bloons, 1 x 1 on damage states).
+                # The image is the tight art: its size at the sprite's pixels per unit, and where
+                # its centre sits from the rect's pivot.
+                ppu = sp.m_PixelsToUnits
+                w, h = img.width / ppu * s2, img.height / ppu * sy
+                t = sp.m_RD.textureRectOffset
+                trim = ((t.x + img.width / 2 - sp.m_Rect.width * sp.m_Pivot.x) / ppu * s2,
+                        (t.y + img.height / 2 - sp.m_Rect.height * sp.m_Pivot.y) / ppu * sy)
+                if img.size == (round(sp.m_Rect.width), round(sp.m_Rect.height)):
+                    trim = (0.0, 0.0)
                 fname = f"{name}_{len(layers)}.png"
                 img.save(os.path.join(out, fname))
                 layers.append({"png": fname, "w": w, "h": h, "offset": o2, "order": r.get("m_SortingOrder", 0),
                                "pivot": [sp.m_Pivot.x, sp.m_Pivot.y], "sprite": sp.m_Name,
-                               "color": [r["m_Color"][k] for k in "rgba"]})
+                               "color": [r["m_Color"][k] for k in "rgba"], "trim": trim})
             for ch in tr["m_Children"]:
                 ct = af.objects[ch["m_PathID"]].read_typetree()
-                stack.append((af.objects[ct["m_GameObject"]["m_PathID"]].read_typetree(), o2, s2))
+                stack.append((af.objects[ct["m_GameObject"]["m_PathID"]].read_typetree(), o2, s2, sy))
         if layers:
             layers.sort(key=lambda l: l["order"])
             result[name] = layers

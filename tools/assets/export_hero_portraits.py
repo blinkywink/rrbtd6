@@ -18,7 +18,9 @@ DIRS = {"ObynGreenfoot": "Obyn"}
 # Files that aren't the hero's own portraits.
 SKIP = re.compile(r"Totem|Spiritless|SunGod|Masqued|Creepy|Genie|Icon|Idol", re.I)
 
-paths = json.load(open("local_extracted/all_container_paths.json"))
+with open("local_extracted/all_container_paths.json", encoding="utf-8") as stream:
+    paths = json.load(stream)
+jobs = []
 for hero in HEROES:
     d = f"Assets/ResizedImages/MonkeyPortraits/{DIRS.get(hero, hero)}/"
     files = [p for p in paths if p.startswith(d) and "/" not in p[len(d):] and p.endswith(".png")
@@ -31,12 +33,14 @@ for hero in HEROES:
     if not files:
         print(hero, "no portraits")
         continue
-    subprocess.run([sys.executable, "tools/assets/export_textures.py", GAME, out, *files], capture_output=True)
-    n = 0
-    for f in os.listdir(out):
-        m = re.search(r"Lvl?(\d+)\.png$", f)
-        new = f"{hero}PortraitLvl{m.group(1)}.png" if m else f"{hero}Portrait.png"
-        if f != new:
-            os.replace(os.path.join(out, f), os.path.join(out, new))
-        n += 1
-    print(hero, n, "portraits")
+    jobs.append({"out": out, "paths": files, "rename_hero": hero})
+
+if jobs:
+    manifest = "local_extracted/.hero_art_jobs.json"
+    try:
+        with open(manifest, "w", encoding="utf-8") as stream:
+            json.dump(jobs, stream)
+        subprocess.run([sys.executable, "tools/assets/export_textures.py", GAME, "--jobs", manifest], check=True)
+    finally:
+        if os.path.exists(manifest):
+            os.unlink(manifest)

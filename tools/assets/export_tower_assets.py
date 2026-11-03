@@ -11,6 +11,7 @@ import unicodedata
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 GAME, TOWERS = sys.argv[1], sys.argv[2:]
 PY = sys.executable
@@ -20,27 +21,43 @@ PORTRAIT_DIRS = {"WizardMonkey": "Wizard"}
 ICON_DIRS = {"Druid": "DruidMonkey", "DartlingGunner": "DartlingMonkey", "Skywarden": "SkyWarden"}
 
 
-def run(*args):
-    r = subprocess.run([PY, *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    tail = (r.stdout.strip().splitlines() or [""])[-1]
-    print(" ".join(a for a in args[:1]), "ok" if r.returncode == 0 else "FAIL", tail[:200],
-          (r.stderr.strip().splitlines() or [""])[-1][:200] if r.returncode else "", flush=True)
-    r.check_returncode()
+def run(*args, span=(.65, .25)):
+    lines = []
+    with subprocess.Popen([PY, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True, encoding="utf-8", errors="replace", bufsize=1) as child:
+        for line in child.stdout:
+            if line.startswith("@@RRBTD6_PROGRESS "):
+                event = json.loads(line[len("@@RRBTD6_PROGRESS "):])
+                event["done"] = span[0] + span[1] * event["done"] / max(1, event["total"])
+                event["total"] = 1
+                print("@@RRBTD6_PROGRESS " + json.dumps(event), flush=True)
+            else:
+                lines.append(line.rstrip())
+                if len(lines) > 25: lines.pop(0)
+        code = child.wait()
+    print(args[0], "ok" if code == 0 else "FAILED", (lines or [""])[-1][:160], flush=True)
+    if code:
+        print("\n".join(lines), flush=True)
+        raise subprocess.CalledProcessError(code, args)
 
 
 run("tools/assets/build_display_plan.py", GAME, *TOWERS)
-run("tools/assets/export_tower_tiers.py", GAME, *TOWERS)
-paths = json.load(open("local_extracted/all_container_paths.json"))
+run("tools/assets/export_tower_tiers.py", GAME, *TOWERS, span=(0., .65))
+paths = json.loads(Path("local_extracted/all_container_paths.json").read_text(encoding="utf-8"))
+art_jobs = []
+model_jobs = {}
+model_indices = []
 for t in TOWERS:
-    plan = json.load(open(f"local_extracted/display_plans/{t}.json"))
+    plan = json.loads(Path(f"local_extracted/display_plans/{t}.json").read_text(encoding="utf-8"))
     base = plan["towers"].get("000")
     if base and not os.path.exists(f"local_extracted/models/{t}/meta.json"):
-        run("tools/assets/export_animated.py", GAME, f"local_extracted/models/{t}", base["bundle"].rsplit("_", 1)[0], base["prefab"])
+        out = f"local_extracted/models/{t}"
+        model_jobs.setdefault(out, [out, base["bundle"].rsplit("_", 1)[0], base["prefab"]])
     icon_dir = ICON_DIRS.get(t, t)
     icons = [p for p in paths if p.startswith(f"Assets/ResizedImages/UI/UpgradeIcons/{icon_dir}/")]
     if icons:
-        run("tools/assets/export_textures.py", GAME, "local_extracted/ui/upgrades", *icons)
-    for f in os.listdir("local_extracted/ui/upgrades"):
+        art_jobs.append({"out": "local_extracted/ui/upgrades", "paths": icons, "prefix_numeric": t, "ascii_names": True})
+    for f in os.listdir("local_extracted/ui/upgrades") if os.path.isdir("local_extracted/ui/upgrades") else []:
         if len(f) > 3 and f[:3].isdigit() and f[3:] == "UpgradeIcon.png":
             os.replace(f"local_extracted/ui/upgrades/{f}", f"local_extracted/ui/upgrades/{t}{f}")
         # Upgrade names are ASCII ("Pouakai") where the icon file isn't ("Pouākai").
@@ -53,14 +70,25 @@ for t in TOWERS:
         dirs.add(f"Assets/ResizedImages/MonkeyPortraits/{PORTRAIT_DIRS[t]}")
     portraits = [p for p in ps if os.path.dirname(p) in dirs]
     if portraits:
-        run("tools/assets/export_textures.py", GAME, f"local_extracted/ui/portraits/{t}", *portraits)
+        art_jobs.append({"out": f"local_extracted/ui/portraits/{t}", "paths": portraits, "portrait_tower": t})
         # The HUD looks portraits up by tower id ("500-Skywarden", not "500-SkyWarden").
         pd = f"local_extracted/ui/portraits/{t}"
-        for f in os.listdir(pd):
+        for f in os.listdir(pd) if os.path.isdir(pd) else []:
             k, _, rest = f.partition("-")
             if k.isdigit() and rest.endswith(".png") and rest != f"{t}.png":
                 os.replace(f"{pd}/{f}", f"{pd}/{k}-{t}.png")
     print(t, len(icons), "upgrade icons,", len(portraits), "portraits", flush=True)
+
+
+if art_jobs:
+    manifest = "local_extracted/.extended_art_jobs.json"
+    try:
+        with open(manifest, "w", encoding="utf-8") as stream:
+            json.dump(art_jobs, stream)
+        run("tools/assets/export_textures.py", GAME, "--jobs", manifest, span=(.65, .20))
+    finally:
+        if os.path.exists(manifest):
+            os.unlink(manifest)
 
 
 def sub_prefabs(v, out):
@@ -80,7 +108,7 @@ def sub_prefabs(v, out):
 def export_paragon(t, tt):
     d = f"local_extracted/models/{t}/tiers"
     idx_path = f"{d}/index.json"
-    idx = json.load(open(idx_path)) if os.path.exists(idx_path) else {}
+    idx = json.loads(Path(idx_path).read_text(encoding="utf-8")) if os.path.exists(idx_path) else {}
     # The tower display ("paragon") and the attack display on top of it ("paragon_top"), plus
     # each display degree's version: "paragon_top<N>" from displayDegreePaths, "paragon<N>"
     # where a "...Lvl<N>" prefab of the base exists.
@@ -101,14 +129,15 @@ def export_paragon(t, tt):
             if not cand:
                 print(t, "paragon prefab not found:", n, flush=True)
                 continue
-            run("tools/assets/export_animated.py", GAME, f"{d}/{n}", paths[cand[0]].rsplit("_", 1)[0], cand[0])
+            out = f"{d}/{n}"
+            model_jobs.setdefault(out, [out, paths[cand[0]].rsplit("_", 1)[0], cand[0]])
         idx[key] = n
-    json.dump(idx, open(idx_path, "w"), indent=1)
+    model_indices.append((idx_path, idx))
 
 
 # Sub-tower displays (Engineer sentries) -> models/subtowers/, and air units (Heli Pilot) ->
 # models/air/, from game.json (build_game_data.py).
-game = json.load(open("local_extracted/game/game.json"))
+game = json.loads(Path("local_extracted/game/game.json").read_text(encoding="utf-8"))
 for t in TOWERS:
     tt = game.get("tower_tiers", {}).get(t) or {}
     export_paragon(t, tt)
@@ -143,10 +172,65 @@ for t in TOWERS:
             cand = sorted((p for p in paths if p.endswith(f"/{n}.prefab")),
                           key=lambda p: (f"/Monkeys/{t}/" not in p, p))
             if cand:
-                run("tools/assets/export_animated.py", GAME, f"local_extracted/models/{kind}/{n}",
-                    paths[cand[0]].rsplit("_", 1)[0], cand[0])
+                out = f"local_extracted/models/{kind}/{n}"
+                model_jobs.setdefault(out, [out, paths[cand[0]].rsplit("_", 1)[0], cand[0]])
             else:
                 print(t, kind, "prefab not found:", n, flush=True)
+# Geraldo's shop items: towers and merges defined outside every tower's own data.
+def spec_prefabs(v, out):
+    if isinstance(v, dict):
+        out.update(v[k] for k in ("base", "model") if isinstance(v.get(k), str) and v[k])
+        for x in v.values():
+            spec_prefabs(x, out)
+    elif isinstance(v, list):
+        for x in v:
+            spec_prefabs(x, out)
+
+
+def spec_air(v, out):
+    if isinstance(v, dict):
+        if isinstance(v.get("air"), dict) and v["air"].get("display"):
+            out.add(v["air"]["display"])
+        for x in v.values():
+            spec_air(x, out)
+    elif isinstance(v, list):
+        for x in v:
+            spec_air(x, out)
+
+
+shop_items = set()
+spec_prefabs(game.get("geraldo") or [], shop_items)
+# The Genie Bottle's floating genie.
+shop_air = set()
+spec_air(game.get("geraldo") or [], shop_air)
+for n in sorted(shop_air):
+    out = f"local_extracted/models/air/{n}"
+    if not os.path.exists(f"{out}/meta.json"):
+        cand = sorted((p for p in paths if p.endswith(f"/{n}.prefab")), key=lambda p: ("/Monkeys/Geraldo/" not in p, p))
+        if cand:
+            model_jobs.setdefault(out, [out, paths[cand[0]].rsplit("_", 1)[0], cand[0]])
+        else:
+            print("Geraldo air unit prefab not found:", n, flush=True)
+for n in sorted(shop_items):
+    out = f"local_extracted/models/subtowers/{n}"
+    if not os.path.exists(f"{out}/meta.json"):
+        cand = sorted(p for p in paths if p.endswith(f"/{n}.prefab"))
+        if cand:
+            model_jobs.setdefault(out, [out, paths[cand[0]].rsplit("_", 1)[0], cand[0]])
+        else:
+            print("Geraldo item prefab not found:", n, flush=True)
+if model_jobs:
+    manifest = "local_extracted/.extended_model_jobs.json"
+    try:
+        with open(manifest, "w", encoding="utf-8") as stream:
+            json.dump(list(model_jobs.values()), stream)
+        run("tools/assets/model_batch.py", GAME, manifest, "--keep-floats", span=(.85, .14))
+    finally:
+        if os.path.exists(manifest):
+            os.unlink(manifest)
+for path, index in model_indices:
+    Path(path).write_text(json.dumps(index, indent=1), encoding="utf-8")
+
 run("tools/assets/export_projectiles.py", GAME)
 
 # One-off Animator clips the "Generated" tier bakes lack, taken from the original prefabs
@@ -164,15 +248,24 @@ GRAFTS = [
     ("SuperMonkey", "TrueSunGodBaseRed", "TrueSunGodBaseRed", None, ["TrueSunGodUpgrade"], []),
     ("SuperMonkey", "TrueSunGodMonkey", "TrueSunGodMonkey", None, ["TrueSunGodUpgrade"], []),
 ]
+# The sources in one batch: one load of their large bundle.
+sources = {}
+for t, target, source, only, clips, flags in GRAFTS:
+    src = f"local_extracted/models/_originals/{only or source}"
+    prefab = f"Assets/Monkeys/{t}/Graphics/{source}.prefab"
+    if t in TOWERS and not os.path.exists(f"{src}/meta.json"):
+        sources[src] = [src, paths[prefab].rsplit("_", 1)[0], prefab, {"RRBTD6_ANIM_ONLY": only} if only else {}]
+if sources:
+    manifest = "local_extracted/.graft_source_jobs.json"
+    try:
+        with open(manifest, "w", encoding="utf-8") as stream:
+            json.dump(list(sources.values()), stream)
+        run("tools/assets/model_batch.py", GAME, manifest, "--keep-floats")
+    finally:
+        if os.path.exists(manifest):
+            os.unlink(manifest)
 for t, target, source, only, clips, flags in GRAFTS:
     if t not in TOWERS:
         continue
     src = f"local_extracted/models/_originals/{only or source}"
-    prefab = f"Assets/Monkeys/{t}/Graphics/{source}.prefab"
-    if not os.path.exists(f"{src}/meta.json"):
-        os.environ.pop("RRBTD6_ANIM_ONLY", None)
-        if only:
-            os.environ["RRBTD6_ANIM_ONLY"] = only
-        run("tools/assets/export_animated.py", GAME, src, paths[prefab].rsplit("_", 1)[0], prefab)
-        os.environ.pop("RRBTD6_ANIM_ONLY", None)
     run("tools/assets/graft_clips.py", *flags, f"local_extracted/models/{t}/tiers/{target}", src, *clips)

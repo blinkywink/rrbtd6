@@ -272,9 +272,10 @@ fn draw_grad(mesh: &Mesh, g: &Grad) {
 impl Model {
     pub async fn load(dir: &Path) -> Option<Model> {
         let worker_dir=dir.to_owned();
-        let (meta,vb,ib,cb)=crate::load_work::spawn(move||{
+        let (meta,vb,ib,cb,nb)=crate::load_work::spawn(move||{
             let meta:serde_json::Value=serde_json::from_str(&std::fs::read_to_string(worker_dir.join("meta.json")).ok()?).ok()?;
-            Some((meta,std::fs::read(worker_dir.join("verts.bin")).ok()?,std::fs::read(worker_dir.join("idx.bin")).ok()?,std::fs::read(worker_dir.join("colors.bin")).unwrap_or_default()))
+            Some((meta,std::fs::read(worker_dir.join("verts.bin")).ok()?,std::fs::read(worker_dir.join("idx.bin")).ok()?,std::fs::read(worker_dir.join("colors.bin")).unwrap_or_default(),
+                  std::fs::read(worker_dir.join("normals.bin")).unwrap_or_default()))
         }).await?;
         let mut budget=crate::load_work::Budget::new();
         let f = |o: usize| f32::from_le_bytes(vb[o..o + 4].try_into().unwrap());
@@ -351,6 +352,9 @@ impl Model {
             });
             let colour = if grad.is_some() || p["shader_file"].is_string() { [255; 4] } else { tint[0].map(|x| (x.clamp(0.0, 1.0) * 255.0) as u8) };
             let coff = p["coff"].as_u64().map(|c| c as usize).filter(|c| (c + vcount) * 4 <= cb.len());
+            // normals.bin (translated-shader parts): Unity world space, to GL like positions.
+            let noff = p["noff"].as_u64().map(|c| c as usize).filter(|c| (c + vcount) * 12 <= nb.len());
+            let nf = |o: usize| f32::from_le_bytes(nb[o..o + 4].try_into().unwrap());
             let verts: Vec<Vertex> = (0..vcount)
                 .map(|k| {
                     let o = (voff + k) * 20;
@@ -358,7 +362,7 @@ impl Model {
                         position: gl(f(o), f(o + 4), f(o + 8)),
                         uv: vec2(f(o + 12), 1.0 - f(o + 16)),
                         color: coff.map_or(colour, |c| cb[(c + k) * 4..(c + k) * 4 + 4].try_into().unwrap()),
-                        normal: Vec4::ZERO,
+                        normal: noff.map_or(Vec4::ZERO, |c| { let o = (c + k) * 12; gl(nf(o), nf(o + 4), nf(o + 8)).extend(0.0) }),
                     }
                 })
                 .collect();
@@ -377,7 +381,10 @@ impl Model {
                 names.push(p["name"].as_str().unwrap_or("").to_string());
                 scene_paths.push(p["path"].as_str().unwrap_or("").to_string());
                 grads.push(grad);
-                fxs.push(crate::fx::Fx::new(dir, p, |f| cache.get(f).cloned().flatten()));
+                // fx.rs looks two dirs above for shaders/: right for models/map_*, not for
+                // models/projectiles/* (its lava balls and beams), so anchor it at their root.
+                let fx_dir = dir.ancestors().find(|a| a.join("shaders").is_dir()).map(|r| r.join("models").join("_")).unwrap_or_else(|| dir.to_path_buf());
+                fxs.push(crate::fx::Fx::new(&fx_dir, p, |f| cache.get(f).cloned().flatten()));
                 budget.checkpoint().await;
             }
         }
@@ -390,6 +397,13 @@ impl Model {
             if std::env::var_os("RRBTD6_TIMING").is_some(){if let Some(g)=&model.gpu_map{let (runs,bytes)=g.resource_sizes();eprintln!("static-map: {runs} immutable draws, {bytes} buffer bytes");}}
         }
         Some(model)
+    }
+
+    /// A map's removeable bought or back again (Game::logic hide_parts).
+    pub fn set_part_hidden(&mut self, part: usize, hidden: bool) {
+        if let Some(h) = self.hidden.get_mut(part) {
+            *h = hidden;
+        }
     }
 
     /// Replace a precise scene subtree only once its animated model is ready.
@@ -480,13 +494,22 @@ impl Model {
     /// Draw with a yaw (radians, about +y, Unity convention: +z forward) and offset (Unity world).
     pub fn draw_at(&self, pos: [f32; 3], yaw: f32, scratch: &mut Vec<Vertex>) {
         let (s, c) = yaw.sin_cos();
-        for m in &self.parts {
+        for (i, m) in self.parts.iter().enumerate() {
             scratch.clear();
             scratch.extend(m.vertices.iter().map(|vx| {
                 let (x, y, z) = (vx.position.x, vx.position.y, -vx.position.z);
                 let (rx, rz) = (x * c + z * s, -x * s + z * c);
-                Vertex { position: gl(rx + pos[0], y + pos[1], rz + pos[2]), ..*vx }
+                let (nx, ny, nz) = (vx.normal.x, vx.normal.y, -vx.normal.z);
+                let normal = gl(nx * c + nz * s, ny, -nx * s + nz * c).extend(0.0);
+                Vertex { position: gl(rx + pos[0], y + pos[1], rz + pos[2]), normal, ..*vx }
             }));
+            // A part with the game's translated shader (the Wizard Lord Phoenix's lava ball, the
+            // Plasma Accelerator beam) draws with it, as map parts do.
+            if let Some(fx) = self.fx.get(i).and_then(|f| f.as_ref()) {
+                let vp = unsafe { get_internal_gl() }.quad_gl.get_projection_matrix() * Mat4::from_scale(vec3(1.0, 1.0, -1.0));
+                fx.draw(&Mesh { vertices: scratch.clone(), indices: m.indices.clone(), texture: None }, vp, get_time() as f32);
+                continue;
+            }
             draw_geometry(scratch,&m.indices,m.texture.as_ref());
         }
     }
@@ -592,12 +615,15 @@ pub fn draw_oriented(m: &Model, axis: Vec3, at: Vec3, dir: Vec3, scale: f32) {
 pub const PLAY_HALF_WIDTH: f32 = 150.0;
 
 /// The in-game layout for a window (logical pixels), as the game builds it:
-/// ScreenRatio.IsOrOver14x9 (VERIFIED-DISASM @0x1815f7130: aspect - 14/9 > -0.01) picks
-/// RatioCanvasScaler.AdjustRefResolution's reference (3840 x 2160, else 3840 x 2880; CanvasScaler
-/// Expand: the canvas covers it), and InGameUIRect.UpdateRect (@0x180876350) a centred UIRect of
-/// a 3:2 map plus the shop (600 wide on the right, else 320 tall along the bottom) scaled to fit:
-/// 3840 x 2160 or 3840 x 2880 canvas units. InGameMapRect.UpdateRect (@0x180876090) gives the
-/// map camera the UIRect less the shop. Outside the UIRect the shop's tiled pattern pads.
+/// RatioCanvasScaler.AdjustRefResolution (@0x180850930) sets the CanvasScaler's reference to
+/// 3840 x 2600 at ScreenRatio.IsOrOver14x9 (aspect - 14/9 > -0.01), else 3840 x 2880, on Steam
+/// (its other test, NKApplication.IsSteam, folds to `return true`; the Epic build took 3840 x 2160
+/// there); CanvasScaler Expand scales by the smaller ratio, the canvas covering the window.
+/// InGameUIRect.UpdateRect (@0x18084f9c0) sizes a centred UIRect: the canvas height (less the
+/// 320 shop bar below 14:9) as a 3:2 map plus the 600-wide shop at 14:9 and wider, scaled down
+/// uniformly when wider than the canvas. At 1920 x 1080: 4500 x 2600 units, 1869 px wide and
+/// centred (the real game's 25 px side strips). InGameMapRect.UpdateRect gives the map camera
+/// the UIRect less the shop. Outside the UIRect the shop's tiled pattern pads.
 #[derive(Clone, Copy, Debug)]
 pub struct Layout {
     /// Screen px per canvas unit.
@@ -610,11 +636,33 @@ pub struct Layout {
     pub bottom: bool,
 }
 
+/// RatioCanvasScaler's reference resolution for a window (see `layout`).
+pub fn reference_resolution(width: f32, height: f32) -> Vec2 {
+    let (w, h) = (width.max(1.0), height.max(1.0));
+    if w / h - 14.0 / 9.0 > -0.01 { vec2(3840.0, 2600.0) } else { vec2(3840.0, 2880.0) }
+}
+
+/// Screen px per canvas unit (CanvasScaler Expand over the reference resolution).
+pub fn canvas_scale(width: f32, height: f32) -> f32 {
+    let r = reference_resolution(width, height);
+    (width.max(1.0) / r.x).min(height.max(1.0) / r.y)
+}
+
 pub fn layout(width: f32, height: f32) -> Layout {
     let (w, h) = (width.max(1.0), height.max(1.0));
     let bottom = !(w / h - 14.0 / 9.0 > -0.01);
-    let (cw, ch) = if bottom { (3840.0, 2880.0) } else { (3840.0, 2160.0) };
-    let scale = (w / cw).min(h / ch);
+    let scale = canvas_scale(w, h);
+    let (canvas_w, canvas_h) = (w / scale, h / scale);
+    // InGameUIRect.UpdateRect: map height x 1.5 plus the shop's width, the bar added below.
+    let (bar, side) = if bottom { (320.0, 0.0) } else { (0.0, 600.0) };
+    let mut map_h = canvas_h - bar;
+    let mut ui_w = map_h * 1.5 + side;
+    if canvas_w < ui_w {
+        let f = canvas_w / ui_w;
+        ui_w *= f;
+        map_h *= f;
+    }
+    let (cw, ch) = (ui_w, bar + map_h);
     let ui = Rect::new((w - cw * scale) * 0.5, (h - ch * scale) * 0.5, cw * scale, ch * scale);
     let (map, shop) = if bottom {
         let bar = 320.0 * scale;
@@ -655,7 +703,12 @@ pub fn camera(target: [f32; 2], viewport_w: f32, viewport_h: f32) -> Camera3D {
         // RRBTD6_ZOOM=k (debug): k times closer.
         fovy: ORTHO_SIZE * 2.0
             / std::env::var("RRBTD6_ZOOM").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0),
-        aspect: Some(1.5),
+        // Unity's Camera.aspect follows its pixelRect: 3:2 unless the UIRect was shrunk (between
+        // 14:9 and 4500:2600) while the shop kept its 600 units.
+        aspect: Some({
+            let f = map_frame(viewport_w, viewport_h);
+            f.w / f.h.max(1e-3)
+        }),
         projection: Projection::Orthographics,
         z_near: 1.0,
         z_far: 12000.0,
@@ -699,18 +752,31 @@ pub fn pick_ground(cam: &Camera3D, mouse: Vec2, vw: f32, vh: f32) -> Option<[f32
     #[test]fn resized_map_keeps_native_composition_and_uniform_scale(){
         for (w,h) in [(1600.0,900.0),(800.0,900.0),(2560.0,1080.0),(900.0,1600.0),(1200.0,1100.0),(1440.0,900.0),(1.0,1.0)]{
             let l=layout(w,h);
-            // InGameUIRect: 3840x2160 (14:9 and wider) or 3840x2880, uniformly scaled, centred,
-            // inside the window; the map rect is 3:2 either way.
+            // InGameUIRect: centred inside the window, the map rect 3:2 either way.
             assert_eq!(l.bottom,w/h<14.0/9.0-0.01);
-            assert!((l.ui.w/l.ui.h-if l.bottom{4.0/3.0}else{16.0/9.0}).abs()<1e-4);
             assert!(l.ui.x>=-0.01&&l.ui.y>=-0.01&&l.ui.right()<=w+0.01&&l.ui.bottom()<=h+0.01);
             assert!((l.ui.center()-vec2(w/2.0,h/2.0)).length()<0.001);
-            assert!((l.map.w/l.map.h-1.5).abs()<1e-4);
+            // InGameMapRect: the UIRect less the 600-unit shop (or the 320 bar below 14:9); 3:2
+            // unless the UIRect had to shrink.
+            if l.bottom {assert!((l.map.w-l.ui.w).abs()<1e-3&&(l.ui.h-l.map.h-320.0*l.scale).abs()<1e-3);}
+            else {assert!((l.map.h-l.ui.h).abs()<1e-3&&(l.ui.w-l.map.w-600.0*l.scale).abs()<1e-3);}
+            if l.ui.w<w-0.01||l.bottom {assert!((l.map.w/l.map.h-1.5).abs()<1e-4);}
             // The camera renders the map rect itself (Camera.pixelRect).
             let r=map_frame(w,h);
             assert!((r.x-l.map.x).abs()<1e-4&&(r.y-l.map.y).abs()<1e-4&&(r.w-l.map.w).abs()<1e-4&&(r.h-l.map.h).abs()<1e-4);
         }
         assert_eq!(ortho_half_height([0.0,0.0],16.0/9.0),ORTHO_SIZE);
+    }
+    #[test]fn steam_reference_resolution_at_1080p(){
+        // RatioCanvasScaler 3840 x 2600: 0.4154 px per unit; UIRect 4500 x 2600 units centred.
+        let l=layout(1920.0,1080.0);
+        assert!((l.scale-1080.0/2600.0).abs()<1e-6);
+        assert!((l.ui.w-4500.0*l.scale).abs()<1e-3&&(l.ui.h-1080.0).abs()<1e-3);
+        assert!((l.ui.x-(1920.0-4500.0*l.scale)/2.0).abs()<1e-3);
+        assert!((l.shop.w-600.0*l.scale).abs()<1e-3);
+        // 4:3: 3840 x 2880, the map above the 320 bar.
+        let l=layout(1024.0,768.0);
+        assert!(l.bottom&&(l.ui.w-1024.0).abs()<1e-3&&(l.map.h-2560.0*l.scale).abs()<1e-3);
     }
 }
 
@@ -731,6 +797,7 @@ pub fn billboard(tex: &Texture2D, x: f32, z: f32, lift: f32, w: f32) {
 /// order (sprites don't write depth, so order is the painter's order). Consecutive sprites with
 /// the same texture merge; a texture change or a full buffer flushes.
 pub struct SpriteBatch {
+    next_shift: [f32; 2],
     tex: Option<Texture2D>,
     verts: Vec<Vertex>,
     idx: Vec<u16>,
@@ -750,6 +817,7 @@ impl SpriteBatch {
             tex: None,
             verts: Vec::with_capacity(BATCH_QUADS * 4),
             idx: Vec::with_capacity(BATCH_QUADS * 6),
+            next_shift: [0.0, 0.0],
             right: vec3(1.0, 0.0, 0.0),
             up: gl(0.0, a.cos(), a.sin()),
             flushes: 0,
@@ -758,6 +826,11 @@ impl SpriteBatch {
 
     /// Camera-facing quad of size (w, h) centred at Unity (x, height, z).
     #[allow(clippy::too_many_arguments)]
+    /// Moves the next billboard within its own plane (a sprite's trim).
+    pub fn shift_next(&mut self, shift: [f32; 2]) {
+        self.next_shift = shift;
+    }
+
     pub fn billboard(&mut self, tex: &Texture2D, x: f32, z: f32, height: f32, w: f32, h: f32, tint: [u8; 4]) {
         self.billboard_uv(tex, [0.0, 0.0, 1.0, 1.0], x, z, height, w, h, tint);
     }
@@ -769,7 +842,8 @@ impl SpriteBatch {
             self.flush();
             self.tex = Some(tex.clone());
         }
-        let c = gl(x, height, z);
+        let c = gl(x, height, z) + self.right * self.next_shift[0] + self.up * self.next_shift[1];
+        self.next_shift = [0.0, 0.0];
         let (r, u) = (self.right * (w / 2.0), self.up * (h / 2.0));
         let base = self.verts.len() as u16;
         let v = |p: Vec3, uu: f32, vv: f32| Vertex { position: p, uv: vec2(uu, vv), color: tint, normal: Vec4::ZERO };

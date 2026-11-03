@@ -8,14 +8,10 @@
 
 #[path = "menu_pages.rs"]
 mod menu_pages;
-#[path = "season_goals.rs"]
-mod season_goals;
 #[path = "coop_session.rs"]
 mod coop_session;
 #[path = "coop_menu.rs"]
 mod coop_menu;
-#[path = "social_pages.rs"]
-mod social_pages;
 #[path = "loading.rs"]
 mod loading;
 #[path = "home_world.rs"]
@@ -32,8 +28,6 @@ mod profile_browser;
 pub(crate) mod jukebox;
 #[path = "mod_browser.rs"]
 mod mod_browser;
-#[path = "daily_reward.rs"]
-mod daily_reward;
 #[path = "save_warning.rs"]
 mod save_warning;
 #[path = "button_motion.rs"]
@@ -102,7 +96,6 @@ pub enum FrontAction {
     /// Start a game: map directory key and game.json mode name.
     Play { map: String, mode: String },
     Coop(rrbtd6_coop::MatchStart),
-    Race(serde_json::Value),
     Quit,
     Jukebox(jukebox::Change),
     Mods(Vec<String>),
@@ -192,7 +185,7 @@ const ADV_SECTIONS: [&str;3] = ["Default","Graphics","UI"];
 
 fn advanced_row_section(name:&str)->usize{
     match name.strip_prefix("Ours").and_then(|v|v.parse::<usize>().ok()){
-        Some(1..=6 | 20)=>1,
+        Some(1..=6 | 11)=>1,
         Some(_)=>2,
         None=>0,
     }
@@ -229,6 +222,9 @@ pub struct FrontEnd {
     account_generation:u64,
     map_group_key:Option<(usize,usize)>,map_group_began:Option<f64>,
     motion_screen:Option<Screen>,motion_began:Option<f64>,motion_pending:bool,
+    /// Coming back to the maps without their entrance animation: the screen is put in its opened
+    /// state once (else an entrance left part-way stays frozen, its lower maps still small).
+    motion_snap:bool,
     screen_motions:Vec<(Screen,serde_json::Value,button_motion::ButtonMotion,&'static str,&'static str)>,
     dir: PathBuf,
     pub screen: Screen,
@@ -251,7 +247,6 @@ pub struct FrontEnd {
     heroes: Vec<crate::data::ShopItem>,
     hero_index: usize,
     hero_from: Screen,
-    social_from: Screen,
     hero_scrolls: [ScrollState; 3],
     hero_drag: Option<ScrollDrag>,
     hero_levels_expanded: bool,
@@ -301,8 +296,6 @@ pub struct FrontEnd {
     drag: Option<usize>,
     advanced: Option<Node>,
     pub adv: crate::advanced::Advanced,
-    /// The Trophy Store button's original height (it takes the Shop's slot when that's hidden).
-    trophy_store_y: Option<f32>,
     adv_scroll: f32,
     adv_expanded: [bool; 3],
     hotkeys: Option<Node>,
@@ -330,6 +323,39 @@ fn scene_node(mut n: Node) -> Node {
     }
     n.hide_named(&["Jewel", "JewelIcon", "ToggleJewel"]);
     n
+}
+
+/// CoopPlayerPanel: each player's hero (or none), rank, banner and info button, from the
+/// profile they sent (PlayerProfile). Returns the info popup to show when one was clicked.
+/// (Its own function: inlined, the front end's draw grows past LLVM's stack.)
+#[inline(never)]
+fn bind_lobby_players(m:&mut Node,net:&coop_session::Session,hero_data:&serde_json::Value,hero_skins:&std::collections::HashMap<String,String>,
+    loc:&std::collections::HashMap<String,String>,modal:bool)->Option<(String,String)>{
+    let room=net.room.as_ref()?;
+    let mut popup=None;
+    for player in &room.players{
+        let path=format!("Canvas/CoopLobbyScreen/CoopPlayerInfo/PlayerSlot{}/OccupiedState",player.slot+1);
+        let pr=&player.profile;
+        let none=std::collections::HashMap::new();
+        let skins=if net.slot==Some(player.slot){hero_skins}else{&none};
+        let icon=(!pr.hero.is_empty()).then(||selected_skin(hero_data,skins,&pr.hero)["icon"].as_str()).flatten().map(|s|s.strip_suffix(".png").unwrap_or(s).to_owned());
+        m.set_active(&format!("{path}/HeroIcon"),icon.is_some());
+        m.set_sprite(&format!("{path}/HeroIcon"),icon.as_deref());
+        m.set_active(&format!("{path}/NoHeroIcon"),icon.is_none());
+        m.set_active(&format!("{path}/LvlStar"),pr.level>0);
+        m.set_text(&format!("{path}/LvlStar/LvlTxt"),&pr.level.to_string());
+        m.set_active(&format!("{path}/CustomBanner"),!pr.banner.is_empty());
+        m.set_sprite(&format!("{path}/CustomBanner/Image"),Some(pr.banner.as_str()).filter(|b|!b.is_empty()));
+        m.set_active(&format!("{path}/InfoButton"),true);
+        if !modal&&m.clicked(&format!("{path}/InfoButton")){
+            let hero=if pr.hero.is_empty(){"None".to_owned()}else{loc.get(&pr.hero).cloned().unwrap_or_else(||crate::spaced(&pr.hero))};
+            popup=Some((player.name.clone(),format!("Rank {}
+Hero: {}
+Avatar: {}
+Banner: {}",pr.level,hero,crate::spaced(&pr.avatar),crate::spaced(&pr.banner))));
+        }
+    }
+    popup
 }
 
 fn selected_skin<'a>(data: &'a serde_json::Value, selected: &std::collections::HashMap<String,String>, hero: &str) -> &'a serde_json::Value {
@@ -527,12 +553,13 @@ impl FrontEnd {
     pub fn coop_status(&self)->&str{&self.net.status}
     pub fn coop_failed(&self)->bool{self.net.error||!self.net.active()}
     pub fn coop_stop(&mut self){self.net.leave();}
-    pub fn new(root: &Path) -> Self {
+    /// The map list: the game's maps with a map.json, then enabled mods' maps.
+    fn map_list(root: &Path) -> Vec<(MapEntry, String)> {
         let list: Vec<MapEntry> = std::fs::read_to_string(root.join("ui").join("mapset.json"))
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let list = list
+        let mut list: Vec<_> = list
             .into_iter()
             .map(|m| {
                 let k = map_key(&m.id);
@@ -540,8 +567,18 @@ impl FrontEnd {
             })
             .filter(|(_, k)| root.join("maps").join(k).join("map.json").exists())
             .collect();
+        list.extend(crate::mod_maps::catalog(root).into_iter().map(|(id, d)| (MapEntry { id: id.clone(), difficulty: d.difficulty, sprite: None }, id)));
+        list
+    }
+    /// Mods were enabled or disabled: their maps join or leave the list.
+    pub fn refresh_maps(&mut self, root: &Path) {
+        self.list = Self::map_list(root);
+        self.map = self.map.min(self.list.len().saturating_sub(1));
+    }
+    pub fn new(root: &Path) -> Self {
+        let list = Self::map_list(root);
         Self {
-            account_generation:0,map_group_key:None,map_group_began:None,motion_screen:None,motion_began:None,motion_pending:false,screen_motions:Vec::new(),
+            account_generation:0,map_group_key:None,map_group_began:None,motion_screen:None,motion_began:None,motion_pending:false,motion_snap:false,screen_motions:Vec::new(),
             dir: root.join("ui").join("prefabs"),
             screen: Screen::Main,
             main: None,
@@ -557,14 +594,14 @@ impl FrontEnd {
             backdrop: None,
             catalog: None,
             monkeys: None,
-            monkey_set: 0,
+            // RRBTD6_MONKEY_SET=0..3: the Monkeys screen opens on that set (screenshots).
+            monkey_set: std::env::var("RRBTD6_MONKEY_SET").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0) % 4,
             upgrade_xp: std::fs::read_to_string(root.join("ui/runtime/upgrade_xp.json")).ok()
                 .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             heroes: std::fs::read_to_string(root.join("ui/runtime/hero_shop.json")).ok()
                 .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default(),
             hero_index: 0,
             hero_from: Screen::Main,
-            social_from: Screen::Main,
             hero_scrolls: [ScrollState::default(); 3],
             hero_drag: None,
             hero_levels_expanded: false,
@@ -621,7 +658,6 @@ impl FrontEnd {
             drag: None,
             advanced: None,
             adv: crate::advanced::Advanced::default(),
-            trophy_store_y: None,
             adv_scroll: 0.0,
             adv_expanded: [false; 3],
             hotkeys: None,
@@ -644,7 +680,8 @@ impl FrontEnd {
                     apply_pose(m, &self.root.join("ui/runtime/MainMenuUi.json"), "HomeScreen", "Open");
                     mod_browser::add_home_button(m,&mut self.main_runtime);
                     m.set_active(&format!("{MAIN}/Mods"),self.adv.show_mods);
-                    for n in ["EventButtonGroup", "LoadGame"] {
+                    for n in ["EventButtonGroup", "LoadGame", "TopGroup/SocialSeasonsGoalPanel",
+                        "BottomButtonGroup/CoOp/CoopAnim/Button/SocialBtnPip"] {
                         m.set_active(&format!("{MAIN}/{n}"), false);
                     }
                     m.hide_named(&["NewRibbon", "NewIcon", "NewTowerDot", "Pip", "LimitedTime", "ParagonAvailable", "SaleBanner",
@@ -721,8 +758,9 @@ impl FrontEnd {
             Screen::Difficulty if self.diff.is_none() => {
                 self.diff = scene(&d.join("DifficultySelectUI.json"));
                 if let Some(m) = self.diff.as_mut() {
-                    m.hide_named(&["Rewards", "DifficultyMilestoneRewards", "BadgeImage", "Panel", "Medals"]);
-                    for n in ["FriendsPanel", "ContinueSavedGame"] {
+                    m.hide_named(&["DifficultyMilestoneRewards", "Medals"]);
+                    // Friends are removed (DEVIATIONS.md).
+                    for n in ["FriendsPanel", "FriendsButton", "ContinueSavedGame"] {
                         m.set_active(&format!("{DIFF}/{n}"), false);
                     }
                 }
@@ -731,6 +769,7 @@ impl FrontEnd {
                 self.modes = scene(&d.join("ModeSelectUI.json"));
                 if let Some(m) = self.modes.as_mut() {
                     m.hide_named(&["Medal", "Lock", "Stars", "Rewards"]);
+                    m.set_text(&format!("{MODES}/HardModes/Clicks/LockedState/Mode"),"CHIMPS");
                     self.custom_modes=crate::modding::custom_mode_buttons(&self.root,m);self.custom_mode=0;
                 }
             }
@@ -743,7 +782,7 @@ impl FrontEnd {
                         "FrontierGroup", "ScreenSizePanel"] {
                         m.set_active(&format!("{SETTINGS}/{n}"), false);
                     }
-                    m.set_text(&format!("{SETTINGS}/Panel/Buttons/BackupButton/Button/Text"),"Account");
+                    m.set_text(&format!("{SETTINGS}/Panel/Buttons/BackupButton/Button/Text"),"Profile");
                     m.hide_named(&["Ribbon"]);
                     // SettingsScreen sizes the panel at runtime (the scene's layout alone gives the
                     // slider column no width): the panel spans the Panel's width, sliders fill it.
@@ -799,7 +838,7 @@ impl FrontEnd {
                             r.name = format!("Ours{i}");
                             extra.push(r);
                         }
-                        extra.sort_by_key(|row| match row.name.as_str(){"Ours20"=>0,"Ours0"=>1,"Ours21"=>2,_=>3});
+                        extra.sort_by_key(|row| match row.name.as_str(){"Ours11"=>0,"Ours0"=>1,"Ours12"=>2,_=>3});
                         let original=std::mem::take(&mut c.children);
                         for (section,name) in ADV_SECTIONS.iter().enumerate(){
                             let mut head=header.clone().unwrap_or_else(||title.clone());
@@ -956,7 +995,7 @@ impl FrontEnd {
         if self.motion_screen==Some(self.screen){return;}
         let map_entrance=self.motion_screen.is_none() || self.motion_screen==Some(Screen::Main) || self.motion_screen==Some(Screen::Menu(MenuPage::Social));
         self.motion_screen=Some(self.screen);self.motion_began=None;self.motion_pending=true;
-        if self.screen==Screen::Maps && !map_entrance{self.motion_pending=false;}
+        if self.screen==Screen::Maps && !map_entrance{self.motion_pending=false;self.motion_snap=true;}
         if self.screen==Screen::Maps{self.map_group_key=None;self.map_group_began=None;}
         if self.screen==Screen::Advanced {
             self.adv_expanded=[false;3];self.adv_scroll=0.0;self.drag=None;
@@ -1065,7 +1104,10 @@ impl Hud {
             }
             if !fe.net.active()&&!fe.net.error{if let Ok(code)=std::env::var("RRBTD6_COOP_JOIN"){fe.net.join(&fe.root,&code);}}
         }
+        let ui_phase=std::time::Instant::now();
         fe.ensure();
+        if std::env::var_os("RRBTD6_TIMING").is_some()&&ui_phase.elapsed().as_millis()>5 {eprintln!("ui-phase: ensure {:.3} ms",ui_phase.elapsed().as_secs_f64()*1000.0);}
+        let ui_background=std::time::Instant::now();
         fe.prepare_screen_motion();
         if fe.game_options_root.is_some() {
             clear_background(BLACK);
@@ -1096,8 +1138,12 @@ impl Hud {
             } else {
                 let size = (screen_width() as u32, screen_height() as u32);
                 if fe.backdrop.as_ref().is_none_or(|(w,h,_)| (*w,*h) != size) {
+                    let world_phase=std::time::Instant::now();
                     fe.draw_world().await;
+                    if std::env::var_os("RRBTD6_TIMING").is_some(){eprintln!("ui-phase: world {:.3} ms",world_phase.elapsed().as_secs_f64()*1000.0);}
+                    let capture_phase=std::time::Instant::now();
                     fe.backdrop = Some((size.0,size.1,crate::menus::Backdrop::capture()));
+                    if std::env::var_os("RRBTD6_TIMING").is_some(){eprintln!("ui-phase: capture {:.3} ms",capture_phase.elapsed().as_secs_f64()*1000.0);}
                 }
                 if let Some((_,_,bg)) = &fe.backdrop { bg.draw(); }
             }
@@ -1145,7 +1191,6 @@ impl Hud {
         let mut out = None;
         let mut next = fe.world_motion.take_action().and_then(|a|MenuPage::from_name(&a)).map(Screen::Menu);
         let mut browse = None;
-        let mut open_legends = false;
         let options_can_close=fe.rebinding.is_none();
         // The support popup (see support_popup.rs) leaves the screen behind it inert.
         let support = self.support_open()||fe.save_warning.is_open();
@@ -1158,14 +1203,11 @@ impl Hud {
                     // Our main menu toggles (Advanced settings, see DEVIATIONS.md).
                     m.set_active(&format!("{MAIN}/Mods"),fe.adv.show_mods);
                     if m.clicked(&format!("{MAIN}/Mods/Button"))||m.clicked(&format!("{MAIN}/Mods/Button/Text")){fe.mods_room=false;next=Some(Screen::Menu(MenuPage::Mods));}
-                    m.set_active(&format!("{MAIN}/BottomButtonGroup/Legends"), !fe.adv.hide_legends);
-                    m.set_active(&format!("{MAIN}/Store"), !fe.adv.hide_store);
-                    // Without the Shop, the Trophy Store moves up into its slot.
-                    let store_y = m.find(&format!("{MAIN}/Store")).map(|n| n.rt.pos.y);
-                    if let (Some(store_y), Some(trophy)) = (store_y, m.find_mut(&format!("{MAIN}/TrophyStore"))) {
-                        let home = *fe.trophy_store_y.get_or_insert(trophy.rt.pos.y);
-                        trophy.rt.pos.y = if fe.adv.hide_store { store_y } else { home };
-                    }
+                    // Removed menu entries leave the Trophy Store in the former Achievements slot.
+                    for path in ["BottomButtonGroup/Legends","Store","Achievements","PlayerInfo/Group/MailboxButton",
+                        "TopGroup/SocialSeasonsGoalPanel","BottomButtonGroup/CoOp/CoopAnim/Button/SocialBtnPip"] {m.set_active(&format!("{MAIN}/{path}"),false);}
+                    let trophy_y = m.find(&format!("{MAIN}/Achievements")).map(|n| n.rt.pos.y);
+                    if let (Some(trophy_y), Some(trophy)) = (trophy_y, m.find_mut(&format!("{MAIN}/TrophyStore"))) {trophy.rt.pos.y = trophy_y;}
                     if let Some(page)=home_events::update(&fe.root,m,s,&fe.adv.hidden_events()){next=Some(Screen::Menu(page));}
                     if let Some(hero)=fe.selected_hero.as_deref().or_else(||fe.heroes.first().map(|h|h.id.as_str())) {
                         let skin=selected_skin(&fe.hero_data,&fe.hero_skins,hero);
@@ -1187,13 +1229,6 @@ impl Hud {
                     if m.clicked(&format!("{MAIN}/BottomButtonGroup/Monkeys/MonkeysAnim/Button")) {
                         next = Some(Screen::Monkeys);
                     }
-                    // Legends DLC modes aren't supported: a popup over the blurred menu instead.
-                    // RRBTD6_LEGENDS_POPUP opens it once, for screenshots.
-                    static PREVIEW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                    let preview = std::env::var_os("RRBTD6_LEGENDS_POPUP").is_some() && !PREVIEW.swap(true, std::sync::atomic::Ordering::Relaxed);
-                    if !support && (preview || m.clicked(&format!("{MAIN}/BottomButtonGroup/Legends/LegendsAnim/Button"))) {
-                        open_legends = true;
-                    }
                     if m.clicked(&format!("{MAIN}/Settings/Button")) {
                         fe.settings_from = Screen::Main;
                         next = Some(Screen::Settings);
@@ -1202,9 +1237,8 @@ impl Hud {
                         ("BottomButtonGroup/Knowledge/KnowledgeAnim/Button", MenuPage::Knowledge),
                         ("BottomButtonGroup/CoOp/CoopAnim/Button", MenuPage::Social),
                         ("BottomButtonGroup/Powers/PowersAnim/Button", MenuPage::Powers),
-                        ("Achievements/Button", MenuPage::Achievements), ("Store/Button", MenuPage::Store),
                         ("PlayerInfo/PlayerAvatar/Hit", MenuPage::Profile),
-                        ("TrophyStore/Button", MenuPage::TrophyStore), ("PlayerInfo/Group/MailboxButton", MenuPage::Mailbox),
+                        ("TrophyStore/Button", MenuPage::TrophyStore),
                     ] {
                         if m.clicked(&format!("{MAIN}/{path}")) { next = Some(Screen::Menu(page)); }
                     }
@@ -1216,7 +1250,6 @@ impl Hud {
             Screen::Menu(page) => {
                 let mut back=back;
                 if let Some(menu) = fe.pages.get_mut(&page) {
-                    if page==MenuPage::DailyReward && menu.node.clicked("Canvas/DailyRewardScreen/BgPanel/ImgClose"){back=true;}
                     if let Some(browser)=&mut menu.mods {
                         let room=if fe.mods_room{fe.net.room.as_ref().map(|r|(r.mods.as_slice(),fe.net.host))}else{None};
                         browser.bind_room(&mut menu.node,room);
@@ -1235,10 +1268,10 @@ impl Hud {
                     menu.animate();
                     menu.update_scroll(ScrollInput { pointer:mouse_position().into(),pressed:!support&&is_mouse_button_pressed(MouseButton::Left),
                         held:!support&&is_mouse_button_down(MouseButton::Left),released:!support&&is_mouse_button_released(MouseButton::Left),
-                        wheel:if support {0.0} else {mouse_wheel().1},dt:get_frame_time(),scale:s });
+                        wheel:if support {0.0} else {crate::hud::wheel_notches()},dt:get_frame_time(),scale:s });
                     if std::mem::take(&mut menu.home_requested){fe.net.leave();next=Some(Screen::Main);}
                     if page==MenuPage::CoopLobby{
-                        if menu.node.clicked("Canvas/CoopLobbyScreen/RoomMods"){fe.mods_room=true;next=Some(Screen::Menu(MenuPage::Mods));}
+                        if menu.node.clicked(coop_menu::ROOM_MODS){fe.mods_room=true;next=Some(Screen::Menu(MenuPage::Mods));}
                         if menu.coop_changed(){if let Some((entry,_))=fe.list.get(fe.map){fe.net.send(rrbtd6_coop::Command::Settings(menu.coop_settings(entry.id.clone())));}}
                         menu.bind_coop(&fe.net);
                     }
@@ -1247,38 +1280,13 @@ impl Hud {
                     let coop_modal=menu.coop_modal_open();
                     let m = &mut menu.node;
                     if page==MenuPage::Profile && m.clicked("Canvas/PlayerStatsScreen/Stats/Own/SettingsBtn") {self.account_ui.open(&fe.root);}
-                    if page==MenuPage::Television {
-                        let base="BloonsMonkeyTalesPopup/AnimatedObject/Panel";
-                        if m.clicked(&format!("{base}/CloseButtonX")) || m.clicked(&format!("{base}/Buttons/CancelButton")){next=Some(Screen::Main);}
-                    } else if page==MenuPage::Events {
-                        let base="Canvas/GameEventsScreen/Content";
-                        for (path,target) in [("DailyChallengesGroup/Standard",MenuPage::DailyStandard),("DailyChallengesGroup/Advanced",MenuPage::DailyAdvanced),("DailyChallengesGroup/Coop",MenuPage::DailyCoop),("RotatingEvents/Scroll/LayoutGroup/Content/SocialSeasons",MenuPage::SocialSeason),("RotatingEvents/Scroll/LayoutGroup/Content/Race",MenuPage::Race),("RotatingEvents/Scroll/LayoutGroup/Content/BossEvent",MenuPage::BossRules)] {
-                            if m.clicked(&format!("{base}/{path}")){next=Some(Screen::Menu(target));}
-                        }
-                    } else if let Some(target)=page.rules_page() {
-                        if page==MenuPage::Race&&m.clicked("Canvas/RaceEventScreen/Content/PlayBtn"){
-                            if let Some(data)=home_events::detail(&fe.root,"raceEvent"){match crate::game::Game::validate_race_rules(&data){Ok(())=>out=Some(FrontAction::Race(data)),Err(error)=>m.set_text("Canvas/RaceEventScreen/TopInfo/Title",&error)}}
-                        }
-                        if page!=MenuPage::Race && m.clicked("Canvas/DailyChallengeScreen/Content/Buttons/PlayBtn") {
-                            if let Some((key,_))=page.event_spec(){if let Some(mut data)=home_events::detail(&fe.root,key){
-                                match crate::game::Game::validate_daily_rules(&data){
-                                    Ok(())=>{data["localDaily"]=serde_json::json!(true);out=Some(FrontAction::Race(data));},
-                                    Err(error)=>m.set_text("Canvas/DailyChallengeScreen/TopInfo/Title",&error),
-                                }
-                            }}
-                        }
-                        let stats="Canvas/DailyChallengeScreen/Content/StatsPopup";
-                        if m.clicked("Canvas/DailyChallengeScreen/Content/StatsBtn"){m.set_active(stats,true);}
-                        if m.clicked(&format!("{stats}/CloseStatsBtn")){m.set_active(stats,false);}
-
-                        let base=if page==MenuPage::Race{"Canvas/RaceEventScreen/Content"}else{"Canvas/DailyChallengeScreen/Content"};
-                        if !m.find(stats).is_some_and(|n|n.active)&&(m.clicked(&format!("{base}/ChallengeRules/RulesButton")) || m.clicked(&format!("{base}/TowerScrollRect"))){next=Some(Screen::Menu(target));}
-                    } else if page==MenuPage::CoopLobby {
+                    if page==MenuPage::CoopLobby {
                         let base="Canvas/CoopLobbyScreen/BgPanel/MapGroup/MapInfoPane";
                         if let Some((entry,_))=fe.list.get(fe.map){
                             m.set_sprite(&format!("{base}/MapMask/MapImage"),entry.sprite.as_deref());
                             m.set_text(&format!("{base}/MapName"),&loc.get(&entry.id).cloned().unwrap_or_else(||crate::spaced(&entry.id)));
                         }
+                        if let Some((title,body))=bind_lobby_players(m,&fe.net,&fe.hero_data,&fe.hero_skins,loc,coop_modal){self.welcome.show(&title,&body);}
                         if m.clicked("Canvas/CoopLobbyScreen/LoadingObject/LoadingGame/Button"){fe.net.leave();next=Some(Screen::Menu(MenuPage::Social));}
                         if m.clicked("Canvas/CoopLobbyScreen/BgPanel/Code/SocialShareBtn"){
                             if let Some(invite)=&fe.net.invite{macroquad::miniquad::window::clipboard_set(invite);}
@@ -1293,15 +1301,6 @@ impl Hud {
                         m.set_active(popup,fe.net.error);
                         if fe.net.error{m.set_text(&format!("{popup}/LoadingGame/Text"),&fe.net.status);}
                         if m.clicked(&format!("{popup}/LoadingGame/Button")){fe.net.error=false;fe.net.status.clear();m.set_active(popup,false);}
-                    } else if page==MenuPage::SocialSeason {
-                        let second=get_time() as u64;
-                        if menu.season_second!=Some(second){home_events::bind_social_season(&fe.root,m);menu.season_second=Some(second);}
-                        if m.clicked("Canvas/SocialSeasonsEventScreen/CompetitionActive/TeamsSection/GoalsBtn"){next=Some(Screen::Menu(MenuPage::SocialGoals));}
-                        let base="Canvas/SocialSeasonsEventScreen/Buttons";
-                        if m.clicked(&format!("{base}/TeamIsland/TeamIslandBtn")){next=Some(Screen::Menu(MenuPage::Teams));}
-                        if m.clicked(&format!("{base}/Perks/PerksBtn")){fe.social_from=fe.screen;next=Some(Screen::Menu(MenuPage::Perks));}
-                    } else if page==MenuPage::SocialGoals {
-                        if m.clicked("Canvas/SocialSeasonsGoalsUI/Buttons/Play/PlayBtn"){next=Some(Screen::Maps);}
                     } else if page == MenuPage::QuickMatch {
                         let base="CoopQuickMatchCanvas/CoopQuickMatchScreen/BgPanel";
                         for (path,key) in [("TrackText/InfoText","AnyMap"),("DifficultyText/InfoText","AnyDifficulty"),("ModeText/InfoText","AnyMode")] {
@@ -1309,13 +1308,8 @@ impl Hud {
                         }
                     } else if page == MenuPage::Social {
                         let base="PlaySocialCanvas/PlaySocialScreen/TopGroup/Social/Buttons";
-                        for (button,target) in [("QuickMatch",MenuPage::QuickMatch),("JoinMatch",MenuPage::JoinMatch)] {
-                            if m.clicked(&format!("{base}/{button}")){next=Some(Screen::Menu(target));}
-                        }
+                        if m.clicked(&format!("{base}/JoinMatch")){next=Some(Screen::Menu(MenuPage::JoinMatch));}
                         if m.clicked(&format!("{base}/CreateMatch")){fe.coop_setup=true;fe.maps=None;next=Some(Screen::Maps);}
-                        if m.clicked("PlaySocialCanvas/PlaySocialScreen/TopGroup/Teams/Buttons/SocialSeasons"){next=Some(Screen::Menu(MenuPage::SocialSeason));}
-                        if m.clicked("PlaySocialCanvas/PlaySocialScreen/TopGroup/Teams/Buttons/TeamIsland"){next=Some(Screen::Menu(MenuPage::Teams));}
-                        if m.clicked("PlaySocialCanvas/PlaySocialScreen/MyTeam/MyTeamButton"){next=Some(Screen::Menu(MenuPage::Teams));}
                     } else if page == MenuPage::Knowledge {
                         for (i,name) in ["Primary", "Military", "Magic", "Support", "Heroes", "Powers"].iter().enumerate() {
                             if m.clicked(&format!("Canvas/KnowledgeMain/Buttons/{name}Btn")) {
@@ -1359,13 +1353,10 @@ impl Hud {
                     }
                 }
                 if back {if page==MenuPage::CoopLobby{fe.net.leave();} next = Some(match page {
-                    MenuPage::SocialGoals=>Screen::Menu(MenuPage::SocialSeason),
                     MenuPage::KnowledgeTree=>Screen::Menu(MenuPage::Knowledge),
-                    MenuPage::CoopLobby|MenuPage::QuickMatch|MenuPage::JoinMatch|MenuPage::Teams=>Screen::Menu(MenuPage::Social),
-                    MenuPage::Friends|MenuPage::Perks=>fe.social_from,
+                    MenuPage::CoopLobby|MenuPage::QuickMatch|MenuPage::JoinMatch=>Screen::Menu(MenuPage::Social),
                     MenuPage::Jukebox=>Screen::Settings,
                     MenuPage::Mods if fe.mods_room=>Screen::Menu(MenuPage::CoopLobby),
-                    p if p.event_spec().is_some()=>Screen::Menu(p.event_parent()),
                     _=>Screen::Main,
                 }); }
             }
@@ -1387,8 +1378,6 @@ impl Hud {
                         m.set_active(&format!("{MONKEYS}/TowerSetButtons/{set}/BgSelectedGlow"), i == fe.monkey_set);
                     }
                     let towers: Vec<_> = g.shop.iter().enumerate().filter(|(_,t)| !t.hero && t.set == 1 << fe.monkey_set).collect();
-                    let account = account_preview::monkey_account();
-                    let goals = home_events::tower_unlock_goals(&fe.root);
                     for i in 0..8 {
                         let row = if i < 4 { "TopRow" } else { "BottomRow" };
                         let p = format!("{MONKEYS}/Towers/{row}/Monkey_{}", i + 1);
@@ -1403,54 +1392,28 @@ impl Hud {
                             .or_else(|| self.sprites.has(&fallback).then_some(fallback.as_str()));
                         m.set_sprite(&format!("{button}/Monkey"), icon);
                         m.set_active(&format!("{button}/Monkey"), icon.is_some());
+                        // HYPOTHESIS P-PORTRAITRECT: the portraits are 1024-pixel squares drawn into the
+                        // 690 image; three exports come out trimmed (Wizard 632x1007, Ninja 871x802,
+                        // Skywarden 1024x953), so each is drawn at 690/1024 per pixel, centred
+                        // (recording menu_monkeys_magic: neither stretched, the Ninja that much smaller).
+                        let px = icon.and_then(|n| self.sprites.get(n)).map(|s| vec2(s.tex.width(), s.tex.height()));
+                        if let (Some(px), Some(node)) = (px, m.find_mut(&format!("{button}/Monkey"))) {
+                            node.rt.size = px * (690.0 / 1024.0);
+                        }
                         // MonkeyButton.Init: TowerContainerSpritesAsset.standard[towerSet] (the plain cards;
                         // the "Large" sunburst set is the upgrade screen portrait's).
                         m.set_sprite(&format!("{button}/Bg"), Some(["TowerContainerPrimary", "TowerContainerMilitary", "TowerContainerMagic", "TowerContainerSupport"][fe.monkey_set]));
                         m.set_text(&format!("{button}/MonkeyName"), loc.get(&t.id).map(String::as_str).unwrap_or(&t.id));
-                        // MonkeyButton.Init: "XP: {towerXp:N0}", white, green (0,1,0) when the next upgrade
-                        // of any path is affordable (Btd6Player.CanAcquireUpgrade: xpCost <= XP); the red pip
-                        // counts those not yet viewed. Locked towers show the lock and hide their XP.
-                        if let Some(account) = &account {
-                            let xp = account.xp.get(&t.id).copied().unwrap_or(0.0).trunc();
-                            let tiers = g.tower_defs.iter().position(|(n,_)| *n == t.id).and_then(|d| g.tower_tiers[d].as_ref());
-                            let (mut affordable, mut unseen) = (false, 0);
-                            for path in 0..3 {
-                                let mut ups: Vec<_> = tiers.into_iter().flat_map(|tt| tt.upgrades.iter()).filter(|u| u.path == path).collect();
-                                ups.sort_by_key(|u| u.tier);
-                                let Some(next) = ups.into_iter().find(|u| !account.acquired.contains(&u.name)) else { continue };
-                                if fe.upgrade_xp.get(&next.name).is_some_and(|&cost| cost <= xp) {
-                                    affordable = true;
-                                    if !account.viewed.contains(&next.name) { unseen += 1; }
-                                }
-                            }
-                            let locked = !account.unlocked.contains(&t.id);
-                            m.set_active(&format!("{button}/XpAmount"), !locked);
-                            m.set_text(&format!("{button}/XpAmount"), &format!("{}: {}", loc.get("XP").map(String::as_str).unwrap_or("XP"), account_preview::number(xp)));
-                            if let Some(txt) = m.find_mut(&format!("{button}/XpAmount")).and_then(|n| n.txt.as_mut()) {
-                                txt.color = if affordable { Color::new(0.0,1.0,0.0,1.0) } else { WHITE };
-                            }
-                            m.set_active(&format!("{button}/SeenCount"), unseen > 0);
-                            m.set_text(&format!("{button}/SeenCount/Text"), &unseen.to_string());
-                            m.set_active(&format!("{button}/Locked"), locked);
-                            // Tower gift: a locked goal tower shows the gift box (rank 30+, else "Unlock at
-                            // level 30"); the selected one also shows its pops progress, capped at the goal.
-                            let goal = goals.get(&t.id).copied().filter(|_| locked);
-                            let level_locked = account.rank < 30.0;
-                            m.set_active(&format!("{button}/Giftbox"), goal.is_some() && !level_locked);
-                            m.set_active(&format!("{button}/GiftboxUnlock"), goal.is_some() && level_locked);
-                            m.set_text(&format!("{button}/GiftboxUnlock/UnlockText"), &format!("{} 30", loc.get("Unlock at level").map(String::as_str).unwrap_or("Unlock at level")));
-                            let selected = goal.filter(|_| account.gift_selected == t.id && !level_locked);
-                            m.set_active(&format!("{button}/GiftboxFillbar"), selected.is_some());
-                            if let Some(goal) = selected {
-                                let done = account.gift_progress.get(&t.id).copied().unwrap_or(0.0).trunc().min(goal);
-                                if let Some(img) = m.find_mut(&format!("{button}/GiftboxFillbar/Bar")).and_then(|n| n.img.as_mut()) { img.fill_amount = (done / goal) as f32; }
-                                m.set_text(&format!("{button}/GiftboxFillbar/Top/Count"), &format!("{}/{}", account_preview::number(done), account_preview::number(goal)));
-                            }
-                            for part in ["Monkey","Bg"] {
-                                if let Some(img) = m.find_mut(&format!("{button}/{part}")).and_then(|n| n.img.as_mut()) { img.gray = locked; }
-                            }
-                        } else {
-                            m.set_active(&format!("{button}/XpAmount"), false);
+                        // MonkeyButton.Init: "XP: {towerXp:N0}" (Monkey XP is a usage record here: nothing
+                        // to unlock, so no pip, lock or gift).
+                        m.set_active(&format!("{button}/XpAmount"), true);
+                        m.set_text(&format!("{button}/XpAmount"), &format!("{}: {}", loc.get("XP").map(String::as_str).unwrap_or("XP"),
+                            crate::tower_xp::format_n0(crate::tower_xp::get(&fe.root, &t.id))));
+                        for child in ["SeenCount","Locked","Giftbox","GiftboxUnlock","GiftboxFillbar","QuestLevelUnlock","NewTowerDot"] {
+                            m.set_active(&format!("{button}/{child}"), false);
+                        }
+                        for part in ["Monkey","Bg"] {
+                            if let Some(img)=m.find_mut(&format!("{button}/{part}")).and_then(|n|n.img.as_mut()){img.gray=false;}
                         }
                         if m.clicked(&button) {
                             browse = Some(*index);
@@ -1471,7 +1434,7 @@ impl Hud {
                     m.set_text(&format!("{HERO}/LeftSideGroup/HeroCount"), &format!("{total}/{total}"));
                     let input = ScrollInput { pointer: mouse_position().into(), pressed: is_mouse_button_pressed(MouseButton::Left),
                         held: is_mouse_button_down(MouseButton::Left), released: is_mouse_button_released(MouseButton::Left),
-                        wheel: mouse_wheel().1, dt: get_frame_time(), scale: s };
+                        wheel: crate::hud::wheel_notches(), dt: get_frame_time(), scale: s };
                     let roster_view = format!("{HERO}/LeftSideGroup/VerticalGroup/HeroSelectButtons/SelectHero");
                     let limit = scroll_limit(m, &roster_view, HERO_GRID, s);
                     let roster_click = fe.hero_scrolls[0].update(&mut fe.hero_drag, 0,
@@ -1619,7 +1582,6 @@ impl Hud {
                         let Some(i) = i else { continue };
                         let (e, _) = &fe.list[i];
                         m.set_active(&format!("{b}/Continue"),!fe.coop_setup&&account_preview::saved_game(&e.id).is_some());
-                        account_preview::bind_map_friends(m,&format!("{b}/Friend"),&e.id,fe.adv.hide_map_friends,false);
                         m.set_sprite(&format!("{b}/MapMask/MapImage"), e.sprite.as_deref());
                         let name = loc.get(&e.id).cloned().unwrap_or_else(|| crate::spaced(&e.id));
                         m.set_text(&format!("{b}/Text"), &name);
@@ -1684,9 +1646,6 @@ impl Hud {
             Screen::Difficulty => {
                 if let Some(m) = fe.diff.as_mut() {
                     if let Some((entry,_))=fe.list.get(fe.map){
-                        account_preview::bind_map_friends(m,&format!("{DIFF}/FriendsPanel"),&entry.id,fe.adv.hide_map_friends,true);
-                        m.set_active(&format!("{DIFF}/FriendsButton"),!fe.adv.hide_map_friends);
-                        if m.clicked(&format!("{DIFF}/FriendsButton")){fe.social_from=fe.screen;next=Some(Screen::Menu(MenuPage::Friends));}
                         let saved=(!fe.coop_setup).then(||account_preview::saved_game(&entry.id)).flatten();
                         let base=format!("{DIFF}/ContinueSavedGame");
                         m.set_active(&base,saved.is_some());
@@ -1699,6 +1658,18 @@ impl Hud {
                                 let mode=MODE_BUTTONS[difficulty].iter().find(|(id,_)|Some(*id)==saved["modeName"].as_str())
                                     .map(|(_,mode)|*mode).unwrap_or(DIFFICULTIES[difficulty]);
                                 fe.save_warning.open(&fe.root,map,mode.into(),&saved);
+                            }
+                        }
+                    }
+                    if let Some((entry,_))=fe.list.get(fe.map){
+                        for name in DIFFICULTIES {
+                            let (amount,first)=account_preview::difficulty_reward(&entry.id,entry.difficulty as u32,name,fe.coop_setup);
+                            let base=format!("{DIFF}/Difficulties/{name}/Button/Rewards");
+                            m.set_text(&format!("{base}/RewardsTitle"),"Rewards:");
+                            for (group,on) in [("LargeAmount",first),("SmallAmount",!first)]{
+                                m.set_active(&format!("{base}/MMRewardsDifficultyScreen/{group}"),on);
+                                m.set_text(&format!("{base}/MMRewardsDifficultyScreen/{group}/CashReward"),&amount.to_string());
+                                m.set_sprite(&format!("{base}/MMRewardsDifficultyScreen/{group}/CashImage"),Some("TrophyIcon"));
                             }
                         }
                     }
@@ -2026,10 +1997,12 @@ impl Hud {
                 }
             }
             fore.set_active(&format!("{FORE}/ExtraSettings/SocialSeasonPerks"),false);
-            if fe.adv.hide_perks{fore.set_active(&format!("{FORE}/PerksButton"),false);}
         }
+        if std::env::var_os("RRBTD6_TIMING").is_some()&&ui_background.elapsed().as_millis()>5 {eprintln!("ui-phase: background/bind {:.3} ms",ui_background.elapsed().as_secs_f64()*1000.0);}
+        let ui_warm=std::time::Instant::now();
         if std::mem::take(&mut fe.mod_ui_dirty){fe.pages.retain(|page,_|matches!(page,MenuPage::Mods|MenuPage::CoopLobby));}
         if let Screen::Menu(page)=fe.screen{if let Some(page)=fe.pages.get_mut(&page){page.warm(&mut self.sprites);}}
+        if std::env::var_os("RRBTD6_TIMING").is_some()&&ui_warm.elapsed().as_millis()>5 {eprintln!("ui-phase: warm {:.3} ms",ui_warm.elapsed().as_secs_f64()*1000.0);}
         // Sandbox has no saves, so starting one never asks about the map's saved game.
         if let Some(FrontAction::Play{map,mode})=out.as_ref().filter(|a|!matches!(a,FrontAction::Play{mode,..} if mode.ends_with("Sandbox"))) {
             if let Some((entry,_))=fe.list.iter().find(|(_,key)|key==map){
@@ -2054,18 +2027,23 @@ impl Hud {
         };
         if let Some(n) = node {
             account_preview::bind(&fe.root,n);
-            home_events::bind_browser(&fe.root,n);
             // CommonPanel flags are exported from the original scene, rather than hiding
-            // the same currency / hero / friends controls on every page.
+            // the same currency / hero controls on every page. Friends and (Social Season) Perks
+            // are removed (DEVIATIONS.md), so their buttons stay hidden.
             if let (Some(panel), Some(fore)) = (n.common_panel(), fe.fore.as_mut()) {
-                for (path,on) in [("CashInfo",panel.money),("CashInfo/MoreBtn",panel.buy_money),
-                    ("Knowledge",panel.knowledge),("Knowledge/MorePointsBtn",panel.buy_knowledge),
-                    ("Back",panel.back),("ChangeHeroButton",panel.change_hero),("Friends",panel.friends),
-                    ("ExtraSettings",panel.extras),("PerksButton",panel.perks && !fe.adv.hide_perks),("Heading",!panel.heading.is_empty())] {
+                // The balance is trophies, also where the game shows knowledge points, which we
+                // don't have: Knowledge costs trophies. Nothing to buy with money (DEVIATIONS.md).
+                for (path,on) in [("CashInfo",panel.money||panel.knowledge),("CashInfo/MoreBtn",false),
+                    ("Knowledge",false),("Knowledge/MorePointsBtn",false),
+                    ("Back",panel.back),("ChangeHeroButton",panel.change_hero),("Friends",false),
+                    ("ExtraSettings",panel.extras),("PerksButton",false),("Heading",!panel.heading.is_empty())] {
                     fore.set_active(&format!("{FORE}/{path}"),on);
                 }
                 fore.set_active(&format!("{FORE}/CashInfo/DEBUGBtn"),false);
-                fore.set_text(&format!("{FORE}/Heading/Title"),self.menus.loc.get(&panel.heading).map(String::as_str).unwrap_or(&panel.heading));
+                fore.set_sprite(&format!("{FORE}/CashInfo/Layout/CashInfo/Icon"),Some("TrophyIcon"));
+                // Our Advanced screen is titled "Advanced Options", not "Accessibility and Advanced Options".
+                let heading=if panel.heading=="AccessibilityAdvancedOptions"{"Advanced Options"}else{self.menus.loc.get(&panel.heading).map(String::as_str).unwrap_or(&panel.heading)};
+                fore.set_text(&format!("{FORE}/Heading/Title"),heading);
             }
             if let Some((_,data,buttons,controller,clip))=fe.screen_motions.iter_mut().find(|(s,..)|*s==fe.screen){
                 if fe.motion_pending{button_motion::warm_visible(n,ctx.sprites);}
@@ -2077,6 +2055,10 @@ impl Hud {
                 if fe.screen==Screen::Maps{if let Some(start)=fe.map_group_began{
                     if apply_animation(n,data,"MapGroup","Next",Some((get_time()-start) as f32)){fe.map_group_began=None;}
                 }}
+                if std::mem::take(&mut fe.motion_snap){
+                    apply_animation(n,data,controller,clip,None);
+                    if fe.screen==Screen::Maps{apply_animation(n,data,"MapGroup","Open",None);}
+                }
                 if fe.motion_pending || fe.motion_began.is_some(){
                     let t=fe.motion_began.map(|start|(get_time()-start) as f32).unwrap_or(0.0);
                     let mut complete=apply_animation(n,data,controller,clip,Some(t));
@@ -2109,7 +2091,14 @@ impl Hud {
             let x = r.x + r.w * def;
             draw_rectangle(x - 3.0 * s, r.y + r.h * 0.78, 6.0 * s, r.h * 0.3, Color::new(1.0, 1.0, 1.0, 0.9));
         }
-        if fe.screen != Screen::Main && fe.screen != Screen::Menu(MenuPage::Television) {
+        if let Some(f)=fe.fore.as_mut(){
+            let hero=fe.selected_hero.as_deref().or_else(||fe.heroes.first().map(|h|h.id.as_str()));
+            let icon=hero.and_then(|id|selected_skin(&fe.hero_data,&fe.hero_skins,id)["icon"].as_str()).map(|s|s.strip_suffix(".png").unwrap_or(s));
+            f.set_sprite(&format!("{FORE}/ChangeHeroButton/HeroIcon"),icon);
+            f.set_active(&format!("{FORE}/ChangeHeroButton/HeroIcon"),icon.is_some());
+            f.set_active(&format!("{FORE}/ChangeHeroButton/NoHeroIcon"),icon.is_none());
+        }
+        if fe.screen != Screen::Main {
             if let Some(f) = fe.fore.as_mut() {
                 account_preview::bind(&fe.root,f);
                 draw_tree(f, full, &mut ctx);
@@ -2126,16 +2115,12 @@ impl Hud {
             }
         }
         if let Some((map,mode))=fe.save_warning.draw(full,&mut ctx){out=Some(FrontAction::Play{map,mode});}
+        // Our first-run welcome (DEVIATIONS.md), on the home screen.
+        if fe.screen == Screen::Main && fe.main.is_some() { self.welcome.maybe_open(&fe.root); }
+        if self.welcome.is_welcome() && self.welcome.draw(full, &mut ctx) { crate::welcome_popup::WelcomePopup::mark_seen(&fe.root); }
+        else if !self.welcome.is_welcome() { self.welcome.draw(full, &mut ctx); }
         // Whether a popup is still open now: one closed this frame (Start New) unblocks.
-        crate::uitree::block_input(self.support_open()||fe.save_warning.is_open());
-        // Every way into the Legends page (home world, menus) shows the not-supported popup.
-        if next == Some(Screen::Menu(MenuPage::Legends)) {
-            next = None;
-            open_legends = true;
-        }
-        if open_legends {
-            self.open_legends();
-        }
+        crate::uitree::block_input(self.support_open()||fe.save_warning.is_open()||self.welcome.is_open());
         if let Some(choice) = self.draw_support(full, canvas.y, s) {
             // The store itself can't be used, so either way it closes.
             if matches!(choice, crate::support_popup::SupportChoice::Webstore) {
@@ -2147,11 +2132,6 @@ impl Hud {
         }
         if fe.screen!=Screen::Main && fe.fore.as_ref().is_some_and(|f|f.clicked(&format!("{FORE}/ChangeHeroButton"))) {
             fe.hero_from=fe.screen;next=Some(Screen::Heroes);
-        }
-        for (path,page) in [("Friends/FriendsButton",MenuPage::Friends),("PerksButton",MenuPage::Perks)] {
-            if fe.screen!=Screen::Main && fe.screen!=Screen::Menu(page) && fe.fore.as_ref().is_some_and(|f|f.clicked(&format!("{FORE}/{path}"))) {
-                fe.social_from=fe.screen;next=Some(Screen::Menu(page));
-            }
         }
         if let Some(n) = next {
             if let Screen::Menu(page)=n {if let Some(page)=fe.pages.get_mut(&page){page.reopen();}}
@@ -2265,6 +2245,4 @@ mod scroll_tests {
     }
 }
 
-pub fn race_entry(root:&Path)->Option<serde_json::Value>{home_events::detail(root,"raceEvent")}
 
-pub fn daily_entry(root:&Path,key:&str)->Option<serde_json::Value>{let mut data=home_events::detail(root,key)?;crate::game::Game::validate_daily_rules(&data).ok()?;data["localDaily"]=serde_json::json!(true);Some(data)}

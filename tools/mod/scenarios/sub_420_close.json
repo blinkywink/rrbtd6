@@ -1,0 +1,1 @@
+{"name": "sub_420_close", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "MonkeySub-420", "x": -2.8, "y": 3.0, "target": "Close"}], "ability": 120}

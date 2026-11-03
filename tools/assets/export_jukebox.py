@@ -10,9 +10,7 @@ import os
 import sys
 
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 
-TypeTreeHelper.read_typetree_boost = False
 GAME = sys.argv[1]
 AA = os.path.join(GAME, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWindows64", "Full")
 bundle = json.load(open("local_extracted/all_container_paths.json"))["Assets/Data/GameData.asset"].rsplit("_", 1)[0]

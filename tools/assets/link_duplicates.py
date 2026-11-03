@@ -20,6 +20,7 @@ import filecmp
 import hashlib
 import os
 import sys
+import time
 
 FOLDERS = ["models", "ui", "effects", "sprites", "audio", "maps", "bloon_displays", "screens"]
 MIN_SIZE = 4096
@@ -50,6 +51,18 @@ def files(root, folders):
                     yield path
 
 
+def replace(pending, path):
+    """os.replace, waiting out a moment when Windows refuses it (antivirus or the search indexer
+    briefly holding a new file open)."""
+    for attempt in range(8):
+        try:
+            return os.replace(pending, path)
+        except PermissionError:
+            if attempt == 7:
+                raise
+            time.sleep(0.1 * 2 ** attempt)
+
+
 def split(root, folders):
     count = 0
     for path in files(root, folders):
@@ -59,7 +72,7 @@ def split(root, folders):
         with open(path, "rb") as src, open(pending, "wb") as out:
             for chunk in iter(lambda: src.read(1 << 20), b""):
                 out.write(chunk)
-        os.replace(pending, path)
+        replace(pending, path)
         count += 1
     print(f"split {count} linked files into separate copies", flush=True)
 
@@ -103,7 +116,7 @@ def main():
                     if os.path.exists(pending):
                         os.remove(pending)
                     os.link(keep, pending)
-                    os.replace(pending, path)
+                    replace(pending, path)
                     linked += 1
                     saved += size
                 except OSError:

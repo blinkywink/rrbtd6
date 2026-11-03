@@ -7,7 +7,7 @@ import UnityPy
 
 game,root=map(Path,sys.argv[1:3])
 base=game/'BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full'
-env=UnityPy.load(glob.glob(str(base/'game_data_assets_all_*.bundle'))[0],glob.glob(str(base/'*_monoscripts_*.bundle'))[0])
+env=UnityPy.load(*(glob.glob(str(base/'game_data_assets_all_*.bundle')) + glob.glob(str(base/'*_monoscripts_*.bundle'))))
 obj=env.container['Assets/Data/GameData.asset'];obj=obj.deref() if hasattr(obj,'deref') else obj
 gd=obj.read_typetree()
 paths=json.loads((root/'catalog_sprite_paths.json').read_text(encoding='utf-8'))

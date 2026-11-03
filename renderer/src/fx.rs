@@ -49,7 +49,7 @@ fn cbs(v: &Value) -> Vec<Cb> {
         .filter_map(|c| {
             let slot = c["slot"].as_u64()?;
             Some(Cb {
-                uniform: String::new() + &slot.to_string(),
+                uniform: slot.to_string(),
                 regs: c["regs"].as_u64()? as usize,
                 vectors: c["vectors"]
                     .as_array()?
@@ -141,6 +141,30 @@ impl FxShader {
     }
 }
 
+/// The in-game camera as Unity's shader globals see it (Unity world space): unity_MatrixV,
+/// _WorldSpaceCameraPos and unity_OrthoParams (half width, half height, 0, 1 for orthographic).
+/// View-dependent shaders (the Wizard Lord Phoenix's fresnel lava ball) read them.
+#[derive(Clone, Copy)]
+struct CamGlobals {
+    view: Mat4,
+    pos: Vec3,
+    ortho: [f32; 4],
+}
+
+thread_local! {
+    static CAMERA: std::cell::Cell<CamGlobals> = std::cell::Cell::new(CamGlobals { view: Mat4::IDENTITY, pos: Vec3::ZERO, ortho: [1.0, 1.0, 0.0, 1.0] });
+}
+
+/// Sets the camera globals from the 3D camera (GL space, render3d::gl: z negated).
+pub fn set_camera(cam: &Camera3D) {
+    let flip = Mat4::from_scale(vec3(1.0, 1.0, -1.0));
+    let view = Mat4::look_at_rh(cam.position, cam.target, cam.up) * flip;
+    let pos = vec3(cam.position.x, cam.position.y, -cam.position.z);
+    let half_h = cam.fovy / 2.0;
+    let ortho = [half_h * cam.aspect.unwrap_or(1.0), half_h, 0.0, 1.0];
+    CAMERA.with(|c| c.set(CamGlobals { view, pos, ortho }));
+}
+
 thread_local! {
     static SHADERS: std::cell::RefCell<HashMap<std::path::PathBuf, Option<Rc<FxShader>>>> = Default::default();
 }
@@ -218,6 +242,7 @@ impl Fx {
         let t = [time, time.sin(), time.cos(), 0.0];
         let unity_time = [time / 20.0, time, time * 2.0, time * 3.0];
         let sh = &self.shader;
+        let cam = CAMERA.with(|c| c.get());
         let mut all = self.regs.borrow_mut();
         for (c, regs) in sh.vs.iter().chain(&sh.fs).zip(all.iter_mut()) {
             for (name, off, _) in &c.vectors {
@@ -227,12 +252,17 @@ impl Fx {
                     "_SinTime" => put(regs, *off, &[(time / 8.0).sin(), (time / 4.0).sin(), (time / 2.0).sin(), time.sin()]),
                     "_CosTime" => put(regs, *off, &[(time / 8.0).cos(), (time / 4.0).cos(), (time / 2.0).cos(), time.cos()]),
                     "_ProjectionParams" => put(regs, *off, &[1.0, 0.1, 2000.0, 1.0 / 2000.0]),
+                    "_WorldSpaceCameraPos" => put(regs, *off, &cam.pos.to_array()),
+                    "unity_OrthoParams" => put(regs, *off, &cam.ortho),
                     _ => {}
                 }
             }
             for (name, off) in &c.matrices {
                 if matches!(name.as_str(), "unity_MatrixVP" | "unity_MatrixVPGL" | "glstate_matrix_projection") {
                     put(regs, *off, &vp.to_cols_array());
+                }
+                if name == "unity_MatrixV" {
+                    put(regs, *off, &cam.view.to_cols_array());
                 }
             }
             sh.mat.set_uniform_array(&c.uniform, &regs[..]);

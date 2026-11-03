@@ -1,5 +1,5 @@
 //! UI-owned connection lifetime. No sockets, hashing or relay lookups on render frames.
-use rrbtd6_coop::{Client,Command,Event,Invite,Options,Room,Settings,Action,Frame,MatchStart};
+use rrbtd6_coop::{Client,Command,Event,Invite,Options,Room,Settings,Action,Frame,MatchStart,PlayerProfile};
 use std::path::Path;
 
 #[derive(Default)]
@@ -10,10 +10,13 @@ pub(super) struct Session{
     start_requested:bool,test_readied:bool,
     mod_job:Option<std::sync::mpsc::Receiver<Result<Vec<rrbtd6_coop::ModPackage>,String>>>,
     mod_next:Option<(std::path::PathBuf,Vec<String>)>,
+    /// The data folder (where the hero and the local profile live) and what was last sent of
+    /// this player's profile (PlayerProfile), checked once a second.
+    root:Option<std::path::PathBuf>,profile_sent:Option<PlayerProfile>,profile_checked:f64,
 }
 impl Session{
     fn options(root:&Path)->Options{
-        let mut options=Options::new(super::account_preview::player_name().unwrap_or_else(||"Player".into()),"rrbtd6-private-coop-1");
+        let mut options=Options::new(crate::local_profile::get(root).name,"rrbtd6-private-coop-1");
         options.identity_files.push(root.join("game/game.json"));
         if let Ok(exe)=std::env::current_exe(){options.identity_files.push(exe);}
         for path in [root.parent().unwrap_or(root).join("version.json"),root.join("assets_version.json")]{
@@ -25,7 +28,7 @@ impl Session{
     pub fn active(&self)->bool{self.client.is_some()}
     pub fn host_or_update(&mut self,root:&Path,settings:Settings){
         if self.active()&&self.host{self.send(Command::Settings(settings));return;}
-        self.leave();self.host=true;self.status="Opening private room...".into();self.error=false;
+        self.leave();self.root=Some(root.to_owned());self.host=true;self.status="Opening private room...".into();self.error=false;
         self.client=Some(Client::host(Self::options(root),settings));self.revision+=1;
         if std::env::var_os("RRBTD6_AUTOTEST").is_some()&&std::env::var_os("RRBTD6_COOP_PLAYTEST").is_some(){
             if let Some(path)=std::env::var_os("RRBTD6_COOP_TEST_MANIFEST"){
@@ -43,7 +46,7 @@ impl Session{
     }
     pub fn join(&mut self,root:&Path,code:&str)->bool{
         let invite=match Invite::parse(code){Ok(i)=>i,Err(e)=>{self.status=e;self.error=true;return false;}};
-        self.leave();self.invite=Some(invite.encode());self.status="Connecting to private room...".into();self.error=false;
+        self.leave();self.root=Some(root.to_owned());self.invite=Some(invite.encode());self.status="Connecting to private room...".into();self.error=false;
         self.client=Some(Client::join(Self::options(root),invite));self.revision+=1;true
     }
     pub fn leave(&mut self){
@@ -51,6 +54,7 @@ impl Session{
         self.error=false;self.status.clear();self.latency=None;self.revision+=1;
         self.prepared=None;self.running=false;self.frames.clear();self.sequence=0;
         self.start_requested=false;self.test_readied=false;self.mod_job=None;self.mod_next=None;
+        self.profile_sent=None;
     }
     pub fn send(&mut self,command:Command){
         if let Some(client)=&self.client{if let Err(e)=client.send(command){self.status=e;self.error=true;self.revision+=1;}}
@@ -109,6 +113,19 @@ impl Session{
                 Event::Frame(frame)=>{self.frames.push_back(frame);},
             }
             self.revision+=1;
+        }
+        // This player's lobby profile: the hero picked (settings.json "hero"), the local profile's
+        // avatar, banner and rank.
+        let now=macroquad::time::get_time();
+        if self.slot.is_some()&&self.room.is_some()&&self.prepared.is_none()&&now-self.profile_checked>=1.0{
+            self.profile_checked=now;
+            if let Some(root)=self.root.clone(){
+                let local=crate::local_profile::get(&root);
+                let hero=std::fs::read(root.join("settings.json")).ok().and_then(|b|serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    .and_then(|v|v["hero"].as_str().map(str::to_owned)).unwrap_or_default();
+                let profile=PlayerProfile{hero,avatar:local.avatar,banner:local.banner,level:(1+local.experience/1000).min(u32::MAX as u64) as u32};
+                if self.profile_sent.as_ref()!=Some(&profile){self.send(Command::Profile(profile.clone()));self.profile_sent=Some(profile);}
+            }
         }
         if self.client.as_ref().is_some_and(Client::is_closed){
             self.client=None;self.room=None;self.slot=None;self.invite=None;

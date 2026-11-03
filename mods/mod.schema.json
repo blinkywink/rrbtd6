@@ -279,6 +279,238 @@
                 "type": "string"
               }
             }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "tower",
+              "asset",
+              "muzzle",
+              "release"
+            ],
+            "properties": {
+              "op": {
+                "const": "tower_model"
+              },
+              "tower": {
+                "type": "string"
+              },
+              "asset": {
+                "type": "string",
+                "pattern": "^mod:[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$"
+              },
+              "muzzle": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "release": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "tower",
+              "path",
+              "tier"
+            ],
+            "properties": {
+              "op": {
+                "const": "upgrade_patch"
+              },
+              "tower": {
+                "type": "string"
+              },
+              "path": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2
+              },
+              "tier": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              "cost": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "stats": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "weapon": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "projectile": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "muzzle": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "number"
+                }
+              },
+              "release": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 5
+              },
+              "projectile_from": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "id",
+              "source"
+            ],
+            "properties": {
+              "op": {
+                "const": "script"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "source": {
+                "type": "string",
+                "maxLength": 32768
+              },
+              "tick_interval": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "tower"
+            ],
+            "properties": {
+              "op": {
+                "const": "shop"
+              },
+              "tower": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "after": {
+                "type": "string"
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 512
+              },
+              "visible": {
+                "type": "boolean"
+              },
+              "category": {
+                "enum": [
+                  1,
+                  2,
+                  4,
+                  8
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "path",
+              "index",
+              "value"
+            ],
+            "properties": {
+              "op": {
+                "const": "insert"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "value": {}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "op",
+              "path",
+              "index"
+            ],
+            "properties": {
+              "op": {
+                "const": "remove"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           }
         ]
       }

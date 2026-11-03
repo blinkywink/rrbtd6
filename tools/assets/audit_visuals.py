@@ -1,7 +1,7 @@
 """List every tower / hero visual the clone can't draw, so missing projectiles and effects show up
 without playing every upgrade.
 
-    tools/.venv/Scripts/python.exe -I tools/assets/audit_visuals.py [Tower ...] > audit.txt
+    tools/.venv/Scripts/python.exe -I tools/assets/audit_visuals.py [--all] [Tower ...] > audit.txt
 
 Three checks:
   1. Projectile displays in game.json (every projectile, sub-projectile and orbit): the display
@@ -11,6 +11,8 @@ Three checks:
   2. Effect names in game.json (place_fx, expire_fx, fx, ...): effects/<name> must exist.
   3. Model behaviours that make visuals (*Effect*, *Display*, Line*, *Ray*) in the game's models
      that tools/assets/build_game_data.py never mentions: visuals the clone doesn't model at all.
+     With --all, every such model behaviour, visual or not (mechanics the clone doesn't have).
+     A Paragon's are under the tier "Paragon".
 Proprietary data: local use only.
 """
 import glob
@@ -32,7 +34,8 @@ def load(p, default=None):
 
 
 def main():
-    only = set(sys.argv[1:])
+    every = "--all" in sys.argv[1:]
+    only = set(a for a in sys.argv[1:] if a != "--all")
     g = load(os.path.join(L, "game", "game.json"))
     plans = {}
     for f in sorted(glob.glob(os.path.join(L, "display_plans", "*.json"))):
@@ -123,8 +126,10 @@ def main():
             c = deref(v)
             if isinstance(c, dict) and "items" in c:
                 for i in c["items"]:
-                    if isinstance(i, int) and i in objs:
-                        yield objs[i]
+                    # A dict container's items are [key, value] pairs.
+                    for j in (i if isinstance(i, list) else [i]):
+                        if isinstance(j, int) and j in objs:
+                            yield objs[j]
             elif isinstance(c, dict) and "type" in c and "f" in c:
                 yield c
 
@@ -145,7 +150,7 @@ def main():
                 continue
             seen.add(x["i"])
             t = x.get("type", "")
-            if t.endswith("Model") and visual.search(t) and t not in builder:
+            if t.endswith("Model") and (every or visual.search(t)) and t not in builder:
                 unmodeled[base][t].add(tier or "000")
             if t != "TowerModel" or x is o:
                 stack.extend(kids(x))

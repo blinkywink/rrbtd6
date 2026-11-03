@@ -3,7 +3,9 @@
 #   sh tools/mod/record.sh tools/mod/scenarios/dart_200.json [...]
 # Each recording lands in research/dumps/recordings/<name>.rec (and <map>.map).
 set -e
-GAME="${BTD6:-/c/Program Files/Epic Games/BloonsTD6}"
+# The install: $BTD6, else Steam (the launcher's first choice), else Epic.
+GAME="${BTD6:-}"
+[ -n "$GAME" ] || { [ -f "/c/Program Files (x86)/Steam/steamapps/common/BloonsTD6/GameAssembly.dll" ] && GAME="/c/Program Files (x86)/Steam/steamapps/common/BloonsTD6" || GAME="/c/Program Files/Epic Games/BloonsTD6"; }
 UD="$GAME/UserData/SimRecorder"
 OUT="${OUT:-$(cd "$(dirname "$0")/../.." && pwd)/research/dumps/recordings}"
 # Launched through its store: Steam (app 960090) when GAME is the Steam install, else Epic.
@@ -43,7 +45,7 @@ for sc in "$@"; do
     sleep 1
   done
   for i in $(seq 1 20); do
-    rm -f "$UD/$name.rec" "$GAME/MelonLoader/Latest.log" 2>/dev/null && break
+    rm -f "$UD/$name.rec" "$UD/$name.fx" "$UD/${name}_"*.png "$GAME/MelonLoader/Latest.log" 2>/dev/null && break
     sleep 1
   done
   sleep 2
@@ -65,6 +67,9 @@ for sc in "$@"; do
   if [ -n "$ok" ] && [ -f "$UD/$name.rec" ]; then
     cp "$UD/$name.rec" "$OUT/"
     cp "$UD"/*.map "$OUT/" 2>/dev/null || true
+    # Effect captures (Scenario.fx / shots): <name>.fx and <name>_<frame>.png.
+    cp "$UD/$name.fx" "$OUT/" 2>/dev/null || true
+    cp "$UD/${name}_"*.png "$OUT/" 2>/dev/null || true
     echo "$name: $result"
   else
     echo "$name: FAILED ($result)"

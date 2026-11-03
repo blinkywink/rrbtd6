@@ -5,8 +5,6 @@ import glob,json,os,sys
 from pathlib import Path
 os.environ['OPENBLAS_NUM_THREADS']='1'
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
-TypeTreeHelper.read_typetree_boost=False
 game,out=map(Path,sys.argv[1:3]);base=game/'BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full'
 e=UnityPy.load(glob.glob(str(base/'asset_references_assets_all_*.bundle'))[0]);paths={}
 for path,ref in e.container.items():

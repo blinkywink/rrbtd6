@@ -11,9 +11,7 @@ import os
 import sys
 
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 
-TypeTreeHelper.read_typetree_boost = False
 
 
 def main():

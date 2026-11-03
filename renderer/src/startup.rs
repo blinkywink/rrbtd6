@@ -1,6 +1,6 @@
-//! The original startup sequence: the Ninja Kiwi splash (NinjaKiwiSplashUI), the initial loading
-//! screen (InitialLoadingUI) and the title screen (TitleScreenUI): a perspective world of 2D
-//! sprites behind a canvas with Start, the BTD6 logo included (from the player's own game files).
+//! The startup sequence: our own splash (in place of the Ninja Kiwi one, see DEVIATIONS.md), the
+//! initial loading screen (InitialLoadingUI) and the title screen (TitleScreenUI): a perspective
+//! world of 2D sprites behind a canvas with Start, our name where the BTD6 logo was.
 //! Advanced > Skip Startup Screen goes straight to the main menu.
 use crate::frontend::{apply_animation, curve_value};
 use crate::hud::Hud;
@@ -9,7 +9,85 @@ use macroquad::prelude::*;
 use serde_json::Value;
 use std::path::Path;
 
-const SPLASH: &str = "NinjaKiwiSplashOpen";
+/// The splash: seconds shown, and of that the fade in and the fade out.
+const SPLASH_TIME: f64 = 3.0;
+const SPLASH_FADE: f64 = 0.4;
+/// The website's main colour (website/public/styles.css --bg).
+const BRAND_BLUE: Color = Color::new(0x2f as f32 / 255.0, 0x80 as f32 / 255.0, 0xf5 as f32 / 255.0, 1.0);
+const BRAND_TITLE: &str = "RUST TD6";
+const BRAND_SUB: &str = "Unofficial client.";
+const BRAND_NOTICE: [&str; 2] = ["BTD6 and all of its assets are owned by Ninja Kiwi.", "Ninja Kiwi does not endorse this project."];
+
+thread_local! {
+    /// Comic Sans (bold, regular) from the system's fonts, loaded once; None: macroquad's own.
+    static BRAND_FONTS: std::cell::OnceCell<(Option<Font>, Option<Font>)> = const { std::cell::OnceCell::new() };
+}
+
+fn brand_fonts() -> (Option<Font>, Option<Font>) {
+    BRAND_FONTS.with(|f| f.get_or_init(|| {
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
+        let load = |names: &[String]| names.iter().find_map(|p| std::fs::read(p).ok()).and_then(|b| load_ttf_font_from_bytes(&b).ok());
+        let paths = |win: &str, mac: &str, linux: &[&str]| {
+            let mut v = vec![format!("{windir}\\Fonts\\{win}"), format!("/System/Library/Fonts/Supplemental/{mac}"), format!("/Library/Fonts/{mac}")];
+            v.extend(linux.iter().map(|l| format!("/usr/share/fonts/truetype/msttcorefonts/{l}")));
+            v
+        };
+        let bold = load(&paths("comicbd.ttf", "Comic Sans MS Bold.ttf", &["Comic_Sans_MS_Bold.ttf", "comicbd.ttf"]));
+        let regular = load(&paths("comic.ttf", "Comic Sans MS.ttf", &["Comic_Sans_MS.ttf", "comic.ttf"]));
+        (bold.clone().or(regular.clone()), regular.or(bold))
+    }).clone())
+}
+
+fn fit_text(font: Option<&Font>, text: &str, width: f32, max: f32) -> f32 {
+    let w = measure_text(text, font, 100, 1.0).width.max(1.0);
+    (100.0 * width / w).min(max).max(1.0)
+}
+
+/// The splash: the name, "Unofficial client." and the notice, centred in `r` and as large as
+/// fit, white at `alpha`.
+fn draw_brand(r: Rect, alpha: f32) {
+    let (bold, regular) = brand_fonts();
+    let title = fit_text(bold.as_ref(), BRAND_TITLE, r.w * 0.9, r.h * 0.5);
+    let sub = fit_text(regular.as_ref(), BRAND_SUB, r.w * 0.9, title * 0.3);
+    let notice = BRAND_NOTICE.iter().map(|t| fit_text(regular.as_ref(), t, r.w * 0.95, title * 0.17)).fold(f32::MAX, f32::min);
+    let lines = [(BRAND_TITLE, bold.as_ref(), title), (BRAND_SUB, regular.as_ref(), sub), (BRAND_NOTICE[0], regular.as_ref(), notice), (BRAND_NOTICE[1], regular.as_ref(), notice)];
+    let gap = |size: f32| size * 1.15;
+    let total: f32 = lines.iter().map(|l| gap(l.2)).sum::<f32>() + sub * 0.3;
+    let mut y = r.y + (r.h - total) * 0.5;
+    for (i, (text, font, size)) in lines.into_iter().enumerate() {
+        if i == 2 {
+            y += sub * 0.3;
+        }
+        let dims = measure_text(text, font, size.round() as u16, 1.0);
+        let base = y + dims.offset_y + (gap(size) - dims.height) * 0.5;
+        draw_text_ex(text, r.x + (r.w - dims.width) * 0.5, base, TextParams { font, font_size: size.round() as u16, color: Color::new(1.0, 1.0, 1.0, alpha), ..Default::default() });
+        y += gap(size);
+    }
+}
+
+/// The title's logo: the name, white on a rounded panel of the brand blue, centred in `r`.
+fn draw_logo(r: Rect, alpha: f32) {
+    let (bold, _) = brand_fonts();
+    let size = fit_text(bold.as_ref(), BRAND_TITLE, r.w * 0.8, r.h * 0.55);
+    let dims = measure_text(BRAND_TITLE, bold.as_ref(), size.round() as u16, 1.0);
+    let (pad_x, pad_y) = (size * 0.35, size * 0.22);
+    let (w, h) = (dims.width + pad_x * 2.0, dims.height + pad_y * 2.0);
+    let (x, y) = (r.x + (r.w - w) * 0.5, r.y + (r.h - h) * 0.5);
+    let color = Color { a: alpha, ..BRAND_BLUE };
+    let rad = (h * 0.25).min(w * 0.5);
+    // One fan (no overlaps, so it fades evenly): the centre, then the outline corner by corner.
+    let mut vertices = vec![Vertex::new(x + w * 0.5, y + h * 0.5, 0.0, 0.0, 0.0, color)];
+    for (k, (cx, cy)) in [(x + w - rad, y + h - rad), (x + rad, y + h - rad), (x + rad, y + rad), (x + w - rad, y + rad)].into_iter().enumerate() {
+        for j in 0..=8 {
+            let a = (k as f32 + j as f32 / 8.0) * std::f32::consts::FRAC_PI_2;
+            vertices.push(Vertex::new(cx + rad * a.cos(), cy + rad * a.sin(), 0.0, 0.0, 0.0, color));
+        }
+    }
+    let n = vertices.len() as u16 - 1;
+    let indices = (0..n).flat_map(|i| [0, 1 + i, 1 + (i + 1) % n]).collect();
+    draw_mesh(&Mesh { vertices, indices, texture: None });
+    draw_text_ex(BRAND_TITLE, x + pad_x, y + pad_y + dims.offset_y, TextParams { font: bold.as_ref(), font_size: size.round() as u16, color: Color::new(1.0, 1.0, 1.0, alpha), ..Default::default() });
+}
 const TITLE_UI: &str = "Canvas/ScreenBoxer/TitleScreen";
 /// TitleScreen.SkipTitleAnimClicked: Animator.Play(state, 0, normalizedTime).
 const SKIP_UI: f32 = 0.83;
@@ -278,7 +356,9 @@ pub(crate) struct Title {
 }
 
 impl Title {
-    fn load(root: &Path, version: &str, player: Option<&str>, plane: Option<crate::anim::AnimModel>) -> Option<Self> {
+    fn load(root: &Path, version: &str, _player: Option<&str>, plane: Option<crate::anim::AnimModel>) -> Option<Self> {
+        let local_name=crate::local_profile::get(root).name;
+        let player=Some(local_name.as_str());
         let mut ui = Scene::load(root, "TitleScreenUI", Some("Canvas"))?;
         let json: Value = serde_json::from_str(&std::fs::read_to_string(root.join("ui/prefabs/TitleScreenUI.json")).ok()?).ok()?;
         let roots = json["children"].as_array()?;
@@ -290,7 +370,7 @@ impl Title {
         ui.node.set_text(&format!("{TITLE_UI}/PlayerId"), "");
         ui.node.set_active(&format!("{TITLE_UI}/iCloudInfo"), false);
         ui.node.set_active(&format!("{TITLE_UI}/PlayerInfo"), true);
-        ui.node.set_active(&format!("{TITLE_UI}/PlayerInfo/LoginButton"), player.is_none());
+        ui.node.set_active(&format!("{TITLE_UI}/PlayerInfo/LoginButton"), false);
         ui.node.set_active(&format!("{TITLE_UI}/PlayerInfo/PlayerNameTxt"), player.is_some());
         ui.node.set_text(&format!("{TITLE_UI}/PlayerInfo/PlayerNameTxt"), player.unwrap_or(""));
         ui.node.set_active(&format!("{TITLE_UI}/LoadingSpinner"), false);
@@ -334,16 +414,26 @@ impl Title {
                 if let Some(a) = actor { Self::draw_plane(&mut self.plane, self.began, self.fov, a); }
                 actor_drawn = true;
             }
-            let Some(t) = hud.sprites.get(&s.name) else { continue };
-            let (tex, size) = ((*t.tex).clone(), s.size);
+            let size = s.size;
             let lo = -s.pivot * size;
             let corners = [vec2(lo.x, lo.y + size.y), vec2(lo.x + size.x, lo.y + size.y), vec2(lo.x, lo.y), vec2(lo.x + size.x, lo.y)]
                 .map(|c| m.transform_point3(vec3(c.x, c.y, 0.0)));
             if corners.iter().any(|c| c.z <= 0.01) {
                 continue;
             }
-            let color = Color::new(s.color[0], s.color[1], s.color[2], s.color[3]);
             let p = corners.map(project);
+            // Our name in place of the BTD6 logo (DEVIATIONS.md), where it is and as it fades.
+            if s.name == "BTD6Logo" {
+                let (min, max) = (p.iter().fold(Vec2::MAX, |a, b| a.min(*b)), p.iter().fold(Vec2::MIN, |a, b| a.max(*b)));
+                draw_logo(Rect::new(min.x, min.y, max.x - min.x, max.y - min.y), s.color[3]);
+                continue;
+            }
+            if matches!(s.name.as_str(), "TitlePlus" | "TitleKidsPlus") {
+                continue;
+            }
+            let Some(t) = hud.sprites.get(&s.name) else { continue };
+            let tex = (*t.tex).clone();
+            let color = Color::new(s.color[0], s.color[1], s.color[2], s.color[3]);
             draw_mesh(&Mesh {
                 vertices: vec![
                     Vertex::new(p[0].x, p[0].y, 0.0, 0.0, 0.0, color),
@@ -391,7 +481,7 @@ impl Title {
         crate::frontend::account_preview::ensure(&self.root);
         let player=crate::frontend::account_preview::player_name();
         let info=format!("{TITLE_UI}/PlayerInfo");
-        self.ui.node.set_active(&format!("{info}/LoginButton"),player.is_none());
+        self.ui.node.set_active(&format!("{info}/LoginButton"),false);
         self.ui.node.set_active(&format!("{info}/PlayerNameTxt"),player.is_some());
         self.ui.node.set_text(&format!("{info}/PlayerNameTxt"),player.as_deref().unwrap_or(""));
         crate::uitree::block_input(hud.account_ui.is_open());
@@ -411,12 +501,16 @@ impl Title {
             return now - c >= self.ui.clip_length("TitleScreenBg", "TitleScreenBgClose").max(0.25) as f64;
         }
         let opening = ui_t < ui_open || bg_t < bg_open;
+        if let Ok(folder) = std::env::var("RRBTD6_STARTUP_SCREENS_OUT") {
+            let path = std::path::PathBuf::from(folder).join("title.png");
+            if !opening && since > ui_open.max(bg_open) + 1.0 && !path.exists() { get_screen_data().export_png(path.to_str().unwrap()); }
+        }
         // The buttons work once they're in: TitleScreen.TransitionToMainMenu has no wait for the
         // background's open clip (the plane), which runs about a second longer than the UI's.
         let ui_opening = ui_t < ui_open;
         let test_start = std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_STARTUP_PRESS_START").is_some();
         let test_account=std::env::var_os("RRBTD6_AUTOTEST").is_some() && std::env::var_os("RRBTD6_STARTUP_ACCOUNT").is_some();
-        if !ui_opening && (self.ui.node.clicked(&format!("{info}/LoginButton/Button")) || self.ui.node.clicked(&format!("{info}/PlayerNameTxt")) || test_account) {
+        if !ui_opening && (self.ui.node.clicked(&format!("{info}/PlayerNameTxt")) || test_account) {
             hud.account_ui.open(&self.root);
         } else if (self.ui.node.clicked(&format!("{TITLE_UI}/Start")) || test_start) && !ui_opening {
             // TitleScreen.TransitionToMainMenu (click sound, music fades over 2 s).
@@ -432,7 +526,8 @@ impl Title {
 // ---- The whole sequence -------------------------------------------------------------------------
 
 enum Stage {
-    Splash(Scene, f64),
+    /// Our splash (in place of NinjaKiwiSplashUI and its NZ On Air logo), from when it began.
+    Splash(f64),
     Initial(Scene, f64, Option<f64>),
     Title(Box<Title>),
 }
@@ -452,10 +547,7 @@ impl Startup {
         matches!(&self.stage, Some(Stage::Title(title)) if title.closing.is_some())
     }
     pub(crate) fn new(root: &Path, version: String, player: Option<String>) -> Self {
-        let stage = Scene::load(root, "NinjaKiwiSplashUI", Some("Canvas")).map(|s| Stage::Splash(s, get_time()));
-        let mut s = Self { stage, root: root.to_path_buf(), version, player, progress: None, loaded: false, plane: None };
-        if s.stage.is_none() { s.next_initial(); }
-        s
+        Self { stage: Some(Stage::Splash(get_time())), root: root.to_path_buf(), version, player, progress: None, loaded: false, plane: None }
     }
 
     fn next_initial(&mut self) {
@@ -526,12 +618,19 @@ impl Startup {
         set_default_camera();
         match &mut self.stage {
             None => return true,
-            Some(Stage::Splash(s, began)) => {
+            Some(Stage::Splash(began)) => {
                 clear_background(BLACK);
-                let t = (now - *began) as f32;
-                let done = s.play("NinjaKiwiSplashAnim", SPLASH, t, false);
-                s.draw(hud);
-                if done { self.next_initial(); }
+                let t = now - *began;
+                let alpha = (t / SPLASH_FADE).min((SPLASH_TIME - t) / SPLASH_FADE).clamp(0.0, 1.0) as f32;
+                let (w, h) = (screen_width(), screen_height());
+                draw_rectangle(0.0, 0.0, w, h, Color { a: alpha, ..BRAND_BLUE });
+                let bw = (w * 0.7).min(h * 1.6);
+                draw_brand(Rect::new((w - bw) * 0.5, h * 0.3, bw, h * 0.4), alpha);
+                if let Ok(folder) = std::env::var("RRBTD6_STARTUP_SCREENS_OUT") {
+                    let path = std::path::PathBuf::from(folder).join("splash.png");
+                    if t >= SPLASH_TIME * 0.5 && !path.exists() { get_screen_data().export_png(path.to_str().unwrap()); }
+                }
+                if t >= SPLASH_TIME { self.next_initial(); }
             }
             Some(Stage::Initial(s, began, closing)) => {
                 clear_background(BLACK);

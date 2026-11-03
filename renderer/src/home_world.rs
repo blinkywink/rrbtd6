@@ -25,15 +25,6 @@ fn ray_box(origin:Vec3,direction:Vec3,inverse:Mat4,center:Vec3,size:Vec3)->Optio
     }
     Some(lo)
 }
-fn ray_triangle(origin:Vec3,direction:Vec3,a:Vec3,b:Vec3,c:Vec3)->Option<f32> {
-    let ab=b-a;let ac=c-a;let p=direction.cross(ac);let det=ab.dot(p);
-    if det.abs()<1e-7{return None;}
-    let inv=det.recip();let s=origin-a;let u=s.dot(p)*inv;
-    if !(0.0..=1.0).contains(&u){return None;}
-    let q=s.cross(ab);let v=direction.dot(q)*inv;
-    if v<0.0 || u+v>1.0{return None;}
-    let distance=ac.dot(q)*inv;(distance>=0.0).then_some(distance)
-}
 #[derive(serde::Deserialize)]
 struct RotationData {
     path: String, speed: f32, axis: [f32;3], position: [f32;3], scale: [f32;3],
@@ -92,6 +83,14 @@ fn sample(keys:&[[f32;5]], time:f32) -> Option<f32> {
     let dt=(time-key[0]).max(0.0);
     Some(((key[1]*dt+key[2])*dt+key[3])*dt+key[4])
 }
+/// Home island objects removed by user request (DEVIATIONS.md): daily chest, Patch's quests,
+/// the tower gift box and the events / co-op event monkeys. Hidden, with no model, click box or page.
+// (Seasonal: the Race flag and tyres, the Contested Territory banner and the Odyssey fire pit,
+// sword and helmet, for modes this game doesn't have; tools/assets/export_model.py skips them.)
+const REMOVED:[&str;5]=["MainMenuWorld/Interactive/DailyChest ","MainMenuWorld/Interactive/PatchQuestMonkeyGroup",
+    "MainMenuWorld/Interactive/GiftBox","MainMenuWorld/Interactive/QuestMonkey","MainMenuWorld/Seasonal"];
+fn removed(path:&str)->bool{REMOVED.iter().any(|r|path.starts_with(r))}
+
 #[derive(Default)]
 pub(super) struct HomeMotion {
     started: bool,
@@ -118,14 +117,15 @@ impl HomeMotion {
     pub(super) fn update(&mut self, root: &Path, world: &mut Model) {
         if !self.started {
             self.started = true;
-            // This is a tutorial prompt, not part of Patch's normal appearance.
-            // Only a bound tutorial state should enable it.
-            world.hide_subtree("MainMenuWorld/Interactive/PatchQuestMonkeyGroup/TutorialArrow3D");
+            for path in REMOVED {world.hide_subtree(path);}
             world.hide_subtree("MainMenuWorld/Interactive/DigitalContent");
             let base = root.join("models/mainmenu_anim");
             self.buttons=std::fs::read_to_string(base.join("buttons.json")).ok()
                 .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default();
-            self.buttons.retain(|b|b.action!="tv");
+            for button in &self.buttons {
+                if button.action=="gift"{world.hide_subtree(&button.path);}
+            }
+            self.buttons.retain(|b|b.action!="tv" && b.action!="gift");
             self.effects=std::fs::read_to_string(base.join("effects.json")).ok()
                 .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default();
             self.effect_times=vec![None;self.effects.len()];
@@ -142,7 +142,8 @@ impl HomeMotion {
                 .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default()));
             let entries: Vec<Entry> = std::fs::read_to_string(base.join("manifest.json")).ok()
                 .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-            for entry in entries {
+            self.buttons.retain(|b|!removed(&b.path));
+            for entry in entries.into_iter().filter(|e|!removed(&e.path)) {
                 world.hide_subtree(&entry.path);
                 let dir: PathBuf = base.join(entry.directory);
                 self.pending.push((entry.path, std::thread::spawn(move || AnimModel::stage(&dir))));
@@ -308,24 +309,8 @@ impl HomeMotion {
         let direction=(far-origin).normalize();
         let hit=self.triggers.iter().enumerate().filter_map(|(i,t)|ray_box(origin,direction,self.collider_world(t).inverse(),Vec3::from_array(t.data.center),Vec3::from_array(t.data.size)).map(|d|(i,d)))
             .min_by(|a,b|a.1.total_cmp(&b.1));
-        // The alternate co-op display has no serialized collider of its own.
-        // Pick its visible source triangles while both event previews are shown.
-        let mut coop=None::<f32>;
-        for (path,model) in &mut self.models {
-            if !path.contains("/CoopEventMonkey/"){continue;}
-            let (meshes,_)=model.meshes(model.idle_clip(),get_time() as f32,[0.0;3],0.0,0.7,false,None);
-            for mesh in meshes {for triangle in mesh.indices.chunks_exact(3) {
-                let point=|i:u16|mesh.vertices[i as usize].position*reflect;
-                if let Some(d)=ray_triangle(origin,direction,point(triangle[0]),point(triangle[1]),point(triangle[2])) {
-                    coop=Some(coop.map_or(d,|old|old.min(d)));
-                }
-            }}
-        }
         let button=self.buttons.iter().filter_map(|b|ray_box(origin,direction,Mat4::from_cols_array(&b.world).inverse(),Vec3::from_array(b.center),Vec3::from_array(b.size)).map(|d|(b,d)))
             .min_by(|a,b|a.1.total_cmp(&b.1));
-        if let Some(distance)=coop.filter(|d|hit.is_none_or(|(_,t)|*d<=t) && button.is_none_or(|(_,t)|*d<=t)) {
-            let _=distance;self.action=Some("events".into());return;
-        }
         if let Some((button,_))=button.filter(|(_,d)|hit.is_none_or(|(_,t)|*d<=t)) {
             self.action=Some(button.action.clone());return;
         }
@@ -359,14 +344,6 @@ impl HomeMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn visible_mesh_pick_is_two_sided_and_rejects_misses_and_behind() {
-        let a=vec3(-1.0,-1.0,5.0);let b=vec3(1.0,-1.0,5.0);let c=vec3(0.0,1.0,5.0);
-        assert_eq!(ray_triangle(Vec3::ZERO,Vec3::Z,a,b,c),Some(5.0));
-        assert_eq!(ray_triangle(Vec3::ZERO,Vec3::Z,c,b,a),Some(5.0));
-        assert!(ray_triangle(vec3(3.0,0.0,0.0),Vec3::Z,a,b,c).is_none());
-        assert!(ray_triangle(Vec3::ZERO,-Vec3::Z,a,b,c).is_none());
-    }
     #[test]
     fn native_box_hit_handles_rotated_scaled_colliders_and_parallel_misses() {
         let world=Mat4::from_scale_rotation_translation(vec3(2.0,1.0,3.0),Quat::from_rotation_y(0.6),vec3(10.0,0.0,20.0));

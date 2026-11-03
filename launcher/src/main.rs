@@ -30,7 +30,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn main() {
     if let Err(e) = run() {
         eprintln!("\nrrbtd6 launcher failed: {e}");
-        pause();
+        if !std::env::args().any(|a|a=="--from-installer"){pause();}
         std::process::exit(1);
     }
 }
@@ -72,7 +72,12 @@ fn run() -> Result<()> {
     }
 
     println!("Starting rrbtd6...");
-    Command::new(dir.join("rrbtd6.exe")).arg("--from-launcher").current_dir(&dir).spawn()?;
+    let mut game_process=Command::new(dir.join("rrbtd6.exe"));
+    game_process.arg("--from-launcher").current_dir(&dir);
+    if std::env::args().any(|a|a=="--from-installer"){
+        game_process.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    }
+    game_process.spawn()?;
     Ok(())
 }
 
@@ -146,11 +151,11 @@ fn update(dir: &Path,game:&Path,refresh_assets:bool) -> Result<Update> {
         let staged:serde_json::Value=serde_json::from_slice(&fs::read(payload.join("local_extracted/assets_version.json"))?)?;
         if compatibility::needs_assets(&remote,&staged){return Err("New extraction did not satisfy this build's asset requirements".into());}
         // Preserve only user-owned state, never copy stale generated assets into the new tree.
-        for name in ["settings.json","local-profile.json","local-profile.backup.json"] {
+        for name in ["settings.json","local-profile.json","local-profile.backup.json","player-name.json"] {
             let old=dir.join("local_extracted").join(name);
             if old.is_file(){fs::copy(old,payload.join("local_extracted").join(name))?;}
         }
-        for name in ["account-cache","online"]{preserve_user_tree(&dir.join("local_extracted").join(name),&payload.join("local_extracted").join(name))?;}
+        for name in ["online"]{preserve_user_tree(&dir.join("local_extracted").join(name),&payload.join("local_extracted").join(name))?;}
     }
     transaction::install(dir)?;
     Ok(Update::Installed)

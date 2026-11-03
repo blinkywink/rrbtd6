@@ -35,7 +35,7 @@ void main() {
     n = normal.xyz;
 }"#;
 
-const TOON_FS: &str = r#"#version 100
+pub(crate) const TOON_FS: &str = r#"#version 100
 precision mediump float;
 varying lowp vec2 uv;
 varying lowp vec4 color;
@@ -63,7 +63,7 @@ void main() {
     color = color0 / 255.0;
 }"#;
 
-const OUTLINE_FS: &str = r#"#version 100
+pub(crate) const OUTLINE_FS: &str = r#"#version 100
 precision mediump float;
 varying lowp vec4 color;
 void main() { gl_FragColor = vec4(color.rgb, 1.0); }"#;
@@ -71,19 +71,21 @@ void main() { gl_FragColor = vec4(color.rgb, 1.0); }"#;
 pub struct Shaders {
     pub unlit: Material,
     pub outline: Material,
+    /// `unlit` / `outline` culling what the game's `Cull Front` / `Cull Back` does (`cull_face`).
+    culled: [(Material, Material); 2],
     /// Camera forward (world, normalized); set each frame before drawing.
     pub forward: Vec3,
 }
 
 impl Shaders {
     pub fn new() -> Self {
-        let unlit = load_material(
+        let unlit = |cull_face| load_material(
             ShaderSource::Glsl { vertex: TOON_VS, fragment: TOON_FS },
             MaterialParams {
                 pipeline_params: PipelineParams {
                     depth_test: Comparison::LessOrEqual,
                     depth_write: true,
-                    cull_face: CullFace::Nothing,
+                    cull_face,
                     ..Default::default()
                 },
                 ..Default::default()
@@ -92,13 +94,13 @@ impl Shaders {
         .expect("unlit shader");
         // Drawn before the model without writing depth: the model then covers it, which leaves
         // only the silhouette band (the game's stencil test).
-        let outline = load_material(
+        let outline = |cull_face| load_material(
             ShaderSource::Glsl { vertex: OUTLINE_VS, fragment: OUTLINE_FS },
             MaterialParams {
                 pipeline_params: PipelineParams {
                     depth_test: Comparison::LessOrEqual,
                     depth_write: false,
-                    cull_face: CullFace::Nothing,
+                    cull_face,
                     ..Default::default()
                 },
                 uniforms: vec![UniformDesc::new("Forward", UniformType::Float3)],
@@ -106,7 +108,35 @@ impl Shaders {
             },
         )
         .expect("outline shader");
-        Self { unlit, outline, forward: vec3(0.0, -1.0, 0.0) }
+        Self {
+            unlit: unlit(CullFace::Nothing),
+            outline: outline(CullFace::Nothing),
+            culled: [CullFace::Front, CullFace::Back].map(|c| (unlit(c), outline(c))),
+            forward: vec3(0.0, -1.0, 0.0),
+        }
+    }
+
+    /// The body and outline materials for a part's cull.
+    fn for_cull(&self, cull: CullFace) -> (&Material, &Material) {
+        match cull {
+            CullFace::Front => (&self.culled[0].0, &self.culled[0].1),
+            CullFace::Back => (&self.culled[1].0, &self.culled[1].1),
+            CullFace::Nothing => (&self.unlit, &self.outline),
+        }
+    }
+}
+
+/// The pipeline cull for a part's meta "cull": its shader's ShaderLab Cull (0 Off, 1 Front,
+/// 2 Back; tools/assets/export_model.shader_cull), both passes (body and outline) alike. The
+/// exported triangles wind the other way from OpenGL's front faces as drawn here: culling
+/// OpenGL's back faces turns the models inside out, culling its front ones gives the game's
+/// look (checked on Apex Plasma Master's HandLvl2, whose inverted magenta hull must lose its
+/// near side). A part without it (or with passes that differ) is drawn double-sided.
+fn cull_face(cull: &serde_json::Value) -> CullFace {
+    match cull.as_u64() {
+        Some(1) => CullFace::Back,
+        Some(2) => CullFace::Front,
+        _ => CullFace::Nothing,
     }
 }
 
@@ -166,6 +196,11 @@ struct Part<T = Texture2D> {
     /// Eyelid mesh: hidden except while blinking (the prefab's DartBlink behaviour
     /// toggles this renderer; it is not meant to be visible all the time).
     blink_only: bool,
+    /// Which faces the part's shader culls (`cull_face`).
+    cull: CullFace,
+    /// A material drawn with the game's translated shader (meta "shader_file": Apex Plasma
+    /// Master's lightning flipbook): the model dir and the part's meta, made into an Fx at upload.
+    fx_spec: Option<std::sync::Arc<(std::path::PathBuf, serde_json::Value)>>,
 }
 
 /// The prefab's ground shadow (`RadialShadow` SpriteRenderer, MonkeyRadialShadow sprite).
@@ -178,9 +213,13 @@ struct Shadow<T = Texture2D> {
 pub struct AnimModel {
     shadow: Option<Shadow<std::rc::Rc<Texture2D>>>,
     parts: Vec<Part>,
+    /// Per part: its translated-shader material (`Part::fx_spec`), drawn by `draw_fx` after the
+    /// towers instead of with the unlit shader.
+    fx: Vec<Option<std::rc::Rc<crate::fx::Fx>>>,
     clips: Vec<Clip>,
     nverts: usize,
     frames: std::sync::Arc<Frames>,
+    attach: Option<std::sync::Arc<Attach>>,
     legacy_scratch:Option<(Vec<Vertex>,Vec<Vertex>)>,
     /// Set before a draw: (pitch, roll, scale) applied in the model's own space before its yaw
     /// (nose up about x, roll about its forward z, left wing down for positive roll).
@@ -191,6 +230,8 @@ pub struct PosedMesh{
     pub vertices:Vec<Vertex>,
     pub indices:std::sync::Arc<[u16]>,
     pub texture:Option<Texture2D>,
+    /// Its part's cull (`cull_face`).
+    pub cull:CullFace,
 }
 
 const POSE_POOL_BYTES:usize=4*1024*1024;
@@ -311,6 +352,15 @@ pub struct Staged {
     clips: Vec<Clip>,
     nverts: usize,
     frames: std::sync::Arc<Frames>,
+    attach: Option<std::sync::Arc<Attach>>,
+}
+
+/// export_animated.py attach.bin: the transforms carrying particle systems (paths from the prefab
+/// root), each frame's world matrix (prefab-root space, Unity axes; 3 x 4 row-major), in
+/// anim.bin's frame order.
+pub struct Attach {
+    pub paths: Vec<String>,
+    mats: Vec<f32>,
 }
 
 /// A part texture read off-thread: its cache key, path, and pixels if this model was the first
@@ -482,10 +532,13 @@ impl AnimModel {
                 outline_color: p.outline_color,
                 vout: p.vout,
                 blink_only: p.blink_only,
+                cull: p.cull,
+                fx_spec: p.fx_spec,
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let fx = parts.iter().map(|p| p.fx_spec.as_ref().and_then(|s| make_fx(s))).collect();
         let shadow = st.shadow.map(|s| Shadow { tex: upload_shadow(&s.tex), size: s.size, pos: s.pos });
-        Self { shadow, parts, clips: st.clips, nverts: st.nverts, frames: st.frames, legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt: None }
+        Self { shadow, parts, fx, clips: st.clips, nverts: st.nverts, frames: st.frames, attach: st.attach, legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt: None }
     }
 
     async fn from_staged_cooperative(st:Staged)->Self{
@@ -500,11 +553,12 @@ impl AnimModel {
             parts.push(Part{
                 tex,
                 voff:p.voff,vcount:p.vcount,uv:p.uv,chunks:p.chunks,outline:p.outline,
-                outline_color:p.outline_color,vout:p.vout,blink_only:p.blink_only,
+                outline_color:p.outline_color,vout:p.vout,blink_only:p.blink_only,cull:p.cull,fx_spec:p.fx_spec,
             });budget.checkpoint().await;
         }
+        let fx=parts.iter().map(|p|p.fx_spec.as_ref().and_then(|s|make_fx(s))).collect();
         let shadow=if let Some(s)=st.shadow{let tex=upload_shadow_cooperative(&s.tex).await;Some(Shadow{tex,size:s.size,pos:s.pos})}else{None};
-        Self{shadow,parts,clips:st.clips,nverts:st.nverts,frames:st.frames,legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt:None}
+        Self{shadow,parts,fx,clips:st.clips,nverts:st.nverts,frames:st.frames,attach:st.attach,legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt:None}
     }
 
     /// Reads and decodes a model directory without touching the GPU (safe off the main thread).
@@ -548,7 +602,8 @@ impl AnimModel {
             });
             // STAND-IN: untextured quads are effect planes (glows) whose particle / additive
             // materials aren't exported; drawn plain they'd be white squares, so they're left out.
-            if tex.is_none() && vcount <= 4 {
+            let fx_spec = p["shader_file"].is_string().then(|| std::sync::Arc::new((dir.to_path_buf(), p.clone())));
+            if tex.is_none() && vcount <= 4 && fx_spec.is_none() {
                 continue;
             }
             let oc = p["outline_color"].as_array();
@@ -596,6 +651,8 @@ impl AnimModel {
                 outline: vout.iter().map(|v| v.1).fold(outline, f32::max),
                 outline_color,
                 vout,
+                cull: cull_face(&p["cull"]),
+                fx_spec,
             });
         }
         let clips = anims
@@ -620,11 +677,81 @@ impl AnimModel {
             }),
             None => None,
         };
-        Some(Staged { shadow, parts, clips, nverts, frames })
+        let attach = meta["attach"].as_array().filter(|a| !a.is_empty()).and_then(|a| {
+            let paths: Vec<String> = a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
+            let total: usize = anims.iter().filter_map(|a| Some(a["offset"].as_u64()? as usize + a["frames"].as_u64()? as usize)).max()?;
+            // Boss models keep it compressed (export_bosses.py): it's most of their size.
+            let b = match std::fs::read(dir.join("attach.bin.zst")) {
+                Ok(packed) => zstd::stream::decode_all(&packed[..]).ok()?,
+                Err(_) => std::fs::read(dir.join("attach.bin")).ok()?,
+            };
+            (b.len() == total * paths.len() * 48).then(|| {
+                let mats = b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+                std::sync::Arc::new(Attach { paths, mats })
+            })
+        });
+        Some(Staged { shadow, parts, clips, nverts, frames, attach })
     }
 
     pub fn vertex_count(&self) -> usize {
         self.nverts
+    }
+
+    /// Whether the export has attach.bin (joints carrying particle systems).
+    pub fn has_attach(&self) -> bool {
+        self.attach.is_some()
+    }
+
+    /// The frames clip `c` at `t` seconds blends, as `meshes` picks them.
+    fn frame_pair(&self, c: usize, t: f32) -> (usize, usize, f32) {
+        let clip = &self.clips[c];
+        let ft = t * clip.fps;
+        if clip.looping {
+            let n = clip.frames as f32;
+            let x = ft.rem_euclid(n);
+            let a = x.floor() as usize % clip.frames;
+            (clip.offset + a, clip.offset + (a + 1) % clip.frames, x.fract())
+        } else {
+            let x = ft.clamp(0.0, (clip.frames - 1) as f32);
+            let a = x.floor() as usize;
+            (clip.offset + a, clip.offset + (a + 1).min(clip.frames - 1), x.fract())
+        }
+    }
+
+    /// The particle-system transforms' world matrices (prefab-root space, Unity axes) at clip `c`,
+    /// `t` seconds, blended between frames as the vertices are and with the model's tilt.
+    pub fn attach_mats(&self, c: usize, t: f32) -> Vec<(&str, Mat4)> {
+        let Some(at) = &self.attach else { return Vec::new() };
+        if c >= self.clips.len() {
+            return Vec::new();
+        }
+        let (f0, f1, u) = self.frame_pair(c, t);
+        let n = at.paths.len();
+        let tilt = self.tilt.map_or(Mat4::IDENTITY, |(p, r, k)| {
+            // `tilted`: scale, roll about z (x, y), then pitch (y, z).
+            let roll = Mat4::from_cols(vec4(r.cos(), r.sin(), 0.0, 0.0), vec4(-r.sin(), r.cos(), 0.0, 0.0), Vec4::Z, Vec4::W);
+            let pitch = Mat4::from_cols(Vec4::X, vec4(0.0, p.cos(), -p.sin(), 0.0), vec4(0.0, p.sin(), p.cos(), 0.0), Vec4::W);
+            pitch * roll * Mat4::from_scale(Vec3::splat(k))
+        });
+        at.paths
+            .iter()
+            .enumerate()
+            .map(|(j, path)| {
+                let m = |f: usize| -> [f32; 12] {
+                    let o = (f * n + j) * 12;
+                    std::array::from_fn(|i| at.mats.get(o + i).copied().unwrap_or(0.0))
+                };
+                let (a, b) = (m(f0), m(f1));
+                let r: [f32; 12] = std::array::from_fn(|i| a[i] + (b[i] - a[i]) * u);
+                let mat = Mat4::from_cols(
+                    vec4(r[0], r[4], r[8], 0.0),
+                    vec4(r[1], r[5], r[9], 0.0),
+                    vec4(r[2], r[6], r[10], 0.0),
+                    vec4(r[3], r[7], r[11], 1.0),
+                );
+                (path.as_str(), tilt * mat)
+            })
+            .collect()
     }
 
     /// Draws the ground shadow flat under the tower at Unity `pos`.
@@ -641,6 +768,11 @@ impl AnimModel {
     }
 
     /// The idle loop: "DartIdle", "CrossbowIdle", "Spike-o-pultIdle", ... ("AttackIdle" only as a fallback).
+    /// A part drawn with the game's translated shader (queued for `draw_fx` when posed).
+    pub fn has_fx(&self) -> bool {
+        self.fx.iter().any(Option::is_some)
+    }
+
     pub fn idle_clip(&self) -> usize {
         self.clips
             .iter()
@@ -747,7 +879,7 @@ impl AnimModel {
         let scale = tilt.map_or(1.0, |t| t.2);
         let mut meshes = Vec::with_capacity(self.parts.len());
         let mut outlines = Vec::new();
-        for part in self.parts.iter().filter(|p|blink||!p.blink_only){
+        for (pi, part) in self.parts.iter().enumerate().filter(|(_, p)|blink||!p.blink_only){
             let (mut vertices,mut outline_vertices)=if reuse{
                 (take_pose_vertices(part.vcount),if part.outline>0.0{take_pose_vertices(part.vcount)}else{Vec::new()})
             }else{let (mut v,mut o)=self.legacy_scratch.take().unwrap_or_default();v.clear();o.clear();(v,o)};
@@ -769,17 +901,55 @@ impl AnimModel {
                     });
                 }
             }
+            if let Some(fx) = self.fx.get(pi).cloned().flatten() {
+                // Unlit and outlineless: posed with the body, drawn by draw_fx.
+                let verts: Vec<Vertex> = vertices.drain(..).collect();
+                for (vs, idx) in &part.chunks {
+                    let v = if vs.is_empty() { verts.clone() } else { vs.iter().map(|&i| verts[i as usize]).collect() };
+                    FX_QUEUE.with(|q| q.borrow_mut().push((fx.clone(), v, idx.to_vec())));
+                }
+                if reuse{recycle_pose_vertices(vertices);recycle_pose_vertices(outline_vertices);}else{self.legacy_scratch=Some((vertices,outline_vertices));}
+                continue;
+            }
             for (vs, idx) in &part.chunks {
                 let pick = |src:&mut Vec<Vertex>| if !reuse{if vs.is_empty(){src.clone()}else{vs.iter().map(|&v|src[v as usize]).collect()}}else if vs.is_empty(){std::mem::take(src)}else{let mut out=take_pose_vertices(vs.len());out.extend(vs.iter().map(|&v|src[v as usize]));out};
                 let has_outline=!outline_vertices.is_empty();
-                meshes.push(PosedMesh { vertices: pick(&mut vertices), indices: idx.clone(), texture: part.tex.clone() });
+                meshes.push(PosedMesh { vertices: pick(&mut vertices), indices: idx.clone(), texture: part.tex.clone(), cull: part.cull });
                 if has_outline {
-                    outlines.push(PosedMesh { vertices: pick(&mut outline_vertices), indices: idx.clone(), texture: None });
+                    outlines.push(PosedMesh { vertices: pick(&mut outline_vertices), indices: idx.clone(), texture: None, cull: part.cull });
                 }
             }
             if reuse{recycle_pose_vertices(vertices);recycle_pose_vertices(outline_vertices);}else{self.legacy_scratch=Some((vertices,outline_vertices));}
         }
         (meshes, outlines)
+    }
+}
+
+thread_local! {
+    /// Translated-shader parts posed this frame (material, vertices, indices), for draw_fx.
+    static FX_QUEUE: std::cell::RefCell<Vec<(std::rc::Rc<crate::fx::Fx>, Vec<Vertex>, Vec<u16>)>> = Default::default();
+}
+
+/// The part's Fx: its shader from <local_extracted>/shaders (fx.rs looks two dirs above the
+/// models dir it's given), textures from the model dir.
+fn make_fx(spec: &(std::path::PathBuf, serde_json::Value)) -> Option<std::rc::Rc<crate::fx::Fx>> {
+    let (dir, part) = spec;
+    let root = dir.ancestors().find(|a| a.join("shaders").is_dir())?;
+    crate::fx::Fx::new(&root.join("models").join("_"), part, |f| {
+        let path = dir.join(f);
+        let key = crate::render3d::tex_key(&path, false)?;
+        crate::render3d::cache_tex(&key, None, &path)
+    })
+    .map(std::rc::Rc::new)
+}
+
+/// Draws (then clears) the translated-shader parts posed since the last call, in the current
+/// 3D camera: after the towers, since they're effects (additive lightning...).
+pub fn draw_fx(time: f32) {
+    let vp = unsafe { get_internal_gl() }.quad_gl.get_projection_matrix() * Mat4::from_scale(vec3(1.0, 1.0, -1.0));
+    let items = FX_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for (fx, vertices, indices) in items {
+        fx.draw(&Mesh { vertices, indices, texture: None }, vp, time);
     }
 }
 
@@ -791,14 +961,29 @@ fn split_chunks(idx: &[u16], vcount: usize) -> Vec<(Vec<u16>, Vec<u16>)> {
 /// Every outline first, then every body, so no outline is drawn over any part of a tower (also
 /// across models that make up one tower, like a Paragon's legs and top).
 pub fn draw_meshes(sh: &Shaders, outlines: &[&[PosedMesh]], meshes: &[&[PosedMesh]]) {
-    gl_use_material(&sh.outline);
-    sh.outline.set_uniform("Forward", sh.forward);
-    for m in outlines.iter().flat_map(|x| x.iter()) {
-        crate::render3d::draw_geometry(&m.vertices,&m.indices,m.texture.as_ref());
+    // A pass per cull (a material switch flushes the batch), each in the order given.
+    const CULLS: [CullFace; 3] = [CullFace::Nothing, CullFace::Front, CullFace::Back];
+    for cull in CULLS {
+        let mat = sh.for_cull(cull).1;
+        let mut using = false;
+        for m in outlines.iter().flat_map(|x| x.iter()).filter(|m| m.cull == cull) {
+            if !using {
+                gl_use_material(mat);
+                mat.set_uniform("Forward", sh.forward);
+                using = true;
+            }
+            crate::render3d::draw_geometry(&m.vertices,&m.indices,m.texture.as_ref());
+        }
     }
-    gl_use_material(&sh.unlit);
-    for m in meshes.iter().flat_map(|x| x.iter()) {
-        crate::render3d::draw_geometry(&m.vertices,&m.indices,m.texture.as_ref());
+    for cull in CULLS {
+        let mut using = false;
+        for m in meshes.iter().flat_map(|x| x.iter()).filter(|m| m.cull == cull) {
+            if !using {
+                gl_use_material(sh.for_cull(cull).0);
+                using = true;
+            }
+            crate::render3d::draw_geometry(&m.vertices,&m.indices,m.texture.as_ref());
+        }
     }
     gl_use_default_material();
 }
@@ -1001,7 +1186,7 @@ pub async fn verify_prefetch(root:&Path){
     #[test]fn posed_buffers_reuse_storage_only_after_mesh_drop(){
         POSE_POOL.with(|p|*p.borrow_mut()=PosePool::default());
         let vertices=take_pose_vertices(128);let pointer=vertices.as_ptr();
-        let mesh=PosedMesh{vertices,indices:std::sync::Arc::from([0,1,2]),texture:None};
+        let mesh=PosedMesh{vertices,indices:std::sync::Arc::from([0,1,2]),texture:None,cull:CullFace::Nothing};
         let other=take_pose_vertices(128);assert_ne!(pointer,other.as_ptr());
         drop(mesh);let reused=take_pose_vertices(128);assert_eq!(pointer,reused.as_ptr());assert!(reused.is_empty());
         recycle_pose_vertices(reused);recycle_pose_vertices(other);

@@ -1,32 +1,49 @@
-"""Run export_animated.py over many prefabs, loading each bundle once.
-
-Usage: python -I tools/assets/export_animated_batch.py <game install> <jobs.json>
-jobs.json: [[out_dir, bundle_glob, prefab container path], ...]. A job whose out_dir already
-has meta.json is skipped. Each output is compacted (compact_anims.py). Run in chunks (a fresh
-process every few dozen prefabs): UnityPy keeps what it reads.
-"""
+"""Export a bounded group of animated prefabs, sharing loaded Unity bundles."""
 import json
 import os
+from pathlib import Path
 import sys
-import traceback
 
-GAME, JOBS = sys.argv[1], sys.argv[2]
-jobs = [j for j in json.load(open(JOBS)) if not os.path.exists(os.path.join(j[0], "meta.json"))]
-if not jobs:
-    sys.exit(0)
-here = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, here)
-sys.argv = [sys.argv[0], GAME, jobs[0][0], jobs[0][1], jobs[0][2]]
-import export_animated as ea  # noqa: E402
-import compact_anims as ca  # noqa: E402
 
-for out, bundle, prefab in jobs:
-    ea.OUT, ea.BUNDLE, ea.PREFAB = out, bundle, prefab
-    ea.em.OUT = out
-    ea.em.tex_cache.clear()
+def complete(folder):
+    folder = Path(folder)
     try:
-        ea.main()
-        ca.convert(out)
-        print("ok", out, flush=True)
-    except Exception:
-        print("FAIL", out, traceback.format_exc().strip().splitlines()[-1][:200], flush=True)
+        return (folder / "outline.bin").is_file() and "shadow" in json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def run(game, jobs, compact=True):
+    pending = [job for job in jobs if not complete(job[0])]
+    if not pending:
+        return
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.argv = [sys.argv[0], game, *pending[0][:3]]
+    import export_animated as ea
+    import compact_anims as ca
+    # A job is [out, bundle, prefab], plus environment settings for that export (RRBTD6_ANIM_*).
+    for i, (out, bundle, prefab, *settings) in enumerate(pending):
+        settings = settings[0] if settings else {}
+        ea.OUT, ea.BUNDLE, ea.PREFAB = out, bundle, prefab
+        ea.em.OUT = out
+        ea.em.tex_cache.clear()
+        if not compact:
+            getattr(ea.em, "shader_done", {}).clear()
+            getattr(ea.em, "_shader_names", {}).clear()
+        os.environ.update(settings)
+        try:
+            ea.main()
+            if compact:
+                ca.convert(out)
+        except Exception:
+            Path(out, "meta.json").unlink(missing_ok=True)
+            raise
+        finally:
+            for name in settings:
+                os.environ.pop(name, None)
+        print("@@RRBTD6_PROGRESS " + json.dumps({"done": i + 1, "total": len(pending),
+              "label": "Models: " + Path(out).name}), flush=True)
+
+
+if __name__ == "__main__":
+    run(sys.argv[1], json.loads(Path(sys.argv[2]).read_text(encoding="utf-8")), compact="--keep-floats" not in sys.argv[3:])

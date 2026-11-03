@@ -117,7 +117,7 @@ guarantee zero load latency.
 Runtime validation checks decoded length against clip/vertex metadata, checksum,
 stream completion and trailing data. Input is streamed through a 1 MiB buffer
 instead of retaining the entire compressed file beside the decoded animation.
-Synthetic coverage: tools/test_animation_storage.py and the renderer's
+Synthetic coverage: tools/tests/test_animation_storage.py and the renderer's
 animation_storage tests. All game data remains local and ignored by Git.
 
 Local migration measurement (2026-10-27): 1,843 animation sources; 1,841 packed
@@ -231,7 +231,7 @@ Validation: 131 Rust game tests passed / 18 ignored, explicit mixer-equivalence
 and prepared-buffer mixer tests passed, and audio-enabled gameplay/home captures
 passed. Gameplay loaded five effect clips with zero missing and music playing.
 
-To reproduce mixer checks without game files, run tools/test_audio_storage.py
+To reproduce mixer checks without game files, run tools/tests/test_audio_storage.py
 --fixtures target/audio-fixtures with the extraction Python, then set
 RRBTD6_AUDIO_FIXTURES=target/audio-fixtures and run cargo test --profile game
 -p btd6-game lossless_mixer_equivalence -- --ignored --nocapture.
@@ -345,3 +345,104 @@ updated client when migrating existing Sandbox runtime files. Seven migration/to
 tests, 15 extraction-plan checks and the native binding test passed. All migrated
 files were independently reread and checked for valid, fully compact JSON.
 
+
+Setup speed (2026-11-01)
+------------------------
+Exporters now use UnityPy's native typetree reader. Across all 250 Full/Half bundles
+(about 1.3 million objects) it returned the same values as the Python reader for every
+object the Python reader could parse, with no crashes. The one exception, a ui_scenes_all
+MonoBehaviour, makes the Python reader raise, while the native reader parses it. Reading the
+largest generated bundle's typetrees took 0.87 s instead of 11.3 s. A/B exports of three maps
+with each reader were identical (38 files).
+
+Worker pools keep 2 GiB free instead of 6 GiB, and count the lower of free RAM and free
+commit (a small page file otherwise ends in MemoryError while RAM looks free). Maps use
+measured per-process budgets (0.16-0.26 GiB peak, 1 GiB budgeted): the map step went from
+178 s on one worker to 54 s on five. Effects run on the same pool; towers are exported in
+four groups so each process loads the tower bundle once (462 s on one worker on a busy PC).
+Each exporter's wall time is appended to local_extracted/.extract_profile.jsonl.
+
+Game Vorbis audio (2026-11-01, audio step v3)
+--------------------------------------------
+The game stores all 3,102 AudioClips as FSB5 Vorbis (115 MB). fsb_vorbis.py copies each
+clip's audio packets unchanged into a standard Ogg Vorbis file instead of decoding with FMOD
+and storing FLAC. FSB5 replaces the Vorbis setup header with its CRC32; the headers come from
+FMOD's table inside the game's own UnityPlayer.dll (161 headers: complete ones, and ones stored
+as a base header with a few replaced bytes), each checked against its CRC. The last page ends
+at the FSB sample count, and the final packet has a page of its own because lewton (quad-snd)
+trims end padding only then.
+
+All 2,806 exported clips: 845 MB of FLAC became 121 MB of Ogg, exported in 27 s. Through the
+game's decoder (quad-snd/lewton) every clip has FMOD's exact length and duration; the largest
+sample difference from FMOD's decode is one 16-bit step for 2,803 clips and two for 3 (two
+Vorbis decoders reading the same data). The runtime reads .wav, then .ogg, then .flac, so older
+FLAC installs keep working; the step version makes them re-export, replacing each FLAC with its
+Ogg. A clip that can't be repackaged is still decoded to FLAC. Checks: tools/tests/test_fsb_vorbis.py
+(synthetic) and the ignored vorbis_matches_fmod_decode test (RRBTD6_OGG_FIXTURES=<dir of
+<clip>.ogg + <clip>.flac pairs>).
+
+Animated models as skinning data (2026-11-01, tower_models 2 and the other model steps)
+--------------------------------------------------------------------------------------
+export_animated.py writes skin.bin (skin_anims.py) instead of baked vertex frames: each vertex's
+rest position, normal, slot indices and weights once, and per frame each slot's 3x4 matrix (the
+bone transform times its bind pose, or a rigid mesh's transform), zstd-compressed with each
+frame stored as a byte difference from the previous one. While staging a model the runtime
+(animation_storage.rs decode_skin) rebuilds exactly the 10-byte frames anim_q.bin held, in f32,
+quantized with meta.json "quant"; nothing after staging changes.
+
+Every model is checked when exported: the f32 rebuild is compared with an f64 rebuild from the
+unrounded matrices (what the vertex bake computed). If it is more than 1.5 steps of the 1/65535
+grid off anywhere, that model keeps vertex frames (IceMonkey AbsoluteZero: 5.7 steps). Prefabs
+without meshes keep their empty anim.bin. Grafted clips are vertex blends, so graft_clips.py
+expands either form and stores its target as anim_q.bin.
+
+Measured on this PC: 1,812 tower, hero, paragon and bloon models became 407 MB of skin.bin,
+against about 2.2-2.8 GB of compressed vertex frames after the finish passes (the raw frames were
+about 18 GB before them). Against the existing install, 1,615 of 1,618 comparable models are
+within 0.55 steps (rounding to the same grid); two bloon differences came from that install
+predating an exporter fix (identical when both forms are exported now). The Nautic Siege Core
+Lvl3 (188 MB of frames) is a 1.96 MB skin.bin and decodes in 310 ms; the Rust decoder matched the
+Python rebuild exactly on it and on a tier model. A Boomerang Monkey gallery capture with all
+models in the new form differed from the old install less than two runs of the old install did.
+Installs from before migrate once: the tower_models step removes animated models that have no
+skin.bin (maps are static and kept) so the exporters write them again.
+
+A model batch that fails (usually other programs taking the memory after the workers were sized)
+is retried with one worker, twice; finished models are kept. Parallel setup jobs likewise retry
+failed or unstarted jobs one at a time once.
+
+Fresh-run fixes and faster steps (2026-11-01)
+---------------------------------------------
+A complete fresh extraction now finishes on this PC. Summing each step's latest time gives about
+38 minutes with 1.7 GB of commit free (mostly one worker). It found three older bugs. Late-bound
+menu sprites crashed export_menu_chrome (they now read the atlas copy). export_model looked up the
+lower-case CAB index with capitals, so cross-bundle references were silently empty since 10-28:
+hero clips and Goliath Doomship's Spotlight parts were lost. 4-component normals dropped one water
+part on four maps. After the fixes all 2,011 models match the working install's parts and clips.
+
+Bloon, home and Sun Temple source models share one bundle load per batch (bloons 415 s -> 22 s,
+all 240 files byte-identical). UI, sprite and catalog exporters run in parallel inside their
+steps; each writes its own files, except export_bundle_sprites' shared borders, which stay
+sequential. Bundle workers budget 2 GiB (asset_references batch measured 0.86 GiB), and cached
+bundles are memory-mapped (load 2.7 -> 2.0 s, no commit, all 733,581 objects read identically).
+skin.bin uses zstd level 9: 28 MB (7%) larger for the game, about 7 minutes less CPU. The export
+accuracy check samples every 8th frame and bounds skip normals. Setup tells players that closing
+programs speeds it up.
+
+The full run's first launch also showed setup never wrote ui/mapset.json, where the menus read it
+(no map cards, $XXXX rewards); mapset step v2 writes it. link_duplicates retries a replace Windows
+refuses for a moment. Menus and gameplay then matched the working install. Not yet checked screen by
+screen: files only the working install has and fresh data doesn't name (most ui/menu_icons), and
+hero icons and boss medals (ui/hero_skins, sprites/MenuChrome) that may be named at runtime.
+
+Geraldo's shop items (towers and merges under game.json "geraldo", outside every tower's data) had
+no models on a fresh install; extended_towers v3 exports them.
+
+Setup review (2026-11-01): the profile page (export_profile_ui.py, step profile_menu) and RightPanel's
+animators now come from setup, not one-off commands. A BTD6 update now removes models, maps and audio
+so they are exported again; exporters keep those when they exist, so they used to stay on the old
+game. build_local_assets.sh and export_frontend.sh call extract_all.py, so setup can't drift from them.
+
+Bloon sprites (2026-11-01, misc_art and game_data v2): all 180 renderers are DrawMode Simple, which
+draws the sprite's rect and ignores SpriteRenderer.m_Size, so sizes now come from the tight art's
+pixels / pixels per unit, with its offset from the pivot as "trim". Images stay tight for the atlas.

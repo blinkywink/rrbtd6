@@ -16,8 +16,8 @@ def package(root: Path, destination: Path) -> list[str]:
             exclusions.append(line.strip())
     tracked = subprocess.check_output(
         ["git", "ls-files", "-z", "--", "tools", *[f":(exclude){p}" for p in exclusions]], cwd=root)
-    names = sorted(p.decode("utf-8") for p in tracked.split(b"\0") if p)
-    required = {"tools/extract_all.py", "tools/requirements.txt", "tools/sitecustomize.py", "tools/unitypy_lowmem.py"}
+    names = sorted(p.decode("utf-8") for p in tracked.split(b"\0") if p and (root / p.decode("utf-8")).is_file())
+    required = {"tools/extract_all.py", "tools/requirements.txt", "tools/sitecustomize.py", "tools/unitypy_lowmem.py", "tools/bundle_lock.py", "tools/assets/export_cache.py", "tools/assets/export_map_pair.py", "tools/assets/sprite_resolver.py", "tools/assets/export_checkpoint.py", "tools/assets/static_model_batch.py"}
     if not required.issubset(names):
         raise ValueError(f"Incomplete extraction tooling: {sorted(required - set(names))}")
     destination = destination.resolve()

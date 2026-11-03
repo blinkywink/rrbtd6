@@ -6,7 +6,9 @@ use std::path::Path;
 const BASE:&str="Canvas/PlayerStatsScreen";
 const DROPDOWN:&str="Canvas/PlayerStatsScreen/Stats/OverallStats/StatCategoryDropdown";
 const OPTIONS:&str="Canvas/StatsCategoryOptions";
-const CATEGORIES:[&str;4]=["Overall Stats","Main Game","Rogue","Frontier"];
+/// The stat categories (StatCategoryDropdown). Main Game, Rogue and Frontier are gone
+/// (DEVIATIONS.md): Overall Stats is the only one, so the dropdown is a plain title.
+const CATEGORIES:[&str;1]=["Overall Stats"];
 pub(super) const MODAL:&str="Canvas/PlayerStatsScreen/SettingsMenu";
 pub(super) struct Browser {category:usize,dropdown:bool,public_stats:bool,root:std::path::PathBuf,catalog:Value,runtime:Value,open:bool,banners:bool,selected:Option<usize>,began:Option<f64>,closing:bool,equipped:[Option<String>;2],overall:Option<(Vec<Node>,Vec<Node>,String)>,named:Option<usize>,pub stats_changed:bool}
 impl Browser {
@@ -25,6 +27,7 @@ impl Browser {
                 }).collect();
             }
         }
+        node.set_active(&format!("{DROPDOWN}/Arrow"),CATEGORIES.len()>1);
         let mut browser=Self{category:0,dropdown:false,public_stats:false,root:root.to_owned(),catalog,runtime,open:false,banners:false,selected:None,began:None,closing:false,equipped:[None,None],overall:None,named:None,stats_changed:false};
         if let Ok(tab)=std::env::var("RRBTD6_PROFILE_PICKER"){
             browser.open=true;node.set_active(MODAL,true);browser.tab(node,tab=="banners");
@@ -62,9 +65,10 @@ impl Browser {
         for name in ["Confirm","Buy","IapBuy","Remove","Quest","GoBtn"]{node.set_active(&format!("{MODAL}/Panel/{name}"),false);}
         let local=super::account_preview::is_local();
         let changed=self.selected.is_some() && self.selected!=self.equipped_index();
-        node.set_active(&format!("{MODAL}/Panel/Confirm"),local && changed);
+        let locked=self.selected.is_some_and(|j|self.locked(self.banners as usize,j).is_some());
+        node.set_active(&format!("{MODAL}/Panel/Confirm"),local && changed && !locked);
         node.set_active(&format!("{MODAL}/Panel/InfoMessage"),!local && changed);
-        node.set_text(&format!("{MODAL}/Panel/InfoMessage/Text"),"Preview only. Ninja Kiwi account changes are disabled.");
+        node.set_text(&format!("{MODAL}/Panel/InfoMessage/Text"),"Choose artwork for your local profile.");
     }
     pub fn presented(&mut self){if self.open && self.began.is_none(){self.began=Some(get_time());}}
     fn equipped_index(&self)->Option<usize>{
@@ -79,10 +83,23 @@ impl Browser {
             self.equipped=current;self.selected=self.equipped_index();self.refresh_cards(node);
         }
     }
+    /// A Trophy Store cosmetic the player hasn't bought (PopulateAvatarItem's TrophyStoreCost):
+    /// its price; None when it can be equipped (owned, or not a store item).
+    fn locked(&self,banners:usize,index:usize)->Option<i64>{
+        let category=if banners==1{"banners"}else{"avatars"};
+        let id=self.catalog[category][index]["trophyStoreId"].as_str().filter(|s|!s.is_empty())?;
+        if crate::local_profile::get(&self.root).trophy_items.contains_key(id){return None;}
+        Some(super::menu_pages::cached_trophy_prices(&self.root).get(id).copied().unwrap_or(50))
+    }
     fn refresh_cards(&self,node:&mut Node){
+        let locks:Vec<Vec<Option<i64>>>=[("avatars",0),("banners",1)].iter().map(|(category,i)|
+            (0..self.catalog[*category].as_array().map_or(0,|a|a.len())).map(|j|self.locked(*i,j)).collect()).collect();
         for (i,(category,group)) in [("avatars","ScrollAvatar/AvatarGroup"),("banners","ScrollBanner/BannerGroup")].iter().enumerate(){
             if let Some(list)=node.find_mut(&format!("{MODAL}/Panel/Container/{group}")){
                 for (j,card) in list.children.iter_mut().enumerate(){
+                    let lock=locks[i].get(j).copied().flatten();
+                    card.set_active("TrophyStoreCost",lock.is_some());
+                    if let Some(price)=lock{card.set_text("TrophyStoreCost/TextCount",&price.to_string());}
                     card.set_active("EquippedTick",self.equipped[i].as_deref().is_some_and(|icon|self.catalog[category][j]["icon"].as_str()==Some(icon)));
                     card.set_active("Selected",self.banners as usize==i && self.selected==Some(j));
                 }
@@ -203,7 +220,7 @@ impl Browser {
             if let Some(i)=picked{self.select_category(node,i);}
             return true;
         }
-        if !self.open && node.rect(DROPDOWN).is_some_and(|r|r.contains(pointer)){self.open_categories(node);return true;}
+        if CATEGORIES.len()>1 && !self.open && node.rect(DROPDOWN).is_some_and(|r|r.contains(pointer)){self.open_categories(node);return true;}
         let hit=|node:&Node,path:&str|node.rect(path).is_some_and(|r|r.contains(pointer));
         if !self.open{
             let path=format!("{BASE}/Stats/NamedMonkeysMenu/OptionScroll/Content");

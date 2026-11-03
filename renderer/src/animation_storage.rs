@@ -1,5 +1,6 @@
-//! Lossless disk compression only. The staging worker expands bytes before the
-//! existing frame cache; rendering, interpolation and simulation stay unchanged.
+//! Animation storage on disk: skinning data (skin.bin) or compressed vertex frames. The staging
+//! worker expands either into the same bytes before the existing frame cache; rendering,
+//! interpolation and simulation stay unchanged.
 use std::{io::{self, BufRead, Read, Seek}, path::Path};
 
 pub fn read(dir: &Path, name: &str, expected: u64) -> io::Result<Vec<u8>> {
@@ -18,13 +19,85 @@ pub fn read(dir: &Path, name: &str, expected: u64) -> io::Result<Vec<u8>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             match std::fs::File::open(dir.join(format!("{name}.dz"))) {
                 Ok(file)=>decode_delta(io::BufReader::with_capacity(1024*1024,file),expected),
-                Err(e) if e.kind()==io::ErrorKind::NotFound=>decode_words(io::BufReader::with_capacity(1024*1024,
-                    std::fs::File::open(dir.join(format!("{name}.wz")))?),expected),
+                Err(e) if e.kind()==io::ErrorKind::NotFound=>match std::fs::File::open(dir.join(format!("{name}.wz"))) {
+                    Ok(file)=>decode_words(io::BufReader::with_capacity(1024*1024,file),expected),
+                    Err(e) if e.kind()==io::ErrorKind::NotFound && name=="anim_q.bin"=>decode_skin(dir,expected),
+                    Err(e)=>Err(e),
+                },
                 Err(e)=>Err(e),
             }
         }
         Err(e) => Err(e),
     }
+}
+
+/// anim_q.bin's frames rebuilt from skin.bin (tools/assets/skin_anims.py): each vertex's slots
+/// and weights, and every frame's 3x4 slot matrices. Runs on the staging worker, once per model.
+fn decode_skin(dir:&Path,expected:u64)->io::Result<Vec<u8>> {
+    let meta:serde_json::Value=serde_json::from_slice(&std::fs::read(dir.join("meta.json"))?).map_err(|_|invalid())?;
+    let bound=|key:&str|->io::Result<[f32;3]>{
+        let a=meta["quant"][key].as_array().filter(|a|a.len()==3).ok_or_else(invalid)?;
+        let mut out=[0.0;3];
+        for (o,v) in out.iter_mut().zip(a){*o=v.as_f64().ok_or_else(invalid)? as f32;}
+        Ok(out)
+    };
+    let (lo,hi)=(bound("min")?,bound("max")?);
+    let data=std::fs::read(dir.join("skin.bin"))?;
+    if data.len()<32 || &data[..8]!=b"RRSKIN01"{return Err(invalid());}
+    let u32_at=|o:usize|u32::from_le_bytes(data[o..o+4].try_into().unwrap()) as usize;
+    let (nv,slots,frames,k)=(u32_at(8),u32_at(12),u32_at(16),u32_at(20));
+    let size=u64::from_le_bytes(data[24..32].try_into().unwrap());
+    let stride=slots.checked_mul(48).ok_or_else(invalid)?;
+    let matrices=frames.checked_mul(stride).ok_or_else(invalid)?;
+    let (rest,indices,weights)=(nv.checked_mul(12).ok_or_else(invalid)?,nv.checked_mul(k).and_then(|n|n.checked_mul(2)).ok_or_else(invalid)?,nv.checked_mul(k).and_then(|n|n.checked_mul(4)).ok_or_else(invalid)?);
+    let total=rest.checked_mul(2).and_then(|n|n.checked_add(indices)).and_then(|n|n.checked_add(weights)).and_then(|n|n.checked_add(matrices)).ok_or_else(invalid)?;
+    if total as u64!=size || (nv as u64).checked_mul(frames as u64).and_then(|n|n.checked_mul(10))!=Some(expected) || k==0{return Err(invalid());}
+    let mut body=Vec::with_capacity(total);
+    zstd::stream::read::Decoder::new(&data[32..])?.single_frame().take(size+1).read_to_end(&mut body)?;
+    if body.len()!=total{return Err(invalid());}
+    drop(data);
+    let (positions,rest_tail)=body.split_at_mut(rest);
+    let (normals,rest_tail)=rest_tail.split_at_mut(rest);
+    let (slot_bytes,rest_tail)=rest_tail.split_at_mut(indices);
+    let (weight_bytes,matrix_bytes)=rest_tail.split_at_mut(weights);
+    let floats=|b:&[u8]|->Vec<f32>{b.chunks_exact(4).map(|c|f32::from_le_bytes(c.try_into().unwrap())).collect()};
+    let (positions,normals,weight_values)=(floats(positions),floats(normals),floats(weight_bytes));
+    let slot_ids:Vec<u16>=slot_bytes.chunks_exact(2).map(|c|u16::from_le_bytes(c.try_into().unwrap())).collect();
+    if slot_ids.iter().any(|&s|s as usize>=slots){return Err(invalid());}
+    let span:[f32;3]=std::array::from_fn(|a|if hi[a]-lo[a]>1e-9{hi[a]-lo[a]}else{1.0});
+    let mut out=vec![0u8;expected as usize];
+    let mut matrix=vec![0f32;slots*12];
+    let mut previous=vec![0u8;stride];
+    let mut target=out.chunks_exact_mut(10);
+    for frame in 0..frames {
+        // Each frame's bytes are stored minus the previous frame's.
+        let row=&mut matrix_bytes[frame*stride..(frame+1)*stride];
+        for (b,p) in row.iter_mut().zip(previous.iter_mut()){*b=b.wrapping_add(*p);*p=*b;}
+        for (m,c) in matrix.iter_mut().zip(row.chunks_exact(4)){*m=f32::from_le_bytes(c.try_into().unwrap());}
+        for v in 0..nv {
+            let (x,y,z)=(positions[v*3],positions[v*3+1],positions[v*3+2]);
+            let (a,b,c)=(normals[v*3],normals[v*3+1],normals[v*3+2]);
+            let (mut p,mut n)=([0f32;3],[0f32;3]);
+            for i in 0..k {
+                let weight=weight_values[v*k+i];
+                if weight==0.0{continue;}
+                let m=&matrix[slot_ids[v*k+i] as usize*12..][..12];
+                for axis in 0..3 {
+                    let r=&m[axis*4..axis*4+4];
+                    p[axis]+=weight*(r[0]*x+r[1]*y+r[2]*z+r[3]);
+                    n[axis]+=weight*(r[0]*a+r[1]*b+r[2]*c);
+                }
+            }
+            let length=(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]).sqrt().max(1e-9);
+            let vertex=target.next().ok_or_else(invalid)?;
+            for axis in 0..3 {
+                let q=((p[axis]-lo[axis])/span[axis]*65535.0).round_ties_even().clamp(0.0,65535.0) as u16;
+                vertex[axis*2..axis*2+2].copy_from_slice(&q.to_le_bytes());
+                vertex[6+axis]=((n[axis]/length).clamp(-1.0,1.0)*127.0).round_ties_even() as i8 as u8;
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn decode_words(mut reader:impl BufRead+Seek,expected:u64)->io::Result<Vec<u8>> {
@@ -379,6 +452,82 @@ mod tests {
             let start = std::time::Instant::now();
             for _ in 0..10 { assert_eq!(decode_delta(io::Cursor::new(&bytes),source.len() as u64).unwrap(), source); }
             eprintln!("predicted: {} bytes; exact decode average {:.2} ms", bytes.len(),start.elapsed().as_secs_f64()*100.0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod skin_tests {
+    use super::*;
+
+    fn skin_file(dir:&Path,v:&[[f32;3]],n:&[[f32;3]],idx:&[u16],w:&[f32],k:usize,mats:&[Vec<f32>]){
+        let mut body=Vec::new();
+        for r in v.iter().chain(n){for x in r{body.extend(x.to_le_bytes());}}
+        for x in idx{body.extend(x.to_le_bytes());}
+        for x in w{body.extend(x.to_le_bytes());}
+        let mut previous=vec![0u8;mats[0].len()*4];
+        for frame in mats {
+            let bytes:Vec<u8>=frame.iter().flat_map(|x|x.to_le_bytes()).collect();
+            body.extend(bytes.iter().zip(&previous).map(|(a,b)|a.wrapping_sub(*b)));
+            previous=bytes;
+        }
+        let mut file=b"RRSKIN01".to_vec();
+        for x in [v.len(),mats[0].len()/12,mats.len(),k]{file.extend((x as u32).to_le_bytes());}
+        file.extend((body.len() as u64).to_le_bytes());
+        file.extend(zstd::encode_all(&body[..],1).unwrap());
+        std::fs::write(dir.join("skin.bin"),file).unwrap();
+    }
+
+    const I:[f32;12]=[1.,0.,0.,0., 0.,1.,0.,0., 0.,0.,1.,0.];
+
+    #[test]
+    fn rebuilds_quantized_frames_from_matrices() {
+        let dir=std::env::temp_dir().join(format!("rrbtd6-skin-{}",std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"),r#"{"quant":{"min":[0,0,0],"max":[2,1,1]}}"#).unwrap();
+        // Vertex 0 follows slot 0; vertex 1 blends slots 0 and 1 half and half.
+        let mut moved=I;moved[3]=2.0;
+        let mats=vec![[I,I].concat(),[moved,I].concat()];
+        skin_file(&dir,&[[0.,0.,0.],[0.,1.,0.]],&[[0.,0.,2.],[0.,0.,1.]],&[0,0,0,1],&[1.,0.,0.5,0.5],2,&mats);
+        let q=read(&dir,"anim_q.bin",2*2*10).unwrap();
+        let vertex=|f:usize,v:usize|->([u16;3],[i8;3]){let o=(f*2+v)*10;
+            (std::array::from_fn(|a|u16::from_le_bytes(q[o+a*2..o+a*2+2].try_into().unwrap())),std::array::from_fn(|a|q[o+6+a] as i8))};
+        assert_eq!(vertex(0,0),([0,0,0],[0,0,127]),"the normal is normalized");
+        assert_eq!(vertex(0,1),([0,65535,0],[0,0,127]));
+        assert_eq!(vertex(1,0),([65535,0,0],[0,0,127]));
+        assert_eq!(vertex(1,1),([32768,65535,0],[0,0,127]),"half of the 2-unit move, ties to even");
+        // A packed vertex-frame file wins, and a wrong size or body is refused.
+        assert!(read(&dir,"anim_q.bin",10).is_err());
+        assert!(read(&dir,"anim.bin",40).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod skin_fixture_tests {
+    /// RRBTD6_SKIN_FIXTURES=<dir of model folders with skin.bin, meta.json and anim_q.ref from
+    /// skin_anims.quantized>: this decoder against the Python rebuild, and its time.
+    #[test]
+    #[ignore]
+    fn skin_decoder_matches_python_rebuild() {
+        let root=std::env::var("RRBTD6_SKIN_FIXTURES").expect("set RRBTD6_SKIN_FIXTURES");
+        for entry in std::fs::read_dir(root).unwrap(){
+            let dir=entry.unwrap().path();
+            let Ok(reference)=std::fs::read(dir.join("anim_q.ref")) else{continue};
+            let start=std::time::Instant::now();
+            let rebuilt=super::read(&dir,"anim_q.bin",reference.len() as u64).unwrap();
+            let ms=start.elapsed().as_secs_f64()*1000.0;
+            let (mut worst,mut off,mut normals)=(0i32,0u64,0i32);
+            for (a,b) in rebuilt.chunks_exact(10).zip(reference.chunks_exact(10)){
+                for i in 0..3{
+                    let d=(u16::from_le_bytes([a[i*2],a[i*2+1]]) as i32-u16::from_le_bytes([b[i*2],b[i*2+1]]) as i32).abs();
+                    worst=worst.max(d);off+=(d>0) as u64;
+                    normals=normals.max((a[6+i] as i8 as i32-b[6+i] as i8 as i32).abs());
+                }
+            }
+            eprintln!("{}: {:.1} MB decoded in {ms:.0} ms; worst {worst} quanta, {off} positions off of {}, normals worst {normals}",
+                      dir.display(),rebuilt.len() as f64/1e6,reference.len()/10*3);
+            assert!(worst<=2&&normals<=2);
         }
     }
 }

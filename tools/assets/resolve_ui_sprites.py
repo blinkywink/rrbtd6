@@ -37,4 +37,4 @@ for bundle in glob.glob(str(Path(game)/'BloonsTD6_Data/StreamingAssets/aa/Standa
     del env
 for path,data in sources.items():path.write_text(json.dumps(data,indent=1),encoding='utf-8')
 meta.write_text(json.dumps(borders,indent=1),encoding='utf-8')
-print('Unresolved sprite references:',len(wanted))
+print('Unresolved sprite references:',len(wanted),sorted(map(str,wanted))[:20])

@@ -16,7 +16,8 @@ import unicodedata
 GAME = sys.argv[1]
 PY = sys.executable
 OUT = "local_extracted/ui/upgrades"
-paths = json.load(open("local_extracted/all_container_paths.json"))
+with open("local_extracted/all_container_paths.json", encoding="utf-8") as stream:
+    paths = json.load(stream)
 have = set(os.listdir(OUT))
 want = []
 for k in paths:
@@ -29,13 +30,10 @@ for k in paths:
         continue
     want.append(k)
 print(len(want), "icons to export", flush=True)
-for i in range(0, len(want), 40):
-    subprocess.run([PY, "tools/assets/export_textures.py", GAME, OUT, *want[i:i + 40]], check=False)
+jobs = [{"out": OUT, "paths": want}] if want else []
 # Names several towers' folders share (FasterShootingUpgradeIcon: Tack Shooter and Buccaneer):
 # also saved as "<Folder>__<name>" so each tower gets its own.
 import collections
-import shutil
-import tempfile
 by_name = collections.defaultdict(list)
 for k in paths:
     if k.startswith("Assets/ResizedImages/UI/UpgradeIcons/") and k.lower().endswith(".png") and "/Powers/" not in k:
@@ -48,10 +46,16 @@ for base, ks in by_name.items():
         dst = os.path.join(OUT, f"{folder}__{base}")
         if os.path.exists(dst):
             continue
-        with tempfile.TemporaryDirectory() as tmp:
-            subprocess.run([PY, "tools/assets/export_textures.py", GAME, tmp, k], check=False)
-            for f in os.listdir(tmp):
-                shutil.copy(os.path.join(tmp, f), dst)
+        jobs.append({"out": OUT, "paths": [k], "name_prefix": folder + "__"})
+if jobs:
+    manifest = "local_extracted/.missing_icon_jobs.json"
+    try:
+        with open(manifest, "w", encoding="utf-8") as stream:
+            json.dump(jobs, stream)
+        subprocess.run([PY, "tools/assets/export_textures.py", GAME, "--jobs", manifest], check=True)
+    finally:
+        if os.path.exists(manifest):
+            os.unlink(manifest)
 for f in os.listdir(OUT):
     folded = unicodedata.normalize("NFKD", f).encode("ascii", "ignore").decode()
     if folded != f and not os.path.exists(os.path.join(OUT, folded)):

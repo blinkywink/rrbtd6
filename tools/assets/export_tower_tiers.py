@@ -4,9 +4,14 @@ Usage: tools/.venv/Scripts/python.exe tools/assets/export_tower_tiers.py <game i
 Writes local_extracted/models/<TowerId>/tiers/<prefab-stem>/ (shared by tiers using the same prefab;
 already exported ones are kept) and local_extracted/models/<TowerId>/tiers/index.json {tier: dir}.
 """
-import json, os, subprocess, sys
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from model_batch import run as run_models
 
 game = sys.argv[1]
+pending = {}
+indices = []
 for tower in sys.argv[2:]:
     with open(f"local_extracted/display_plans/{tower}.json", encoding="utf-8") as plan_file:
         plan = json.load(plan_file)
@@ -36,15 +41,12 @@ for tower in sys.argv[2:]:
                     done[stem] = 0
                     continue
         bundle_glob = t["bundle"].rsplit("_", 1)[0]
-        r = subprocess.run([sys.executable, "tools/assets/export_animated.py", game, out, bundle_glob, t["prefab"]],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace")
-        done[stem] = r.returncode
-        print(tower, tier, stem, "ok" if r.returncode == 0 else "FAIL " + (r.stderr.strip().splitlines() or ["?"])[-1][:200],
-              flush=True)
-        if r.returncode:
-            raise SystemExit(r.returncode)
+        pending.setdefault(out, [out, bundle_glob, t["prefab"]])
+    indices.append((root, index, attack_index))
+run_models(game, list(pending.values()))
+for root, index, attack_index in indices:
     with open(os.path.join(root, "index.json"), "w", encoding="utf-8") as index_file:
         json.dump(index, index_file, indent=1)
     with open(os.path.join(root, "attack.json"), "w", encoding="utf-8") as attack_file:
         json.dump(attack_index, attack_file, indent=1)
-    print(tower, "exported", sum(1 for v in done.values() if v == 0), "of", len(done))
+    print(root, "prepared", len(index), "tier references", flush=True)

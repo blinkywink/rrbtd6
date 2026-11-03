@@ -7,6 +7,12 @@ or "CAN'T FIX YET" (with why). A screenshot of the real game next to ours helps 
 
 OPEN
 ----
+- In-game Powers button (shop) does nothing: it's shown but has no click handler, and game.json has no Power data.
+  Needs the game's PowersMenu, a Powers export, and placing/using them in game.rs. docs/dev/NOT_BUILT.md has the plan.
+- Sandbox: double-clicking with the bloon menu open selected the tower behind it. -> Fixed 2026-11-01, please check:
+  for 0.4 s after the menu closes, a map press doesn't select anything.
+- Test Bloon looks too small: the game's data makes it the size of a Red. Compare with the real game; a screenshot helps.
+- Test MOAB looked too big. -> Fixed 2026-11-01: its height was 16% too tall. Please check against the real game.
   implementation / validation; these controls do not upload changes to the official account.
 - Daily chest: native calendar, cached server 50-day reward cycle, saved reward index, daily reset,
   and session-only opening preview wired. No reward credit, persistent claim or cloud upload yet.

@@ -41,16 +41,22 @@ jobs:
       - name: Test tooling and updater
         shell: bash
         run: |
-          python -I tools/test_modsdk.py
-          python -I tools/test_extraction_bootstrap.py
-          python -I tools/test_package_tools.py
-          python -I tools/test_shader_imports.py
-          python -I tools/test_extraction_plan.py
-          python -I tools/test_model_refs.py
-          python -I tools/test_shared_textures.py
-          python -I tools/test_repack_anims.py
-          python -I tools/test_link_duplicates.py
+          python -I tools/tests/test_modsdk.py
+          python -I tools/tests/test_mod_model.py
+          python -I tools/tests/test_extraction_bootstrap.py
+          python -I tools/tests/test_package_tools.py
+          python -I tools/tests/test_shader_imports.py
+          python -I tools/tests/test_extraction_plan.py
+          python -I tools/tests/test_setup_progress.py
+          python -I tools/tests/test_animation_precompute.py
+          python -I tools/tests/test_clip_sampling.py
+          python -I tools/tests/test_model_refs.py
+          python -I tools/tests/test_shared_textures.py
+          python -I tools/tests/test_repack_anims.py
+          python -I tools/tests/test_link_duplicates.py
           cargo test --release -p rrbtd6-launcher --locked
+          cargo test --release -p btd6-game --locked mod_entities::
+          cargo test --release -p btd6-game --locked mod_runtime::tests
           cargo test --release -p rrbtd6-coop --locked
           cargo test --release -p btd6-game modding:: --locked
           cargo test --release -p btd6-game frontend::mod_browser:: --locked
@@ -62,17 +68,17 @@ jobs:
       - name: Test lossless storage
         shell: bash
         run: |
-          python -I tools/test_word_anims.py
-          python -I tools/test_compact_json.py
+          python -I tools/tests/test_word_anims.py
+          python -I tools/tests/test_compact_json.py
           cargo test --release -p btd6-game animation_storage:: --locked
-          python -I tools/test_audio_storage.py
-          python -I tools/test_audio_storage.py --fixtures target/audio-fixtures
+          python -I tools/tests/test_audio_storage.py
+          python -I tools/tests/test_audio_storage.py --fixtures target/audio-fixtures
           RRBTD6_AUDIO_FIXTURES=target/audio-fixtures cargo test --release -p btd6-game lossless_mixer_equivalence --locked -- --ignored
           cargo test --release -p quad-snd prepared_tests --locked
 
       - name: Test embedded Python bootstrap
         shell: bash
-        run: python -I tools/test_launcher_bootstrap.py target/release/rrbtd6-launcher.exe
+        run: python -I tools/tests/test_launcher_bootstrap.py target/release/rrbtd6-launcher.exe
 
       - name: Build installer mod
         shell: bash

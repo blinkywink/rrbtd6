@@ -96,7 +96,7 @@ mod tests {
 
 /// Prime only visible-content sprites; offscreen opening transforms must not defer
 /// texture decode until the middle of an authored entrance. Cache hits are shared.
-pub(super) fn warm_visible(node:&Node,sprites:&mut crate::ui::Sprites){
+pub(super) fn sprite_names(node:&Node)->Vec<String>{
     fn gather(n:&Node,names:&mut std::collections::HashSet<String>,limit:usize){
         if !n.active || names.len()>=limit{return;}
         if let Some(name)=n.img.as_ref().and_then(|i|i.sprite.as_ref()){names.insert(name.clone());}
@@ -106,5 +106,15 @@ pub(super) fn warm_visible(node:&Node,sprites:&mut crate::ui::Sprites){
         for child in &n.children{gather(child,names,limit);if names.len()>=limit{break;}}
     }
     let mut names=std::collections::HashSet::new();gather(node,&mut names,64);
+    let mut names:Vec<_>=names.into_iter().collect();names.sort();names
+}
+pub(super) fn warm_visible(node:&Node,sprites:&mut crate::ui::Sprites){
+    let names=sprite_names(node);
+    // Decode independent PNGs on the bounded loading workers, then upload on
+    // the render thread. Finish before the entrance begins so no card flashes.
+    if std::env::var_os("RRBTD6_SERIAL_UI_WARM").is_none(){
+        let prepared=crate::load_work::complete_asset(sprites.prepare(&names));
+        sprites.install_prepared(prepared);
+    }
     for name in names{let _=sprites.get(&name);}
 }

@@ -26,6 +26,12 @@ Checked from files and tests, not yet in a real install from a release:
 - [ ] Tower "i" button shows a description for all 3 paths at once, on any crosspath (try a 4-2-0).
 - [ ] Holding the mouse on an owned upgrade icon shows its description; releasing hides it; no press animation.
 - [ ] Sounds and music play as normal (now Ogg).
+- [ ] Memory failsafe: send a huge number of ZOMGs in the sandbox: the bloons clear with a red message at the top, and
+      Windows stays fine, with the display's refresh rate and scaling unchanged. Normal games are unaffected.
+- [ ] Trophies replace Monkey Money: the menus' balance shows trophies with the trophy icon; the difficulty screen's rewards
+      are trophies; winning a map shows +N on the victory screen and the balance goes up by N.
+- [ ] Powers and Knowledge: prices show the trophy icon; buying takes the trophies and adds the Power or learns the Knowledge;
+      without enough trophies nothing happens; purchases survive a restart.
 - [ ] Scrollbars, input fields and dropdowns draw their real sprites instead of plain boxes, and masked lists
       still clip properly (Unity's built-in UISprite, Background, InputFieldBackground, UIMask).
 - [ ] Victory screen: award callouts show their own icon, not the fallback.

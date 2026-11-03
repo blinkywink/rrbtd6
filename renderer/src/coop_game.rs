@@ -100,6 +100,7 @@ impl Replica{
             },
             Action::Point{tower,at}=>{
                 let Some(t)=self.tower(g,slot,*tower)else{return false;};
+                if g.is_necro(t){g.necro_select(t,*at);return true;}
                 if !g.uses_point(t){return false;}
                 g.towers[t].point=Some(*at);true
             },

@@ -7,8 +7,16 @@ metadata. Read-only; never loads or executes the DLL.
 
     python -I codegen.py <GameAssembly.dll> <module.dll> [expected_count]
 """
+import os
 import struct
 import sys
+
+# The game install: BTD6_DIR, else the first that exists (the launcher's order: Steam, Epic).
+INSTALLS = [r"C:\Program Files (x86)\Steam\steamapps\common\BloonsTD6", r"C:\Program Files\Epic Games\BloonsTD6"]
+
+
+def game_dir():
+    return os.environ.get("BTD6_DIR") or next((d for d in INSTALLS if os.path.exists(os.path.join(d, "GameAssembly.dll"))), INSTALLS[0])
 
 
 class PE64:

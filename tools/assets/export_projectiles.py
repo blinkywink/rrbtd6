@@ -21,19 +21,39 @@ import subprocess
 import sys
 
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 
-TypeTreeHelper.read_typetree_boost = False
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from sprite_resolver import SpriteImages
+import export_checkpoint
+import static_model_batch
+
 
 GAME = sys.argv[1]
 AA = os.path.join(GAME, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWindows64", "Full")
 ROOT = "local_extracted/models/projectiles"
+_sprite_images = SpriteImages(AA)
 plan = {}
 for f in sorted(glob.glob("local_extracted/display_plans/*.json")):
     plan.update({g: p for g, p in json.load(open(f))["projectiles"].items() if p["prefab"]})
 index = json.load(open("local_extracted/all_container_paths.json"))
 os.makedirs(ROOT, exist_ok=True)
 envs = {}
+
+
+def full_rect_image(sp):
+    """The sprite's image padded back to its full m_Rect: atlas packing trims transparent margins
+    (m_RD.textureRect at textureRectOffset inside m_Rect, y up), and the renderer draws the image
+    over the whole rect (w, h, pivot) (UnpoppedArmyBloon: 120 x 170 art in a 256 x 256 rect)."""
+    from PIL import Image
+    src = _sprite_images.source(sp) if not sp.m_RD.texture.m_PathID else sp
+    img = _sprite_images.image(sp).convert("RGBA")
+    w, h = round(src.m_Rect.width), round(src.m_Rect.height)
+    if img.size == (w, h):
+        return img
+    off = src.m_RD.textureRectOffset
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    out.paste(img, (round(off.x), round(h - off.y - img.size[1])))
+    return out
 
 
 def sprite_renderer(root):
@@ -57,7 +77,8 @@ def sprite_renderer(root):
 
 def sprite_layers(root, out):
     """Every active SpriteRenderer of the prefab as a layer (layer_<i>.png + layers.json): its
-    offset and angle in the sprite plane relative to the root, size from the whole parent chain,
+    offset and angle in the sprite plane relative to the root (x across the flight, y along it),
+    size from the whole parent chain,
     tint, and the prefab's animators: CustomRotationSimple (spin, degrees / s about z) and
     CustomScaleAnimator (scale curve over `duration`, looping). Sun Temple / Plasma blasts are a
     stack of these (core, spinning sprite, pulsing orange glow)."""
@@ -66,27 +87,53 @@ def sprite_layers(root, out):
     g = root.read_typetree()
     root_tr = next(c["component"]["m_PathID"] for c in g["m_Component"]
                    if af.objects[c["component"]["m_PathID"]].type.name == "Transform")
+
+    def qmul(a, b):
+        ax, ay, az, aw = a
+        bx, by, bz, bw = b
+        return (aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+                aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz)
+
+    def qrot(q, v):
+        x, y, z, w = qmul(qmul(q, (v[0], v[1], v[2], 0.0)), (-q[0], -q[1], -q[2], q[3]))
+        return (x, y, z)
+
     layers = []
-    # (transform id, parent 2D frame: offset x / y, angle (rad), scale x / y)
-    stack = [(root_tr, (0.0, 0.0, 0.0, 1.0, 1.0), True)]
+    # (transform id, parent frame: position, rotation, scale x / y / z, all relative to the root)
+    # Each entry also carries the animators of its ancestors: a container's scale / colour
+    # animator acts on what is under it (UnpoppedArmyBloon's GlowAnimContainer fades its glow).
+    stack = [(root_tr, None, True, [])]
     while stack:
-        tid, (px, py, pa, psx, psy), is_root = stack.pop()
+        tid, parent, is_root, inherited = stack.pop()
         t = af.objects[tid].read_typetree()
         go = af.objects[t["m_GameObject"]["m_PathID"]].read_typetree()
         if not go.get("m_IsActive", 1):
             continue
         lp, lq, ls = t["m_LocalPosition"], t["m_LocalRotation"], t["m_LocalScale"]
         if is_root:
-            frame = (0.0, 0.0, 0.0, ls["x"], ls["y"])
+            frame = ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (ls["x"], ls["y"], ls["z"]))
         else:
-            # Rotation about the sprite plane's normal (z): the angle of the local quaternion.
-            ang = 2.0 * math.atan2(lq["z"], lq["w"])
-            ox, oy = lp["x"] * psx, lp["y"] * psy
-            ca, sa = math.cos(pa), math.sin(pa)
-            frame = (px + ox * ca - oy * sa, py + ox * sa + oy * ca, pa + ang, psx * ls["x"], psy * ls["y"])
+            (ppos, pq, psc) = parent
+            off = qrot(pq, (lp["x"] * psc[0], lp["y"] * psc[1], lp["z"] * psc[2]))
+            frame = ((ppos[0] + off[0], ppos[1] + off[1], ppos[2] + off[2]),
+                     qmul(pq, (lq["x"], lq["y"], lq["z"], lq["w"])),
+                     (psc[0] * ls["x"], psc[1] * ls["y"], psc[2] * ls["z"]))
+        # The sprite plane: the ground (x, z) for a sprite turned to lie flat (its normal up or
+        # down; the usual projectile, whose +y then points along the flight), else the root's x / y.
+        # A tilted node's own height (GlaiveLordGlaiveOrbit's 4 up) isn't an offset in the plane.
+        (wpos, wq, wsc) = frame
+        normal, axis_x = qrot(wq, (0.0, 0.0, 1.0)), qrot(wq, (1.0, 0.0, 0.0))
+        k = 2 if abs(normal[1]) > abs(normal[2]) else 1
+        offset = (wpos[0], wpos[k])
+        angle = math.atan2(axis_x[k], axis_x[0])
+        # A frame that mirrors the sprite in that plane (UnpoppedArmyBloon's OffsetContainer, turned
+        # 180 degrees about x): its y flips.
+        axis_y = qrot(wq, (0.0, 1.0, 0.0))
+        mirrored = axis_x[0] * axis_y[k] - axis_x[k] * axis_y[0] < 0.0
         comps = [af.objects.get(c["component"]["m_PathID"]) for c in go["m_Component"]]
         sr = next((o for o in comps if o is not None and o.type.name == "SpriteRenderer"), None)
-        spin, scale_anim = 0.0, None
+        spin = 0.0
+        anims = list(inherited)
         for o in comps:
             if o is None or o.type.name != "MonoBehaviour":
                 continue
@@ -99,7 +146,13 @@ def sprite_layers(root, out):
             if "curve" in mb and "duration" in mb and isinstance(mb["curve"], dict):
                 keys = [[k["time"], k["value"]] for k in mb["curve"].get("m_Curve", [])]
                 if keys:
-                    scale_anim = {"duration": mb["duration"], "keys": keys}
+                    # (An animator without a loop flag is the looping CustomScaleAnimator kind.)
+                    anim = {"duration": mb["duration"], "keys": keys, "loop": bool(mb.get("loop", 1))}
+                    if "color1" in mb and "color2" in mb:
+                        anim["colors"] = [[mb[c].get(k, 1.0) for k in ("r", "g", "b", "a")] for c in ("color1", "color2")]
+                    anims.append(anim)
+        scale_anim = next((a for a in reversed(anims) if "colors" not in a), None)
+        color_anim = next((a for a in reversed(anims) if "colors" in a), None)
         if sr is not None:
             r = sr.read_typetree()
             sp_pp = r["m_Sprite"]
@@ -109,15 +162,15 @@ def sprite_layers(root, out):
                 if color[3] > 0.001:
                     sp = af.objects[sp_pp["m_PathID"]].read()
                     i = len(layers)
-                    sp.image.convert("RGBA").save(os.path.join(out, f"layer_{i}.png"))
+                    full_rect_image(sp).save(os.path.join(out, f"layer_{i}.png"))
                     ppu = sp.m_PixelsToUnits
-                    layers.append({"png": f"layer_{i}.png", "w": sp.m_Rect.width / ppu * frame[3],
-                                   "h": sp.m_Rect.height / ppu * frame[4], "pivot": [sp.m_Pivot.x, sp.m_Pivot.y],
-                                   "offset": [frame[0], frame[1]], "angle": math.degrees(frame[2]), "color": color,
-                                   "order": r.get("m_SortingOrder", 0), "spin": spin, "scale_anim": scale_anim,
-                                   "flip": [bool(r.get("m_FlipX", 0)), bool(r.get("m_FlipY", 0))]})
+                    layers.append({"png": f"layer_{i}.png", "w": sp.m_Rect.width / ppu * wsc[0],
+                                   "h": sp.m_Rect.height / ppu * wsc[1], "pivot": [sp.m_Pivot.x, sp.m_Pivot.y],
+                                   "offset": [offset[0], offset[1]], "angle": math.degrees(angle), "color": color,
+                                   "order": r.get("m_SortingOrder", 0), "spin": spin, "scale_anim": scale_anim, "color_anim": color_anim,
+                                   "flip": [bool(r.get("m_FlipX", 0)), bool(r.get("m_FlipY", 0)) != mirrored]})
         for ch in reversed(t["m_Children"]):
-            stack.append((ch["m_PathID"], frame, False))
+            stack.append((ch["m_PathID"], frame, False, anims))
     if layers:
         json.dump({"layers": layers}, open(os.path.join(out, "layers.json"), "w"), indent=1)
     return len(layers)
@@ -170,7 +223,12 @@ def particle_sprite(root):
     return None, None
 
 
-def export_mesh(out, bundle, prefab):
+def export_mesh(out, bundle, prefab, env=None):
+    if env is not None:
+        try:
+            return static_model_batch.export(GAME, out, bundle, prefab, env)
+        except Exception as error:
+            return "FAIL " + str(error)[-200:]
     r = subprocess.run([sys.executable, "tools/assets/export_model.py", GAME, out, "prefab",
                         bundle.rsplit("_", 1)[0], prefab], capture_output=True, text=True)
     return "mesh " + (r.stdout.strip().splitlines() or ["?"])[0] if r.returncode == 0 else "FAIL " + r.stderr[-200:]
@@ -183,11 +241,18 @@ for guid, p in sorted(plan.items(), key=lambda kv: (index.get(kv[1]["prefab"], "
     name, prefab = p["name"], p["prefab"]
     if name in done:
         continue
-    on_disk = os.path.isdir(os.path.join(ROOT, name)) and os.listdir(os.path.join(ROOT, name))
-    if (ONLY and name not in ONLY) or (not ONLY and on_disk):
-        if on_disk:
+    out = os.path.join(ROOT, name)
+    signature = json.dumps([1, index.get(prefab), prefab])
+    existing = os.path.isdir(out) and bool(os.listdir(out))
+    on_disk = export_checkpoint.complete(out, signature)
+    if ONLY and name not in ONLY:
+        if existing:
             done[name] = "kept"
         continue
+    if not ONLY and on_disk:
+        done[name] = "kept"
+        continue
+    export_checkpoint.begin(out)
     if prefab not in index:
         print(name, "MISSING prefab", prefab)
         continue
@@ -207,7 +272,7 @@ for guid, p in sorted(plan.items(), key=lambda kv: (index.get(kv[1]["prefab"], "
     os.makedirs(out, exist_ok=True)
     if sr is not None:
         sp = af.objects[sr["m_Sprite"]["m_PathID"]].read()
-        img = sp.image.convert("RGBA")
+        img = full_rect_image(sp)
         # SpriteRenderer.m_Color tints white masks (acid puddles).
         col = sr.get("m_Color") or {}
         tint = [col.get(k, 1.0) for k in ("r", "g", "b", "a")]
@@ -222,16 +287,14 @@ for guid, p in sorted(plan.items(), key=lambda kv: (index.get(kv[1]["prefab"], "
         n = sprite_layers(root, out)
         done[name] = f"sprite {w:.2f} x {h:.2f}, {n} layers"
     else:
-        # The mesh subprocess loads the bundle itself: free ours first so only one copy of a big
-        # bundle (asset_references_assets_all, ~13 GB unpacked) is in memory at a time.
-        if os.path.getsize(os.path.join(AA, bundle)) > 200_000_000:
-            envs.clear()
-            root = sr = af = None
-            gc.collect()
-        done[name] = export_mesh(out, bundle, prefab)
+        # Reuse the scene already loaded to inspect the projectile. This avoids
+        # another interpreter, decompression and catalogue parse for each mesh.
+        done[name] = export_mesh(out, bundle, prefab, envs[bundle])
         if done[name].startswith("FAIL"):
             # The subprocess runs out of memory while this process holds every loaded bundle.
+            static_model_batch.release()
             envs.clear()
+            root = sr = af = None
             gc.collect()
             done[name] = export_mesh(out, bundle, prefab)
         if done[name].startswith(("mesh 0 parts", "FAIL")) and bundle not in envs:
@@ -249,5 +312,8 @@ for guid, p in sorted(plan.items(), key=lambda kv: (index.get(kv[1]["prefab"], "
                 img.save(os.path.join(out, "sprite.png"))
                 json.dump({"w": size, "h": size, "pivot": [0.5, 0.5]}, open(os.path.join(out, "sprite.json"), "w"))
                 done[name] = f"particle sprite {size:.2f}"
+    if done[name].startswith("FAIL"):
+        raise RuntimeError(name + ": " + done[name])
+    export_checkpoint.commit(out, signature)
     print(name, done[name], flush=True)
 json.dump({g: p["name"] for g, p in plan.items() if p["name"] in done}, open(os.path.join(ROOT, "index.json"), "w"), indent=1)

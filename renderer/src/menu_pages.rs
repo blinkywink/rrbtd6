@@ -8,34 +8,30 @@ use std::path::Path;
 pub(super) struct Page {
     first_presentation:bool,
     pub node: Node,
-    pub(super) season_second:Option<u64>,
     buttons:super::button_motion::ButtonMotion,
     profile:Option<super::profile_browser::Browser>,
     pub(super) jukebox:Option<super::jukebox::Browser>,
     pub(super) mods:Option<super::mod_browser::Browser>,
-    daily_reward:Option<super::daily_reward::Browser>,
     event:Option<super::event_details::Detail>,
-    goals:Option<super::season_goals::Browser>,
     coop:Option<super::coop_menu::Lobby>,
     scrolls: Vec<ScrollRegion>,
     trophy_items: Vec<serde_json::Value>,
     trophy_selected: Option<usize>,
+    /// The item to select again once a purchase or tick has rebuilt the store.
+    trophy_reselect: Option<usize>,
     trophy: Option<TrophyState>,
     pointer_start: Option<Vec2>,
     pointer_dragged: bool,
     animation: Option<PageAnimation>,
     powers: Option<PowerBrowser>,
-    search: Option<AchievementSearch>,
     knowledge: Option<KnowledgeBrowser>,
-    legends: Option<LegendsBrowser>,
     join_code: Option<JoinCode>,
-    social:Option<super::social_pages::SocialPage>,
     pub(super) home_requested: bool,
 }
 const JOIN_INPUT:&str="CoopJoinMatchCanvas/CoopJoinScreen/ButtonGroup/BgPanel/Code/CodeInput";
 struct JoinCode {text:String,focused:bool,limit:usize,submit:bool}
-struct LegendsBrowser {data:serde_json::Value,selected:usize,about:bool,animation:Option<PageAnimation>,runtime:serde_json::Value}
 struct KnowledgeBrowser {
+    root:std::path::PathBuf,
     items:Vec<serde_json::Value>,selected:Option<usize>,panel_animation:Option<PageAnimation>,
     /// KnowledgeSkillBtn.currState per item (0 = not yet set, 1 available, 2 locked,
     /// 3 purchased, 4 disabled) and when its arrows began fading to the purchased colour.
@@ -47,11 +43,9 @@ struct KnowledgeBrowser {
     pulse:serde_json::Value,runtime:serde_json::Value,
 }
 const KNOWLEDGE_PANEL:&str="Canvas/KnowledgeSkillTree/SelectedPanel";
-struct AchievementSearch {terms:Vec<String>,query:String,focused:bool}
-const ACHIEVEMENT_GRID:&str="Canvas/AchievementsScreen/Scroll/Viewport/Content";
-const ACHIEVEMENT_SEARCH:&str="Canvas/AchievementsScreen/TopInfo/SearchPanel/SearchBar";
 struct PowerPortrait {node:Node,runtime:serde_json::Value}
 struct PowerBrowser {
+    root:std::path::PathBuf,
     items:Vec<serde_json::Value>,selected:usize,began:f64,dir:std::path::PathBuf,runtime_dir:std::path::PathBuf,
     portraits:HashMap<usize,Option<PowerPortrait>>,
     /// Whether the account preview was applied (it loads in the background).
@@ -116,6 +110,8 @@ struct TrophyState {
 /// TrophyItemBinding / TrophyItemPanel flags for one catalogue entry.
 #[derive(Clone,Default)]
 struct TrophyCard {
+    /// TrophyStoreItem.get_Id (walletIdOverride when set): the profile's key for it.
+    id:String,
     visible:bool,purchased:bool,enabled:bool,favorite:bool,can_enable:bool,featured:bool,on_sale:bool,
     is_new:bool,limited_end:Option<u64>,quest:bool,nexus:bool,price:i64,base:i64,
 }
@@ -133,22 +129,29 @@ impl Page {
     pub(super) fn join_text(&self)->Option<&str>{self.join_code.as_ref().map(|c|c.text.as_str())}
     pub(super) fn take_join_submit(&mut self)->bool{self.join_code.as_mut().is_some_and(|c|std::mem::take(&mut c.submit))}
     pub(super) fn coop_modal_open(&self)->bool {self.coop.as_ref().and_then(|c|c.modal_path()).is_some()}
+    fn reset_mod_scrolls(&mut self){
+        let Some(mods)=&mut self.mods else{return;};
+        let list=std::mem::take(&mut mods.reset_list);let details=std::mem::take(&mut mods.reset_details);
+        for scroll in &mut self.scrolls{
+            if (list&&scroll.content=="Canvas/JukeboxScreen/AvailableTracks/Scroll/Container/Content")||(details&&scroll.content=="Canvas/JukeboxScreen/Playlist/Scroll/Container/Content"){
+                scroll.offset=Vec2::ZERO;scroll.velocity=Vec2::ZERO;scroll.drag=None;
+                if let Some(content)=self.node.find_mut(&scroll.content){content.rt.pos=scroll.origin;}
+            }
+        }
+    }
     pub(super) fn dismiss_search(&mut self)->bool {
-        let stats="Canvas/DailyChallengeScreen/Content/StatsPopup";
-        if self.event.is_some()&&self.node.find(stats).is_some_and(|n|n.active){self.node.set_active(stats,false);return true;}
-
+        if self.mods.as_mut().is_some_and(|m|m.dismiss(&mut self.node)){return true;}
         if self.coop.as_mut().is_some_and(|p|p.dismiss(&mut self.node)){return true;}
         if self.profile.as_mut().is_some_and(|p|p.dismiss(&mut self.node)){return true;}
-        if self.social.as_mut().is_some_and(|s|s.dismiss(&mut self.node)){return true;}
 
-        if let Some(browser)=&self.legends {
-            if browser.about {let selected=browser.selected;self.show_legend(selected,false);return true;}
-        }
         if let Some(code)=&mut self.join_code {if code.focused {code.focused=false;return true;}}
-        let Some(search)=&mut self.search else {return false};
-        let focused=search.focused;search.focused=false;focused
+        false
     }
-    pub(super) fn warm(&mut self,sprites:&mut crate::ui::Sprites){if self.first_presentation{super::button_motion::warm_visible(&self.node,sprites);}}
+    pub(super) fn warm(&mut self,sprites:&mut crate::ui::Sprites){
+        if let Some(mods)=&mut self.mods{mods.warm_icons(sprites);}
+        if self.first_presentation{super::button_motion::warm_visible(&self.node,sprites);}
+
+    }
     pub(super) fn presented(&mut self){if let Some(profile)=&mut self.profile{profile.presented();}if self.first_presentation{self.first_presentation=false;if let Some(animation)=&mut self.animation{animation.began=Some(get_time());}}}
     pub(super) fn reopen(&mut self) {
         if !self.first_presentation{if let Some(mods)=&mut self.mods{mods.reopen(&mut self.node);}}
@@ -158,27 +161,14 @@ impl Page {
     }
     pub(super) fn animate(&mut self) {
         self.buttons.update(&mut self.node);
-        if let Some(goals)=&mut self.goals{if goals.bind(&mut self.node){
-            self.scrolls=goals.regions.iter().filter_map(|(view,content)|Some(ScrollRegion{view:view.clone(),content:content.clone(),origin:self.node.find(content)?.rt.pos,
-                axes:vec2(0.0,1.0),offset:Vec2::ZERO,velocity:Vec2::ZERO,sensitivity:150.0,drag:None})).collect();
-        }}
         if let Some(event)=&mut self.event{event.bind(&mut self.node);}
         if let Some(jukebox)=&mut self.jukebox{jukebox.refresh(&mut self.node);}
-        if let Some(daily)=&mut self.daily_reward{daily.animate(&mut self.node);}
         if let Some(profile)=&mut self.profile{profile.animate(&mut self.node);}
-        if let Some(social)=&mut self.social{social.animate(&mut self.node);}
 
         if let Some(animation)=&mut self.animation {
             if let Some(began)=animation.began {
                 if apply_animation(&mut self.node,&animation.data,animation.controller,animation.clip,Some(if self.first_presentation{0.0}else{(get_time()-began) as f32})) {
                     animation.began=None;
-                }
-            }
-        }
-        if let Some(browser)=&mut self.legends {
-            if let Some(animation)=&mut browser.animation {
-                if let Some(began)=animation.began {
-                    if apply_animation(&mut self.node,&animation.data,animation.controller,animation.clip,Some((get_time()-began) as f32)) {animation.began=None;}
                 }
             }
         }
@@ -214,8 +204,8 @@ impl Page {
         }
     }
     pub(super) fn update_scroll(&mut self, input: ScrollInput) {
-        if let Some(social)=&mut self.social{social.input(&mut self.node,&input);}
-
+        if let Some(mods)=&mut self.mods{mods.input(&mut self.node);}
+        self.reset_mod_scrolls();
         if let Some(code)=&mut self.join_code {
             if input.pressed {code.focused=self.node.rect(JOIN_INPUT).is_some_and(|r|r.contains(input.pointer));}
             if code.focused {
@@ -228,27 +218,12 @@ impl Page {
                 self.node.set_text(&format!("{JOIN_INPUT}/Text Area/Text"),&code.text);
             }
         }
-        let mut search_changed=false;
-        if let Some(search)=&mut self.search {
-            if input.pressed {search.focused=self.node.rect(ACHIEVEMENT_SEARCH).is_some_and(|r|r.contains(input.pointer));}
-            if search.focused {
-                while let Some(c)=get_char_pressed() {
-                    if !c.is_control() && search.query.len()<256 {search.query.push(c);search_changed=true;}
-                }
-                if is_key_pressed(KeyCode::Backspace) {search_changed|=search.query.pop().is_some();}
-                if is_key_pressed(KeyCode::Enter) {search.focused=false;}
-            }
-        }
-        if search_changed {self.filter_achievements();}
         if input.pressed {self.pointer_start=Some(input.pointer);self.pointer_dragged=false;}
         if self.pointer_start.is_some_and(|p|p.distance(input.pointer)>5.0) {self.pointer_dragged=true;}
         let mut taken = false;
         for scroll in &mut self.scrolls {
             if self.coop.as_ref().and_then(|c|c.modal_path()).is_some_and(|p|!scroll.view.starts_with(&p)){scroll.drag=None;scroll.velocity=Vec2::ZERO;continue;}
-            let stats="Canvas/DailyChallengeScreen/Content/StatsPopup";
-            if self.event.is_some()&&self.node.find(stats).is_some_and(|n|n.active)&&!scroll.view.starts_with(stats){scroll.drag=None;scroll.velocity=Vec2::ZERO;continue;}
             if self.profile.as_ref().and_then(|p|p.modal()).is_some_and(|p|!scroll.view.starts_with(p)){scroll.drag=None;scroll.velocity=Vec2::ZERO;continue;}
-            if self.social.as_ref().and_then(|s|s.modal_path()).is_some_and(|p|!scroll.view.starts_with(p)){scroll.drag=None;scroll.velocity=Vec2::ZERO;continue;}
             let Some(view) = self.node.rect(&scroll.view).filter(|v| v.w>0.0 && v.h>0.0) else { continue };
             let Some(content) = self.node.find(&scroll.content) else { continue };
             let limit = ((content.unclipped_screen.size()-view.size())/input.scale).max(Vec2::ZERO);
@@ -282,14 +257,8 @@ impl Page {
         }
         if input.released {
             let clicked=self.pointer_start.take().is_some() && !self.pointer_dragged;
-            if clicked && self.daily_reward.as_mut().is_some_and(|d|d.click(&mut self.node,input.pointer)){return;}
             if clicked && self.mods.as_mut().is_some_and(|m|m.click(&mut self.node,input.pointer)){
-                if self.mods.as_mut().is_some_and(|m|std::mem::take(&mut m.reset_details)){
-                    for scroll in &mut self.scrolls{if scroll.content=="Canvas/JukeboxScreen/Playlist/Scroll/Container/Content"{
-                        scroll.offset=Vec2::ZERO;scroll.velocity=Vec2::ZERO;scroll.drag=None;
-                        if let Some(content)=self.node.find_mut(&scroll.content){content.rt.pos=scroll.origin;}
-                    }}
-                }
+                self.reset_mod_scrolls();
                 return;
             }
             if clicked && self.jukebox.as_mut().is_some_and(|j|j.click(&mut self.node,input.pointer)){return;}
@@ -302,16 +271,8 @@ impl Page {
                 }
                 return;
             }
-            if clicked {
-                if self.social.as_mut().is_some_and(|s|s.click(&mut self.node,input.pointer)) {
-                    for scroll in &mut self.scrolls {scroll.offset=Vec2::ZERO;scroll.velocity=Vec2::ZERO;scroll.drag=None;
-                        if let Some(content)=self.node.find_mut(&scroll.content){content.rt.pos=scroll.origin;}}
-                }
-            }
-            if clicked && self.legends.is_some() {self.click_legends(input.pointer);}
             if clicked && !self.trophy_items.is_empty() {self.click_trophies(input.pointer);}
             if clicked {if let Some(coop)=&mut self.coop{coop.click(&mut self.node,input.pointer);}}
-            if clicked {if let Some(goals)=&self.goals{goals.click(&mut self.node,input.pointer);}}
             if clicked && self.powers.is_some() {
                 if let Some(tab)=[("AllTab",0),("Powers",1),("Pro",2)].iter().find(|(name,_)|
                     self.node.rect(&format!("{POWER_TABS}/{name}")).is_some_and(|r|r.contains(input.pointer))).map(|t|t.1) {
@@ -322,6 +283,8 @@ impl Page {
                     self.select_power(index);
                 }
             }
+            if clicked && self.buy_selected_knowledge(input.pointer) {return;}
+            if clicked && self.buy_selected_power(input.pointer) {return;}
             if clicked && self.knowledge.is_some() {
                 let index=self.knowledge.as_ref().unwrap().items.iter().position(|item|
                     item["path"].as_str().and_then(|p|self.node.rect(p)).is_some_and(|r|r.contains(input.pointer)));
@@ -330,37 +293,6 @@ impl Page {
                 }
             }
         }
-    }
-
-    fn show_legend(&mut self,index:usize,about:bool) {
-        let Some(browser)=&mut self.legends else {return};
-        let Some(slides)=browser.data["slides"].as_array() else {return};
-        if slides.is_empty(){return;}
-        browser.selected=index%slides.len();browser.about=about;
-        for (i,path) in slides.iter().enumerate() {
-            if let Some(path)=path.as_str(){self.node.set_active(path,!about && i==browser.selected);}
-            self.node.set_active(&format!("Canvas/LegendsSelectScreen/PagePips/Pip{i}/On"),i==browser.selected);
-        }
-        if let Some(path)=browser.data["infoPanel"].as_str(){self.node.set_active(path,about);}
-        self.node.set_active("Canvas/LegendsSelectScreen/ArrowButtons",!about);
-        self.node.set_active("Canvas/LegendsSelectScreen/PagePips",!about);
-        let path=if about {browser.data["infoPanel"].as_str()} else {slides[browser.selected].as_str()};
-        let animators:Vec<_>=browser.runtime["animators"].as_array().into_iter().flatten()
-            .filter(|a|a["controller"]=="PageTransition" && a["path"].as_str()==path).cloned().collect();
-        browser.animation=Some(PageAnimation {data:serde_json::json!({"animators":animators}),controller:"PageTransition",clip:"PageTransition",began:Some(get_time())});
-    }
-    fn click_legends(&mut self,pointer:Vec2) {
-        let Some(browser)=&self.legends else {return};
-        let hit=|key:&str|browser.data[key].as_str().and_then(|p|self.node.rect(p)).is_some_and(|r|r.contains(pointer));
-        let count=browser.data["slides"].as_array().map_or(0,Vec::len);
-        if count==0{return;}
-        let selected=browser.selected;
-        if !browser.about && selected==0 && self.node.rect("Canvas/LegendsSelectScreen/SlideSubPanels/Home/Buttons/HomeButton").is_some_and(|r|r.contains(pointer)) {self.home_requested=true;return;}
-        if browser.about {if hit("infoClose"){self.show_legend(selected,false);}return;}
-        if hit("infoButton"){self.show_legend(selected,true);}
-        else if hit("prevBtn"){self.show_legend((selected+count-1)%count,false);}
-        else if hit("nextBtn"){self.show_legend((selected+1)%count,false);}
-        else if let Some(index)=(0..count).find(|i|self.node.rect(&format!("Canvas/LegendsSelectScreen/PagePips/Pip{i}")).is_some_and(|r|r.contains(pointer))) {self.show_legend(index,false);}
     }
 
     pub(super) fn sync_knowledge_category(&mut self,category:usize) {
@@ -425,6 +357,36 @@ impl Page {
         apply_animation(node,&browser.pulse,"CircleVfxAnimation","pulse",Some((now%1.0) as f32));
     }
 
+    /// The panel's button: the selected Knowledge for trophies.
+    fn buy_selected_knowledge(&mut self,pointer:Vec2)->bool {
+        let Some(browser)=&self.knowledge else {return false};
+        let Some(i)=browser.selected.filter(|&i|browser.states[i]==1) else {return false};
+        let button=format!("{KNOWLEDGE_PANEL}/Panel/LayoutGroup/AddPointButton");
+        if !self.node.rect(&button).is_some_and(|r|r.contains(pointer)) {return false;}
+        let item=&browser.items[i];
+        let price=crate::local_profile::knowledge_price(item["cost"].as_i64().unwrap_or(0));
+        if crate::local_profile::buy_knowledge(&browser.root,item["id"].as_str().unwrap_or(""),price) {
+            super::account_preview::refresh_local(&browser.root);
+        }
+        true
+    }
+
+    /// The side panel's button: one of the selected Power for trophies.
+    fn buy_selected_power(&mut self,pointer:Vec2)->bool {
+        let Some(browser)=&self.powers else {return false};
+        let selected=browser.selected;
+        let cost=browser.costs.get(selected).copied().unwrap_or(0);
+        let button=format!("{POWER_SIDE}/Info/AddButton");
+        if cost<=0||!self.node.find(&button).is_some_and(|n|n.active)||!self.node.rect(&button).is_some_and(|r|r.contains(pointer)) {return false;}
+        let root=browser.root.clone();
+        if crate::local_profile::buy_power(&root,browser.id(selected),crate::local_profile::power_price(cost)) {
+            super::account_preview::refresh_local(&root);
+            self.bind_powers();
+            self.select_power(selected);
+        }
+        true
+    }
+
     fn select_knowledge(&mut self,index:Option<usize>) {
         let Some(browser)=&mut self.knowledge else {return};
         let previous=browser.selected;
@@ -468,10 +430,11 @@ impl Page {
             }
             let data=account.as_ref().and_then(|a|a.data.get(id)).copied();
             // SkuSettings.CanShowPower; offline there is no store, so IsPowerIapInStore is false.
-            let achievement=item["achievement"].as_i64().unwrap_or(0);
             let store=item["store"].as_str().unwrap_or("");
+            // Store-only powers have no Monkey Money cost: 50 trophies, as the Trophy Store's
+            // unpriced items (DEVIATIONS.md).
+            if cost==0 && !store.is_empty() {cost=375;}
             let shown=item["hidden"]!=true
-                && (achievement==0 || account.as_ref().is_some_and(|a|a.claimed.contains(&achievement)))
                 && (cost>0 || store.is_empty() || data.is_some());
             browser.costs[i]=cost;
             browser.shown[i]=shown;
@@ -537,7 +500,8 @@ impl Page {
         let quantity=browser.quantities[index];
         self.node.set_text(&format!("{info}/Title"),item["title"].as_str().unwrap_or(""));
         self.node.set_text(&format!("{info}/Description"),item["description"].as_str().unwrap_or(""));
-        self.node.set_text(&format!("{info}/AddButton/CostContainer/TextCount"),&super::account_preview::number(cost as f64));
+        self.node.set_text(&format!("{info}/AddButton/CostContainer/TextCount"),&super::account_preview::number(crate::local_profile::power_price(cost) as f64));
+        self.node.set_sprite(&format!("{info}/AddButton/CostContainer/Image"),Some("TrophyIcon"));
         self.node.set_active(&format!("{info}/AddButton/CostContainer"),cost>0);
         self.node.set_active(&format!("{info}/AddButton"),cost>0);
         self.node.set_active(&format!("{info}/IapStoreButton"),false);
@@ -593,27 +557,6 @@ impl Page {
         self.node.set_sprite(&format!("{info}/Icon"),item["icon"].as_str().and_then(|s|s.strip_suffix(".png")));
     }
 
-    fn filter_achievements(&mut self) {
-        let Some(search)=&self.search else {return};
-        let query=search.query.trim().to_lowercase();
-        let mut count=0;
-        if let Some(content)=self.node.find_mut(ACHIEVEMENT_GRID) {
-            for (card,term) in content.children.iter_mut().zip(&search.terms) {
-                card.active=query.is_empty() || term.contains(&query);
-                count+=usize::from(card.active);
-            }
-        }
-        self.node.set_text(&format!("{ACHIEVEMENT_SEARCH}/Text Area/SearchText"),&search.query);
-        self.node.set_active(&format!("{ACHIEVEMENT_SEARCH}/Text Area/SearchPlaceholder"),search.query.is_empty());
-        self.node.set_active("Canvas/AchievementsScreen/Scroll/FoundNothingTxt",count==0);
-        for scroll in &mut self.scrolls {
-            if scroll.content==ACHIEVEMENT_GRID {
-                scroll.offset=Vec2::ZERO;scroll.velocity=Vec2::ZERO;scroll.drag=None;
-                if let Some(content)=self.node.find_mut(ACHIEVEMENT_GRID){content.rt.pos=scroll.origin;}
-            }
-        }
-    }
-
     fn select_trophy(&mut self,index:usize) {
         let Some(item)=self.trophy_items.get(index) else {return};
         if let Some(previous)=self.trophy_selected {
@@ -624,7 +567,7 @@ impl Page {
         let base=format!("{TROPHY_BASE}/BottomInfo");
         self.node.set_sprite(&format!("{base}/Icon"),item["icon"].as_str().and_then(|s|s.strip_suffix(".png")));
         self.node.set_text(&format!("{base}/Title"),item["title"].as_str().unwrap_or(""));
-        self.node.set_text(&format!("{base}/Description"),item["description"].as_str().unwrap_or(""));
+        self.node.set_text(&format!("{base}/Description"),&without_limited_time(item["description"].as_str().unwrap_or("")));
         // TrophyStoreScreen.RefreshBottomBar.
         if let Some(card)=self.trophy.as_ref().and_then(|t|t.cards.get(index)).cloned() {
             let owned=card.purchased;
@@ -669,16 +612,19 @@ impl Page {
                 let id=raw["walletIdOverride"].as_str().filter(|s|!s.is_empty()).map(str::to_owned).unwrap_or(original.clone());
                 let has=|set:&std::collections::HashSet<String>|set.contains(&id)||set.contains(&original);
                 let [purchased,enabled,favorite,can_enable]=rows.get(i).copied().unwrap_or([false,false,false,true]);
-                let limited_end=limited.get(&id).or_else(||limited.get(&original)).copied();
-                let price=|key:&str|live["prices"][key].as_i64().unwrap_or(9999);
+                // Nothing is limited-time here (DEVIATIONS.md): no countdown, and every item shows.
+                let _=&limited;let limited_end:Option<u64>=None;
+                // Prices: the live bank's, else the cached one (online/events.json), else 50.
+                let cached=cached_trophy_prices(&state.root);
+                let price=|key:&str|live["prices"][key].as_i64().or_else(||cached.get(key).copied()).unwrap_or(if key.ends_with("_sale"){-1}else{50});
                 let base=price(&id);let sale=price(&format!("{id}_sale"));
-                let on_sale=has(&on_sale);
+                let on_sale=has(&on_sale)&&sale>=0;
                 let loot=raw["lootSetFilter"].as_i64().unwrap_or(0);
                 // InstantiateItem.isVisible (IsIapStoreItem needs item-target data the export lacks).
-                let visible=purchased||(raw["hideUnlessUnlocked"]!=1&&(limited_end.is_some()||!has(&hidden)));
-                TrophyCard {visible,purchased,enabled,favorite,can_enable,featured:has(&featured),on_sale,
-                    is_new:has(&new)&&limited_end.is_none(),limited_end:limited_end.filter(|_|!purchased),
-                    quest:loot==1,nexus:loot==2,price:if on_sale{sale}else{base},base}
+                let _=(&hidden,loot);let visible=true;
+                // Quest and Nexus rewards can be bought like the rest (DEVIATIONS.md).
+                TrophyCard {id:id.clone(),visible,purchased,enabled,favorite,can_enable,featured:has(&featured),on_sale,
+                    is_new:has(&new),limited_end,quest:false,nexus:false,price:if on_sale{sale}else{base},base}
             }).collect();
             let cards=state.cards.clone();
             if let Some(content)=self.node.find_mut(TROPHY_GRID) {
@@ -717,6 +663,9 @@ impl Page {
             }
             let (inventory,tab)=(state.inventory,state.tab);
             self.show_trophy_tab(inventory,tab);
+            if let Some(i)=self.trophy_reselect.take() {
+                if self.node.find(&format!("{TROPHY_GRID}/Trophy{i}")).is_some_and(|n|n.active) {self.select_trophy(i);}
+            }
         }
         let Some(state)=&self.trophy else {return};
         let (day,days)=(state.day.clone(),state.days.clone());
@@ -806,6 +755,27 @@ impl Page {
                     return;
                 }
             }
+            // Buying (our trophies, DEVIATIONS.md) and the owned item's Enable / Favourite ticks.
+            if let Some(index)=self.trophy_selected {
+                let card=self.trophy.as_ref().and_then(|t|t.cards.get(index)).cloned();
+                let root=self.trophy.as_ref().map(|t|t.root.clone());
+                let hit=|n:&Node,p:&str|n.find(p).is_some_and(|x|x.active)&&n.rect(p).is_some_and(|r|r.contains(pointer));
+                let bottom=format!("{TROPHY_BASE}/BottomInfo");
+                if let (Some(card),Some(root))=(card,root) {
+                    let changed=if !card.purchased&&hit(&self.node,&format!("{bottom}/AddButton")) {
+                        crate::local_profile::buy_trophy_item(&root,&card.id,card.price.max(0) as u64)
+                    } else if card.purchased&&hit(&self.node,&format!("{bottom}/PurchasedGroup/EnableCheck")) {
+                        crate::local_profile::set_trophy_item(&root,&card.id,Some(!card.enabled),None);true
+                    } else if card.purchased&&hit(&self.node,&format!("{bottom}/PurchasedGroup/FavouriteCheck")) {
+                        crate::local_profile::set_trophy_item(&root,&card.id,None,Some(!card.favorite));true
+                    } else {false};
+                    if changed {
+                        super::account_preview::refresh_local(&root);
+                        self.trophy_reselect=Some(index);
+                        return;
+                    }
+                }
+            }
             let clicked=(0..self.trophy_items.len()).find(|i|
                 self.node.find(&format!("{TROPHY_GRID}/Trophy{i}")).is_some_and(|n|n.active)&&
                 self.node.rect(&format!("{TROPHY_GRID}/Trophy{i}")).is_some_and(|r|r.contains(pointer)));
@@ -852,62 +822,42 @@ fn scroll_regions(data: &serde_json::Value, node: &Node) -> Vec<ScrollRegion> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum MenuPage { CoopLobby,SocialGoals,SocialSeason,DailyStandard,DailyAdvanced,DailyCoop,Race,DailyStandardRules,DailyAdvancedRules,DailyCoopRules,RaceRules,BossRules,BossEliteRules,Profile, Knowledge, KnowledgeTree, Social, Powers, Achievements, Store, TrophyStore, Legends, Mailbox, QuickMatch, JoinMatch, Friends, Teams, Perks, Quests, Gift, Events, Television, Jukebox, DailyReward, Mods }
+pub enum MenuPage { CoopLobby,BossRules,BossEliteRules,Profile, Knowledge, KnowledgeTree, Social, Powers, Store, TrophyStore, QuickMatch, JoinMatch, Jukebox, Mods }
 
 impl MenuPage {
-    pub(super) fn event_spec(self)->Option<(&'static str,bool)>{
-        Some(match self {
-            Self::DailyStandard=>("daily_standard",false),Self::DailyAdvanced=>("daily_advanced",false),Self::DailyCoop=>("daily_coop",false),Self::Race=>("raceEvent",false),
-            Self::DailyStandardRules=>("daily_standard",true),Self::DailyAdvancedRules=>("daily_advanced",true),Self::DailyCoopRules=>("daily_coop",true),Self::RaceRules=>("raceEvent",true),Self::BossRules=>("bossBloon",true),Self::BossEliteRules=>("bossElite",true),_=>return None
-        })
+    /// The boss event whose rules a page shows.
+    pub(super) fn event_spec(self)->Option<&'static str>{
+        Some(match self {Self::BossRules=>"bossBloon",Self::BossEliteRules=>"bossElite",_=>return None})
     }
-    pub(super) fn rules_page(self)->Option<Self>{Some(match self{Self::DailyStandard=>Self::DailyStandardRules,Self::DailyAdvanced=>Self::DailyAdvancedRules,Self::DailyCoop=>Self::DailyCoopRules,Self::Race=>Self::RaceRules,_=>return None})}
-    pub(super) fn event_parent(self)->Self{match self{Self::DailyStandardRules=>Self::DailyStandard,Self::DailyAdvancedRules=>Self::DailyAdvanced,Self::DailyCoopRules=>Self::DailyCoop,Self::RaceRules=>Self::Race,_=>Self::Events}}
 
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
-            "daily"=>Self::DailyStandard,"daily_advanced"=>Self::DailyAdvanced,"daily_coop"=>Self::DailyCoop,"race"=>Self::Race,
-            "daily_rules"=>Self::DailyStandardRules,"advanced_rules"=>Self::DailyAdvancedRules,"race_rules"=>Self::RaceRules,"boss_rules"=>Self::BossRules,"boss_elite_rules"=>Self::BossEliteRules,
-            "mods"=>Self::Mods,"profile"=>Self::Profile,"jukebox"=>Self::Jukebox,"daily_reward"=>Self::DailyReward,
-            "quests"=>Self::Quests,"gift"=>Self::Gift,"events"=>Self::Events,"tv"=>Self::Television,
-            "coop_lobby"=>Self::CoopLobby,"social_goals"=>Self::SocialGoals,"social_season"=>Self::SocialSeason,"friends"=>Self::Friends,"teams"=>Self::Teams,"perks"=>Self::Perks,
+            "boss_rules"=>Self::BossRules,"boss_elite_rules"=>Self::BossEliteRules,
+            "mods"=>Self::Mods,"profile"=>Self::Profile,"jukebox"=>Self::Jukebox,
+
+            "coop_lobby"=>Self::CoopLobby,
             "knowledge" => Self::Knowledge, "knowledge_tree" => Self::KnowledgeTree,
             "quick_match" => Self::QuickMatch, "join_match" => Self::JoinMatch,
-            "social" => Self::Social, "powers" => Self::Powers, "achievements" => Self::Achievements,
+            "social" => Self::Social, "powers" => Self::Powers,
             "store" => Self::Store, "trophy_store" => Self::TrophyStore,
-            "legends" => Self::Legends, "mailbox" => Self::Mailbox, _ => return None,
+            _ => return None,
         })
     }
     pub(super) fn spec(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            Self::DailyStandard|Self::DailyAdvanced|Self::DailyCoop=>("DailyChallengeUI","DailyChallengeAnimation","Open"),
-            Self::Race=>("RaceEventUI","DailyChallengeAnimation","Open"),
-            Self::DailyStandardRules|Self::DailyAdvancedRules|Self::DailyCoopRules|Self::RaceRules|Self::BossRules|Self::BossEliteRules=>("ChallengeRulesUI","ChallengeRulesAnim","ChallengeRulesOpen"),
+            Self::BossRules|Self::BossEliteRules=>("ChallengeRulesUI","ChallengeRulesAnim","ChallengeRulesOpen"),
             Self::CoopLobby => ("CoopLobbyUI","LobbyMatchAnimation2","LobbyPanelOpen2"),
-            Self::SocialGoals => ("SocialSeasonsGoalsUI","SocialSeasonsGoalsUI","GoalsOpen"),
-            Self::SocialSeason => ("SocialSeasonsEventUI","SocialSeasonsEventUI","Open"),
             Self::Profile => ("PlayerStatsUI","PlayerStats","Open"),
             Self::Jukebox => ("JukeboxUI","JukeboxAnimation","Open"),
             Self::Mods => ("JukeboxUI","JukeboxAnimation","Open"),
-            Self::DailyReward => ("DailyRewardUI","DailyRewardsAnimation","Open"),
-            Self::Quests => ("QuestBrowserUI","QuestBrowserAnim","Open"),
-            Self::Gift => ("TowerGiftBoxUI","TowerGiftBoxPopUp","Open"),
-            Self::Events => ("GameEventsUI","GameEventsAnimation","Open"),
-            Self::Television => ("BloonsMonkeyTalesPopup","SceneBasicAnim","SceneBasicOpen"),
-            Self::Friends => ("LinkFriendsUI","SceneBasicAnim","SceneBasicOpen"),
-            Self::Teams => ("TeamsBrowserUI","SceneBasicAnim","SceneBasicOpen"),
-            Self::Perks => ("PerksUI","PerksScene","PerksSceneOpen"),
             Self::Knowledge => ("KnowledgeMainUI", "KnowledgeScreenTransitions", "Open"),
             Self::KnowledgeTree => ("KnowledgeSkillTreeUI", "KnowledgeSkillTreeTransitions", "Open"),
             Self::QuickMatch => ("CoopQuickMatchUI", "CreateMatchAnimation", "MatchPanelOpen"),
             Self::JoinMatch => ("CoopJoinMatchUI", "JoinMatchAnimation", "JoinPanelOpen"),
             Self::Social => ("PlaySocialUI", "PlaySocialScreen", "PlaySocialScreenOpen"),
             Self::Powers => ("PowersSelectUI", "PowersSelectScreen", "PowersMenuOpen"),
-            Self::Achievements => ("AchievementsUI", "AchievementsAnimation", "Open"),
             Self::Store => ("StoreUI", "StoreAnimation", "StoreOpen"),
             Self::TrophyStore => ("TrophyStoreUI", "TrophyStoreAnimation", "Open"),
-            Self::Legends => ("LegendsSelectUI", "LegendsSelect", "LegendsSelectOpen"),
-            Self::Mailbox => ("MailboxUI", "SceneBasicAnim", "SceneBasicOpen"),
         }
     }
     pub(super) fn background_key(self)->&'static str {
@@ -916,16 +866,15 @@ impl MenuPage {
     pub(super) fn load(self, dir: &Path, root: &Path) -> Option<Page> {
         let (file, controller, clip) = self.spec();
         let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(format!("{file}.json"))).ok()?).ok()?;
-        let mut node = if self==Self::Television {Node::from_json(&data)} else {scene_node(Node::from_json(&data))};
+        let mut node = scene_node(Node::from_json(&data));
         crate::modding::menu_edits(root,file,&mut node);
         let mut trophy_items=Vec::new();
         let mut power_items=Vec::new();
-        let mut search=None;
         let mut knowledge_animation=None;
         let mut animation=None;
         let mut buttons=super::button_motion::ButtonMotion::default();
         // Retain only this opening clip, not all controllers in a scene.
-        if let Some(data) = std::fs::read_to_string(root.join(format!("ui/runtime/{file}.json"))).ok()
+        if let Some(mut data) = std::fs::read_to_string(root.join(format!("ui/runtime/{file}.json"))).ok()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()) {
             buttons=super::button_motion::ButtonMotion::from_runtime(&data);
             apply_animation(&mut node, &data, controller, clip, None);
@@ -954,8 +903,29 @@ impl MenuPage {
                     node.set_active(&format!("{base}/Stats/{path}"),false);
                 }
             }
-            Self::Gift => {node.hide_named(&["DebugForceUnlockButton","DebugResetButton"]);}
-            Self::Television => {node.hide_named(&["BloonsTube"]);}
+            // Local co-op entry: retain the native cards and opening animation.
+            Self::Social => {
+                const BASE:&str="PlaySocialCanvas/PlaySocialScreen";
+                for path in ["TopGroup/Teams","MyTeam","JewelBar","ContentBrowser",
+                    "SocialAmazonKids","AccoladeNotificationsPanel","TopInfo/AccoladeNexusBtnGroup"] {
+                    node.set_active(&format!("{BASE}/{path}"),false);
+                }
+                if let Some(group)=node.find_mut(&format!("{BASE}/TopGroup")) {
+                    group.layout=None;
+                    group.rt.pos=vec2(0.0,60.0);
+                    group.rt.size=vec2(1500.0,812.0);
+                }
+                if let Some(panel)=node.find_mut(&format!("{BASE}/TopGroup/Social")) {
+                    panel.rt.amin=vec2(0.5,0.5);panel.rt.amax=vec2(0.5,0.5);
+                    panel.rt.pos=Vec2::ZERO;panel.rt.size=vec2(1500.0,812.0);
+                }
+                node.set_text(&format!("{BASE}/TopInfo/Title"),"Co-op");
+                node.set_text(&format!("{BASE}/TopGroup/Social/SocialTitle"),"Play together");
+                if let Some(buttons)=node.find_mut(&format!("{BASE}/TopGroup/Social/Buttons")) {
+                    buttons.children.retain(|n|matches!(n.name.as_str(),"CreateMatch"|"JoinMatch"));
+                    for card in &mut buttons.children {card.le_flex.x=0.0;card.le_pref.x=600.0;}
+                }
+            }
             Self::Store => {
                 if let Some(catalog)=std::fs::read_to_string(root.join("ui/runtime/store_menu.json")).ok()
                     .and_then(|s|serde_json::from_str::<serde_json::Value>(&s).ok()) {
@@ -998,6 +968,8 @@ impl MenuPage {
                 node.set_active("CoopJoinMatchCanvas/CoopJoinScreen/LoadingObject",false);
             }
             Self::Knowledge => {
+                // Paid in Monkey Money, which we don't have, and has no action here.
+                node.hide_named(&["RespecAllMK"]);
                 node.set_active("Canvas/KnowledgeMain/JewelBar",false);
                 node.set_active("Canvas/KnowledgeMain/LevelLockInfo", false);
                 if let Some(counts)=std::fs::read_to_string(root.join("ui/runtime/knowledge_counts.json")).ok()
@@ -1009,6 +981,7 @@ impl MenuPage {
                 }
             }
             Self::KnowledgeTree => {
+                knowledge_lines_in_trophies(&mut node);
                 node.set_active(KNOWLEDGE_PANEL,false);
                 node.set_active("Canvas/KnowledgeSkillTree/JewelBar",false);
             }
@@ -1047,48 +1020,6 @@ impl MenuPage {
                     power_items=powers.as_array().cloned().unwrap_or_default();
                 }
             }
-            Self::Achievements => {
-                node.hide_named(&["GooglePlay", "GameCenter"]);
-                let base="Canvas/AchievementsScreen";
-                let template_path=format!("{base}/Scroll/Viewport/AchievementPanelBlue");
-                let template=node.find(&template_path).cloned();
-                node.set_active(&template_path,false);
-                if let (Some(template),Some(entries))=(template,read_catalog(root,"achievements")) {
-                    let loot_template=Node::load(&dir.join("SmallBaseLootItem.json"));
-                    let insta_template=Node::load(&dir.join("SmallInstaTowerLootItem.json"));
-                    if let Some(content)=node.find_mut(&format!("{base}/Scroll/Viewport/Content")) {
-                        content.fit[1]=2;
-                        content.children=entries.iter().enumerate().map(|(i,a)| {
-                            let mut card=template.clone();card.name=format!("Achievement{i}");card.active=true;
-                            card.set_text("Title",a["title"].as_str().unwrap_or(""));
-                            card.set_text("Description",a["description"].as_str().unwrap_or(""));
-                            card.set_sprite("Achievements/Icon",a["icon"].as_str().and_then(|s|s.strip_suffix(".png")));
-                            card.set_text("Achievements/Text",a["subscript"].as_str().unwrap_or(""));
-                            card.set_active("InProgressGroup",true);
-                            card.set_text("InProgressGroup/ProgressBar/ProgressText","0%");
-                            if let Some(bar)=card.find_mut("InProgressGroup/ProgressBar/Mask/InnerBar") {bar.rt.amax.x=0.0;}
-                            card.hide_named(&["ClaimGroup","ClaimedGroup","iconGlow"]);
-                            card.set_active("RewardsGroup",true);
-                            if let Some(container)=card.find_mut("RewardsGroup/LootPanel") {
-                                container.children=a["rewards"].as_array().into_iter().flatten().enumerate().filter_map(|(j,reward)| {
-                                    let mut item=if reward["kind"]=="InstaMonkey" {insta_template.clone()} else {loot_template.clone()}?;
-                                    item.name=format!("Reward{j}");item.active=true;
-                                    item.set_sprite("Icon",reward["icon"].as_str().and_then(|s|s.strip_suffix(".png")));
-                                    item.set_text("Description",reward["label"].as_str().unwrap_or(""));
-                                    item.hide_named(&["Bonus","AddOne","LimitedTime"]);
-                                    Some(item)
-                                }).collect();
-                            }
-                            card
-                        }).collect();
-                    }
-                    node.set_text(&format!("{base}/TopInfo/Count"),&format!("0/{}",entries.len()));
-                    node.hide_named(&["NothingFound"]);
-                    search=Some(AchievementSearch {terms:entries.iter().map(|a|format!("{}\n{}",
-                        a["title"].as_str().unwrap_or(""),a["description"].as_str().unwrap_or("")).to_lowercase()).collect(),
-                        query:std::env::var("RRBTD6_ACHIEVEMENT_SEARCH").unwrap_or_default(),focused:false});
-                }
-            }
             Self::TrophyStore => {
                 node.set_active("Canvas/SortBy", false);
                 let base="Canvas/TrophyStoreScreen/Container";
@@ -1119,49 +1050,18 @@ impl MenuPage {
             }
             _ => {}
         }
-        let legends=if self==Self::Legends {
-            let bindings=std::fs::read_to_string(root.join("ui/runtime/legends_menu.json")).ok().and_then(|s|serde_json::from_str::<serde_json::Value>(&s).ok());
-            bindings.map(|bindings| {
-                for text in bindings["text"].as_array().into_iter().flatten() {
-                    if let (Some(path),Some(text))=(text["path"].as_str(),text["text"].as_str()){node.set_text(path,text);}
-                }
-                node.set_active("Canvas/LegendsSelectScreen/JewelBar",false);
-                // Read-only expansion previews use the source information panel. Product prices,
-                // sale flags and ownership are supplied by services and are not bound here.
-                for panel in bindings["panels"].as_array().into_iter().flatten() {
-                    if let Some(path)=panel["mainPanel"].as_str(){node.set_active(path,true);}
-                    if let Some(path)=panel["purchasePanel"].as_str(){node.set_active(path,false);}
-                }
-                // Source artwork has an unbound empty release banner; live release state is absent.
-                node.hide_named(&["UpdatedLegendBanner"]);
-                if let Some(pips)=node.find_mut("Canvas/LegendsSelectScreen/PagePips") {
-                    if let Some(template)=pips.children.first().cloned() {
-                        pips.children=bindings["slides"].as_array().into_iter().flatten().enumerate().map(|(i,_)| {
-                            let mut pip=template.clone();pip.name=format!("Pip{i}");pip
-                        }).collect();
-                    }
-                }
-                let mut runtime:serde_json::Value=std::fs::read_to_string(root.join("ui/runtime/LegendsSelectUI.json")).ok()
-                    .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default();
-                if let Some(animators)=runtime["animators"].as_array_mut(){animators.retain(|a|a["controller"]=="PageTransition");}
-                LegendsBrowser {data:bindings,selected:0,about:false,animation:None,runtime}
-            })
-        }else{None};
         let coop=if self==Self::CoopLobby{Some(super::coop_menu::Lobby::new(&mut node))}else{None};
-        let goals=if self==Self::SocialGoals{super::season_goals::Browser::new(root,&mut node)}else{None};
-        let social=super::social_pages::SocialPage::load(root,file,&mut node);
         let profile=if self==Self::Profile{super::profile_browser::Browser::load(root,&mut node)}else{None};
         let jukebox=if self==Self::Jukebox{super::jukebox::Browser::load(root,&mut node,crate::menus::load_loc(&root.join("text/English.xml")))}else{None};
         let mods=if self==Self::Mods{super::mod_browser::Browser::load(root,&mut node)}else{None};
-        let daily_reward=if self==Self::DailyReward{super::daily_reward::Browser::load(root,&mut node)}else{None};
         let scrolls=scroll_regions(&data,&node);
-        let powers=(!power_items.is_empty()).then(||PowerBrowser {costs:vec![0;power_items.len()],shown:vec![false;power_items.len()],quantities:vec![None;power_items.len()],
+        let powers=(!power_items.is_empty()).then(||PowerBrowser {root:root.to_owned(),costs:vec![0;power_items.len()],shown:vec![false;power_items.len()],quantities:vec![None;power_items.len()],
             items:power_items,selected:0,began:get_time(),dir:dir.to_path_buf(),
             runtime_dir:root.join("ui/runtime"),portraits:HashMap::new(),bound:false,seen:Default::default(),pro:HashMap::new(),
             // CommonBackgroundScreen starts from the MenuBackgrounds colour (white for InstaPowersCollectionUI).
             tint:(WHITE,WHITE,get_time())});
         let knowledge=if self==Self::KnowledgeTree {read_catalog(root,"knowledge_items").map(|items|KnowledgeBrowser {
-            states:vec![0;items.len()],arrow_fade:vec![None;items.len()],items,selected:None,panel_animation:knowledge_animation,
+            root:root.to_owned(),states:vec![0;items.len()],arrow_fade:vec![None;items.len()],items,selected:None,panel_animation:knowledge_animation,
             owned:Default::default(),disabled:Default::default(),points:0,account:None,pulse:serde_json::Value::Null,
             runtime:std::fs::read_to_string(root.join("ui/runtime/KnowledgeSkillTreeUI.json")).ok()
                 .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default()})}else{None};
@@ -1176,20 +1076,14 @@ impl MenuPage {
             node.set_text(&format!("{JOIN_INPUT}/Text Area/Text"),&text);
             Some(JoinCode {text,focused:false,limit,submit:false})
         }else{None};
-        let event=self.event_spec().map(|(key,rules)|super::event_details::Detail::new(root,key,rules));
+        let event=self.event_spec().map(|key|super::event_details::Detail::new(root,key));
         // TrophyStoreScreen opens in store mode on the Featured tab (OnMainToggleChanged(false)).
         let trophy=(self==Self::TrophyStore&&!trophy_items.is_empty()).then(|| {
             let text=std::fs::read_to_string(root.join("text/English.xml")).unwrap_or_default();
             let entry=|id:&str|text.split(&format!("<T id=\"{id}\">")).nth(1).and_then(|s|s.split('<').next()).unwrap_or(id).to_owned();
             TrophyState {inventory:false,tab:5,live:None,account:None,cards:Vec::new(),day:entry("day"),days:entry("days"),root:root.to_owned()}
         });
-        let mut page=Page {first_presentation:true,node,season_second:None,buttons,profile,jukebox,mods,daily_reward,event,goals,coop,scrolls,trophy_items,trophy_selected:Some(0),trophy,pointer_start:None,pointer_dragged:false,animation,powers,search,knowledge,legends,join_code,social,home_requested:false};
-        if self==Self::Legends {
-            let preview=std::env::var("RRBTD6_LEGENDS_PREVIEW").unwrap_or_default();
-            let index=page.legends.as_ref().and_then(|b|b.data["slides"].as_array())
-                .and_then(|slides|slides.iter().position(|p|p.as_str().is_some_and(|p|p.rsplit('/').next()==Some(preview.as_str())))).unwrap_or(0);
-            page.show_legend(index,preview.eq_ignore_ascii_case("about"));
-        }
+        let mut page=Page {first_presentation:true,node,buttons,profile,jukebox,mods,event,coop,scrolls,trophy_items,trophy_selected:Some(0),trophy_reselect:None,trophy,pointer_start:None,pointer_dragged:false,animation,powers,knowledge,join_code,home_requested:false};
         if self==Self::KnowledgeTree {
             if let Some(browser)=&page.knowledge {
                 for item in &browser.items {
@@ -1200,7 +1094,6 @@ impl MenuPage {
             if let Some(index)=std::env::var("RRBTD6_KNOWLEDGE_PREVIEW").ok().and_then(|id|
                 page.knowledge.as_ref()?.items.iter().position(|k|k["id"].as_str()==Some(&id))) {page.select_knowledge(Some(index));}
         }
-        if page.search.is_some(){page.filter_achievements();}
         if self==Self::Powers {page.bind_powers();}
         if self==Self::TrophyStore {
             let category=std::env::var("RRBTD6_TROPHY_CATEGORY").ok().and_then(|name|
@@ -1240,10 +1133,10 @@ mod catalog_tests {
             {"name":"Trophy2","children":[{"name":"Selected"}]}
         ]});
         for name in TROPHY_GRID.split('/').rev().skip(1) {tree=json!({"name":name,"children":[tree]});}
-        let mut page=Page {first_presentation:true,season_second:None,node:Node::from_json(&json!({"name":"Scene","children":[tree]})),
+        let mut page=Page {first_presentation:true,node:Node::from_json(&json!({"name":"Scene","children":[tree]})),
             buttons:Default::default(),
             scrolls:Vec::new(),trophy_items:vec![json!({"category":1}),json!({"category":0}),json!({"category":2})],
-            profile:None,jukebox:None,mods:None,daily_reward:None,event:None,goals:None,coop:None,trophy_selected:Some(0),trophy:None,pointer_start:None,pointer_dragged:false,animation:None,powers:None,search:None,knowledge:None,legends:None,join_code:None,social:None,home_requested:false};
+            profile:None,jukebox:None,mods:None,event:None,coop:None,trophy_selected:Some(0),trophy_reselect:None,trophy:None,pointer_start:None,pointer_dragged:false,animation:None,powers:None,knowledge:None,join_code:None,home_requested:false};
         page.filter_trophies(Some(0));
         assert_eq!(page.trophy_selected,Some(1));
         let cards=&page.node.find(TROPHY_GRID).unwrap().children;
@@ -1271,7 +1164,18 @@ fn knowledge_state(browser:&KnowledgeBrowser,i:usize)->u8 {
     if browser.disabled.contains(id) {return 4;}
     let prerequisites=item["prerequisites"].as_array().into_iter().flatten().all(|p|p.as_str().is_some_and(|p|knowledge_learnt(browser,p)));
     let invested=knowledge_category_learnt(browser,&item["category"])>=item["required"].as_i64().unwrap_or(0);
-    if browser.points>0&&prerequisites&&invested {1} else {2}
+    // Bought with trophies, not points (DEVIATIONS.md).
+    if prerequisites&&invested {1} else {2}
+}
+
+/// The tree's level lines (MMTxt*) show a tier's Monkey Money cost: its price in trophies instead.
+fn knowledge_lines_in_trophies(n:&mut Node) {
+    if n.name.starts_with("MMTxt") {
+        n.set_sprite("MM",Some("TrophyIcon"));
+        let cost=n.find("CostTxt").and_then(|c|c.txt.as_ref()).and_then(|t|t.text.replace(',',"").parse::<i64>().ok());
+        if let Some(cost)=cost {n.set_text("CostTxt",&crate::local_profile::knowledge_price(cost).to_string());}
+    }
+    for child in &mut n.children {knowledge_lines_in_trophies(child);}
 }
 
 /// KnowledgeSkillBtn.SetSelected: the selected glow, and the pulse only while available and not selected.
@@ -1301,8 +1205,10 @@ fn fill_knowledge_panel(node:&mut Node,browser:&KnowledgeBrowser,i:usize) {
     node.set_active(&format!("{panel}/LayoutGroup/AddPointButton"),state==1);
     let cost=item["cost"].as_i64().unwrap_or(0);
     if state==1 {
-        node.set_active(&format!("{panel}/LayoutGroup/AddPointButton/MonkeyMoney"),cost>0);
-        node.set_text(&format!("{panel}/LayoutGroup/AddPointButton/MonkeyMoney/TextCount"),&cost.to_string());
+        let button=format!("{panel}/LayoutGroup/AddPointButton");
+        node.set_active(&format!("{button}/MonkeyMoney"),false);
+        node.set_sprite(&format!("{button}/MKIcon"),Some("TrophyIcon"));
+        node.set_text(&format!("{button}/AddPointTxt"),&crate::local_profile::knowledge_price(cost).to_string());
     }
     // KnowledgeHelper.IsKnowledgePurchasableReason: missing prerequisites, then investment.
     let reason=if state==2 {
@@ -1324,4 +1230,29 @@ fn fill_knowledge_panel(node:&mut Node,browser:&KnowledgeBrowser,i:usize) {
     } else {String::new()};
     node.set_active(&format!("{panel}/PrereqTxt"),true);
     node.set_text(&format!("{panel}/PrereqTxt"),&reason);
+}
+
+/// An item description without its "Limited Time Collector's Item!" sentence or "Limited Time"
+/// wording (DEVIATIONS.md: nothing in the Trophy Store is limited).
+fn without_limited_time(text:&str)->String {
+    let mut out=String::new();let mut sentence=String::new();
+    for c in text.chars() {
+        sentence.push(c);
+        if matches!(c,'.'|'!'|'?') {
+            let t=sentence.trim_start().trim_start_matches("\n").trim_start();
+            if !(t.starts_with("Limited Time Collector")||t.starts_with("Extremely Limited Time Collector")) {out.push_str(&sentence);}
+            sentence.clear();
+        }
+    }
+    out.push_str(&sentence);
+    out.replace("Limited Time, ","").replace("Limited Time ","").trim().to_owned()
+}
+
+/// The cached Trophy Store bank's prices (local_extracted/online/events.json), read once.
+pub(super) fn cached_trophy_prices(root:&std::path::Path)->&'static HashMap<String,i64> {
+    static PRICES:std::sync::OnceLock<HashMap<String,i64>>=std::sync::OnceLock::new();
+    PRICES.get_or_init(||std::fs::read(root.join("online/events.json")).ok()
+        .and_then(|b|serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v|v["trophyBank"]["prices"].as_object().map(|m|m.iter().filter_map(|(k,v)|Some((k.clone(),v.as_i64()?))).collect()))
+        .unwrap_or_default())
 }

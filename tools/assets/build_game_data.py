@@ -27,6 +27,9 @@ HEROES = ["Quincy", "Gwendolin", "StrikerJones", "ObynGreenfoot", "CaptainChurch
 PLAYABLE += HEROES
 
 
+# BloonOverlayClass's names in order (Il2Cpp.BloonOverlayClass; Invalid is -1).
+OVERLAY_CLASSES = ['Red', 'Blue', 'Green', 'Yellow', 'Pink', 'White', 'RedRegrow', 'BlueRegrow', 'GreenRegrow', 'YellowRegrow', 'PinkRegrow', 'WhiteRegrow', 'Moab', 'Bfb', 'Zomg', 'Ddt', 'Bad', 'Bloonarius', 'Lych', 'MiniLych', 'Vortex', 'Dreadbloon', 'Blastapopoulos', 'Wild']
+
 def main():
     root, map_key, root_idx = sys.argv[1], sys.argv[2], int(sys.argv[3])
     objs = {}
@@ -34,6 +37,23 @@ def main():
         r = json.loads(line)
         objs[r["i"]] = r
     values = {int(k): v for k, v in json.load(open(os.path.join(root, "decoded", "values.json"))).items()}
+    # Display GUIDs whose prefab is an empty placeholder: the game draws nothing for them (the
+    # renderer would otherwise draw its stand-in dart).
+    try:
+        catalog_prefabs = json.load(open(os.path.join(root, "catalog_prefabs.json"), encoding="utf-8"))
+    except OSError:
+        catalog_prefabs = {}
+    try:
+        catalog_sprites = json.load(open(os.path.join(root, "catalog_sprites.json"), encoding="utf-8"))
+    except OSError:
+        catalog_sprites = {}
+
+    def sprite_ref(ref):
+        """A SpriteReference (or its GUID) as the sprite's file name, without extension."""
+        guid = ref.get("guidRef") if isinstance(ref, dict) else ref
+        return os.path.splitext(catalog_sprites.get(guid, ""))[0] if isinstance(guid, str) else ""
+
+    empty_displays = {g for g, n in catalog_prefabs.items() if n in ("Empty.prefab", "EmptyPrefab.prefab", "#EmptyAsset.prefab")}
 
     def deref(v):
         if isinstance(v, dict) and "$ref" in v:
@@ -169,10 +189,15 @@ def main():
             # BloonModel.rotateToFollowPath: Bloon.UpdatePositionAlongTrack turns it towards the
             # path's heading (Math.LerpAngle by TotalSpeedFrames x 0.5) as it moves.
             "rotateToFollowPath": bool(f.get("rotateToFollowPath", False)),
+            # BloonModel.overlayClass (enum BloonOverlayClass: Invalid -1, Red 0 .. Wild 23): whose
+            # overlay prefabs a mutator's overlayType shows on it ("<class><overlayType>", e.g.
+            # WhiteRegrowGlueBasic; MiniLych's are LychMini...).
+            "overlayClass": OVERLAY_CLASSES[f["overlayClass"]] if 0 <= f.get("overlayClass", -1) < len(OVERLAY_CLASSES) else "",
             # BloonModel.distributeDamageToChildren: damage past its layer may go on to its children.
             "distributeDamageToChildren": bool(f.get("distributeDamageToChildren", False)),
             # GrowModel (regrow bloons): becomes growToId every `rate` seconds, up to its ceiling.
-            "grow": next(({"to": b["f"].get("growToId") or "", "rate": b["f"].get("rate", 3.0)}
+            "grow": next(({"to": b["f"].get("growToId") or "", "rate": b["f"].get("rate", 3.0),
+                           "child_color": b["f"].get("overrideChildWithColor") or None}
                           for b in bbs if b and b["type"] == "GrowModel"), None),
             "sprite": ("Bloons/" + sprite) if sprite else
                       (("UiBloonIcons/" + icon_name) if icon_name in icons else None),
@@ -273,10 +298,13 @@ def main():
         if not ts and hero_track:
             ts = {"speed": hero_track.get("maximumSpeed", 300.0),
                   "lifespan": hero_track.get("lifespan") or age.get("lifespan") or 3.0}
+        random_range = None
         if not ts and pb.get("RandomRangeTravelStraitModel"):
-            # HYPOTHESIS P-RANDRANGE: the random travel range is taken at its midpoint.
+            # RandomRangeTravelStrait.Initialise draws its lifespan (random_range); the midpoint here
+            # is only the static value.
             rr = pb["RandomRangeTravelStraitModel"][0]["f"]
             ts = {"speed": rr["speed"], "lifespan": (rr["minRange"] + rr["maxRange"]) / 2 / rr["speed"]}
+            random_range = [rr["minRange"], rr["maxRange"], rr["speed"]]
         filters, exclude_bloons, exclude_tags = [], [], []
         glue_filter, skip_frozen, cant_hit = 0, False, 0
         out_require_effects = None
@@ -303,7 +331,9 @@ def main():
                                                x["f"].get("highestPriorityMutationId") or "", x["f"].get("defaultMutationId") or ""]
         # Bloon effects (slow, freeze, damage over time, brittle) and their per-tag modifiers.
         effects, effect_mods = [], []
-        for s in pb.get("SlowModel", []) + pb.get("SlowForBloonModel", []):
+        # SlowMinusAbilityDurationModel (Sabotage): a SlowModel whose lifespan
+        # (GetLifespanFrames @0xcddc50) is lifespanFrames + the ability's activation time - now.
+        for s in pb.get("SlowModel", []) + pb.get("SlowForBloonModel", []) + pb.get("SlowMinusAbilityDurationModel", []):
             sf = s["f"]
             tags = []
             bloon_id, bloon_ids = "", []
@@ -315,18 +345,23 @@ def main():
                 tags = [neg + t for t in ([sf["bloonTag"]] if sf.get("bloonTag") else [])]
                 bloon_id = sf.get("bloonId") or ""
                 bloon_ids = [t for t in items(sf.get("bloonIds")) if isinstance(t, str)]
+            # Slow.Collide (VERIFIED-DISASM @0xcde360): matchLayersWithDamage adds the projectile's
+            # (int) DamageModel.damage to the layers (recording ninja_003: a Flash Bomb's stun
+            # outlasts the blast's 3 layers on a Lead, and goes with the Yellow's next pop).
+            layers = sf.get("layers", 1) + (int(dmg.get("damage", 0.0)) if sf.get("matchLayersWithDamage") else 0)
             effects.append({"kind": "slow", "id": sf.get("mutationId") or "", "mult": sf.get("multiplier", 1.0),
-                            "lifespan": sf.get("lifespan", 0.0), "layers": sf.get("layers", 1),
+                            "lifespan": sf.get("lifespan", 0.0), "layers": layers, "overlay": sf.get("overlayType") or "",
                             "glue": sf.get("glueLevel", 0), "refresh": not sf.get("dontRefreshDuration", False),
                             "tags": tags, "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False)),
                             "bloon_id": bloon_id, "bloon_ids": bloon_ids, "excluding": bool(sf.get("excluding")),
                             # Slow.Collide (VERIFIED-DISASM @0xcfce70): removeMutatorIfNotMatching
                             # takes off a same-id mutator another SlowModel put on.
-                            "replace": bool(sf.get("removeMutatorIfNotMatching", False))})
+                            "replace": bool(sf.get("removeMutatorIfNotMatching", False)),
+                            "minus_age": s["type"] == "SlowMinusAbilityDurationModel"})
         for s in pb.get("FreezeModel", []):
             sf = s["f"]
             effects.append({"kind": "freeze", "id": sf.get("mutationId") or "", "mult": sf.get("speed", 0.0),
-                            "lifespan": sf.get("lifespan", 0.0), "layers": sf.get("layers", 1),
+                            "lifespan": sf.get("lifespan", 0.0), "layers": sf.get("layers", 1), "overlay": sf.get("overlayType") or "",
                             "moabs": sf.get("canFreezeMoabs", False), "boss_immunity": bool(sf.get("bossImmunity", False)),
                             "after_damage": bool(sf.get("applyAfterDamage", False))})
         # PsiEffectModel (Psi): the hit bloon is held and takes damagePerTick every tickRate
@@ -347,6 +382,7 @@ def main():
                     df = d["f"]
                     effects.append({"kind": "dot", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
                                     "layers": sf.get("layers", 1), "damage": df["damage"], "interval": df["interval"],
+                                    "overlay": sf.get("overlayType") or "",
                                     "immune": df.get("immuneBloonProperties", 0),
                                     "trigger_immediate": bool(df.get("triggerImmediate", False)),
                                     "tag_mods": [tag_mod(m) for m in items(df.get("damageModifierModels"))
@@ -386,6 +422,16 @@ def main():
                                     "moabs_only": False})
                     effects.append({"kind": "slow", "id": "PsiHold", "mult": 0.0, "lifespan": sf.get("lifespan", 0.0),
                                     "layers": sf.get("layers", 1), "glue": 0, "refresh": True, "tags": []})
+                # CreateEffectOnPopModel (Glue Splatter's GlueDegradeSplatEffect): its effect where
+                # the bloon pops (visual).
+                if d and d["type"] == "CreateEffectOnPopModel":
+                    em = deref(d["f"].get("effectModel"))
+                    name = prefab_name(em["f"].get("assetId")) if em else None
+                    if name:
+                        effects.append({"kind": "pop_fx", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
+                                        "layers": sf.get("layers", 1), "fx": [name, em["f"].get("scale", 1.0) or 1.0],
+                                        "refresh": not sf.get("isUnique", False),
+                                        "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
                 # EmitOnPopModel (Ice shards, glue splat): when the bloon pops, its projectile
                 # is fired where it popped.
                 if d and d["type"] == "EmitOnPopModel" and depth < 3 and deref(d["f"].get("projectile")):
@@ -502,6 +548,7 @@ def main():
                     "mult": {k: pf.get("multiplier" + k, 1.0) for k in ("MOAB", "BFB", "DDT", "ZOMG")}}
         out = {
             "pierce": f["pierce"], "max_pierce": f.get("maxPierce", 0.0), "radius": f["radius"],
+            "pid": f.get("id") or "",
             # ProjectileModel ctor: checkCollisionIntervalFrames = (int)(interval x 60), truncated.
             "check_frames": int(struct.unpack("<f", struct.pack("<f", float(f.get("checkCollisionInterval") or 0.0) * 60.0))[0]),
             "vs_blocker_radius": f.get("vsBlockerRadius", 0.0), "ignore_blockers": f.get("ignoreBlockers", False),
@@ -516,9 +563,10 @@ def main():
             # Whether it has a DamageModel at all (AddBehaviorToBloon's applyOnlyIfDamaged asks it).
             "damage_model": bool(pb.get("DamageModel")),
             "speed": ts.get("speed", 0.0), "lifespan": ts.get("lifespan") or age.get("lifespan", 0.0),
+            "random_range": random_range,
             # Its AgeModel's lifespan (Projectile.lifespan for the exhaust duration fraction).
             "age_lifespan": pb["AgeModel"][0]["f"].get("lifespan") if pb.get("AgeModel") else None,
-            "display": disp.get("display"),
+            "display": "#empty" if disp.get("display") in empty_displays else disp.get("display"),
             "tag_mods": [tag_mod(b) for b in pb.get("DamageModifierForTagModel", [])],
             # DamageModifierWrathModel (Avatar of Wrath): + total RBE on screen / rbeThreshold x
             # damage, between 0 and maxDamageBoost (DamageModifierWrath.GetDamageAdditive).
@@ -537,6 +585,8 @@ def main():
             "knockback": (pb.get("KnockbackModel") or [{"f": None}])[0]["f"],
             "filters": filters,
             "no_hit": "FilterAllModel" in filters,
+            # ProjectileModel.dontUseCollisionChecker: CollisionChecker.Process skips it.
+            "no_checker": bool(f.get("dontUseCollisionChecker")),
             # FilterAllExceptTargetModel: hits only the bloon it was aimed at.
             # CollideOnlyWithTargetModel (Sniper, Boomerang glaives...): only its target.
             "only_target": "FilterAllExceptTargetModel" in filters or bool(pb.get("CollideOnlyWithTargetModel"))
@@ -591,7 +641,8 @@ def main():
                                "max_angle": 360.0 if tf.get("ignoreSeekAngle") else tf.get("maxSeekAngle", 360.0),
                                "new_targets": tf.get("trackNewTargets", True),
                                "lifetime": bool(tf.get("useLifetimeAsDistance")),
-                               "constantly": bool(tf.get("constantlyAquireNewTarget"))}
+                               "constantly": bool(tf.get("constantlyAquireNewTarget")),
+                               "within": tf.get("timeInFrames") if k == "TrackTargetWithinTimeModel" else None}
         if hero_track and "seek" not in out:
             out["seek"] = {"distance": 9999.0, "turn_rate": hero_track.get("rotation", 9.0) * 60.0,
                            "max_angle": 360.0, "new_targets": True}
@@ -600,7 +651,11 @@ def main():
             out["wind"] = {"min": wf["distanceMin"], "max": wf["distanceMax"], "chance": wf.get("chance", 1.0),
                            "moabs": wf.get("affectMoab", False), "tag_scale": wf.get("distanceScaleForTags", 0.0),
                            "tags": [t for t in (wf.get("distanceScaleForTagsTags") or "").split(",") if t]
-                           + [t for t in items(wf.get("distanceScaleForTagsTagsList")) if isinstance(t, str)]}
+                           + [t for t in items(wf.get("distanceScaleForTagsTagsList")) if isinstance(t, str)],
+                           # MoveWithWind: the bloon is carried at speedFrames x this to its spot.
+                           "speed_mult": wf.get("speedMultiplier", 1.0),
+                           "tag_filter": [t for t in items(wf.get("tagFilter")) if isinstance(t, str)],
+                           "tag_inclusive": bool(wf.get("tagInclusive", False))}
         # Skywarden: WindlashModel blows bloons back distanceMin..Max (like WindModel);
         # ChilledModel slows non-MOABs to `multiplier` for slowDuration. STAND-IN P-SKYSTATES:
         # the stages, vacuum pull, shrapnel and Galvanized / Heat states aren't modelled.
@@ -621,7 +676,10 @@ def main():
         # from its end back when `reverse`.
         if pb.get("TravelAlongPathModel"):
             tf = pb["TravelAlongPathModel"][0]["f"]
-            out["track_travel"] = {"speed": tf.get("speed", 0.0), "lifespan": tf.get("lifespan", 0.0), "reverse": bool(tf.get("reverse"))}
+            out["track_travel"] = {"speed": tf.get("speed", 0.0), "lifespan": tf.get("lifespan", 0.0), "reverse": bool(tf.get("reverse")),
+                                   # disableRotateWithPathDirection (the Necromancer's undead): it keeps the
+                                   # rotation it was made with instead of turning along the track.
+                                   "fixed_rotation": bool(tf.get("disableRotateWithPathDirection"))}
         # ScaleDamageWithTimeModel (Mermonkey): damage grows with the time flown.
         if pb.get("ScaleDamageWithTimeModel"):
             sf = pb["ScaleDamageWithTimeModel"][0]["f"]
@@ -652,6 +710,9 @@ def main():
             # isn't modelled).
             lf = pb["LightningModel"][0]["f"]
             out["instant"] = True
+            # Lightning.Process hits its targets itself (Projectile.CollideBloons), not through the
+            # CollisionChecker that dontUseCollisionChecker skips.
+            out["lightning"] = True
             out["retarget"] = {"distance": lf["splitRange"], "max_bounces": int(f["pierce"]), "delay": lf["delay"],
                                "expire_if_none": True}
             out["lifespan"] = max(out["lifespan"] or 0.0, lf["delay"] * (f["pierce"] + 1) + 0.1)
@@ -682,6 +743,17 @@ def main():
                                   "once": bool(cf.get("onlyEmitOnce")),
                                   "projectile": projectile(deref(cf["projectile"]), depth + 1),
                                   "emission": emission(deref(cf.get("emission")))}
+        # Projectile.CollideBloon (VERIFIED-DISASM @0xc8b970) runs the behaviours ordered by
+        # collisionPass, keeping the model's order within a pass: a behaviour in a later pass than
+        # the DamageModel, or listed after it in the same pass, sees the hit's damage done
+        # (recording wizard_020: a Fireball that pops a Red explodes where the fireball was).
+        order = [b for b in items(f["behaviors"]) if b]
+        dmg_at = next(((i, b["f"].get("collisionPass", 0)) for i, b in enumerate(order) if b["type"] == "DamageModel"), None)
+        def after_damage(b):
+            if dmg_at is None:
+                return False
+            k = (b["f"].get("collisionPass", 0), next(i for i, x in enumerate(order) if x is b))
+            return k > (dmg_at[1], dmg_at[0])
         if depth < 3:
             for cc in pb.get("CreateProjectileOnContactModel", []):
                 cf = cc["f"]
@@ -689,7 +761,8 @@ def main():
                                           "emission": emission(deref(cf["emission"])),
                                           "pass_on_collided": cf.get("passOnCollidedWith", False),
                                           # dontCreateAtBloon: made where the shot is, not on the bloon.
-                                          "at_shot": bool(cf.get("dontCreateAtBloon", False))})
+                                          "at_shot": bool(cf.get("dontCreateAtBloon", False)),
+                                          "after_damage": after_damage(cc)})
             for cc in pb.get("EmitOnDamageModel", []):
                 cf = cc["f"]
                 out["on_contact"].append({"projectile": projectile(deref(cf["projectile"]), depth + 1),
@@ -756,6 +829,9 @@ def main():
         out["eat"] = {"capacity": eat["f"]["rbeCapacity"], "cash_mult": eat["f"]["rbeCashMultiplier"]} if eat else None
         # CollideExtraPierceReductionModel: each hit uses this much more pierce.
         out["pierce_cost"] = 1.0 + sum(c["f"].get("extraAmount", 0) for c in pb.get("CollideExtraPierceReductionModel", []))
+        # ProjectileModel.ignorePierceExhaustion: Projectile.CollideBloon (@0xc8b970) doesn't
+        # exhaust it at 0 pierce (a Wall of Fire waits for its RefreshPierce).
+        out["keep_spent"] = bool(f.get("ignorePierceExhaustion"))
         # DamageModifierForCashAmountModel (VERIFIED-DISASM IsValid @0xcd2670): with at least
         # cashThreshold cash, damage x damageMultiplier + damageAdditive.
         cm = (pb.get("DamageModifierForCashAmountModel") or [None])[0]
@@ -789,7 +865,9 @@ def main():
         if e["type"] == "LineProjectileEmissionModel":
             return {"kind": "Line", "count": 1}
         # STAND-IN P-WERERABBIT: the Wererabbit leaps onto its target; its blast lands there.
-        if e["type"] in ("InstantDamageEmissionModel", "WererabbitEmissionModel"):
+        if e["type"] == "InstantDamageEmissionModel":
+            return {"kind": "InstantDamage", "count": 1}
+        if e["type"] == "WererabbitEmissionModel":
             return {"kind": "AtTarget", "count": 1}
         if e["type"] == "RandomEmissionModel":
             return {"kind": "Random", "count": f.get("count", 1), "angle": f.get("angle", 0.0),
@@ -862,7 +940,7 @@ def main():
             require_tags, exclude_tags, skip_effects = [], [], []
             # TargetMoabModel (Bomb Shooter's "Boom" attack): MOAB-class bloons first.
             prio_moab = any(x and x["type"] == "TargetMoabModel" for x in items(af["behaviors"]))
-            glue_filter, skip_frozen, cant_hit = 0, False, 0
+            glue_filter, skip_frozen, cant_hit, only_camo = 0, False, 0, False
             for x in items(af["behaviors"]):
                 if x and x["type"] == "AttackFilterModel":
                     for flt in items(x["f"]["filters"]):
@@ -881,6 +959,9 @@ def main():
                             glue_filter = flt["f"]["glueLevel"]
                         if flt and flt["type"] == "FilterFrozenBloonsModel":
                             skip_frozen = True
+                        # FilterOnlyCamoIn.FilterBloon (@0xc20590): bloon.bloonModel.isCamo (Shimmer).
+                        if flt and flt["type"] == "FilterOnlyCamoInModel":
+                            only_camo = True
                         if flt and flt["type"] == "FilterMoabModel":
                             (exclude_tags if flt["f"].get("flip") else require_tags).append("Moabs")
                         if flt and flt["type"] == "FilterMutatedTargetModel" and not flt["f"].get("inverse"):
@@ -888,10 +969,12 @@ def main():
             track_target = next((x["f"].get("maxOffset", 0.0) for x in items(af["behaviors"])
                                  if x and x["type"] == "TargetTrackModel"), None)
             track_closest = False
+            track_default = False
             for x in items(af["behaviors"]):
                 if x and x["type"] == "TargetTrackOrDefaultModel" and x["f"].get("forceTargetTrack"):
                     track_target = x["f"].get("maxTrackOffset", 0.0)
                     track_closest = bool(x["f"].get("useClosestTrack"))
+                    track_default = True
                 # CloseTargetTrackModel (Cleansing Foam, Bloon Trap): the track spot nearest the
                 # tower; it is the attack's default, so the selectable point mode is left out
                 # (STAND-IN: one target mode per attack).
@@ -907,7 +990,7 @@ def main():
                 # STAND-IN P-OVERTIME: initialFireDelay isn't modelled.
                 eot = deref(w["f"].get("emission"))
                 if eot and eot["type"] == "EmissionOverTimeModel":
-                    burst = {"count": eot["f"].get("count", 1), "frames": eot["f"].get("timeBetween", 0.0) * 60.0}
+                    burst = {"count": eot["f"].get("count", 1), "frames": eot["f"].get("timeBetween", 0.0) * 60.0, "over_time": True}
                 for x in items(w["f"].get("behaviors")):
                     if x and x["type"] == "BurstWeaponBehaviorModel":
                         burst = {"count": x["f"]["count"], "frames": x["f"].get("intervalFrames", 0)}
@@ -932,6 +1015,10 @@ def main():
                 aim_offset = next((x["f"]["offsetRotation"] for x in items((em or {}).get("f", {}).get("behaviors"))
                                    if x and x["type"].startswith(("EmissionRotationOff", "EmissionArcRotationOff"))
                                    and "offsetRotation" in x["f"]), None)
+                # EmissionRotationOffBloonDirectionModel (Prince of Darkness): the shot heads for the
+                # bloon from the eject point (OnEmit), or from the tower with dontSetAfterEmit.
+                bloon_dir = next(("air" if x["f"].get("useAirUnitPosition") else "tower" if x["f"].get("dontSetAfterEmit") else "eject" for x in items((em or {}).get("f", {}).get("behaviors"))
+                                  if x and x["type"] == "EmissionRotationOffBloonDirectionModel"), None)
                 with_main = next((x["f"].get("weaponId") for x in items(w["f"].get("behaviors"))
                                   if x and x["type"] == "FireWhenAlternateWeaponIsReadyModel"), None)
                 alt_id = next((x["f"].get("weaponId") for x in items(w["f"].get("behaviors"))
@@ -950,6 +1037,11 @@ def main():
                                 # targets (rateBonusPerRange, rangeMax).
                                 "dist_rate": next(([x["f"].get("rateBonusPerRange", 0.0), x["f"].get("rangeMax", 0)]
                                                    for x in items(w["f"].get("behaviors")) if x and x["type"] == "BloonDistanceRateBonusModel"), None),
+                                # VagrantWeaponBehaviorModel (Desperado): faster with fewer towers and
+                                # more bloons in range.
+                                "vagrant": next(([x["f"].get("noTowersRateBonus", 0.0), x["f"].get("towerRangeBonusReduction", 0.0),
+                                                  x["f"].get("bloonInRangeAttackSpeedBuff", 0.0), x["f"].get("maxBloonAttackSpeedBuff", 0.0)]
+                                                 for x in items(w["f"].get("behaviors")) if x and x["type"] == "VagrantWeaponBehaviorModel"), None),
                                 # LeakDangerAttackSpeedModel: up to maxRateIncreasePercent faster as bloons near the exit.
                                 "leak_danger": next((x["f"].get("maxRateIncreasePercent", 0.0) for x in items(w["f"].get("behaviors"))
                                                      if x and x["type"] == "LeakDangerAttackSpeedModel"), 0.0), "animation_offset": w["f"].get("animationOffset", 0.0),
@@ -979,7 +1071,9 @@ def main():
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
                                 "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit,
-                                "aim_offset": aim_offset, "with_main": with_main, "alt_id": alt_id, "fov": fov,
+                                "aim_offset": aim_offset, "bloon_dir": bloon_dir,
+                                # PrinceOfDarknessEmissionModel: this weapon sends the Prince's ghost.
+                                "prince": (em or {}).get("type") == "PrinceOfDarknessEmissionModel", "with_main": with_main, "alt_id": alt_id, "fov": fov,
                                 "fire_sounds": behavior_sounds(items(w["f"].get("behaviors")),
                                                                "CreateSoundOnProjectileCreatedModel", SOUND_KEYS),
                                 "to_bank": (deref(w["f"]["emission"]) or {}).get("type") == "SendToBankModel"})
@@ -998,8 +1092,12 @@ def main():
                         lm = next((l for l in link_models if not refs or (l.get("projectileModel") or {}).get("$ref") == pr.get("$ref")), link_models[0])
                         w["projectile"]["link_offset"] = lm.get("projectileRadiusOffset", 0.0)
             prio_camo = any(x and "PrioCamo" in x["type"] for x in items(af["behaviors"]))
+            # TargetDesperado*Model: the upgrade panel's camo and bounty (marked) toggles.
+            desperado = [x["f"] for x in items(af["behaviors"]) if x and x["type"].startswith("TargetDesperado")]
             random_position = next(([x["f"]["minRadius"], x["f"]["maxRadius"]] for x in items(af["behaviors"])
                                     if x and x["type"] == "RandomPositionBasicModel"), None)
+            random_basic = next((x["f"].get("mapBorder", 0.0) for x in items(af["behaviors"])
+                                 if x and x["type"] == "RandomPositionBasicModel"), None)
             rpm = next((x["f"] for x in items(af["behaviors"]) if x and x["type"] == "RandomPositionModel"), None)
             random_land = None
             if rpm and random_position is None:
@@ -1034,21 +1132,29 @@ def main():
                     necro = {k: ef.get(k, 0) for k in ("damageRbePerStack", "damageStackMax", "maxBloonsSpawnedPerWave",
                                                        "minBloonsSpawnedPerWave", "maxPiercePerBloon", "maxRbeSpawnedPerSecond",
                                                        "maxRbeStored", "rateRbePerStack", "rateStackMax", "roundsBeforeDecay",
-                                                       "maxPathRandomRange")}
+                                                       "maxPathRandomRange", "maxPathOffset")}
                 if em and em["type"] == "PrinceOfDarknessEmissionModel" and deref(em["f"].get("alternateProjectile")):
                     necro = dict(necro or {}, prince=projectile(deref(em["f"]["alternateProjectile"])),
-                                 princePierce=em["f"].get("minPiercePerBloon", 0))
+                                 princePierce=em["f"].get("minPiercePerBloon", 0),
+                                 # The Prince's own spot on the track and offset (Emit @0xc493b0).
+                                 princeRange=em["f"].get("maxPathRandomRange", 0),
+                                 princeOffset=em["f"].get("maxPathOffset", 0))
             return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "turn_body": turn_body, "rotate_always": rotate_always, "face_middle": face_middle,
                     # AttackModel name: Tower.UpdatedModel keeps the Attack of the same name.
                     "model_name": af.get("_name") or "",
                     "range": af["range"], "camo": camo, "rotate": rotate, "turn_rate": turn_rate,
                     "targets": targets, "weapons": weapons,
-                    "prio_camo": prio_camo, "skip_effects": skip_effects, "track_target": track_target, "track_closest": track_closest,
-                    "require_tags": require_tags, "exclude_tags": exclude_tags,
-                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land,
+                    "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
+                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
+                    "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
+                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic,
                     "fire_without_target": af.get("fireWithoutTarget", False),
                     # AttackModel.attackThroughWalls: no Map.IsTargetLineClear check.
-                    "through_walls": bool(af.get("attackThroughWalls", False))}
+                    "through_walls": bool(af.get("attackThroughWalls", False)),
+                    # TargetSelectedPointModel.startWithClosestTrackPoint: the point starts on the
+                    # attack's visible in-range path segment (TargetSelectedPoint.Process).
+                    "point_start_track": any(x and x["type"] == "TargetSelectedPointModel" and x["f"].get("startWithClosestTrackPoint")
+                                             for x in items(af["behaviors"]))}
 
         def ability(b):
             """AbilityModel: ActivateAttackModel attacks (on for `lifespan` seconds, or one volley
@@ -1057,7 +1163,16 @@ def main():
             out = {"name": bf["displayName"], "cooldown": bf.get("cooldown") or 0.0,
                    "description": bf.get("description"), "upgrade": bf.get("addedViaUpgrade"),
                    "ready": bool(bf.get("startOffCooldown")), "activate": [], "turbo": None,
+                   # activateOnPreLeak (Bomb Blitz), maxActivationsPerRound, resetCooldownOnTierUpgrade.
+                   "pre_leak": bool(bf.get("activateOnPreLeak")), "per_round": bf.get("maxActivationsPerRound", 0),
+                   "full_start": bool(bf.get("resetCooldownOnTierUpgrade")),
+                   # ToggleableAbilityBehaviorModel.startsToggledOn false: it starts toggled off
+                   # (Sniper 0-4-x's AmmoSwap beside Supply Drop).
+                   "toggled_off": any(x and x["type"] == "ToggleableAbilityBehaviorModel" and not x["f"].get("startsToggledOn")
+                                      for x in items(bf.get("behaviors"))),
                    "supports": [], "loan": None,
+                   # activateOnRoundEnd: it goes off by itself as each round ends (Jungle's Bounty).
+                   "round_end": bool(bf.get("activateOnRoundEnd")),
                    "sounds": behavior_sounds(items(bf.get("behaviors")), "CreateSoundOnAbilityModel", SOUND_KEYS)}
             for x in items(bf.get("behaviors")):
                 if not x:
@@ -1323,9 +1438,15 @@ def main():
                 op = deref(b["f"]["projectile"])
                 disp = next((x["f"].get("display") for x in items(op["f"]["behaviors"]) if x and x["type"] == "DisplayModel"),
                             op["f"].get("display"))
-                orbit = {"count": b["f"]["count"], "range": b["f"]["range"], "display": disp}
+                spin = next((x["f"].get("angle", 0.0) for x in items(op["f"]["behaviors"]) if x and x["type"] == "RotateModel"), 0.0)
+                orbit = {"count": b["f"]["count"], "range": b["f"]["range"], "display": disp, "spin": spin}
         round_start_rate = next(({"mult": b["f"]["modifier"], "duration": b["f"]["duration"]} for b in items(f["behaviors"])
                                  if b and b["type"] == "StartOfRoundRateBuffModel"), None)
+        # VigilanteTowerBehaviorModel (Desperado): on losing lives, weapon rates x
+        # loseLifeAttackSpeedBuff and range + loseLifeRangeBuff for the duration, then a cooldown.
+        vigilante = next(([b["f"]["loseLifeAttackSpeedBuff"], b["f"]["loseLifeRangeBuff"],
+                           b["f"]["loseLifeBuffDurationFrames"], b["f"]["loseLifeBuffCooldownFrames"]]
+                          for b in items(f["behaviors"]) if b and b["type"] == "VigilanteTowerBehaviorModel"), None)
         bank = next(({"capacity": b["f"]["capacity"], "interest": b["f"]["interest"], "auto": b["f"].get("autoCollect", False)}
                      for b in items(f["behaviors"]) if b and b["type"] == "BankModel"), None)
         # Buffs this tower gives others in range (Village, Shinobi Tactics).
@@ -1376,6 +1497,10 @@ def main():
               # SubCommanderSupportModel: +pierceIncrease pierce and x damageScale damage (+
               # damageIncrease) to Subs in range, itself included; unique (no stacking).
               extra = []
+              # SupportShinobiTactics.MutatorTower.Mutate (VERIFIED-DISASM @0xd92090): weapon rates x
+              # multiplier, and every projectile's pierce + (1 - multiplier) x the original's.
+              if b["type"] == "SupportShinobiTacticsModel":
+                  extra = [("pierce_pct", mult, 0.0)]
               if b["type"] == "SubCommanderSupportModel":
                   kind, add = "pierce", sf.get("pierceIncrease", 0)
                   extra = [("damage_mult", sf.get("damageScale", 1.0), sf.get("damageIncrease", 0))]
@@ -1590,10 +1715,30 @@ def main():
                             "cooldown_scale": bf.get("abilityCooldownSpeedScale", 1.0),
                             "cooldown_scale_global": bf.get("abilityCooldownSpeedScaleGlobal", 1.0),
                             "hero_xp": bf.get("heroXpScale", 1.0), "depth": bf.get("submergeDepth", 0.0)}
+        # SupportShinobiTactics.MutatorTower.Mutate (VERIFIED-DISASM @0xd92090) adds a share of the
+        # pierce of the first projectile in the tower model with the same id (recording ninja_032:
+        # the caltrops, id "Projectile" like the shurikens, get 8% of the shuriken's 2).
+        def walk_projs(x):
+            if isinstance(x, dict):
+                if "pid" in x and "pierce" in x:
+                    yield x
+                for v in x.values():
+                    yield from walk_projs(v)
+            elif isinstance(x, list):
+                for v in x:
+                    yield from walk_projs(v)
+        first_pierce = {}
+        for pj in walk_projs(attacks):
+            first_pierce.setdefault(pj["pid"], pj["pierce"])
+        for pj in walk_projs(attacks):
+            pj["shinobi_base"] = first_pierce[pj["pid"]]
         return {"name": f["_name"], "tiers": tiers, "range": f["range"], "global": f.get("isGlobalRange", False),
                 "air": air, "submerge": submerge, "air_modes": air_modes, "grapple": grapple, "stance": stance, "damage_speed": damage_speed,
+                # OverrideCamoDetectionModel (Monkey Sense): FirstUpdate gives the tower and its
+                # sub-towers a camo-detection mutator (Tower.AddMutatorIncludeSubTowers).
+                "detect_camo": any(b and b["type"] == "OverrideCamoDetectionModel" and b["f"].get("detectCamo") for b in items(f["behaviors"])),
                 "attacks": attacks, "pets": pets, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
-                "round_start_rate": round_start_rate, "bank": bank, "supports": supports,
+                "round_start_rate": round_start_rate, "vigilante": vigilante, "bank": bank, "supports": supports,
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
                 # SpiritOfTheForestModel (Druid x-x-4+): vines along the track; each zone's
                 # DamageOverTimeCustomModel by distance from the Druid (close / middle / far).
@@ -1691,6 +1836,8 @@ def main():
                                        if b and b["type"] == "SwitchTargetSupplierOnUpgradeModel"), None),
                 # TowerModel.towerSelectionMenuThemeId: the upgrade panel's theme (Camo, MonkeySub...).
                 "tsm_theme": f.get("towerSelectionMenuThemeId") or "Default",
+                # TowerModel.portrait: the upgrade panel's portrait (TSMThemeDefault.TowerInfoChanged).
+                "portrait": sprite_ref(f.get("portrait")),
                 "sounds": {"place": behavior_sounds(items(f["behaviors"]), "CreateSoundOnTowerPlaceModel", ["sound1", "sound2"]),
                            "upgrade": behavior_sounds(items(f["behaviors"]), "CreateSoundOnUpgradeModel", ["sound"]),
                            "sell": behavior_sounds(items(f["behaviors"]), "CreateSoundOnSellModel", ["sound"]),
@@ -1820,9 +1967,35 @@ def main():
         paragon = ({"tier": tier(pt), "cost": pu["cost"], "name": pu["_name"], "display": prefab_name(pt["f"].get("display")), "top": top,
                     "tops": tops, "bases": bases, "levels": len(dpaths),
                     "base_display": pt["f"].get("display"),
+                    # TowerModel.portrait: the upgrade panel's portrait (file names vary:
+                    # "ParagonMagusPerfectus", "Paragon - MasterBuilder", "SpikeFactoryParagon").
+                    "portrait": sprite_ref(pt["f"].get("portrait")),
+                    # UpgradeModel.icon: its icon in the upgrade panel.
+                    "icon": sprite_ref(pu.get("icon")),
                     # ParagonTowerModel.endAnimationState: ParagonTower.Finish sets the tower's and its
                     # attack displays' animation state to it when the sacrifice ends (-1: none).
                     "end_anim": ptm.get("endAnimationState", -1),
+                    # The purchase's effects (ParagonTower.StartSacrifice / Process /
+                    # MakeNewInvestmentEffect / Finish): one investment effect per sacrificed tower
+                    # (the Tier5 one for tier-5 towers), flown to the Paragon and shrunk, the
+                    # Paragon's own effect during the sacrifice and at its end, and the degree text.
+                    "sacrifice": {
+                        **{k: (lambda em: [prefab_name(em["f"].get("assetId")), em["f"].get("scale", 1.0) or 1.0]
+                                       if em and prefab_name(em["f"].get("assetId")) else None)(deref(ptm.get(f)))
+                           for k, f in (("invest", "investmentEffectModel"), ("invest_t5", "investmentEffectTier5Model"),
+                                        ("during", "effectDuringModel"), ("end", "endEffectModel"))},
+                        **{k: ptm.get(k) for k in ("effectMinScale", "effectMaxScale", "investStartScale", "investEndScale",
+                                                   "effectsStartMovingAt", "effectsDontStartMovingAt",
+                                                   "investmentEffectHeight", "investmentEffectDestYOffset",
+                                                   "degreeTextEffectId", "degreeTextEffectLifespan",
+                                                   "effectScaleDownTime", "investmentEffectExponent")},
+                        # CreateDegreeText's effect (degreeTextEffectId, a PrefabReference: the
+                        # degree in its text node) and degreeTextEffectLifespan.
+                        "degree_text": [n, ptm.get("degreeTextEffectLifespan", 0.0)] if (n := prefab_name(ptm.get("degreeTextEffectId"))) else None,
+                        # Every numeric field as serialized (their names don't all match the
+                        # runtime layout: the 1.5 s move time is stored as effectsStartMovingAtFrame).
+                        "raw": {k: v for k, v in ptm.items() if isinstance(v, (int, float)) and not isinstance(v, bool)},
+                    },
                     # ParagonTowerModel.inactiveDurationFrames: attacks paused while the sacrifice plays.
                     "inactive_frames": int(round(ptm.get("inactiveDuration", 0.0) * 60))}
                    if pt and pu else None)
@@ -1858,7 +2031,7 @@ def main():
         layers = displays.get(bid)
         if layers:
             b["display"] = [{"png": "bloon_displays/" + l["png"], "w": l["w"], "h": l["h"],
-                             "offset": l["offset"]} for l in layers]
+                             "offset": l["offset"], "trim": l.get("trim", [0.0, 0.0])} for l in layers]
     game_map = json.load(open(os.path.join(root, "maps", map_key, "map.json")))
 
     # Tower shop (ShopTowerDetailsModel order; towerCount 0 = not in the standard shop), with the
@@ -2016,8 +2189,55 @@ def main():
             out.append(item)
         return out
 
+    def power_projectiles():
+        """The projectile a Power puts on the map, by Power id (as game/powers.json): the projectileModel
+        of CashDropModel (a collectable with CashModel) and of the track Powers (RoadSpikesModel,
+        GlueTrapModel, MoabMineModel, CamoTrapModel)."""
+        game = next(o for o in objs.values() if o["type"] == "GameModel")
+        res = {}
+        for pw in items(game["f"].get("powers")):
+            if not pw:
+                continue
+            pf = pw["f"]
+            pid = pf.get("powerId") if pw["type"] == "PowerProModel" else pf["_name"]
+            for b in items(pf.get("behaviors")):
+                if b and b["type"] in ("CashDropModel", "RoadSpikesModel", "GlueTrapModel", "MoabMineModel", "CamoTrapModel"):
+                    res[pid] = projectile(deref(b["f"]["projectileModel"]))
+        return res
+
+    def power_towers():
+        """The tower a Power places, by Power id: its TowerModel through tower() / tower_tiers(), as
+        a shop tower's (tier 000). Kept apart from "towers" so it's never in the shop. "unmodelled":
+        its TowerModel behaviours the clone doesn't simulate for a Power tower yet (the game only
+        loads one with none)."""
+        modelled = {"AttackModel", "DisplayModel", "CreateEffectOnPlaceModel", "CreateEffectOnSellModel",
+                    "CreateSoundOnTowerPlaceModel", "CreateSoundOnSellModel", "PlayAnimationIndexModel",
+                    "CircleFootprintModel", "RectangleFootprintModel",
+                    # Banana Farmer: CollectCashZoneModel as Banana Farm x-x-5's (tier collect_zone);
+                    # ShowCashIconInsteadModel changes only its display.
+                    "CollectCashZoneModel", "ShowCashIconInsteadModel"}
+        game = next(o for o in objs.values() if o["type"] == "GameModel")
+        res = {}
+        for pw in items(game["f"].get("powers")):
+            if not pw or pw["f"].get("availableInMode"):
+                continue
+            pf = pw["f"]
+            pid = pf.get("powerId") if pw["type"] == "PowerProModel" else pf["_name"]
+            t = deref(pf.get("tower"))
+            if not (isinstance(t, dict) and "f" in t):
+                continue
+            name = t["f"]["_name"]
+            try:
+                res[pid] = {"name": name, "tower": tower(name), "tiers": tower_tiers(t["f"]["baseId"]),
+                            "unmodelled": sorted({b["type"] for b in items(t["f"]["behaviors"]) if b} - modelled)}
+            except Exception as e:  # a model the converters can't read yet: listed, not exported
+                print("power tower", pid, name, "not exported:", type(e).__name__, e, flush=True)
+        return res
+
     out = {
         "geraldo": geraldo_items(),
+        "power_projectiles": power_projectiles(),
+        "power_towers": power_towers(),
         "modes": modes,
         "start": {"mode": "Medium", "cash": medium["StartingCashModModel"]["changeBase"],
                   "lives": medium["StartingHealthModModel"]["addition"], "mods": list(medium.values())},

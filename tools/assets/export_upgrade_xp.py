@@ -22,11 +22,12 @@ for line in (root/'decoded/named/objects.jsonl').open(encoding='utf8'):
     if item['type']!='UpgradeModel':continue
     f=item['f'];costs[f['_name']]=f['xpCost']
     # The icon SpriteReference's GUID -> exported sprite file. Icons sharing a file name across
-    # towers were exported with their folder as a prefix ("TackShooter__FasterShootingUpgradeIcon").
+    # towers were exported with their folder as a prefix ("TackShooter__FasterShootingUpgradeIcon");
+    # tier-code icons with the tower's name (Desperado/100UpgradeIcon: Desperado100UpgradeIcon).
     path=catalog.get(f.get('icon') or '')
     if isinstance(path,str):
-        stem=Path(path).stem;prefixed=f'{Path(path).parent.name}__{stem}'
-        icons[f['_name']]=prefixed if (root/'ui/upgrades'/(prefixed+'.png')).exists() else stem
+        stem=Path(path).stem;folder=Path(path).parent.name
+        icons[f['_name']]=next((n for n in (f'{folder}__{stem}',f'{folder}{stem}') if (root/'ui/upgrades'/(n+'.png')).exists()),stem)
 (root/'ui/runtime/upgrade_xp.json').write_text(json.dumps(costs,indent=1),encoding='utf8')
 (root/'ui/runtime/upgrade_icons.json').write_text(json.dumps(icons,indent=1),encoding='utf8')
 (root/'ui/runtime/paragon_portraits.json').write_text(json.dumps(paragon_portraits,indent=1),encoding='utf8')

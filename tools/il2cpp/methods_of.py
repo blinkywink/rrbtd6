@@ -7,10 +7,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from codegen import PE64, find_module, method_pointers  # noqa: E402
+from codegen import PE64, find_module, method_pointers, game_dir  # noqa: E402
 from metadata_v39 import Metadata  # noqa: E402
 
-GAME = r"C:\Program Files\Epic Games\BloonsTD6"
+GAME = game_dir()
 
 
 def methods_of(type_name, image=None):

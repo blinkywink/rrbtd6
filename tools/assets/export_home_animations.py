@@ -1,8 +1,6 @@
 """Bake original continuous home-world idle clips in scene coordinates; local assets only."""
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 game, root = sys.argv[1:3]
@@ -17,16 +15,12 @@ entries = [
     ('bomb_idle', 'MainMenuWorld/Interactive/BombShooterPopUp/LOD_1', 'Idle'),
     ('boomerang_idle', 'MainMenuWorld/Town/PalmTree (2)/LOD_1/PalmTree_Base_JNT/PalmTree_Trunk_JNT/PalmTree_TrunkMid_JNT/PalmTree_TrunkTop_JNT/BoomerangPopUp/LOD_1', 'Idle'),
 ]
-manifest = []
-for key, path, clip in entries:
-    dest = root/'models/mainmenu_anim'/key
-    subprocess.run([sys.executable,str(Path(__file__).with_name('export_animated.py')),game,str(dest),
-                    'ui_scenes_all_',f'scene:{cab}|{path}','60'],
-                   env={**os.environ,'RRBTD6_ANIM_CLIP':clip},check=True)
-    data = json.loads((dest/'meta.json').read_text())
-    # Preserve the source loop flag. Short non-looping idle clips hold their
-    # final pose; they must never fall back to the exported skin bind pose.
-    manifest.append({'directory':key,'path':path,'clip':clip})
+# One load of the scene bundle for all of them. Exports keep the source loop flag: short
+# non-looping idle clips hold their final pose, never the exported skin bind pose.
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from model_batch import run as run_models
+run_models(game,[[str(root/'models/mainmenu_anim'/key),'ui_scenes_all_',f'scene:{cab}|{path}',{'RRBTD6_ANIM_CLIP':clip}] for key,path,clip in entries])
+manifest = [{'directory':key,'path':path,'clip':clip} for key,path,clip in entries]
 (root/'models/mainmenu_anim/manifest.json').write_text(json.dumps(manifest,indent=1))
 
 # The windmill is driven by a script, not an Animator clip. Preserve its source

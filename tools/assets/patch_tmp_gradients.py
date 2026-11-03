@@ -11,12 +11,10 @@ import os
 import sys
 from pathlib import Path
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
-TypeTreeHelper.read_typetree_boost = False
 
 game, root, *sources = sys.argv[1:]
 aa = os.path.join(game, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWindows64", "Full")
-monoscripts = glob.glob(os.path.join(aa, "*_monoscripts_*.bundle"))[0]
+monoscripts = glob.glob(os.path.join(aa, "*_monoscripts_*.bundle"))
 sources = sources or ["ui_scenes_all_*.bundle"]
 
 
@@ -27,7 +25,7 @@ def color(c):
 gradients = {}
 for source in sources:
     path = source if os.path.isabs(source) else glob.glob(os.path.join(aa, source))[0]
-    env = UnityPy.load(monoscripts, path)
+    env = UnityPy.load(path, *monoscripts)
     for obj in env.objects:
         if obj.type.name != "MonoBehaviour":
             continue

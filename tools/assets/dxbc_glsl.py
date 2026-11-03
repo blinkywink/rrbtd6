@@ -472,9 +472,13 @@ def cb_layout(pass_, prog, names):
     cp = pass_[prog]["m_CommonParameters"]
     binds = {names.get(b["m_NameIndex"]): b["m_Index"] for b in cp["m_ConstantBufferBindings"]}
     out = []
-    for c in cp["m_ConstantBuffers"]:
+    for i, c in enumerate(cp["m_ConstantBuffers"]):
         nm = names.get(c["m_NameIndex"])
-        out.append({"name": nm, "slot": binds.get(nm), "size": c.get("m_Size"),
+        # No bindings recorded at all (the Lightning shader's vertex program: UnityPerDraw,
+        # UnityPerFrame): the buffers take slots in declaration order (its vs_cb0[4] holds
+        # unity_ObjectToWorld, vs_cb1[21] unity_MatrixVP at register 17).
+        slot = binds.get(nm) if binds else i
+        out.append({"name": nm, "slot": slot, "size": c.get("m_Size"),
                     "vectors": [[names.get(v["m_NameIndex"]), v["m_Index"], v["m_Dim"]] for v in c["m_VectorParams"]],
                     "matrices": [[names.get(v["m_NameIndex"]), v["m_Index"]] for v in c["m_MatrixParams"]]})
     tex = [[names.get(x["m_NameIndex"]), x["m_Index"]] for x in cp["m_TextureParams"]]

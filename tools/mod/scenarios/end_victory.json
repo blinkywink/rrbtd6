@@ -1,0 +1,1 @@
+{"map": "Tutorial", "difficulty": "Easy", "mode": "Standard", "frames": 100000, "cash": -1, "fast": false, "towers": [], "quit": true, "end_frame": 90, "name": "end_victory", "round": 40, "end": "victory", "end_shots": [0.5, 0.75, 1.0, 1.25, 1.5, 2, 2.5, 2.9, 3.1, 3.25, 3.5, 4, 5], "end_next": 3.0}

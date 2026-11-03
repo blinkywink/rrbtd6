@@ -45,7 +45,7 @@ pub type Row = (&'static str, &'static str, Option<KeyCode>);
 
 pub const MONKEYS_EXTRA: [Row; 1] = [("hero", "Heroes", Some(KeyCode::U))];
 
-pub const GAMEPLAY: [Row; 11] = [
+pub const GAMEPLAY: [Row; 10] = [
     ("upgrade1", "Upgrade Path 1", Some(KeyCode::Comma)),
     ("upgrade2", "Upgrade Path 2", Some(KeyCode::Period)),
     ("upgrade3", "Upgrade Path 3", Some(KeyCode::Slash)),
@@ -55,7 +55,6 @@ pub const GAMEPLAY: [Row; 11] = [
     ("special2", "Tower Special 2", Some(KeyCode::PageUp)),
     ("sell", "Sell", Some(KeyCode::Backspace)),
     ("play", "Play / Fast Forward", Some(KeyCode::Space)),
-    ("send_next_round", "SendNextRound", None),
     ("pause", "Pause", Some(KeyCode::Escape)),
 ];
 

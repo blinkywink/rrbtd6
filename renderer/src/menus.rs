@@ -42,6 +42,7 @@ pub enum Menu {
     Paragon,
 }
 
+#[derive(Clone, Copy)]
 pub enum MenuAction {
     Close,
     Hotkeys,
@@ -58,6 +59,8 @@ pub enum MenuAction {
     ToggleAuto,
     /// Pause-screen sliders changed: (music, sound effects, hero voice), each 0..=1.
     Volume([f32; 3]),
+    /// The pause screen's Drag & Drop radio: true for Drag & Drop, false for Lock & Drop.
+    DragAndDrop(bool),
     /// Jukebox: previous (-1) / next (+1) track.
     Track(i32),
     ToggleLoop,
@@ -78,24 +81,27 @@ pub struct Backdrop {
 impl Backdrop {
     /// Snapshot of what has been drawn so far this frame.
     pub fn capture() -> Backdrop {
-        let img = get_screen_data();
+        Self::capture_with(std::env::var_os("RRBTD6_CPU_MENU_SNAPSHOT").is_some())
+    }
+    fn capture_with(use_reference:bool)->Backdrop {
+        let img = if use_reference {get_screen_data()}else{downsample_menu_snapshot()};
         let (w, h) = (img.width as usize, img.height as usize);
         // Downsample 8x, then two separable box-blur passes.
-        const K: usize = 8;
-        let (sw, sh) = ((w / K).max(1), (h / K).max(1));
+        let k=if use_reference{8}else{1};
+        let (sw, sh) = ((w / k).max(1), (h / k).max(1));
         let mut px = vec![[0f32; 3]; sw * sh];
         for y in 0..sh {
             for x in 0..sw {
                 let mut acc = [0f32; 3];
-                for dy in 0..K {
-                    for dx in 0..K {
-                        let i = ((y * K + dy).min(h - 1) * w + (x * K + dx).min(w - 1)) * 4;
+                for dy in 0..k {
+                    for dx in 0..k {
+                        let i = ((y * k + dy).min(h - 1) * w + (x * k + dx).min(w - 1)) * 4;
                         for c in 0..3 {
                             acc[c] += img.bytes[i + c] as f32;
                         }
                     }
                 }
-                px[y * sw + x] = acc.map(|v| v / (K * K) as f32);
+                px[y * sw + x] = acc.map(|v| v / (k * k) as f32);
             }
         }
         for _ in 0..2 {
@@ -141,6 +147,127 @@ impl Backdrop {
     }
 }
 
+impl Backdrop {
+    /// The end screens' background: CommonBackgroundScreen.TakeSnapshotWithBlurCB's quarter-size
+    /// snapshot of the map camera, blurred, in blurRawImg (its colour BLUR_TINT, no vignette).
+    /// Taken before the HUD draws; the HUD goes over it sharp, then the screen's Lightbox. The
+    /// real VictoryUI / DefeatUI frames fit a Gaussian of 2.25 quarter-size pixels (about 9 px
+    /// at 1080p) within 1.3 / 255 (median).
+    pub fn capture_map_blur() -> Backdrop {
+        let img = get_screen_data();
+        let (w, h) = (img.width as usize, img.height as usize);
+        let (sw, sh) = ((w / 4).max(1), (h / 4).max(1));
+        let mut px = vec![[0f32; 3]; sw * sh];
+        for y in 0..sh {
+            for x in 0..sw {
+                let mut acc = [0f32; 3];
+                for dy in 0..4 {
+                    for dx in 0..4 {
+                        let i = ((y * 4 + dy).min(h - 1) * w + (x * 4 + dx).min(w - 1)) * 4;
+                        for c in 0..3 {
+                            acc[c] += img.bytes[i + c] as f32;
+                        }
+                    }
+                }
+                px[y * sw + x] = acc.map(|v| v / 16.0);
+            }
+        }
+        // Separable Gaussian, sigma 2.25 (quarter-size pixels), edges clamped.
+        const SIGMA: f32 = 2.25;
+        let r = (SIGMA * 3.0).ceil() as i32;
+        let k: Vec<f32> = (-r..=r).map(|d| (-(d * d) as f32 / (2.0 * SIGMA * SIGMA)).exp()).collect();
+        let norm: f32 = k.iter().sum();
+        for horizontal in [true, false] {
+            let src = px.clone();
+            for y in 0..sh {
+                for x in 0..sw {
+                    let mut acc = [0f32; 3];
+                    for (j, kv) in k.iter().enumerate() {
+                        let d = j as i32 - r;
+                        let (xx, yy) = if horizontal { ((x as i32 + d).clamp(0, sw as i32 - 1), y as i32) } else { (x as i32, (y as i32 + d).clamp(0, sh as i32 - 1)) };
+                        let p = src[yy as usize * sw + xx as usize];
+                        for c in 0..3 {
+                            acc[c] += p[c] * kv;
+                        }
+                    }
+                    px[y * sw + x] = acc.map(|v| v / norm);
+                }
+            }
+        }
+        let t = [BLUR_TINT.r, BLUR_TINT.g, BLUR_TINT.b];
+        let bytes: Vec<u8> = px.iter().flat_map(|p| [(p[0] * t[0]) as u8, (p[1] * t[1]) as u8, (p[2] * t[2]) as u8, 255]).collect();
+        let tex = Texture2D::from_rgba8(sw as u16, sh as u16, &bytes);
+        tex.set_filter(FilterMode::Linear);
+        // The tint is in the pixels: drawn as is.
+        Backdrop { tex, sharp: true }
+    }
+}
+
+/// Compile and exercise the blur-copy pipeline while the loading screen is active.
+pub fn warm_menu_snapshot(){let _=downsample_menu_snapshot();}
+
+/// Actual-context pixel guard, including orientation and blur-edge behavior.
+pub fn verify_menu_snapshot(){
+    let (w,h)=(screen_width() as u16,screen_height() as u16);
+    let bytes:Vec<u8>=(0..h as usize).flat_map(|y|(0..w as usize).flat_map(move|x|
+        [((x*17+y*3)%256) as u8,((y*7+x/9)%256) as u8,((x/13+y/11)%2*255) as u8,255])).collect();
+    let texture=Texture2D::from_rgba8(w,h,&bytes);texture.set_filter(FilterMode::Nearest);
+    set_default_camera();clear_background(BLACK);draw_texture(&texture,0.0,0.0,WHITE);
+    let reference=Backdrop::capture_with(true).tex.get_texture_data();
+    let actual=Backdrop::capture_with(false).tex.get_texture_data();
+    assert_eq!((reference.width,reference.height),(actual.width,actual.height));
+    let worst=reference.bytes.iter().zip(&actual.bytes).map(|(a,b)|a.abs_diff(*b)).max().unwrap_or(0);
+    assert!(worst<=2,"GPU menu snapshot differs from CPU reference by {worst}/255");
+    eprintln!("menu-snapshot: CPU/GPU pixel guard passed, {}x{}, max channel difference {worst}/255",w,h);
+}
+
+/// Average the same 8x8 blocks as the CPU reference, before reading pixels back.
+/// Sixteen bilinear taps each average four source pixels. The remaining blur,
+/// vignette, tint and orientation use the existing CPU path unchanged.
+fn downsample_menu_snapshot()->Image {
+    thread_local!{static MATERIAL:std::cell::RefCell<Option<Material>>=const{std::cell::RefCell::new(None)};}
+    unsafe{get_internal_gl().flush();}
+    // Snapshot dimensions are framebuffer pixels, including Windows DPI scale.
+    let (fw,fh)=macroquad::miniquad::window::screen_size();
+    let (w,h)=(fw as u32,fh as u32);
+    let source=render_target(w.max(1),h.max(1));source.texture.set_filter(FilterMode::Linear);
+    source.texture.grab_screen();
+    let (sw,sh)=((w/8).max(1),(h/8).max(1));let target=render_target(sw,sh);
+    MATERIAL.with(|cache|{
+        let mut cache=cache.borrow_mut();
+        let material=cache.get_or_insert_with(||load_material(ShaderSource::Glsl{
+            vertex:r#"#version 100
+attribute vec3 position;
+uniform mat4 Model;
+uniform mat4 Projection;
+void main(){gl_Position=Projection*Model*vec4(position,1.0);}
+"#,
+            fragment:r#"#version 100
+precision highp float;
+uniform sampler2D Texture;
+uniform vec2 SourceSize;
+void main(){
+    vec2 origin=floor(gl_FragCoord.xy)*8.0;
+    vec3 total=vec3(0.0);
+    for(int y=0;y<4;y++){
+        for(int x=0;x<4;x++){
+            vec2 pixel=origin+vec2(float(x)*2.0+1.0,float(y)*2.0+1.0);
+            total+=texture2D(Texture,pixel/SourceSize).rgb;
+        }
+    }
+    gl_FragColor=vec4(total/16.0,1.0);
+}
+"#},MaterialParams{uniforms:vec![UniformDesc::new("SourceSize",UniformType::Float2)],..Default::default()}).expect("menu downsample shader"));
+        material.set_uniform("SourceSize",vec2(w.max(1) as f32,h.max(1) as f32));
+        push_camera_state();
+        let mut camera=Camera2D::from_display_rect(Rect::new(0.0,0.0,sw as f32,sh as f32));camera.render_target=Some(target.clone());
+        set_camera(&camera);clear_background(BLACK);gl_use_material(material);
+        draw_texture_ex(&source.texture,0.0,0.0,WHITE,DrawTextureParams{dest_size:Some(vec2(sw as f32,sh as f32)),..Default::default()});
+        unsafe{get_internal_gl().flush();}gl_use_default_material();pop_camera_state();
+    });
+    target.texture.get_texture_data()
+}
+
 fn box_blur(src: &[[f32; 3]], w: usize, h: usize, r: usize, horizontal: bool) -> Vec<[f32; 3]> {
     let mut out = vec![[0f32; 3]; src.len()];
     for y in 0..h {
@@ -178,6 +305,58 @@ pub(crate) fn load_loc(path: &Path) -> HashMap<String, String> {
     out
 }
 
+/// CalloutUiData components (VictoryPanel/CalloutData/Data/*): calloutId -> (headerLoc,
+/// subTextLoc, sprite); the first of an id (InitialisePlayerStatsPanel looks the id up).
+fn callout_ui(path: &Path) -> HashMap<u32, (String, String, Option<String>)> {
+    fn walk(n: &serde_json::Value, out: &mut HashMap<u32, (String, String, Option<String>)>) {
+        for c in n["comps"].as_array().into_iter().flatten().filter(|c| c["type"] == "CalloutUiData") {
+            if let Some(id) = c["calloutId"].as_u64() {
+                out.entry(id as u32).or_insert_with(|| (c["headerLoc"].as_str().unwrap_or("").into(), c["subTextLoc"].as_str().unwrap_or("").into(),
+                    c["sprite_name"].as_str().map(String::from)));
+            }
+        }
+        for ch in n["children"].as_array().into_iter().flatten() {
+            walk(ch, out);
+        }
+    }
+    let mut out = HashMap::new();
+    if let Some(v) = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()) {
+        walk(&v, &mut out);
+    }
+    out
+}
+
+/// Seconds of an Animator clip (its stop - start).
+fn end_clip_len(data: &serde_json::Value, controller: &str, clip: &str) -> f32 {
+    data["animators"].as_array().into_iter().flatten()
+        .filter(|a| a["controller"].as_str() == Some(controller))
+        .flat_map(|a| a["clips"].as_array().into_iter().flatten())
+        .find(|c| c["name"].as_str() == Some(clip))
+        .map_or(0.0, |c| (c["stop"].as_f64().unwrap_or(0.0) - c["start"].as_f64().unwrap_or(0.0)) as f32)
+}
+
+/// Write Defaults: whatever the controller's clips animate returns to its loaded value before the
+/// playing state's clip writes its own.
+fn reset_animated(n: &mut Node, pristine: &Node, data: &serde_json::Value, controller: &str) {
+    for animator in data["animators"].as_array().into_iter().flatten().filter(|a| a["controller"].as_str() == Some(controller)) {
+        for clip in animator["clips"].as_array().into_iter().flatten() {
+            for b in clip["bindings"].as_array().into_iter().flatten() {
+                let Some(path) = b["path"].as_str() else { continue };
+                let (Some(dst), Some(src)) = (n.find_mut(path), pristine.find(path)) else { continue };
+                dst.rt = src.rt.clone();
+                dst.active = src.active;
+                dst.alpha = src.alpha;
+                if let (Some(d), Some(s)) = (dst.img.as_mut(), src.img.as_ref()) {
+                    d.color = s.color;
+                }
+                if let (Some(d), Some(s)) = (dst.txt.as_mut(), src.txt.as_ref()) {
+                    d.color = s.color;
+                }
+            }
+        }
+    }
+}
+
 /// Scene dumps wrap the Canvas, whose RectTransform the Canvas component sizes to the screen.
 fn scene(path: &Path) -> Option<Node> {
     let mut n = Node::load(path)?;
@@ -197,6 +376,10 @@ enum Pick {
 }
 
 pub struct Menus {
+    /// Trophies the game just won earned (DEVIATIONS.md), shown in the victory screen's
+    /// rewards as a SmallBaseLootItem with the trophy icon.
+    pub trophy_reward: u64,
+    trophy_loot: Option<Node>,
     pause: Option<Node>,
     paragon: Option<Node>,
     /// The tower the Paragon popup is for, and its investment slider (0..=1).
@@ -204,6 +387,26 @@ pub struct Menus {
     paragon_slide: f32,
     victory: Option<Node>,
     defeat: Option<Node>,
+    /// VictoryUI / DefeatUI Animators (ui/runtime; controllers "Victory" / "Defeat", states with
+    /// Write Defaults), each tree as loaded (those defaults), and the state playing: its clip,
+    /// since when, and what its end leads to.
+    end_runtime: [serde_json::Value; 2],
+    end_pristine: [Option<Node>; 2],
+    end_state: (&'static str, f64, Option<MenuAction>),
+    /// VictoryUI's CalloutUiData by callout id: header and sub-text keys and the sprite.
+    callout_ui: HashMap<u32, (String, String, Option<String>)>,
+    /// DefeatScreen.bloonCauseDeathDisplayPrefab (a leaked bloon: its icon, "-damage").
+    leak_entry: Option<Node>,
+    /// PauseScreenUI's Animator clips (the jukebox's EQ, the Drag & Drop radio).
+    pause_runtime: serde_json::Value,
+    /// When the pause screen was last drawn: a gap means it opened again (its Animators restart).
+    pause_drawn: f64,
+    /// When it opened (the EQ's clock: unscaled time) and when the radio was last set.
+    pause_opened: f64,
+    radio_since: f64,
+    /// Drag & Drop chosen over Lock & Drop (the game's PlayerPrefs "dropAndLock" 0, unset by
+    /// default; settings.json "drop_and_lock").
+    pub drag_and_drop: bool,
     upgrades: Option<Node>,
     fore: Option<Node>,
     /// UpgradePopup (description bubble) and its first-column variant.
@@ -250,6 +453,22 @@ pub(crate) fn set_slider(p: &mut Node, sl: &str, v: f32) {
 }
 
 impl Menus {
+    /// An end screen opens: VictoryScreen on its stats (Callouts In), DefeatScreen at Defeat In;
+    /// SummaryScreen.ReOpen (back from Review Map) at Summary In.
+    pub fn open_end(&mut self, won: bool, reopen: bool) {
+        let clip = match (won, reopen) {
+            (true, false) => "VictoryStatsIn",
+            (true, true) => "VictoryIn",
+            (false, _) => "DefeatIn",
+        };
+        self.end_state = (clip, get_time(), None);
+    }
+
+    /// Autotest: the end screen's clip as if it had started `secs` earlier.
+    pub fn end_rewind(&mut self, secs: f64) {
+        self.end_state.1 -= secs;
+    }
+
     pub fn private_coop(&mut self,enabled:bool){
         if let Some(p)=&mut self.pause{p.set_active("Canvas/PauseMenuPanel/Bg/Buttons/Restart",!enabled);}
         if let Some(p)=&mut self.defeat{p.set_active("Canvas/DefeatPanel/Container/Buttons/RetryButton",!enabled);}
@@ -267,7 +486,6 @@ impl Menus {
                 "Bg/ChallengeRules",
                 "Bg/CTTileID",
                 "Bg/Goals",
-                "Bg/DragAndDrop/LockAndDrop",
                 "Bg/HorzLayout/PetSoundsObject",
                 "Bg/Buttons/Store",
                 "Bg/Buttons/ConsoleControls",
@@ -275,8 +493,17 @@ impl Menus {
                 "Bg/Buttons/PurchaseRaceTickets",
                 // Perks are an account feature; the side tab holds nothing else.
                 "Bg/SidePanelR",
+                // DEVIATION: no Twitch integration.
+                "Bg/SidePanel/ButtonGroup/TwitchButton",
             ] {
                 p.set_active(&format!("{PAUSE}/{n}"), false);
+            }
+            // Without the Twitch button the ButtonGroup (a VerticalLayoutGroup from the top) moves
+            // Hotkeys and Advanced up a slot; the side panel drops that slot (a 220 button and
+            // 150 spacing) from its bottom.
+            if let Some(n) = p.find_mut(&format!("{PAUSE}/Bg/SidePanel")) {
+                n.rt.pos.y += 370.0 * (1.0 - n.rt.pivot.y);
+                n.rt.size.y -= 370.0;
             }
             p.set_text(&format!("{PAUSE}/Bg/DifficultyText"), "Monkey Meadow - Medium");
             // Jukebox toggles start off (the On variants are swapped in by the script).
@@ -292,6 +519,9 @@ impl Menus {
             // Store and tower gift parts (the tower XP panel stays: UpdateUi shows it).
             for n in [
                 "PurchaseButtons",
+                // The Monkey XP "+" (a store product): hidden as SetIapButtons hides it when the
+                // store has no product (DEVIATIONS 1).
+                "TowerInfo/PurchaseTowerXPButton/PurchaseTowerXPButton",
                 "TowerGiftUnlock",
                 "GamepadInfoButton",
                 "UpgradeInfo/UpgradeDetails/UpgradePortrait/Portrait/Tier5PortraitUnlockEffect",
@@ -321,20 +551,22 @@ impl Menus {
         let mut victory = scene(&dir.join("VictoryUI.json"));
         if let Some(v) = victory.as_mut() {
             // Account / event parts: rewards, accolades, golden bloon, Monkey Teams.
-            for n in ["Container/Background/Rewards", "Container/Background/Completed", "Container/Background/UserChalObject",
+            // VictoryScreen.Open: completeObject (creation mode) and userChalObject (user play)
+            // off, rewardsObject on; the golden bloon and Monkey Teams only when they were on.
+            for n in ["Container/Background/Completed", "Container/Background/UserChalObject",
                 "Container/Background/AccoladeFloats", "Container/GoldenBloonContainer", "Container/MonkeyTeamsContainer", "CalloutData"] {
                 v.set_active(&format!("{VICTORY}/{n}"), false);
             }
         }
         let mut defeat = scene(&dir.join("DefeatUI.json"));
         if let Some(d) = defeat.as_mut() {
-            for n in ["Container/UserChalObject", "Container/AccoladeFloats", "Container/AlternateGameOverMessage",
-                "Container/LivesLostBloons", "Container/Buttons/ContinueButton", "StatsContainer"] {
+            // DefeatScreen.Open: no user challenge or alternate game-over message; regularObject
+            // (the round) on. Body stays as the prefab has it (off); the continue button and the
+            // lives-lost bloons are on.
+            for n in ["Container/UserChalObject", "Container/AccoladeFloats", "Container/AlternateGameOverMessage"] {
                 d.set_active(&format!("{DEFEAT}/{n}"), false);
             }
-            for n in ["Container/RegularObject", "Container/Body"] {
-                d.set_active(&format!("{DEFEAT}/{n}"), true);
-            }
+            d.set_active(&format!("{DEFEAT}/Container/RegularObject"), true);
         }
         let mut fore = scene(&dir.join("CommonForeground.json"));
         if let Some(f) = fore.as_mut() {
@@ -343,6 +575,13 @@ impl Menus {
             }
         }
         Menus {
+            trophy_reward: 0,
+            trophy_loot: Node::load(&dir.join("SmallBaseLootItem.json")).map(|mut n| {
+                n.name = "TrophyReward".into();
+                n.set_sprite("Icon", Some("TrophyIcon"));
+                for p in ["AddOne", "Bonus", "LimitedTime"] { n.set_active(p, false); }
+                n
+            }),
             paragon: Node::load(&dir.join("ParagonConfirmationPopup.json")).map(|mut n| {
                 n.hide_named(&["Jewel"]);
                 n
@@ -350,6 +589,20 @@ impl Menus {
             paragon_tower: 0,
             paragon_slide: 0.0,
             pause,
+            end_runtime: ["VictoryUI", "DefeatUI"].map(|s| std::fs::read_to_string(root.join(format!("ui/runtime/{s}.json"))).ok()
+                .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()),
+            end_pristine: [victory.clone(), defeat.clone()],
+            end_state: ("", 0.0, None),
+            callout_ui: callout_ui(&dir.join("VictoryUI.json")),
+            leak_entry: Node::load(&dir.join("BloonCauseDeathDisplay.json")),
+            pause_runtime: std::fs::read_to_string(root.join("ui/runtime/PauseScreenUI.json")).ok()
+                .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+            pause_drawn: f64::NEG_INFINITY,
+            pause_opened: 0.0,
+            radio_since: 0.0,
+            drag_and_drop: std::fs::read_to_string(root.join("settings.json")).ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .map_or(true, |v| v["drop_and_lock"].as_bool() != Some(true)),
             victory,
             defeat,
             upgrades,
@@ -520,40 +773,183 @@ impl Hud {
         out
     }
 
-    /// VictoryScreen / DefeatScreen: the mode (victory) or the round lost on (defeat), and the
-    /// Home / Restart / Review Map / Freeplay buttons.
+    /// VictoryScreen / DefeatScreen through their Animator ("Victory" / "Defeat", int
+    /// AnimationIndex): the victory opens on its player stats (Callouts In), Next (index 3) runs
+    /// Callouts Out into Summary In; the defeat opens at index 2 (Defeat In); leaving runs the
+    /// exit animation (index 1, Summary Out). Texts as VictoryScreen.Open / DefeatScreen.Open.
     fn draw_end(&mut self, menu: Menu, game: &Game, full: R, canvas_h: f32, s: f32) -> Vec<MenuAction> {
         let mut out = Vec::new();
-        let mode = game.mode_name.clone();
         let won = menu == Menu::Victory;
-        let Some(n) = (if won { self.menus.victory.as_mut() } else { self.menus.defeat.as_mut() }) else { return out };
-        if won {
-            n.set_active(&format!("{VICTORY}/Container/Buttons/FreePlayBtn"),game.race.is_none());
-            n.set_text(&format!("{VICTORY}/Container/Background/Body"), &format!("Congratulations! you completed this track on: {mode}"));
-            if let Some(race)=&game.race{n.set_text(&format!("{VICTORY}/Container/Background/Body"),&format!("Race practice completed in {}",race.time_text()));}
-            if n.clicked(&format!("{VICTORY}/Container/Buttons/HomeBtn")) {
-                out.push(MenuAction::Home);
-            }
-            if n.clicked(&format!("{VICTORY}/Container/Buttons/ReviewMapBtn")) {
-                out.push(MenuAction::ReviewMap);
-            }
-            if n.clicked(&format!("{VICTORY}/Container/Buttons/FreePlayBtn")) {
-                out.push(MenuAction::Freeplay);
-            }
-        } else {
-            n.set_text(&format!("{DEFEAT}/Container/RegularObject/DiedRoundTxt"), &format!("Round {}", game.round.max(1)));
-            if n.clicked(&format!("{DEFEAT}/Container/Buttons/HomeButton")) {
-                out.push(MenuAction::Home);
-            }
-            if n.clicked(&format!("{DEFEAT}/Container/Buttons/RetryButton")) {
-                out.push(MenuAction::Restart);
-            }
-            if n.clicked(&format!("{DEFEAT}/Container/Buttons/ReviewMapBtn")) {
-                out.push(MenuAction::ReviewMap);
+        let k = if won { 0 } else { 1 };
+        let controller = if won { "Victory" } else { "Defeat" };
+        if self.menus.end_state.0.is_empty() {
+            self.menus.open_end(won, false);
+        }
+        let now = get_time();
+        let data = &self.menus.end_runtime[k];
+        let len = |clip: &str| end_clip_len(data, controller, clip);
+        // Callouts Out leaves for Summary In at exit time 1; an exit animation's end does what
+        // was clicked.
+        let (clip, began, then) = self.menus.end_state;
+        if clip == "VictoryStatsOut" && now - began >= len(clip) as f64 {
+            self.menus.end_state = ("VictoryIn", began + len(clip) as f64, None);
+        } else if matches!(clip, "VictoryOut" | "DefeatOut") && now - began >= len(clip) as f64 {
+            if let Some(a) = then {
+                out.push(a);
+                self.menus.end_state.2 = None;
             }
         }
-        let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h, clip: None };
+        let (clip, began, _) = self.menus.end_state;
+        let loc = &self.menus.loc;
+        let text = |key: &str| loc.get(key).cloned().unwrap_or_else(|| key.to_string());
+        let profile_name = crate::local_profile::get(&self.menus.root).name;
+        let callouts = &self.menus.callout_ui;
+        let player_icon = self.menus.end_pristine[0].as_ref()
+            .and_then(|p| p.find(&format!("{VICTORY}/Container/StatsBackground/PlayerStats/Player/TowerIcon")))
+            .and_then(|t| t.img.as_ref()).and_then(|i| i.sprite.clone());
+        let sprites = &mut self.sprites;
+        let Some(n) = (if won { self.menus.victory.as_mut() } else { self.menus.defeat.as_mut() }) else { return out };
+        if let Some(pristine) = &self.menus.end_pristine[k] {
+            reset_animated(n, pristine, data, controller);
+        }
+        crate::frontend::apply_animation(n, data, controller, clip, Some((now - began) as f32));
+        // VictoryStatsIn turns MonkeyTeamsContainer on and the Victory clips GoldenBloonContainer;
+        // neither Monkey Teams nor golden bloons are in this game (DEVIATIONS.md).
+        n.set_active(&format!("{VICTORY}/Container/MonkeyTeamsContainer"), false);
+        n.set_active(&format!("{VICTORY}/Container/GoldenBloonContainer"), false);
+        if won {
+            // Our trophies in VictoryScreen's rewards (LootPanel), in place of Monkey Money.
+            let reward = self.menus.trophy_reward;
+            if let (Some(template), Some(panel)) = (&self.menus.trophy_loot, n.find_mut(&format!("{VICTORY}/Container/Background/Rewards/LootPanel"))) {
+                panel.children.retain(|c| c.name != "TrophyReward");
+                if reward > 0 {
+                    let mut item = template.clone();
+                    item.set_text("Description", &format!("+{reward}"));
+                    panel.children.push(item);
+                }
+            }
+            n.set_active(&format!("{VICTORY}/Container/Background/Rewards"), reward > 0);
+        }
+        let summary = matches!(clip, "VictoryIn" | "DefeatIn");
+        let mut state = self.menus.end_state;
+        if won {
+            // "Victory Body" with the difficulty's text (ReadonlyInGameData.selectedDifficulty).
+            n.set_text(&format!("{VICTORY}/Container/Background/Body"), &text("Victory Body").replace("{0}", &text(&game.difficulty)));
+            n.set_text(&format!("{VICTORY}/Container/StatsBackground/PlayerStats/Player/PlayerName"), &profile_name);
+            // SinglePlayerStatsPanel: the session's stats (LocalizationManager.FormatLong), the
+            // Monkey Star (the player's tower with the most pops: portrait, tiers, pops) and no
+            // featured-tower callout.
+            const PLAYER: &str = "Container/StatsBackground/PlayerStats/Player";
+            let count = |v: u64| money(v as f64).trim_start_matches('$').to_string();
+            // Powers and Insta Monkeys don't exist in the clone: always 0.
+            let st = game.stats;
+            for (row, v) in [("GameObject/TowersPlacedValue", st.towers_placed as u64), ("GameObject (7)/PopsValue", st.pops),
+                ("GameObject (1)/DamageValue", st.damage), ("GameObject (2)/EcoValue", st.eco.floor() as u64), ("GameObject (3)/MoabsValue", st.moabs()),
+                ("GameObject (4)/PowersValue", 0), ("GameObject (5)/InstasValue", 0), ("GameObject (6)/AbilitiesValue", st.abilities as u64),
+                ("GameObject (8)/Value", st.cash_spent.floor() as u64)] {
+                n.set_text(&format!("{VICTORY}/{PLAYER}/StatsDetail/Layout/{row}"), &count(v));
+            }
+            // The featured callout (CalloutManager): its ribbon, header, "{0} ..." sub-text and its
+            // portrait in place of the player's; none: the ribbon and texts off.
+            let callout = crate::callouts::pick(&game.stats, &game.difficulty, game.freeplay_seed)
+                .and_then(|(id, v)| callouts.get(&id).map(|ui| (ui.clone(), v)));
+            for p in ["FeaturedTowerDetail/Ribbon", "FeaturedTowerDetail/MainInfoText", "FeaturedTowerDetail/SubInfoText"] {
+                n.set_active(&format!("{VICTORY}/{PLAYER}/{p}"), callout.is_some());
+            }
+            if let Some(((header, sub, _), v)) = &callout {
+                n.set_text(&format!("{VICTORY}/{PLAYER}/FeaturedTowerDetail/MainInfoText"), &text(header));
+                n.set_text(&format!("{VICTORY}/{PLAYER}/FeaturedTowerDetail/SubInfoText"), &text(sub).replace("{0}", &(*v as u32).to_string()));
+            }
+            let icon = callout.as_ref().and_then(|((_, _, sp), _)| sp.clone()).filter(|s| sprites.has(s)).or(player_icon);
+            n.set_sprite(&format!("{VICTORY}/{PLAYER}/TowerIcon"), icon.as_deref());
+            let star = game.towers.iter().filter(|t| t.sub.is_none()).max_by_key(|t| t.pops);
+            n.set_active(&format!("{VICTORY}/{PLAYER}/MonkeyStarDetail"), star.is_some());
+            if let Some(t) = star {
+                n.set_active(&format!("{VICTORY}/{PLAYER}/MonkeyStarDetail/PopInfo"), true);
+                n.set_active(&format!("{VICTORY}/{PLAYER}/MonkeyStarDetail/CashInfo"), false);
+                n.set_text(&format!("{VICTORY}/{PLAYER}/MonkeyStarDetail/PopInfo/PopCount"), &count(t.pops));
+                n.set_text(&format!("{VICTORY}/{PLAYER}/MonkeyStarDetail/InstaTower/TowerInfo"), &format!("{}-{}-{}", t.tiers[0], t.tiers[1], t.tiers[2]));
+                // Its portrait: the tiers of its highest path ("200" for a 2-1-0).
+                let top = (0..3).max_by_key(|&k| (t.tiers[k], 2 - k)).unwrap_or(0);
+                let mut key = [b'0'; 3];
+                key[top] = b'0' + t.tiers[top];
+                let id = &game.tower_defs[t.def].0;
+                let icon = portrait_name(sprites, id, std::str::from_utf8(&key).unwrap_or("000"), None);
+                n.set_sprite(&format!("{VICTORY}/{PLAYER}/MonkeyStarDetail/InstaTower/Icon"), icon.as_deref());
+            }
+            if clip == "VictoryStatsIn" && n.clicked(&format!("{VICTORY}/Container/NextButton/NextButton")) {
+                state = ("VictoryStatsOut", now, None);
+            }
+            if summary {
+                if n.clicked(&format!("{VICTORY}/Container/Buttons/HomeBtn")) {
+                    out.push(MenuAction::Home);
+                }
+                if n.clicked(&format!("{VICTORY}/Container/Buttons/ReviewMapBtn")) {
+                    state = ("VictoryOut", now, Some(MenuAction::ReviewMap));
+                }
+                if n.clicked(&format!("{VICTORY}/Container/Buttons/FreePlayBtn")) {
+                    state = ("VictoryOut", now, Some(MenuAction::Freeplay));
+                }
+            }
+        } else {
+            // finalRoundTxt: the round lost on; continuePrice by that round (InGame.Lose: round
+            // index < 21: 100, < 41: 200, < 61: 300, < 81: 400, else 500).
+            let round = game.round.max(1);
+            n.set_text(&format!("{DEFEAT}/Container/RegularObject/DiedRoundTxt"), &format!("Round {round}"));
+            let index = round - 1;
+            let cost = match index { 0..=20 => 100, 21..=40 => 200, 41..=60 => 300, 61..=80 => 400, _ => 500 };
+            // In trophies (DEVIATIONS.md).
+            n.set_text(&format!("{DEFEAT}/Container/Buttons/ContinueButton/ContinueCost/CostValue"), &crate::local_profile::power_price(cost).to_string());
+            n.set_sprite(&format!("{DEFEAT}/Container/Buttons/ContinueButton/ContinueCost/Icon"), Some("TrophyIcon"));
+            // Single player (summary data not matchWon): AnimationIndex 2, title GetText("Defeat").
+            n.set_text(&format!("{DEFEAT}/TitleImage/TitleText"), &text("Defeat"));
+            // Bloons Leaked: a bloonCauseDeathDisplayPrefab per cause-of-defeat entry in the
+            // bloonCoDContainer, its icon GameModel.GetBloon(id less "Reanimated").icon, its text
+            // "-" + damage, shown when 0 < damage <= 50000.
+            if let (Some(proto), Some(group)) = (self.menus.leak_entry.as_ref(), n.find_mut(&format!("{DEFEAT}/Container/LivesLostBloons/BloonGroup"))) {
+                group.children = game.cause_of_defeat().into_iter().map(|(id, dmg)| {
+                    let mut e = proto.clone();
+                    let icon = game.bloon_sprite(&id.replace("Reanimated", "")).map(str::to_string);
+                    if let Some(img) = e.img.as_mut() {
+                        img.sprite = icon;
+                    }
+                    let shown = dmg > 0.0 && dmg <= 50000.0;
+                    e.set_active("LivesCount", shown);
+                    // Single.ToString: whole numbers without decimals.
+                    let v = if dmg.fract() == 0.0 { format!("{}", dmg as i64) } else { format!("{dmg}") };
+                    e.set_text("LivesCount", &format!("-{v}"));
+                    e
+                }).collect();
+            }
+            if summary {
+                if n.clicked(&format!("{DEFEAT}/Container/Buttons/HomeButton")) {
+                    out.push(MenuAction::Home);
+                }
+                if n.clicked(&format!("{DEFEAT}/Container/Buttons/RetryButton")) {
+                    out.push(MenuAction::Restart);
+                }
+                if n.clicked(&format!("{DEFEAT}/Container/Buttons/ReviewMapBtn")) {
+                    state = ("DefeatOut", now, Some(MenuAction::ReviewMap));
+                }
+            }
+        }
+        self.menus.end_state = state;
+        // The screen's CommonPanel picks the foreground's parts (DefeatUI: the Monkey Money
+        // counter; VictoryUI: none), with the account's values. Its buy button is removed
+        // (DEVIATIONS.md 1).
+        let panel = n.common_panel().map(|p| p.money);
+        let mut ctx = Ctx { sprites, fonts: &self.fonts, scale: s, canvas_h, clip: None };
         draw_tree(n, full, &mut ctx);
+        if let (Some(true), Some(f)) = (panel, self.menus.fore.as_mut()) {
+            for (path, on) in [("CashInfo", true), ("CashInfo/MoreBtn", false), ("CashInfo/DEBUGBtn", false), ("Back", false)] {
+                f.set_active(&format!("{FORE}/{path}"), on);
+            }
+            crate::frontend::account_preview::bind(&self.menus.root, f);
+            draw_tree(f, full, &mut ctx);
+            for path in ["CashInfo", "Back"] {
+                f.set_active(&format!("{FORE}/{path}"), path == "Back");
+            }
+        }
         out
     }
 
@@ -562,6 +958,14 @@ impl Hud {
         let hints = self.menus.game_hints;
         let (mut vols, mut drag) = (self.menus.volumes, self.menus.drag);
         let (track_name, loop_on, shuffle_on) = (self.menus.track_name.clone(), self.menus.loop_on, self.menus.shuffle_on);
+        let now = get_time();
+        if now - self.menus.pause_drawn > 0.25 {
+            self.menus.pause_opened = now;
+            self.menus.radio_since = now;
+        }
+        self.menus.pause_drawn = now;
+        let (opened, radio_since, drag_and_drop) = (self.menus.pause_opened, self.menus.radio_since, self.menus.drag_and_drop);
+        let runtime = &self.menus.pause_runtime;
         let Some(p) = self.menus.pause.as_mut() else { return out };
         // Volume sliders: press on a slider (or its handle) and drag; value follows the cursor
         // across the handle slide area, like UnityEngine.UI.Slider.
@@ -609,6 +1013,17 @@ impl Hud {
         if p.clicked(&format!("{jb}/Controls/ShufflePlaylistBtn")) {
             out.push(MenuAction::ToggleShuffle);
         }
+        // TrackEQ: EQAnimation's default state, EQPlaying (looping; MiniJukeBoxPlayer never
+        // changes it), on unscaled time from the screen's opening.
+        let eq = end_clip_len(runtime, "EQAnimation", "EQPlaying").max(1e-3) as f64;
+        crate::frontend::apply_animation(p, runtime, "EQAnimation", "EQPlaying", Some(((now - opened) % eq) as f32));
+        // Drag & Drop / Lock & Drop: PauseScreen.ToggleDragAndDrop sets the ToggleRadio
+        // Animator's VisibleState (On: Drag & Drop), its hit box toggling it.
+        let radio = if drag_and_drop { "ToggleRadioOn" } else { "ToggleRadioOff" };
+        crate::frontend::apply_animation(p, runtime, "ToggleRadio", radio, Some((now - radio_since) as f32));
+        if p.clicked(&format!("{PAUSE}/Bg/DragAndDrop/DragAndDropHitBox")) {
+            out.push(MenuAction::DragAndDrop(!drag_and_drop));
+        }
         let cp = format!("{PAUSE}/Bg/ContinuousPlay");
         set_toggle(p, &[&format!("{cp}/BtnOn"), &format!("{cp}/ContinuousPlayHitBox/Position/BtnOnWithTint")], auto_start);
         set_toggle(p, &[&format!("{PAUSE}/Bg/GameHints/BtnOn")], hints);
@@ -636,6 +1051,10 @@ impl Hud {
         draw_tree(p, full, &mut ctx);
         self.menus.volumes = vols;
         self.menus.drag = drag;
+        if let Some(&MenuAction::DragAndDrop(v)) = out.iter().find(|a| matches!(a, MenuAction::DragAndDrop(_))) {
+            self.menus.drag_and_drop = v;
+            self.menus.radio_since = now;
+        }
         if toggle_hints {
             self.menus.game_hints = !hints;
         }
@@ -672,51 +1091,16 @@ impl Hud {
         let icon_of = |icons: &HashMap<String, String>, name: &str, path: usize, tier: usize| find_icon(icons, name, &id, path, tier);
         let set = item.set;
         let tower_cost = item.cost;
+        // UpdateUi: xpToSpend = GetText("XP") + ": " + FormatFloat(GetTowerXP(baseId), "N0").
+        let xp = format!("{}: {}", self.menus.text("XP"), crate::tower_xp::format_n0(crate::tower_xp::get(&self.menus.root, &id)));
         let menus = &mut self.menus;
         let Some(u) = menus.upgrades.as_mut() else { return out };
 
         u.set_text(&format!("{UPG}/TowerInfo/TowerTitle"), &tower_name);
-        // UpdateUi: xpToSpend = "XP: " + the tower's XP (Btd6Player.GetTowerXP, N0).
-        let xp = crate::frontend::account_preview::monkey_account().and_then(|a| a.xp.get(&id).copied()).unwrap_or(0.0).trunc();
-        u.set_text(&format!("{UPG}/TowerInfo/XPToSpend"), &format!("{}: {}", menus.loc.get("XP").map(String::as_str).unwrap_or("XP"),
-            crate::frontend::account_preview::number(xp)));
+        u.set_text(&format!("{UPG}/TowerInfo/XPToSpend"), &xp);
         u.set_text(&format!("{UPG}/TowerInfo/TowerDescription"), &description);
-
-        // UpgradeScreen.PopulatePaths: with no upgrade chosen, select the ResetUpgradeUnlocks
-        // result (start at path 1's first card; CompareDetails against each unowned upgrade).
-        crate::frontend::account_preview::ensure(&menus.root);
-        let account = crate::frontend::account_preview::monkey_account();
-        if menus.pick_without_account && account.is_some() {
-            menus.pick = None;
-            menus.pick_without_account = false;
-        }
-        if menus.pick.is_none() && account.is_none() {
-            menus.pick_without_account = true;
-        }
-        let has = |name: &str| account.as_ref().is_some_and(|a| a.acquired.contains(name));
-        // ShowParagonPanel: the tower has a Paragon and all three tier 5 upgrades are owned.
-        let paragon_panel = paragon.is_some() && (0..3).all(|path| name_of(path, 4).is_some_and(|u| has(&u.name)));
-        if menus.pick.is_none() && paragon_panel {
-            // UpdateUi selects the Paragon after PopulatePaths when its panel shows.
-            menus.pick = Some(Pick::Paragon);
-        }
-        if menus.pick.is_none() {
-            let owned = |name: &str| account.as_ref().is_some_and(|a| a.acquired.contains(name));
-            let xp = account.as_ref().and_then(|a| a.xp.get(&id).copied()).unwrap_or(0.0).trunc();
-            let affordable = |name: &str| menus.upgrade_xp.get(name).is_some_and(|&cost| cost <= xp);
-            let mut best = (0usize, 0usize);
-            for path in 0..3 {
-                for tier in 0..5 {
-                    let Some(cand) = name_of(path, tier) else { continue };
-                    if owned(&cand.name) { continue; }
-                    let Some(b) = name_of(best.0, best.1) else { best = (path, tier); continue };
-                    let (cand_aff, best_aff) = (affordable(&cand.name), affordable(&b.name));
-                    let prefer = if b.tier < cand.tier || (cand_aff && !best_aff) { cand_aff || !best_aff } else { false };
-                    if owned(&b.name) || prefer { best = (path, tier); }
-                }
-            }
-            menus.pick = Some(Pick::Upgrade(best.0, best.1));
-        }
+        let paragon_panel=paragon.is_some() && tt.is_some();
+        if menus.pick.is_none(){menus.pick=Some(if paragon_panel{Pick::Paragon}else{Pick::Upgrade(0,0)});}
         // Upgrade cards: all unlocked (blue, gold at tier 5), the picked one glowing.
         for path in 0..3 {
             for tier in 0..5 {
@@ -751,7 +1135,7 @@ impl Hud {
         u.set_active(&format!("{UPG}/UpgradeInfo/ParagonContainer/ParagonPanel"), paragon_panel);
         // SwitchTower / UpdateUi: once the Paragon itself is owned, the Paragon title panel shows and
         // the title and description switch to their Paragon-styled copies (same text).
-        let paragon_owned = has(&format!("{id} Paragon"));
+        let paragon_owned = paragon_panel;
         u.set_active(&format!("{UPG}/TowerInfo/ParagonTitlePanel"), paragon_owned);
         for (normal, styled) in [("TowerTitle", "TowerTitleParagon"), ("TowerDescription", "TowerDescriptionParagon")] {
             u.set_active(&format!("{UPG}/TowerInfo/{normal}"), !paragon_owned);

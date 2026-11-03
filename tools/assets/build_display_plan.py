@@ -16,9 +16,7 @@ import os
 import sys
 
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 
-TypeTreeHelper.read_typetree_boost = False
 
 GAME = sys.argv[1]
 TOWERS = sys.argv[2:]
@@ -338,7 +336,8 @@ for tower in TOWERS:
                  for p in [deref(r["f"].get("projectileModel"))] + list(items(r["f"].get("projectileModelUpgrades")))]
         shots += [deref(w["f"].get("projectile")) for r in objs.values()
                   if r["type"] == "TowerModel" and r["f"].get("geraldoItemName")
-                  for a in items(r["f"]["behaviors"]) if a and a["type"] == "AttackModel"
+                  # AttackAirUnitModel: the Genie Bottle's genie.
+                  for a in items(r["f"]["behaviors"]) if a and a["type"] in ("AttackModel", "AttackAirUnitModel")
                   for w in items(a["f"]["weapons"]) if w]
         for proj in shots:
             for g in (projectiles(proj) if proj else []):

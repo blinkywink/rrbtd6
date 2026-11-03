@@ -11,9 +11,10 @@ use std::collections::HashMap;
 use std::path::Path;
 #[path = "coop_hud.rs"]
 mod coop_hud;
+#[path = "placement_buttons.rs"]
+mod placement_buttons;
+pub use placement_buttons::PlaceClick;
 
-/// CanvasScaler: ScaleWithScreenSize, 3840x2160, Expand.
-const REF: Vec2 = vec2(3840.0, 2160.0);
 /// ShopMenu16:9 width (canvas units).
 const SHOP_W: f32 = 600.0;
 
@@ -21,12 +22,29 @@ const SHOP: &str = "ShopMenu16:9";
 /// The bottom-bar shop below 14:9 (render3d::layout bottom).
 const SHOP_BOTTOM: &str = "ShopMenu4:3";
 const TSM_OPTS: &str = "Ratio/Scaler/TowerElements/SelectedTowerOptions";
-const THEME: &str = "Ratio/Scaler/TowerElements/SelectedTowerInformation/TowerSelectionMenuThemes/TSMThemeDefault";
+const THEMES: &str = "Ratio/Scaler/TowerElements/SelectedTowerInformation/TowerSelectionMenuThemes";
+
+/// The upgrade panel for TowerModel.towerSelectionMenuThemeId: TowerSelectionMenu loads that theme's
+/// own prefab, with its own layout ("ActionButton" is TSMThemeWithActionButton).
+fn theme_path(id: &str) -> String {
+    let file = match id {
+        "" => "Default",
+        "ActionButton" => "WithActionButton",
+        id => id,
+    };
+    format!("{THEMES}/TSMTheme{file}")
+}
+
+/// Themes whose TSMActionButton (a TSMWithActionButton) sets a point: shown while the tower has that
+/// input (TSMThemeWithActionButton.UpdateActionButton, InGame.HasCustomInput).
+const POINT_THEMES: [&str; 4] = ["ActionButton", "MortarMonkey", "SelectPointInput", "TechBotAmbushTech"];
 const INFO: &str = "Ratio/Scaler/InfoPanel";
 /// TowerSelectionMenu.GetAdvancedStat's rows.
 const ADV_STATS: usize = 7;
 
 pub enum Action {
+    ModEvent(String,String),
+    ModDismiss,
     Coop(rrbtd6_coop::Action),
     Buy(usize),
     /// A tower pulled sideways out of the shop: placed where the mouse is released.
@@ -34,11 +52,14 @@ pub enum Action {
     Go,
     Upgrade(usize),
     Sell,
+    SellRemoveable,
     /// The advanced stats' eye button: the panel shows Pops (true) or Damage (false); saved.
     ShowPops(bool),
     Target(TargetMode),
     /// "Set Target": the next click on the map sets the selected tower's aim point.
     SetPoint,
+    /// Back to the default target (Mermonkey's Select Default).
+    DefaultPoint,
     Close,
     /// Gear button: the pause screen.
     Pause,
@@ -52,6 +73,8 @@ pub enum Action {
     TempleUpgrade(usize, usize),
     /// A Geraldo shop item picked: used now, or taken in hand for the next map click.
     GeraldoItem(usize),
+    /// A Power picked in the Powers menu (its id): taken in hand for the next map click.
+    Power(String),
     /// The camo priority toggle (TSMThemeCamo...): flip it on the selected tower.
     CamoPrio,
     /// AmbidextrousRangs: throw with the left (true) or right hand.
@@ -60,6 +83,8 @@ pub enum Action {
     Submerge,
     /// TSMThemeMonkeyAce's reverse button.
     Reverse,
+    /// Skywarden: switch between Spread and Focus stance.
+    Stance,
     /// TSMThemeSuperMonkey's left-hand target row: set the off hand's mode.
     LeftTarget(TargetMode),
     /// TSMThemeBananaFarm: collect this bank (false) or every bank (true).
@@ -75,13 +100,18 @@ struct Press {
 }
 
 pub struct Hud {
+    pub(crate) mod_ui:crate::mod_ui::ModUi,
     pub(crate) account_ui:crate::account_ui::AccountUi,
     coop: coop_hud::CoopHud,
+    place_btns: placement_buttons::PlaceButtons,
     pub(crate) left: Node,
-    race_ui:Option<Node>,
     right: Node,
     shop: Node,
     tsm: Node,
+    /// TowerSelectionMenu with only its RemoveBtn: a selected removeable's "Remove for $n".
+    remove_menu: Node,
+    /// The removeable's cost and whether the player can pay, while one is selected.
+    pub removeable: Option<(i32, bool)>,
     pub(crate) sprites: Sprites,
     pub(crate) fonts: Fonts,
     /// icon_key(upgrade name) -> sprite name.
@@ -97,8 +127,14 @@ pub struct Hud {
     shop_bottom: bool,
     scroll_vel: f32,
     press: Option<Press>,
+    shop_tap: ShopTap,
     /// TSM "i" button: the InfoPanel (next upgrade descriptions, stats) is shown.
     info_open: bool,
+    /// An owned upgrade being held down: its path and since when (DEVIATIONS.md: hold 1 s to
+    /// show its description, tap to hide).
+    current_hover: Option<(usize, f64)>,
+    /// The tower and path whose owned upgrade's description is showing.
+    current_popup: Option<(usize, usize)>,
     /// The panel shows Pops instead of Damage (the player's setting; Damage by default).
     pub show_pops: bool,
     /// Seconds since the upgrade menu opened on the left (lives/cash slide out of its way).
@@ -112,9 +148,21 @@ pub struct Hud {
     pub(crate) sandbox: crate::sandbox::SandboxUi,
     pub(crate) temple: crate::temple_popup::TemplePopup,
     pub(crate) support: crate::support_popup::SupportPopup,
+    pub(crate) welcome: crate::welcome_popup::WelcomePopup,
     pub(crate) geraldo: crate::geraldo_shop::GeraldoShop,
-    /// The grafted controls of each upgrade panel theme, by theme id.
-    theme_controls: HashMap<String, Vec<String>>,
+    /// The in-game Powers menu (the shop's PowersButton).
+    pub(crate) powers: crate::powers_menu::PowersMenu,
+}
+
+/// Only released taps on the same tile form a double-click. Scroll/pull cancels it.
+#[derive(Default)]
+struct ShopTap {last:Option<(usize,f64)>}
+impl ShopTap {
+    fn tap(&mut self,index:usize,now:f64)->bool{
+        if self.last.is_some_and(|(old,time)|old==index&&now>=time&&now-time<0.3){self.last=None;true}
+        else{self.last=Some((index,now));false}
+    }
+    fn cancel(&mut self){self.last=None;}
 }
 
 /// EventSystem pixelDragThreshold (screen px).
@@ -122,10 +170,17 @@ const DRAG_THRESHOLD: f32 = 10.0;
 /// ScrollRect decelerationRate (velocity kept per second).
 const DECELERATION: f32 = 0.135;
 /// Shop ScrollRect m_ScrollSensitivity (16:9 UITowers): canvas units per mouse-wheel notch.
-const WHEEL_STEP: f32 = 150.0;
+pub(crate) const WHEEL_STEP: f32 = 150.0;
 /// miniquad reports the raw Windows wheel delta (WHEEL_DELTA = 120 per notch); Unity's
 /// scrollDelta counts notches.
 const WHEEL_NOTCH: f32 = 120.0;
+/// This frame's mouse wheel in notches, as Unity's Input.mouseScrollDelta (ScrollRect moves
+/// scrollSensitivity canvas units per notch). Windows reports WHEEL_DELTA per notch; the
+/// other platforms' backends already count notches.
+pub(crate) fn wheel_notches() -> f32 {
+    let y = mouse_wheel().1;
+    if cfg!(windows) { y / WHEEL_NOTCH } else { y }
+}
 
 /// MainHudLeftAlign "StatsPanel" controller: LeftGroup anchoredPosition.x, sampled over
 /// StatsSlideInFromLeft (0.167 s); StatsSlideInFromRight snaps back to the first value.
@@ -169,10 +224,10 @@ impl Hud {
         let mut budget=crate::load_work::Budget::new();
         let dir = root.join("ui").join("prefabs");
         let worker_dir=dir.clone();
-        let (mut left,mut right,mut shop,mut tsm,theme,button)=crate::load_work::spawn(move||Some((
+        let (mut left,mut right,mut shop,mut tsm,button)=crate::load_work::spawn(move||Some((
             Node::load(&worker_dir.join("MainHudLeftAlign.json"))?,Node::load(&worker_dir.join("MainHudRightAlign.json"))?,
             Node::load(&worker_dir.join("RightPanel.json"))?,Node::load(&worker_dir.join("TowerSelectionMenu.json"))?,
-            Node::load(&worker_dir.join("TSMThemeDefault.json"))?,Node::load(&worker_dir.join("TowerPurchaseButton.json"))?
+            Node::load(&worker_dir.join("TowerPurchaseButton.json"))?
         ))).await?;
         // TowerSelectionMenu.GetAdvancedStat: Damage, Pops, Round Placed, Current Value, Cash
         // Spent, Cash Earnt, Lives Gained, each a copy of the Stat row.
@@ -207,7 +262,7 @@ impl Hud {
         ]);
         right.set_text(&format!("{rp}/RoundGroup/Title"), "Round");
 
-        hide(&mut shop, &["CancelPurchaseButton", "ConfirmlPurchaseButton", "ShopMenu3D"]);
+        hide(&mut shop, &["ShopMenu3D"]);
         for root in [SHOP, SHOP_BOTTOM] {
             for p in ["UITowersFrontier", "UITowersRogue", "ToggleBloons", "SendRound", "ReviewMapReturn", "EditorBackBtn", "EditorTowerBackBtn", "GoButtonGlowPulse"] {
                 shop.set_active(&format!("{root}/{p}"), false);
@@ -290,59 +345,22 @@ impl Hud {
                 tsm.set_active(&format!("{u}/TierIndicators/Tier {t}/Restricted"), false);
             }
         }
-        let mut theme = theme;
-        hide(&mut theme, &["TSMCoopPlayerID", "TSMPopInfoAll/CashEarnt", "TargetType/Bar", "TargetType/Count", "UpgradeToggleButton"]);
-        theme.set_sprite("BackgroundImage", Some("PortraitContainerPrimary"));
-        // "Set Target" buttons from the Mortar and select-point themes, shown when needed.
-        let action = |file: &str| Node::load(&dir.join(file)).and_then(|n| n.find("TSMActionButton").cloned());
-        if let Some(mut b) = action("TSMThemeMortarMonkey.json") {
-            b.active = false;
-            theme.children.push(b);
-        }
-        if let Some(mut b) = action("TSMThemeSelectPointInput.json") {
-            b.name = "TSMActionButtonSquare".into();
-            b.active = false;
-            let mut icon = b.clone();
-            icon.name = "Icon".into();
-            icon.children.clear();
-            icon.button = false;
-            icon.rt.amin = vec2(0.5, 0.5);
-            icon.rt.amax = vec2(0.5, 0.5);
-            icon.rt.pos = Vec2::ZERO;
-            icon.rt.size = vec2(130.0, 130.0);
-            icon.active = true;
-            if let Some(i) = icon.img.as_mut() {
-                i.sprite = Some("TargetSetIcon".into());
-                i.kind = 0;
-            }
-            b.children.push(icon);
-            theme.children.push(b);
-        }
-        // Every other theme's own controls (TowerModel.towerSelectionMenuThemeId: the camo
-        // priority toggle, the Sub's submerge button, Banana Farm bank buttons...), grafted on
-        // as "<Theme>_<control>" and shown for towers using that theme. Mortar and select-point
-        // have their buttons above.
-        let mut theme_controls: HashMap<String, Vec<String>> = HashMap::new();
-        let base: std::collections::HashSet<String> = theme.children.iter().map(|c| c.name.clone()).collect();
+        // Every theme prefab, shown one at a time for the selected tower's theme.
+        let mut themes = Vec::new();
         for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             budget.checkpoint().await;
             let f = e.file_name().to_string_lossy().to_string();
-            let Some(id) = f.strip_prefix("TSMTheme").and_then(|x| x.strip_suffix(".json")) else { continue };
-            let id = if id == "WithActionButton" { "ActionButton" } else { id };
-            if ["Default", "MortarMonkey", "SelectPointInput", "DefaultProp"].contains(&id) {
-                continue;
-            }
-            let Some(t) = Node::load(&e.path()) else { continue };
-            for mut c in t.children.into_iter().filter(|c| !base.contains(&c.name)) {
-                let name = format!("{id}_{}", c.name);
-                c.name = name.clone();
-                c.active = false;
-                theme_controls.entry(id.to_string()).or_default().push(name);
-                theme.children.push(c);
-            }
+            let Some(name) = f.strip_prefix("TSMTheme").and_then(|x| x.strip_suffix(".json")) else { continue };
+            let Some(mut theme) = Node::load(&e.path()) else { continue };
+            hide(&mut theme, &["TSMCoopPlayerID", "TargetType/Bar",
+                "TargetType/Count", "UpgradeToggleButton"]);
+            theme.set_sprite("BackgroundImage", Some("PortraitContainerPrimary"));
+            theme.name = format!("TSMTheme{name}");
+            theme.active = false;
+            themes.push(theme);
         }
-        if let Some(n) = tsm.find_mut("Ratio/Scaler/TowerElements/SelectedTowerInformation/TowerSelectionMenuThemes") {
-            n.children.push(theme);
+        if let Some(n) = tsm.find_mut(THEMES) {
+            n.children.extend(themes);
         }
 
         let fonts = Fonts::load(root, &[("Btd6FontTitleSDF", "fonts/title"), ("Btd6FontBodySDF", "fonts/body")]).await;
@@ -381,14 +399,27 @@ impl Hud {
             crate::sandbox::SandboxUi::load(&worker_dir),crate::temple_popup::TemplePopup::load(&worker_dir),
             crate::support_popup::SupportPopup::load(&worker_dir),crate::geraldo_shop::GeraldoShop::load(&worker_dir)
         )).await;
-        let mut race_ui=if game.race.is_some(){Node::load(&dir.join("RaceUi.json"))}else{None};
-        if let Some(race)=&mut race_ui{race.rt=right.rt.clone();}
         Some(Hud {
+            welcome: crate::welcome_popup::WelcomePopup::load(&dir),
+            powers: crate::powers_menu::PowersMenu::load(&dir, root),
+            mod_ui:crate::mod_ui::ModUi::load(root),
             account_ui:Default::default(),
             coop,
-            left,race_ui,
+            place_btns: placement_buttons::PlaceButtons::load(&dir),
+            left,
             right,
             shop,
+            remove_menu: {
+                let mut menu = tsm.clone();
+                menu.active = true;
+                for child in ["SelectedTowerInformation", "SelectedTowerOptions", "SelectedTowerWorth", "GeraldoShopContainer", "FrontierTraitsTab", "FrontierTraits"] {
+                    menu.set_active(&format!("Ratio/Scaler/TowerElements/{child}"), false);
+                }
+                menu.set_active("Ratio/Scaler/BG1", false);
+                menu.set_active("Ratio/Scaler/TowerElements/RemoveTower", true);
+                menu
+            },
+            removeable: None,
             tsm,
             sprites,
             fonts,
@@ -400,7 +431,10 @@ impl Hud {
             shop_bottom: false,
             scroll_vel: 0.0,
             press: None,
+            shop_tap: ShopTap::default(),
             info_open: std::env::var("RRBTD6_INFO").is_ok(),
+            current_hover: None,
+            current_popup: None,
             // settings.json "show_pops" (the advanced stats' eye button), Damage by default.
             show_pops: std::fs::read_to_string(root.join("settings.json"))
                 .ok()
@@ -414,7 +448,6 @@ impl Hud {
             ability_rects: Vec::new(),
             paragon_portraits,
             sandbox,temple,support,geraldo,
-            theme_controls,
         })
     }
 
@@ -482,23 +515,28 @@ impl Hud {
     }
 
     pub(crate) fn canvas_scale() -> f32 {
-        (screen_width() / REF.x).min(screen_height() / REF.y)
+        crate::render3d::canvas_scale(screen_width(), screen_height())
     }
 
     /// True if the point is over a HUD panel or button (map input should ignore it).
     pub fn blocks(&self, p: Vec2) -> bool {
+        if self.removeable.is_some() && self.remove_menu.rect("Ratio/Scaler/TowerElements/RemoveTower/RemoveBtn").is_some_and(|r| r.contains(p)) {
+            return true;
+        }
         let l = Self::layout();
-        l.shop.contains(p) || !l.ui.contains(p)
+        self.mod_ui.blocks(p) || l.shop.contains(p) || !l.ui.contains(p) || self.powers.covers(p)
             || self.tsm.find("Ratio/Scaler/BG1").is_some_and(|n| self.tsm.active && n.screen.contains(p))
-            || self.tsm.find(INFO).is_some_and(|n| self.tsm.active && n.active && n.screen.contains(p))
+            || self.tsm.find(INFO).is_some_and(|n| self.tsm.active && n.active && drawn_over(n, p))
             || self.right.rect("Anim/RoundPanel/PauseButton").is_some_and(|r| r.contains(p))
             || self.ability_rects.iter().any(|r| r.contains(p))
-            || self.left.rect("LeftGroup/LayoutGroup/HealthGroup").is_some_and(|r|r.contains(p))
-            || self.left.rect("LeftGroup/LayoutGroup/CashGroup").is_some_and(|r|r.contains(p))
+            || ["HealthGroup","HealthGroup/Health","CashGroup","CashGroup/Cash","CashGroup/CashIcon"].iter()
+                .any(|g|self.left.rect(&format!("LeftGroup/LayoutGroup/{g}")).is_some_and(|r|r.contains(p)))
             || self.sandbox_blocks(p)
             || self.temple_blocks()
+            || self.sandbox.typing()
             || self.geraldo_blocks(p)
             || self.coop.blocks(p)
+            || self.placement_button_blocks(p)
     }
 
     /// Ability buttons along the bottom left of the map (AbilityButtons: 250-unit slots, 180-unit
@@ -672,6 +710,58 @@ impl Hud {
         });
     }
 
+    /// Title-font text `px` pixels high centred on `at`, in TextMeshPro's four-corner gradient
+    /// (top left, top right, bottom left, bottom right) with the black outline material.
+    pub fn gradient_text(&self, text: &str, at: Vec2, px: f32, gradient: [Color; 4]) {
+        let a = gradient[0].a;
+        let style = TmpStyle {
+            outline: Color::new(0.0, 0.0, 0.0, a),
+            outline_width: 0.25,
+            face_dilate: 0.2,
+            ratio_a: 0.8333,
+            ratio_c: 0.5104,
+            ..Default::default()
+        };
+        let (w, h) = (px * 8.0, px * 3.0);
+        self.fonts.draw("Btd6FontTitleSDF", &TextBox { gradient: Some(gradient),
+            text,
+            rect: Rect::new(at.x - w / 2.0, at.y - h / 2.0, w, h),
+            size: px,
+            color: WHITE,
+            h_align: 2,
+            v_align: 512,
+            style: &style,
+            bold: false,
+            spacing: 0.0,
+        });
+    }
+
+    /// An effect's world-space TextMeshPro (particles::WorldText) projected to `rect` (screen),
+    /// `px` per em, in its gradient (or face colour) and TMP alignment, with the title font's
+    /// black outline as `gradient_text`.
+    pub fn effect_text(&self, text: &str, rect: Rect, px: f32, gradient: [Color; 4], h_align: u32, v_align: u32) {
+        let a = gradient[0].a;
+        let style = TmpStyle {
+            outline: Color::new(0.0, 0.0, 0.0, a),
+            outline_width: 0.25,
+            face_dilate: 0.2,
+            ratio_a: 0.8333,
+            ratio_c: 0.5104,
+            ..Default::default()
+        };
+        self.fonts.draw("Btd6FontTitleSDF", &TextBox { gradient: Some(gradient),
+            text,
+            rect,
+            size: px,
+            color: WHITE,
+            h_align: h_align as i64,
+            v_align: v_align as i64,
+            style: &style,
+            bold: false,
+            spacing: 0.0,
+        });
+    }
+
     fn icon(&self, name: &str, tower: &str, path: usize, tier: usize) -> Option<String> {
         find_icon(&self.icons, name, tower, path, tier)
     }
@@ -686,6 +776,8 @@ impl Hud {
     }
 
     pub fn draw(&mut self, game: &Game, mut selected: Option<usize>, placing: Option<usize>, speed: u32, auto_start: bool) -> Vec<Action> {
+        self.mod_ui.sync(game);
+        crate::uitree::block_input(self.mod_ui.modal());
         let mut out = Vec::new();
         // The UIRect (render3d::layout) in canvas units, y up: the HUD trees lay out inside it.
         let l = Self::layout();
@@ -699,9 +791,12 @@ impl Hud {
         let lg = "LeftGroup/LayoutGroup";
         self.left.set_text(&format!("{lg}/HealthGroup/Health"), &format!("{:.0}", game.lives.max(0.0)));
         self.left.set_text(&format!("{lg}/CashGroup/Cash"), &money(game.cash));
+        // Simulation.ThriveStatusChanged: ThriveGlow by the cash while a Thrive runs.
+        self.left.set_active(&format!("{lg}/CashGroup/ThriveGlow"), !game.thrives.is_empty());
         self.sandbox_resources(game,&mut out);
         let round = (game.round + 1).min(game.total_rounds());
-        self.right.set_text("Anim/RoundPanel/RoundGroup/Round/Value", &format!("{round}/{}", game.total_rounds()));
+        let round_text=if game.sandbox||game.freeplay{round.to_string()}else{format!("{round}/{}",game.total_rounds())};
+        self.right.set_text("Anim/RoundPanel/RoundGroup/Round/Value", &round_text);
 
         // Shop: Go / fast-forward state, affordability, hovered tower name. Below 14:9 the game
         // shows ShopMenu4:3 (the bottom bar) instead of ShopMenu16:9.
@@ -710,6 +805,7 @@ impl Hud {
         self.shop.set_active(SHOP_BOTTOM, l.bottom);
         if self.shop_bottom != l.bottom {
             self.shop_bottom = l.bottom;
+            self.shop_tap.cancel();
             self.scroll = 0.0;
             self.scroll_vel = 0.0;
             self.press = None;
@@ -717,6 +813,9 @@ impl Hud {
         // Sandbox: the ToggleBloons button opens the bloon menu.
         let tb = format!("{shop_root}/ToggleBloons");
         self.shop.set_active(&tb, game.sandbox);
+        // HYPOTHESIS P-SANDBOXPOWERSBTN: in sandbox ToggleBloons takes the PowersButton's rect (the
+        // prefab's two rects coincide) and the bloon menu's SBPowersBtn opens the Powers instead.
+        self.shop.set_active(&format!("{shop_root}/PowersButton"), !game.sandbox);
         if game.sandbox && self.shop.clicked(&tb) {
             self.toggle_sandbox(&mut selected);
             if self.sandbox.open {
@@ -730,14 +829,6 @@ impl Hud {
         self.shop.set_active(&format!("{go}/Go"), !running);
         self.shop.set_active(&format!("{go}/FastForwardOff"), running && speed == 1);
         self.shop.set_active(&format!("{go}/FastForwardOn"), running && speed > 1);
-        self.shop.set_active(&format!("{shop_root}/SendRound"),game.race.is_some());
-        self.shop.set_active(&go,game.race.is_none());
-        if game.race.is_some()&&self.shop.clicked(&format!("{shop_root}/SendRound")){out.push(Action::Go);}
-        if let (Some(node),Some(race))=(&mut self.race_ui,&game.race){
-            node.set_text("RaceTimer/RaceTimeTxt",&race.time_text());
-            node.set_text("RaceTimer/Title",&race.name);
-            node.hide_named(&["GhostTimeObject","Flash","AdditionalHudsPanel","RaceEventFlag"]);
-        }
         // Shop list: a ScrollRect inside its RectMask2D (wheel, drag with inertia). A press
         // that turns into a drag doesn't click the tower under it.
         let list = format!("{shop_root}/UITowers/Mask");
@@ -750,10 +841,14 @@ impl Hud {
             // wheel into x there: wheel up moves the content left).
             let horizontal = l.bottom;
             let max = if horizontal { sorter.rt.size.x - view.screen.w / s } else { sorter.rt.size.y - view.screen.h / s }.max(0.0);
-            let over = view.screen.contains(m);
-            let wheel = mouse_wheel().1;
+            // The sandbox bloon menu slides over the shop and takes its clicks: a double-click there
+            // opened the Upgrades screen of the tile underneath.
+            let over = view.screen.contains(m) && !self.powers.covers(m) && !self.sandbox_blocks(m);
+            let wheel = wheel_notches();
+            if is_mouse_button_pressed(MouseButton::Left)&&!over{self.shop_tap.cancel();}
             if over && wheel != 0.0 {
-                self.scroll += if horizontal { 1.0 } else { -1.0 } * wheel / WHEEL_NOTCH * WHEEL_STEP;
+                self.shop_tap.cancel();
+                self.scroll += if horizontal { 1.0 } else { -1.0 } * wheel * WHEEL_STEP;
                 self.scroll_vel = 0.0;
             }
             if over && is_mouse_button_pressed(MouseButton::Left) {
@@ -768,6 +863,7 @@ impl Hud {
                         pull = Some(p.start);
                     }
                     p.dragging |= along.abs() > DRAG_THRESHOLD;
+                    if p.dragging||pull.is_some(){self.shop_tap.cancel();}
                     if p.dragging {
                         let to = (p.from - along / s).clamp(0.0, max);
                         if dt > 0.0 {
@@ -827,10 +923,14 @@ impl Hud {
             self.shop.set_text_color(&format!("{b}/Button/Text"), if afford { WHITE } else { Color::new(1.0, 0.0, 0.0, 1.0) });
             self.shop.set_active(&format!("{b}/Button/Selected"), self.shop_sel == i);
             let hit = self.shop.rect(&format!("{b}/Button"));
-            let tapped = tap.is_some_and(|p| hit.is_some_and(|r| r.contains(p) && r.contains(m)));
-            let pulled = pull.is_some_and(|p| hit.is_some_and(|r| r.contains(p)));
+            let tapped = tap.is_some_and(|p| hit.is_some_and(|r| r.contains(p) && r.contains(m))) && !self.powers.covers(m);
+            let pulled = pull.is_some_and(|p| hit.is_some_and(|r| r.contains(p))) && !self.powers.covers(m);
             if tapped || pulled {
                 self.shop_sel = i;
+                if tapped&&self.shop_tap.tap(i,get_time())&&!item.hero {
+                    out.push(Action::Upgrades(i));
+                    continue;
+                }
                 // Only towers with simulation data can be placed so far.
                 if let Some(def) = game.tower_defs.iter().position(|(n, _)| n == &item.id) {
                     if afford && !locked && !hero_out {
@@ -843,6 +943,9 @@ impl Hud {
         self.shop.set_text(&format!("{shop_root}/TowerSelected/Text"), &sel_name);
         if self.shop.clicked(&go) {
             out.push(Action::Go);
+        }
+        if !game.sandbox && self.shop.clicked(&format!("{shop_root}/PowersButton")) {
+            self.toggle_powers();
         }
         if self.right.clicked("Anim/RoundPanel/PauseButton") {
             out.push(Action::Pause);
@@ -875,19 +978,35 @@ impl Hud {
             self.tsm.rt.pivot.x = x;
             let (name, _) = &game.tower_defs[tw.def];
             let pdef = game.tower_tiers[tw.def].as_ref().and_then(|x| x.paragon.clone());
-            let display = match (&tw.paragon, &pdef) {
-                (Some(_), Some(p)) => self.menus.loc.get(&p.name).cloned().unwrap_or_else(|| crate::spaced(&p.name)),
-                _ => crate::spaced(name),
-            };
-            self.tsm.set_text(&format!("{THEME}/TowerNameText"), &display);
-            self.tsm.set_text(&format!("{THEME}/TowerNameText/Text"), &display);
+            // This tier's theme (towerSelectionMenuThemeId), the only one shown.
+            // The Boomerang paragon's model keeps AmbidextrousRangs, but the game shows it no hand
+            // buttons (observed in game; TSMThemeAmbidextrousRangs' decompile doesn't show why).
+            let mut theme_id = game.tier(t).map(|x| x.tsm_theme.clone()).filter(|id| !(tw.paragon.is_some() && id == "AmbidextrousRangs")).unwrap_or_default();
+            if self.tsm.find(&theme_path(&theme_id)).is_none() {
+                theme_id.clear();
+            }
+            let th = theme_path(&theme_id);
+            if let Some(n) = self.tsm.find_mut(THEMES) {
+                for c in &mut n.children {
+                    c.active = th.ends_with(&format!("/{}", c.name));
+                }
+            }
+            // TSMThemeDefault.Selected (0x180b8f680): LocalizationManager.GetText(TowerModel.baseId), a
+            // Paragon's too ("Wizard Monkey"; its own name is ParagonDetails' title).
+            let display = self.menus.loc.get(name).cloned().unwrap_or_else(|| crate::spaced(name));
+            self.tsm.set_text(&format!("{th}/TowerNameText"), &display);
+            self.tsm.set_text(&format!("{th}/TowerNameText/Text"), &display);
             // TowerSelectionMenu.UpdatePopInfo: Damage, or Pops with the player's setting;
             // TSMThemeDefault.HideDamagePopsStatsCheck: neither for a tower that doesn't attack.
             let peaceful = game.tier(t).is_none_or(|x| x.attacks.is_empty());
-            self.tsm.set_text(&format!("{THEME}/TSMPopInfoAll/Pops/PopText"), &tw.pops.to_string());
-            self.tsm.set_text(&format!("{THEME}/TSMPopInfoAll/Damage/DamageText"), &tw.damage.to_string());
-            self.tsm.set_active(&format!("{THEME}/TSMPopInfoAll/Pops"), !peaceful && self.show_pops);
-            self.tsm.set_active(&format!("{THEME}/TSMPopInfoAll/Damage"), !peaceful && !self.show_pops);
+            let stats = if self.tsm.find(&format!("{th}/TSMCounterContainer")).is_some() { "TSMCounterContainer" } else { "TSMPopInfoAll" };
+            self.tsm.set_text(&format!("{th}/{stats}/Pops/PopText"), &tw.pops.to_string());
+            self.tsm.set_text(&format!("{th}/{stats}/Damage/DamageText"), &tw.damage.to_string());
+            self.tsm.set_active(&format!("{th}/{stats}/Pops"), !peaceful && self.show_pops);
+            self.tsm.set_active(&format!("{th}/{stats}/Damage"), !peaceful && !self.show_pops);
+            // TSMThemeDefault.UpdateFromSimInfo: the Cash Earnt row shows once the tower has earned any.
+            self.tsm.set_active(&format!("{th}/{stats}/CashEarnt"), tw.cash_earned > 0.0);
+            self.tsm.set_text(&format!("{th}/{stats}/CashEarnt/CashText"), &(tw.cash_earned.floor() as i64).to_string());
             // Towers whose attacks have a single Target*Model (Tack Shooter) can't change mode.
             let modes = game.target_modes(t);
             let fixed = (modes.len() <= 1).then(|| modes.first().copied()).flatten();
@@ -895,35 +1014,33 @@ impl Hud {
             // instead of targeting arrows (TSMThemeMortarMonkey); the Dartling's "Locked" mode
             // adds the square one (TSMThemeSelectPointInput).
             let only_point = fixed == Some(TargetMode::Point);
-            self.tsm.set_active(&format!("{THEME}/TargetType"), !modes.is_empty() && !only_point);
-            self.tsm.set_active(&format!("{THEME}/TSMActionButton"), only_point);
-            self.tsm.set_active(&format!("{THEME}/TSMActionButtonSquare"), !only_point && game.uses_point(t));
-            for b in ["ForwardsButton", "BackwardsButton"] {
-                self.tsm.set_active(&format!("{THEME}/TargetType/{b}"), modes.len() > 1);
+            self.tsm.set_active(&format!("{th}/TargetType"), !modes.is_empty() && !only_point);
+            let point_theme = POINT_THEMES.contains(&theme_id.as_str());
+            if point_theme {
+                self.tsm.set_active(&format!("{th}/TSMActionButton"), only_point || game.uses_point(t));
             }
-            self.tsm.set_text(&format!("{THEME}/TargetType/Text"), {
+            for b in ["ForwardsButton", "BackwardsButton"] {
+                self.tsm.set_active(&format!("{th}/TargetType/{b}"), modes.len() > 1);
+            }
+            self.tsm.set_text(&format!("{th}/TargetType/Text"), {
                 let m = fixed.unwrap_or(tw.target);
                 if tw.air.is_some() { m.air_label() } else { m.label() }
             });
-            if self.tsm.clicked(&format!("{THEME}/TSMActionButton")) || self.tsm.clicked(&format!("{THEME}/TSMActionButtonSquare")) {
+            if point_theme && self.tsm.clicked(&format!("{th}/TSMActionButton")) {
                 out.push(Action::SetPoint);
             }
-            // This tier's theme's own controls (towerSelectionMenuThemeId).
-            // The Boomerang paragon's model keeps AmbidextrousRangs, but the game shows it no hand
-            // buttons (observed in game; TSMThemeAmbidextrousRangs' decompile doesn't show why).
-            let theme_id = game.tier(t).map(|x| x.tsm_theme.clone()).filter(|id| !(tw.paragon.is_some() && id == "AmbidextrousRangs")).unwrap_or_default();
-            for (id, names) in &self.theme_controls {
-                for n in names {
-                    self.tsm.set_active(&format!("{THEME}/{n}"), *id == theme_id);
-                }
-            }
             // The camo priority toggle; HYPOTHESIS P-CAMOTICK: its cross shows while it's on.
-            // Boomerang Monkey (AmbidextrousRangs): the hand it throws with; the other greyed.
-            let left = format!("{THEME}/AmbidextrousRangs_LeftHandButton");
-            let right = format!("{THEME}/AmbidextrousRangs_RightHandButton");
+            // Boomerang Monkey: TSMThemeAmbidextrousRangs.UpdateFromSimInfo (VERIFIED-DISASM
+            // @0xb8bd20) makes the hand in use's button non-interactable and the other one
+            // interactable; their Animation transition's disabled look is invisible, so only the
+            // button to switch to shows (Left while throwing right-handed, the default).
+            let left = format!("{th}/LeftHandButton");
+            let right = format!("{th}/RightHandButton");
             if theme_id == "AmbidextrousRangs" {
-                self.tsm.set_img_gray(&format!("{left}/Icon"), !tw.flip);
-                self.tsm.set_img_gray(&format!("{right}/Icon"), tw.flip);
+                self.tsm.set_active(&left, !tw.flip);
+                self.tsm.set_active(&right, tw.flip);
+                self.tsm.set_img_gray(&format!("{left}/Icon"), false);
+                self.tsm.set_img_gray(&format!("{right}/Icon"), false);
                 if self.tsm.clicked(&left) {
                     out.push(Action::Hand(true));
                 } else if self.tsm.clicked(&right) {
@@ -933,8 +1050,8 @@ impl Hud {
             // Monkey Ace: reverse (with its cooldown clock); the long button sets the centre of
             // Centered Path. Heli Pilot: the long button sets the Lock In Place point.
             if theme_id == "MonkeyAce" {
-                let rev = format!("{THEME}/MonkeyAce_ButtonGroup/ReverseToggle");
-                self.tsm.set_active(&format!("{THEME}/MonkeyAce_ButtonGroup/ParagonCarpetBombSelectMultiPoint"), false);
+                let rev = format!("{th}/ButtonGroup/ReverseToggle");
+                self.tsm.set_active(&format!("{th}/ButtonGroup/ParagonCarpetBombSelectMultiPoint"), false);
                 self.tsm.set_active(&format!("{rev}/CooldownEffect"), !game.can_reverse(t));
                 if self.tsm.clicked(&rev) && game.can_reverse(t) {
                     out.push(Action::Reverse);
@@ -942,9 +1059,8 @@ impl Hud {
             }
             for (id, mode) in [("MonkeyAce", TargetMode::Centered), ("HeliPilot", TargetMode::Point)] {
                 if theme_id == id {
-                    let b = format!("{THEME}/{id}_TSMActionButton");
+                    let b = format!("{th}/TSMActionButton");
                     self.tsm.set_active(&b, tw.target == mode);
-                    self.tsm.set_active(&format!("{THEME}/TSMActionButtonSquare"), false);
                     if tw.target == mode && self.tsm.clicked(&b) {
                         out.push(Action::SetPoint);
                     }
@@ -953,14 +1069,14 @@ impl Hud {
             // Super Monkey with two arms (Robo Monkey...): a target row per hand instead of one.
             if theme_id == "SuperMonkey" {
                 let hands = game.has_hands(t);
-                let both = format!("{THEME}/SuperMonkey_BothHandsContainer");
+                let both = format!("{th}/BothHandsContainer");
                 self.tsm.set_active(&both, hands);
-                self.tsm.set_active(&format!("{THEME}/SuperMonkey_Text"), hands);
+                self.tsm.set_active(&format!("{th}/Text"), hands);
                 // Made from a Dart Monkey by Geraldo's Worn Hero's Cape (its tiers are capped).
-                self.tsm.set_active(&format!("{THEME}/SuperMonkey_TSMWornHeroCape"), tw.tier_cap < 5);
+                self.tsm.set_active(&format!("{th}/TSMWornHeroCape"), tw.tier_cap < 5);
                 if hands {
-                    self.tsm.set_active(&format!("{THEME}/TargetType"), false);
-                    self.tsm.set_text(&format!("{THEME}/SuperMonkey_Text"), tw.target.label());
+                    self.tsm.set_active(&format!("{th}/TargetType"), false);
+                    self.tsm.set_text(&format!("{th}/Text"), tw.target.label());
                     self.tsm.set_text(&format!("{both}/TSMTargetTypeLeftHand/Text"), tw.left_target.label());
                     let r = format!("{both}/TSMTargetTypeRightHand");
                     let l = format!("{both}/TSMTargetTypeLeftHand");
@@ -978,7 +1094,7 @@ impl Hud {
             // Banana Farm: a bank's Collect (its balance) and Collect All (every bank's), and the
             // IMF Loan's debt.
             if theme_id == "BananaFarm" {
-                let g = format!("{THEME}/BananaFarm_BankButtonGroup");
+                let g = format!("{th}/BankButtonGroup");
                 let bank = game.tier(t).is_some_and(|tr| tr.bank.is_some());
                 self.tsm.set_active(&g, bank);
                 self.tsm.set_active(&format!("{g}/BankDeposit"), false);
@@ -992,11 +1108,11 @@ impl Hud {
                         out.push(Action::BankCollect(true));
                     }
                 }
-                self.tsm.set_active(&format!("{THEME}/BananaFarm_Debt"), game.debt > 0.0);
-                self.tsm.set_text(&format!("{THEME}/BananaFarm_Debt/Text"), &format!("-{}", money(game.debt.ceil())));
+                self.tsm.set_active(&format!("{th}/Debt"), game.debt > 0.0);
+                self.tsm.set_text(&format!("{th}/Debt/Text"), &format!("-{}", money(game.debt.ceil())));
             }
             // Monkey Sub: submerge / surface, for tiers that can (SubmergeModel).
-            let sub = format!("{THEME}/MonkeySub_SubmergeButton");
+            let sub = format!("{th}/SubmergeButton");
             if theme_id == "MonkeySub" {
                 let can = game.can_submerge(t);
                 self.tsm.set_active(&sub, can);
@@ -1009,20 +1125,128 @@ impl Hud {
             // Necromancer (UnpoppedArmy): the graveyard's stored RBE.
             if theme_id == "UnpoppedArmy" {
                 let stored: f32 = tw.grave.iter().map(|g| g.1).sum();
-                let c = format!("{THEME}/UnpoppedArmy_TSMCounterContainer");
+                let c = format!("{th}/TSMCounterContainer");
                 self.tsm.set_text(&format!("{c}/Graveyard/GraveyardText"), &format!("{}", stored.floor()));
-                self.tsm.set_text(&format!("{c}/Damage/DamageText"), &tw.pops.to_string());
-                self.tsm.set_active(&format!("{THEME}/UnpoppedArmy_ButtonGroup/TSMActionButton"), false);
-                self.tsm.set_active(&format!("{THEME}/TSMPopInfoAll"), false);
-            } else {
-                self.tsm.set_active(&format!("{THEME}/TSMPopInfoAll"), true);
+                // TSMThemeUnpoppedArmy.Selected (VERIFIED-DISASM @0xbd2ae0): its targetTypeButton
+                // (TSMButton "UnpoppedArmySetTarget", SelectPointInput) shows for the tower's
+                // owner on every tier; it sets the spawn segment (Game::necro_select).
+                let b = format!("{th}/ButtonGroup/TSMActionButton");
+                self.tsm.set_active(&b, true);
+                if self.tsm.clicked(&b) {
+                    out.push(Action::SetPoint);
+                }
             }
-            // Some themes keep the camo toggle in their button group.
-            let camo = [format!("{THEME}/{theme_id}_CamoTargetPriorityToggle"), format!("{THEME}/{theme_id}_ButtonGroup/CamoTargetPriorityToggle")]
+            // Magus Perfectus: TSMThemeMagusPerfectus.UpdateFromSimInfo (0x180b91fb0) by the graveyard's
+            // state: Consuming shows DrainSetOn and the using bar; Draining DrainSetOff and the using
+            // bar; Generating DrainSetOff and the draining bar; Exploding DrainSetOff and neither.
+            // STAND-IN: the graveyard isn't simulated, so it's empty and in its first state
+            // (MagusPerfectusGraveyardStateManagerModel.attackManagerStates: Consuming), and the
+            // drainingBeamCooldownFade (60 frames after a switch) never shows.
+            if theme_id == "MagusPerfectus" {
+                let state = "Consuming";
+                // (drainingBeamSetOn, graveyardUseObject, graveyardDrainObject); drainingBeamSetOff is
+                // the opposite of the first.
+                let (on, using, draining) = match state {
+                    "Consuming" => (true, true, false),
+                    "Draining" => (false, true, false),
+                    "Generating" => (false, false, true),
+                    _ => (false, false, false),
+                };
+                let beam = format!("{th}/DrainingBeamToggleButton");
+                self.tsm.set_active(&format!("{beam}/DrainSetOn"), on);
+                self.tsm.set_active(&format!("{beam}/DrainSetOff"), !on);
+                self.tsm.set_active(&format!("{beam}/CooldownEffect"), false);
+                let bars = format!("{th}/GraveyardFillbars");
+                self.tsm.set_active(&format!("{bars}/UsingObject"), using);
+                self.tsm.set_active(&format!("{bars}/DrainingObject"), draining);
+                for fill in ["UsingObject/UsingFill", "DrainingObject/DrainingFill"] {
+                    if let Some(i) = self.tsm.find_mut(&format!("{bars}/{fill}")).and_then(|n| n.img.as_mut()) {
+                        i.fill_amount = 0.0;
+                    }
+                }
+                self.tsm.set_text(&format!("{th}/TSMCounterContainer/Graveyard/GraveyardText"), "0");
+            }
+            // The camo priority toggle (some themes keep it in their button group): TSMThemeCamo and
+            // the themes built on it show it only with "TargetCamo" sim info, which a
+            // Target*PrioCamoModel gives.
+            let camo = [format!("{th}/CamoTargetPriorityToggle"), format!("{th}/ButtonGroup/CamoTargetPriorityToggle")]
                 .into_iter()
-                .find(|p| self.tsm.find(p).is_some_and(|n| n.active))
+                .find(|p| self.tsm.find(p).is_some())
                 .unwrap_or_default();
+            // Desperado (TSMThemeDesperado.UpdateFromSimInfo, "TargetDesperado" sim info): its camo
+            // toggle with TargetDesperado*Model.canPrioritiseCamo, the bounty hunter one with
+            // canTargetMarked.
+            let attacks = game.tier(t).map_or(&[][..], |x| &x.attacks[..]);
+            let has_camo = if theme_id == "Desperado" { attacks.iter().any(|a| a.desperado_camo) } else { attacks.iter().any(|a| a.prio_camo) };
+            if theme_id == "Desperado" {
+                let bounty = format!("{th}/BountyHunterToggle");
+                self.tsm.set_active(&bounty, attacks.iter().any(|a| a.desperado_marked));
+                // STAND-IN: targeting marked bloons isn't simulated, so its tick stays off.
+                self.tsm.set_active(&format!("{bounty}/Tick"), false);
+            }
+            // Mermonkey (TSMThemeSelectInputOrDefault.UpdateFromSimInfo, "SelectInputOrDefault" sim
+            // info from TargetSelectedPointOrDefaultModel): Select Target shows while it uses its
+            // default target, Select Default once a point is set. STAND-IN: the 360-frame cooldown
+            // after a change (and its fade) isn't kept.
+            if theme_id == "MermonkeyTrance" || theme_id == "SelectPointOrDefault" {
+                let default = tw.point.is_none();
+                let input = format!("{th}/SelectTargetPosButton");
+                let back = format!("{th}/SelectDefaultButton");
+                self.tsm.set_active(&input, default);
+                self.tsm.set_active(&back, !default);
+                self.tsm.set_active(&format!("{th}/CooldownEffect"), false);
+                if default && self.tsm.clicked(&input) {
+                    out.push(Action::SetPoint);
+                } else if !default && self.tsm.clicked(&back) {
+                    out.push(Action::DefaultPoint);
+                }
+            }
+            // Corvus (TSMThemeCorvus.UpdateFromSimInfo): UnityToSimulation.GetCorvusAvailableManaString,
+            // "{0:N0}/{1:N0}" of the CorvusManager's mana and 800. STAND-IN: mana isn't simulated.
+            if theme_id == "Corvus" {
+                self.tsm.set_text(&format!("{th}/TSMPopInfoAll/ManaCount/ManaText"), "0/800");
+            }
+            // Beast Handler (TSMThemeBeastHandler): a move button per leashed pet whose
+            // BeastHandlerPetModel.canMove (Piranha, Microraptor; not the Gyrfalcon)
+            // (UpdateMoveButtonVisibility, CanMovePet), and the select point button with the
+            // tower's SelectPointInput. STAND-IN: moving pets isn't simulated, so the buttons do
+            // nothing and show the prefab's icons and no cooldown.
+            if theme_id == "BeastHandler" {
+                let pets = game.tier(t).map_or(&[][..], |x| &x.pets[..]);
+                let moves = |i: usize| pets.get(i).is_some_and(|p| p.name != "Gyrfalcon");
+                let g = format!("{th}/ButtonGroup");
+                self.tsm.set_active(&format!("{g}/MoveButton"), moves(0));
+                self.tsm.set_active(&format!("{g}/MoveButtonSecond"), moves(1));
+                self.tsm.set_active(&format!("{g}/MoveButton/CooldownEffect"), false);
+                self.tsm.set_active(&format!("{g}/MoveButtonSecond/CooldownEffect"), false);
+                let select = format!("{g}/SelectPointButton");
+                self.tsm.set_active(&select, game.uses_point(t));
+                if game.uses_point(t) && self.tsm.clicked(&select) {
+                    out.push(Action::SetPoint);
+                }
+            }
+            // Skywarden (TSMThemeZephyrSense.UpdateFromSimInfo, "ZephyrStance" sim info): Long
+            // Stance shows in Spread, Short Stance in Focus, for a tier with a stance.
+            if theme_id == "ZephyrSense" {
+                let stance = game.tier(t).is_some_and(|x| x.stance.is_some());
+                let long = format!("{th}/LongStanceButton");
+                let short = format!("{th}/ShortStanceButton");
+                self.tsm.set_active(&long, stance && !tw.focus);
+                self.tsm.set_active(&short, stance && tw.focus);
+                // STAND-IN: the 360-frame cooldown after a switch (and its fade) isn't kept.
+                self.tsm.set_active(&format!("{th}/CooldownEffect"), false);
+                if stance && (self.tsm.clicked(&long) || self.tsm.clicked(&short)) {
+                    out.push(Action::Stance);
+                }
+                self.tsm.set_active(&format!("{th}/TSMActionButton"), game.uses_point(t));
+                if game.uses_point(t) && self.tsm.clicked(&format!("{th}/TSMActionButton")) {
+                    out.push(Action::SetPoint);
+                }
+            }
             if !camo.is_empty() {
+                self.tsm.set_active(&camo, has_camo);
+            }
+            if has_camo && !camo.is_empty() {
                 self.tsm.set_active(&format!("{camo}/Tick"), tw.camo_prio);
                 if self.tsm.clicked(&camo) {
                     out.push(Action::CamoPrio);
@@ -1046,13 +1270,19 @@ impl Hud {
             });
             // Paragon portrait: the tower's one "Paragon-*" portrait (named after the Paragon,
             // sometimes misspelt: "Paragon-NauticSeigeCore").
-            let paragon_portrait = tw.paragon.as_ref().zip(pdef.as_ref()).and_then(|_| self.paragon_portraits.get(name.as_str()).cloned());
+            let paragon_portrait = tw.paragon.as_ref().zip(pdef.as_ref()).and_then(|(_, p)| {
+                Some(p.portrait.clone()).filter(|s| !s.is_empty()).or_else(|| self.paragon_portraits.get(name.as_str()).cloned())
+            });
+            // TSMThemeDefault.TowerInfoChanged loads TowerModel.portrait; a few exported files are
+            // named differently from it ("000-Wizard" is 000-WizardMonkey.png), so the guesses follow.
+            let model_portrait = game.tier(t).map(|x| x.portrait.clone()).filter(|p| !p.is_empty());
             let portrait = paragon_portrait
                 .into_iter()
+                .chain(model_portrait)
                 .chain(hero_portrait)
                 .chain([format!("{key}-{name}"), format!("{key}-{}{}", &name[..1], name[1..].to_lowercase())])
                 .find(|n| self.sprites.get(n).is_some());
-            self.tsm.set_sprite(&format!("{THEME}/MonkeyImage"), portrait.as_deref());
+            self.tsm.set_sprite(&format!("{th}/MonkeyImage"), portrait.as_deref());
             // The portrait's frame follows the tower set (PortraitContainer<Set>), purple for a
             // Paragon.
             let set = game.shop.iter().find(|it| it.id == *name).map_or(1, |it| it.set);
@@ -1064,9 +1294,9 @@ impl Hud {
                 (_, _, 8) => "PortraitContainerSupport",
                 _ => "PortraitContainerPrimary",
             };
-            self.tsm.set_sprite(&format!("{THEME}/BackgroundImage"), Some(frame));
-            self.tsm.set_active(&format!("{THEME}/MonkeyImage"), portrait.is_some());
-            if let Some(n) = self.tsm.find_mut(&format!("{THEME}/MonkeyImage")).and_then(|n| n.img.as_mut()) {
+            self.tsm.set_sprite(&format!("{th}/BackgroundImage"), Some(frame));
+            self.tsm.set_active(&format!("{th}/MonkeyImage"), portrait.is_some());
+            if let Some(n) = self.tsm.find_mut(&format!("{th}/MonkeyImage")).and_then(|n| n.img.as_mut()) {
                 n.preserve = true;
             }
 
@@ -1082,7 +1312,7 @@ impl Hud {
                 let pd = format!("{TSM_OPTS}/ParagonDetails");
                 let title = self.menus.loc.get(&p.name).cloned().unwrap_or_else(|| p.name.clone());
                 let desc = self.menus.description(&format!("{name} Paragon")).or_else(|| self.menus.description(&p.name)).unwrap_or("").to_string();
-                let icon = self.icon(&p.name, name, 0, 5).or_else(|| self.icon(&title, name, 0, 5));
+                let icon = Some(p.icon.clone()).filter(|i| !i.is_empty()).or_else(|| self.icon(&p.name, name, 0, 5)).or_else(|| self.icon(&title, name, 0, 5));
                 self.tsm.set_sprite(&format!("{pd}/CurrentUpgrade/UpgradeImage"), icon.as_deref());
                 if let Some(i) = self.tsm.find_mut(&format!("{pd}/CurrentUpgrade/UpgradeImage")).and_then(|n| n.img.as_mut()) {
                     i.preserve = true;
@@ -1099,23 +1329,27 @@ impl Hud {
                     (Some((xp, need)), Some((_, c))) => ((xp / need.max(1.0)).clamp(0.0, 1.0), Some(c)),
                     _ => (1.0, None),
                 };
-                if let Some(bar) = self.tsm.find_mut(&format!("{hd}/CurrentUpgrade/UpgradeBar/Mask/Bar")) {
-                    bar.rt.amin = vec2(0.0, bar.rt.amin.y);
-                    bar.rt.amax = vec2(frac, bar.rt.amax.y);
-                    bar.rt.size.x = 0.0;
-                    bar.rt.pos.x = 0.0;
+                // TowerSelectionMenu.UpdateXpBar: HeroXpBar (a Filled image) at relativeXp / relativeXpForNextLevel.
+                if let Some(bar) = self.tsm.find_mut(&format!("{hd}/CurrentUpgrade/UpgradeBar/Mask/Bar")).and_then(|n| n.img.as_mut()) {
+                    bar.fill_amount = frac as f32;
                 }
                 self.tsm.set_text(&format!("{hd}/CurrentUpgrade/UpgradeBar/Star/Text"), &level.to_string());
-                self.tsm.set_text(&format!("{hd}/CurrentUpgrade/UpgradeTitle"), &format!("Level {level}"));
+                // TowerSelectionMenu.UpdateCurrentLevel / UpdateNextLevel: "Level" N, and "Unlock Hero"
+                // ("Unlock Level") N+1, or "Max Level Reached" with no description at the top level.
+                let text = |k: &str| self.menus.loc.get(k).cloned().unwrap_or_else(|| k.to_string());
+                self.tsm.set_text(&format!("{hd}/CurrentUpgrade/UpgradeTitle"), &format!("{} {level}", text("Level")));
                 let cur_desc = self.menus.description(&format!("{tower} Level {level}")).unwrap_or("").to_string();
                 self.tsm.set_text(&format!("{hd}/CurrentUpgrade/UpgradeDescription"), &cur_desc);
                 let has_next = next_cost.is_some();
-                self.tsm.set_active(&format!("{hd}/NextUpgrade"), has_next);
-                if has_next {
-                    let nd = self.menus.description(&format!("{tower} Level {}", level + 1)).unwrap_or("").to_string();
-                    self.tsm.set_text(&format!("{hd}/NextUpgrade/UpgradeTitle"), &format!("Level {}", level + 1));
-                    self.tsm.set_text(&format!("{hd}/NextUpgrade/UpgradeDescription"), &nd);
-                }
+                self.tsm.set_active(&format!("{hd}/NextUpgrade"), true);
+                let (next_title, next_desc) = if has_next {
+                    (format!("{} {}", text("Unlock Hero"), level + 1),
+                     self.menus.description(&format!("{tower} Level {}", level + 1)).unwrap_or("").to_string())
+                } else {
+                    (text("Max Level Reached"), String::new())
+                };
+                self.tsm.set_text(&format!("{hd}/NextUpgrade/UpgradeTitle"), &next_title);
+                self.tsm.set_text(&format!("{hd}/NextUpgrade/UpgradeDescription"), &next_desc);
                 // Hero boosters are a store item.
                 self.tsm.set_active(&format!("{hd}/Buttons/HeroBoosterButton"), false);
                 self.tsm.set_active(&format!("{hd}/Buttons/UnlockNextLevel"), has_next);
@@ -1132,6 +1366,8 @@ impl Hud {
                     }
                 }
             }
+            let mut owned_names: [Option<String>; 3] = [None, None, None];
+            let mut first_names: [Option<String>; 3] = Default::default();
             for path in 0..3 {
                 if hero || paragon.is_some() {
                     break;
@@ -1153,6 +1389,19 @@ impl Hud {
                 }
                 let owned_label = owned.as_deref().map(|n| self.menus.loc.get(n).cloned().unwrap_or_else(|| n.to_string())).unwrap_or_default();
                 self.tsm.set_text(&format!("{u}/PreviousUpgrade/UpgradeName"), &owned_label);
+                // An owned upgrade isn't a button: no press animation or highlight.
+                if let Some(node) = self.tsm.find_mut(&format!("{u}/PreviousUpgrade")) {
+                    node.clear_button();
+                }
+                // Press on an owned upgrade starts the hold; letting go or sliding off ends it.
+                let over = owned.is_some() && self.tsm.rect(&format!("{u}/PreviousUpgrade")).is_some_and(|r| r.contains(mouse_position().into()));
+                if over && is_mouse_button_pressed(MouseButton::Left) && self.current_popup.is_none() {
+                    self.current_hover = Some((path, get_time()));
+                } else if self.current_hover.is_some_and(|(p, _)| p == path) && (!over || !is_mouse_button_down(MouseButton::Left)) {
+                    self.current_hover = None;
+                }
+                owned_names[path] = owned.clone();
+                first_names[path] = name_at(0);
 
                 let next = game.next_upgrade(t, path);
                 let afford = next.as_ref().is_some_and(|(_, c)| game.cash >= *c);
@@ -1169,7 +1418,8 @@ impl Hud {
                 self.tsm.set_text(&format!("{n}/LockedText"), "Max Upgrades");
                 if let Some((nm, c)) = &next {
                     // Paragon icons are named after the Paragon ("Apex Plasma Master").
-                    let icon = self.icon(nm, &tower, path, cur).or_else(|| self.menus.loc.get(nm).and_then(|l| self.icon(l, &tower, path, cur)));
+                    let paragon_icon = pdef.as_ref().filter(|p| p.name == *nm && !p.icon.is_empty()).map(|p| p.icon.clone());
+                    let icon = paragon_icon.or_else(|| self.icon(nm, &tower, path, cur)).or_else(|| self.menus.loc.get(nm).and_then(|l| self.icon(l, &tower, path, cur)));
                     self.tsm.set_sprite(&format!("{n}/UpgradeIcon"), icon.as_deref());
                     if let Some(i) = self.tsm.find_mut(&format!("{n}/UpgradeIcon")).and_then(|n| n.img.as_mut()) {
                         i.preserve = true;
@@ -1221,20 +1471,33 @@ impl Hud {
             if self.tsm.clicked("Ratio/Scaler/TowerElements/SelectedTowerWorth/Sell") {
                 out.push(Action::Sell);
             }
-            if self.tsm.clicked(&format!("{THEME}/TargetType/ForwardsButton")) {
+            if self.tsm.clicked(&format!("{th}/TargetType/ForwardsButton")) {
                 out.push(Action::Target(game.cycle_target(t, false)));
             }
-            if self.tsm.clicked(&format!("{THEME}/TargetType/BackwardsButton")) {
+            if self.tsm.clicked(&format!("{th}/TargetType/BackwardsButton")) {
                 out.push(Action::Target(game.cycle_target(t, true)));
             }
-            if self.tsm.clicked(&format!("{THEME}/CloseButton")) {
+            if self.tsm.clicked(&format!("{th}/CloseButton")) {
                 out.push(Action::Close);
             }
-            if self.tsm.clicked(&format!("{THEME}/InfoToggleButton")) {
+            if self.tsm.clicked(&format!("{th}/InfoToggleButton")) {
                 self.info_open = !self.info_open;
             }
-            self.tsm.set_active(INFO, self.info_open);
-            if self.info_open {
+            // Our input (DEVIATIONS.md; the game shows it on hover): held for BaseUpgrade's 0.2 s,
+            // that path's UpgradeInfoPopup shows the owned upgrade (forCurrent) until the mouse is
+            // released.
+            if self.current_popup.is_some() && !is_mouse_button_down(MouseButton::Left) {
+                self.current_popup = None;
+            }
+            if let Some((p, began)) = self.current_hover {
+                if get_time() - began >= 0.2 { self.current_popup = Some((t, p)); self.current_hover = None; }
+            }
+            if self.current_popup.is_some_and(|(pt, p)| pt != t || owned_names[p].is_none()) {
+                self.current_popup = None;
+            }
+            let popup = self.current_popup.map(|(_, p)| p);
+            self.tsm.set_active(INFO, self.info_open || popup.is_some());
+            if self.info_open || popup.is_some() {
                 // InfoPanel sits beside the menu, on the map side.
                 if let Some(p) = self.tsm.find_mut(INFO) {
                     let w = p.rt.size.x;
@@ -1274,33 +1537,79 @@ impl Hud {
                         }
                     }
                 }
+                // ScrollRect's vertical scrollbar auto-hides while the content fits the viewport
+                // (all seven stats do).
+                let anim = format!("{INFO}/AdvancedStats/Anim");
+                let fits = match (self.tsm.find(&format!("{anim}/Viewport/Content")), self.tsm.find(&format!("{anim}/Viewport"))) {
+                    (Some(c), Some(v)) => c.unclipped_screen.h <= v.screen.h + 0.5,
+                    _ => true,
+                };
+                self.tsm.set_active(&format!("{anim}/Scrollbar"), !fits);
                 for path in 0..3 {
                     let row = format!("{INFO}/Upgrade_{}/InfoContainer/NextUpgrade", path + 1);
-                    let next = game.next_upgrade(t, path).map(|(nm, _)| nm);
-                    let desc = next.as_deref().and_then(|nm| self.menus.description(nm)).map(str::to_string);
+                    // All three paths at once: the next upgrade (a Paragon's text is under
+                    // "{name} Paragon"); a path with none left describes the upgrade it has, or
+                    // its first if a closed path has none.
+                    let subject = game.next_upgrade(t, path).map(|(nm, _)| nm)
+                        .or_else(|| owned_names[path].clone()).or_else(|| first_names[path].clone());
+                    let desc = subject.as_deref().and_then(|nm| {
+                        self.menus.description(nm).or_else(|| self.menus.description(&format!("{nm} Paragon"))).map(str::to_string)
+                    });
                     self.tsm.set_active(&row, desc.is_some());
-                    if let (Some(nm), Some(d)) = (next, desc) {
-                        self.tsm.set_text(&format!("{row}/Title"), &nm);
+                    if let (Some(nm), Some(d)) = (subject, desc) {
+                        let title = self.menus.loc.get(&nm).cloned().unwrap_or(nm);
+                        self.tsm.set_text(&format!("{row}/Title"), &title);
                         self.tsm.set_text(&format!("{row}/Description"), &d);
                     }
+                }
+                if let Some(path) = popup {
+                    // Only the hovered row when the panel itself isn't open.
+                    if !self.info_open {
+                        self.tsm.set_active(&format!("{INFO}/AdvancedStats"), false);
+                        for other in (0..3).filter(|&o| o != path) {
+                            self.tsm.set_active(&format!("{INFO}/Upgrade_{}/InfoContainer/NextUpgrade", other + 1), false);
+                        }
+                    }
+                    let row = format!("{INFO}/Upgrade_{}/InfoContainer/NextUpgrade", path + 1);
+                    let nm = owned_names[path].clone().unwrap_or_default();
+                    let d = self.menus.description(&nm).unwrap_or("").to_string();
+                    self.tsm.set_active(&row, true);
+                    let title = self.menus.loc.get(&nm).cloned().unwrap_or(nm);
+                    self.tsm.set_text(&format!("{row}/Title"), &title);
+                    self.tsm.set_text(&format!("{row}/Description"), &d);
+                } else if self.info_open {
+                    self.tsm.set_active(&format!("{INFO}/AdvancedStats"), true);
                 }
             }
         }
         let _ = auto_start;
 
+        self.mod_ui.sync(game);
+        crate::uitree::block_input(self.mod_ui.modal());
         let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h: canvas.y, clip: None };
         if self.tsm.active {
             draw_tree(&mut self.tsm, map, &mut ctx);
         }
+        if let Some((cost, afford)) = self.removeable {
+            const BTN: &str = "Ratio/Scaler/TowerElements/RemoveTower/RemoveBtn";
+            // English.xml "Removable Cost".
+            self.remove_menu.set_text(&format!("{BTN}/Text"), &format!("Remove for ${cost}"));
+            self.remove_menu.set_text_color(&format!("{BTN}/Text"), if afford { WHITE } else { Color::new(1.0, 0.4, 0.4, 1.0) });
+            draw_tree(&mut self.remove_menu, map, &mut ctx);
+            if afford && self.remove_menu.clicked(BTN) {
+                out.push(Action::SellRemoveable);
+            }
+        }
         draw_tree(&mut self.left, map, &mut ctx);
         draw_tree(&mut self.right, map, &mut ctx);
-        if let Some(race)=&mut self.race_ui{draw_tree(race,map,&mut ctx);}
         draw_tree(&mut self.shop, full, &mut ctx);
         self.draw_geraldo(game, selected, full, canvas.y, SHOP_W, s, &mut out);
         // BloonMenu.ShowHideExternal listens to placement-blocking UI, not TSM side.
         self.draw_sandbox(game, full, canvas.y, s, placing.is_some(), &mut out);
+        self.draw_powers(game, full, canvas.y, s, l.bottom, &mut out);
         self.draw_abilities(game, &mut out);
         self.draw_temple(full, canvas.y, s, &mut out);
+        self.draw_set_value(full, canvas.y, s, &mut out);
         // IMF Loan: what's still owed, in red under the cash.
         if game.debt > 0.0 {
             if let Some(r) = self.left.rect(&format!("{lg}/CashGroup/Cash")) {
@@ -1317,6 +1626,28 @@ impl Hud {
                 });
             }
         }
+        self.draw_mod_ui(game,full,canvas.y,s,&mut out);
         out
+    }
+}
+
+/// The point is over an image of this active node or its active children: InfoPanel's
+/// AdvancedStats and upgrade rows sit outside the panel's own rect.
+fn drawn_over(n: &crate::uitree::Node, p: Vec2) -> bool {
+    n.active && ((n.img.is_some() && n.screen.contains(p)) || n.children.iter().any(|c| drawn_over(c, p)))
+}
+
+#[cfg(test)]
+mod shop_tap_tests {
+    use super::ShopTap;
+    #[test]
+    fn same_tile_double_tap_opens_once_and_drag_or_scroll_cancels(){
+        let mut taps=ShopTap::default();
+        assert!(!taps.tap(7,1.0));assert!(taps.tap(7,1.2));
+        assert!(!taps.tap(7,1.25),"a third tap starts a new pair");
+        taps.cancel();assert!(!taps.tap(7,1.3));
+        assert!(!taps.tap(8,1.35),"switching tiles is not a double-click");
+        assert!(!taps.tap(8,2.0),"slow taps only select");
+        assert!(taps.tap(8,2.1));
     }
 }

@@ -42,6 +42,17 @@ mod storage_tests {
         assert!(quad_snd::decode_samples(b"invalid audio").is_err());
     }
 
+    /// RRBTD6_MP3=<file>: the jukebox's MP3 decoder gives stereo 44.1 kHz samples.
+    #[test]
+    #[ignore]
+    fn custom_mp3_decodes() {
+        let path=PathBuf::from(std::env::var("RRBTD6_MP3").expect("set RRBTD6_MP3 to an MP3 file"));
+        let p=Prepared::read_custom(&path).expect("decodes");
+        assert!(p.samples.len()%2==0&&p.secs>0.5,"{} samples",p.samples.len());
+        assert!(p.samples.iter().any(|s|s.abs()>0.01));
+        eprintln!("{}: {:.2} s",path.display(),p.secs);
+    }
+
     // Generate synthetic pairs with tools/test_audio_storage.py, or use local
     // WAV+FLAC pairs. No proprietary audio is included in the repository.
     #[test]
@@ -68,6 +79,38 @@ mod storage_tests {
         assert!(count>=4,"include mono, stereo, 48kHz and 22.05kHz fixtures");
     }
 }
+
+#[cfg(test)]
+mod vorbis_tests {
+    use super::*;
+
+    /// RRBTD6_OGG_FIXTURES=<dir> of <clip>.ogg (export_audio.py) + <clip>.flac (FMOD's decode,
+    /// older setups): same duration and mixer length, and how far the two decoders differ.
+    #[test]
+    #[ignore]
+    fn vorbis_matches_fmod_decode() {
+        let root=PathBuf::from(std::env::var("RRBTD6_OGG_FIXTURES").expect("set RRBTD6_OGG_FIXTURES to an OGG+FLAC fixture directory"));
+        let mut count=0;
+        for file in std::fs::read_dir(root).unwrap(){
+            let p=file.unwrap().path();
+            if p.extension().and_then(|s|s.to_str())!=Some("ogg"){continue;}
+            let ogg=std::fs::read(&p).unwrap();
+            let flac=std::fs::read(p.with_extension("flac")).unwrap();
+            assert!((audio_secs(&ogg)-audio_secs(&flac)).abs()<1e-9,"duration {}: {} vs {}",p.display(),audio_secs(&ogg),audio_secs(&flac));
+            let start=std::time::Instant::now();
+            let a=quad_snd::decode_samples(&ogg).unwrap();let ogg_ms=start.elapsed().as_secs_f64()*1000.0;
+            let b=quad_snd::decode_samples(&flac).unwrap();
+            assert_eq!(a.len(),b.len(),"mixer samples: {}",p.display());
+            let worst=a.iter().zip(&b).map(|(a,b)|(a-b).abs()).fold(0f32,f32::max);
+            eprintln!("{}: {} -> {} bytes, {:.3} s, decode {:.2} ms, largest difference {:.6} ({:.1} dB)",
+                      p.display(),flac.len(),ogg.len(),audio_secs(&ogg),ogg_ms,worst,20.0*worst.max(1e-9).log10());
+            assert!(worst<2e-3,"{}: decoders differ by {worst}",p.display());
+            count+=1;
+        }
+        assert!(count>0);
+    }
+}
+
 pub const FAMILY_LIMIT: usize = 3;
 const FAMILY_GAP: f64 = 3.0 / 60.0;
 pub const TOTAL_LIMIT: usize = 24;
@@ -118,25 +161,91 @@ struct Prepared {samples:std::sync::Arc<[f32]>,secs:f64}
 struct Job {music:bool,handle:std::thread::JoinHandle<Option<Prepared>>}
 impl Prepared {
     fn read(dir:&std::path::Path,name:&str)->Option<Self>{
-        // A fresh export overrides older compressed data.
-        let bytes=match std::fs::read(dir.join(format!("{name}.wav"))){
-            Ok(bytes)=>bytes,
-            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>std::fs::read(dir.join(format!("{name}.flac"))).ok()?,
-            Err(_)=>return None,
-        };
+        if let Some(file)=name.strip_prefix(crate::frontend::jukebox::CUSTOM){
+            return Self::read_custom(&crate::frontend::jukebox::custom_dir(dir.parent().unwrap_or(dir)).join(file));
+        }
+        // A fresh WAV export overrides compressed data; the game's own Vorbis (export_audio.py)
+        // overrides FLAC decoded by older setups.
+        let mut bytes=None;
+        for ext in ["wav","ogg","flac"]{
+            match std::fs::read(dir.join(format!("{name}.{ext}"))){
+                Ok(b)=>{bytes=Some(b);break;}
+                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{}
+                Err(_)=>return None,
+            }
+        }
+        let bytes=bytes?;
         let secs=audio_secs(&bytes);
         let samples=quad_snd::decode_samples(&bytes).ok()?;
         Some(Self{samples:samples.into(),secs})
     }
+
+    /// A file from the jukebox's custom music folder: MP3 through symphonia, the rest through
+    /// quad-snd; the mixer's interleaved stereo at 44.1 kHz either way.
+    fn read_custom(path:&std::path::Path)->Option<Self>{
+        let bytes=std::fs::read(path).ok()?;
+        let mp3=path.extension().and_then(|x|x.to_str()).is_some_and(|x|x.eq_ignore_ascii_case("mp3"));
+        let samples=if mp3{decode_mp3(bytes)?}else{quad_snd::decode_samples(&bytes).ok()?};
+        let secs=samples.len() as f64/2.0/44100.0;
+        Some(Self{samples:samples.into(),secs})
+    }
+}
+
+/// An MP3's samples as the mixer takes them (interleaved stereo, 44.1 kHz; mono doubled, other
+/// rates resampled nearest-neighbour as quad-snd does).
+fn decode_mp3(bytes:Vec<u8>)->Option<Vec<f32>>{
+    use symphonia::core::{audio::SampleBuffer,codecs::DecoderOptions,formats::FormatOptions,io::MediaSourceStream,meta::MetadataOptions,probe::Hint};
+    let mss=MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)),Default::default());
+    let mut hint=Hint::new();hint.with_extension("mp3");
+    let probed=symphonia::default::get_probe().format(&hint,mss,&FormatOptions::default(),&MetadataOptions::default()).ok()?;
+    let mut format=probed.format;
+    let track=format.default_track()?.clone();
+    let mut decoder=symphonia::default::get_codecs().make(&track.codec_params,&DecoderOptions::default()).ok()?;
+    let mut rate=track.codec_params.sample_rate.unwrap_or(44100);
+    let mut out:Vec<f32>=Vec::new();
+    while let Ok(packet)=format.next_packet(){
+        if packet.track_id()!=track.id{continue;}
+        let Ok(decoded)=decoder.decode(&packet) else{continue};
+        let spec=*decoded.spec();rate=spec.rate;
+        let mut buf=SampleBuffer::<f32>::new(decoded.capacity() as u64,spec);
+        buf.copy_interleaved_ref(decoded);
+        match spec.channels.count(){
+            1=>for &s in buf.samples(){out.extend_from_slice(&[s,s]);},
+            n if n>=2=>for f in buf.samples().chunks_exact(n){out.extend_from_slice(&f[..2]);},
+            _=>{}
+        }
+    }
+    if out.is_empty(){return None;}
+    if rate!=44100{
+        let frames=out.len()/2;
+        let new_frames=(frames as f64*44100.0/rate as f64) as usize;
+        out=(0..new_frames).flat_map(|n|{let i=2*((n as f64/new_frames as f64*frames as f64) as usize);[out[i],out[i+1]]}).collect();
+    }
+    Some(out)
 }
 
 fn audio_secs(bytes:&[u8])->f64{
     if bytes.starts_with(b"RIFF"){return wav_secs(bytes);}
+    if bytes.starts_with(b"OggS"){return ogg_secs(bytes);}
     // FLAC STREAMINFO: 20-bit rate, 3-bit channels, 5-bit depth, 36-bit samples.
     if bytes.len()<42 || &bytes[..4]!=b"fLaC" || bytes[4]&0x7f!=0 || bytes[5..8]!=[0,0,34]{return 0.0;}
     let bits=u64::from_be_bytes(bytes[18..26].try_into().unwrap());
     let rate=bits>>44;let samples=bits&0x0f_ffff_ffff;
     if rate==0{0.0}else{samples as f64/rate as f64}
+}
+
+/// Seconds of an Ogg Vorbis file: the last page's granule position (its sample count) over
+/// the identification header's rate.
+fn ogg_secs(b:&[u8])->f64{
+    // The identification packet starts the first page: 27-byte header, its lacing, then packet.
+    if b.len()<28{return 0.0;}
+    let first=28+b[26] as usize-1;
+    if b.len()<first+16 || &b[first..first+7]!=b"\x01vorbis"{return 0.0;}
+    let rate=u32::from_le_bytes(b[first+12..first+16].try_into().unwrap());
+    let Some(last)=b.windows(4).rposition(|w|w==b"OggS") else{return 0.0};
+    if b.len()<last+14 || rate==0{return 0.0;}
+    let granule=i64::from_le_bytes(b[last+6..last+14].try_into().unwrap());
+    if granule<0{0.0}else{granule as f64/rate as f64}
 }
 
 /// Seconds of 16-bit PCM in a WAV file.
@@ -250,10 +359,13 @@ impl Audio {
             self.music_account=Some(revision);
             if let Some(tracks)=crate::frontend::jukebox::saved_playlist(self.dir.parent().unwrap_or(&self.dir),&owned){
                 let selected=self.track().and_then(|id|tracks.iter().position(|(next,_)|next==id)).unwrap_or(0);
-                self.set_jukebox(&crate::frontend::jukebox::Change{tracks,selected,playing:self.music_enabled});
+                self.set_jukebox(&crate::frontend::jukebox::Change{tracks,selected,playing:self.music_enabled,preview:None});
             }
         }
         self.pump();
+        // For the jukebox screen: what plays and how far through it is.
+        let progress=self.music.as_ref().and_then(|(i,c,end)|Some((self.playlist.get(*i)?.0.as_str(),((c.secs-(end-now))/c.secs.max(1e-3)).clamp(0.0,1.0) as f32)));
+        crate::frontend::jukebox::publish(progress);
         if self.music_volume <= 0.0 || !self.music_enabled || self.playlist.is_empty() {
             self.prepared_music=None;
             if let Some((_, c, _)) = self.music.take() {
@@ -313,12 +425,14 @@ impl Audio {
     }
 
     pub fn set_jukebox(&mut self,change:&crate::frontend::jukebox::Change){
-        let same_track=self.track().is_some_and(|id|change.tracks.get(change.selected).is_some_and(|(next,_)|next==id));
+        // A previewed Songs track plays on its own.
+        let (playlist,selected)=match &change.preview{Some(p)=>(vec![p.clone()],0),None=>(change.tracks.clone(),change.selected)};
+        let same_track=self.track().is_some_and(|id|playlist.get(selected).is_some_and(|(next,_)|next==id));
         if !same_track || !change.playing{
             if let Some((_,clip,_))=self.music.take(){stop_sound(&clip.sound);}
-        }else if let Some((index,_,_))=self.music.as_mut(){*index=change.selected;}
-        self.playlist=change.tracks.clone();self.music_enabled=change.playing;
-        self.requested_track=if same_track&&change.playing{None}else{Some(change.selected)};self.skip=0;
+        }else if let Some((index,_,_))=self.music.as_mut(){*index=selected;}
+        self.playlist=playlist;self.music_enabled=change.playing;
+        self.requested_track=if same_track&&change.playing{None}else{Some(selected)};self.skip=0;
     }
 
     /// Jukebox previous / next.

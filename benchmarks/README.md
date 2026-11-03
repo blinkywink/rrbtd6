@@ -480,3 +480,81 @@ because the prepared client already owns the title textures at that point.
 
 Raw traces, captures and the settled-memory sample: `local_extracted/title-preload-ab/`.
 This measures this client's transition stalls, not performance against official BTD6.
+
+
+## Simulation segment reuse and model lookup (2026-10-29)
+
+Same-build headless comparison in ref1/opt1/opt2/ref2 order: 3,000 steps,
+600 warm-up steps, 19 tier-5 towers, four Ceramics per frame (cap 6,000).
+The test-only RRBTD6_REFERENCE_TARGETING=1 uses the original per-bloon
+segment checks and allocated tier-name lookup. Targeting and process order
+stay unchanged. The nearest-target scan experiment had no meaningful gain
+and was reverted.
+
+- Reference step averages: 3.541 / 3.499 ms; worst: 14.874 / 15.371 ms.
+- Optimized step averages: 1.177 / 1.161 ms; worst: 6.259 / 6.579 ms.
+- Mean step time fell 66.8%; maximum observed step fell 57.2% in these pairs.
+- All runs: 1,118,458 tower pops, peak 1,446 bloons, 36 final projectiles.
+- game.json SHA256 before/after:
+  314931637CEE5112FDDD92228E6AF0156D368A62F65C3795BFE87D2E07CA1445.
+- Three unchanged-budget guards passed: average 1.189 / 1.217 / 1.221 ms,
+  worst 6.376 / 6.847 / 6.503 ms. Limits remain 2.6 / 10 ms.
+
+Geometry is reused only within one attack search: moving towers, range or
+model changes and blockers are visible on the next search. Tier keys use a
+nine-byte stack buffer, including multi-digit hero levels. The data format
+and UI string keys stay unchanged. The 1,800-frame mixed-bloon comparison
+checks live entities, shot aims, cooldowns, cash, lives, pop totals and RNG.
+It switches target modes and enables/disables a blocker. Detailed timers
+and the reference switch compile only in tests.
+
+Raw logs: local_extracted/ui-cleanup-check/perf-final-*.log and
+perf-pop-guard*.log. These measure simulation, not rendering FPS or official
+BTD6 performance. Timing varies with machine load; earlier exploratory runs
+that exceeded 10 ms are retained in the same folder.
+
+Final full-suite build: 164 default tests passed (28 ignored), 21 mod checks and
+the 1,800-frame equivalence test passed. Final guard: 1.306 ms average /
+8.143 ms worst. Installed binary SHA256:
+94a39ea155ed0b6f6682f37f5ffa03dca0394e69e7bc7659e185feef3189c805.
+
+A separate light-scene renderer smoke pair (900 frames, 150 warm-up, 1600x900,
+three Dart Monkeys, Ceramic:4, uncapped) measured 515.2 vs 514.8 average FPS.
+Population traces match. p99: 3.214 vs 2.887 ms; worst: 4.363 vs 4.700 ms.
+Peak private commit: 717.6 vs 728.6 MiB. This single pair does not establish
+a rendering-FPS or memory improvement. Raw captures/results:
+local_extracted/ui-cleanup-check/perf-frames/.
+
+
+### Achievements UI (2026-10-29)
+
+Fresh-process 1600x900 captures, 60 FPS cap, 210 frames, isolated identical settings.
+Repeated previous-build baseline vs optimized viewport clipping/card subtree culling:
+opening draw-CPU maximum 553.528 -> 222.079 ms (60% lower); subsequent 100-frame
+average 1.558 -> 0.140 ms (91% lower). The first baseline run peaked at 816.278 ms.
+These are local UI CPU measurements, not gameplay FPS; a cold-opening hitch remains.
+All 162 source catalogue IDs match the export and the final row is reachable.
+Raw logs: local_extracted/ui-cleanup-check/achievements-before-repeat.log and
+achievements-after.log (ignored local artifacts).
+
+
+### Further menu-opening optimization (2026-10-29)
+
+Same optimized build, 1600x900, 60 FPS cap, isolated settings, Home for 100 frames
+then Achievements, 310 frames total. Reference switches restore CPU full-frame
+snapshot/downsampling and serial opening-sprite decoding. Final reference opening
+maximum: 50.453 ms; optimized: 38.249 ms, repeated 36.000 ms (24-29% lower).
+Snapshot portion: 7.025 -> 3.164 / 2.998 ms. Sprite warming: 32.216 -> 24.700 /
+22.949 ms. Steady UI draw remains about 0.15 ms; this is opening work, not a
+sustained gameplay FPS change. A short opening hitch remains.
+
+The earlier ~222 ms direct-page measurement included cold home-world loading:
+phase profiling measured ~185 ms world preparation, ~13 ms snapshot and ~29 ms
+sprite warming. The normal Home -> Achievements route isolates menu work better.
+The downsample shader is exercised during loading to keep first driver compilation
+out of the first menu transition. Pixel guards passed within 1/255 per channel
+at four window shapes, including Windows DPI and uneven dimensions.
+
+Logs: local_extracted/ui-cleanup-check/ref-final.log, fast-final.log and
+fast-repeat.log. These local artifacts are ignored. Co-op header and in-game
+pause screenshots also passed on the final optimized executable.

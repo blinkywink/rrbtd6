@@ -46,9 +46,19 @@ PreBloonSpawn and RemoveableSold, with Path, Area, Removeable, Sell and Event ac
 (disabled areas start off it). The buy button is hud.rs `remove_menu`. Not modelled: StartRound, SimTime and click
 triggers, other actions (moving areas, projectiles, towers), RegenRemovable, Removeable.textKey and cost formulas,
 towers destroyed by a new area, Path deactivation (no map uses it).
+Start-of-round, sim time and lives-lost triggers are hooked in `game.rs`; lives are only hooked at leaks.
 Not built yet: clickables, prop animation (bought objects without a display just vanish), NestedPrefab placement.
-3 tests already fail without these changes: beast_tests::every_ability_runs, beast_tests::sub_commander,
-tests::necromancer_graveyard.
+Bosses: docs/dev/BOSSES.md, with `renderer/src/boss_logic.rs` written and tested but not hooked up.
+2 tests fail (2026-11-02): beast_tests::sub_commander and tests::necromancer_graveyard. (heroes_pop passes again:
+lightning (Geraldo, Corvus, Druid) had stopped hitting once dontUseCollisionChecker skipped the collision pass;
+`ProjectileSpec::lightning` keeps it there, P-LIGHTNING. The real Lightning.Process (@0x180cc84d0: GetTargets,
+CreateSplit, CollideBloons) isn't built; Geraldo level 20 pops nothing in that test.)
+
+Speed-only changes to `game.rs` must leave the simulation bit-identical. Check them with
+`RRBTD6_SIGNATURE_TRACE=<file> cargo test --profile game -p btd6-game signature_trace -- --ignored` before and
+after (simulation_signature every frame of a heavy mixed load, fixed seed; the files must be identical), plus the
+recording regression with the same per-recording lines. `sim_bench` (RRBTD6_BENCH_BLOON picks the flood) shows
+where the time goes.
 
 Ground rules follow.
 
@@ -88,9 +98,13 @@ Ground rules follow.
   (the game's random seed); copy them into `research/dumps/recordings/pending/<set>/`.
   Menu screenshots: a scenario with `"menu": "<MenuName>"`, optional `"menu_clicks"`.
   Rebuild the recorder after editing it: `sh tools/mod/build.sh`.
+  Never let a scenario reach a game's last round end (CHIMPS round 100): the win still reached
+  RewardsUI and gave the owner an Insta Monkey on 2026-11-02 (wizard_500_bad, now capped at
+  7400 frames, before round 100's end at 7498).
 - **Decompile**: `python tools/il2cpp/decompile.py "Type::Method"` (or a VA),
   `python tools/il2cpp/methods_of.py "Type"`, offsets in `research/dumps/field_offsets.json`,
-  string/float literals `python tools/il2cpp/literal.py 0x...`. A vtable call at offset X is
+  string/float literals `python tools/il2cpp/literal.py 0x...`, the class behind a TypeInfo slot
+  `python tools/il2cpp/type_usage.py 0x...`. A vtable call at offset X is
   slot (X - 0x138) / 16.
 - **Game data**: after editing `tools/assets/build_game_data.py`, regenerate with
   `ROOT=$(tail -c 4 local_extracted/game_model/sim_model.bytes | python -I -c "import
@@ -102,9 +116,9 @@ Ground rules follow.
 
 ## Regression baseline (must not drop)
 
-Last full run: dart 70/70, boomerang 99/99, wizard 21/34, sub 14/32, tack 17/25, ace 0/25,
-bomb 28/34, sniper 19/34, druid 0/34, desperado 6/34, engineer 7/34, spike 0/25,
-heli 0/25, mortar 0/24, dartling 0/23.
+Last full run (2026-11-02, every set): dart 70/70, boomerang 99/99, wizard 34/34, ninja 34/34, bomb 33/34,
+glue 33/34, ice 20/25, sniper 19/34, tack 17/25, sub 16/32, beast 9/34, engineer 7/34, desperado 6/34, and 0
+for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar, spike, super, village.
 Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
 
@@ -116,9 +130,9 @@ checkpoint that changes `renderer/src/game.rs`.
 | Boomerang | 99/99 | done (paragon too) |
 | Tack | 17/25 | open: 040/050/052/250 throw counts, 500/502/520, upgrades_r30 |
 | Sub | 16/32 | open: 001/002/004 positions; 005/025/030/032/040/050/052/205/250 throws |
-| Wizard | 26/34 | see Now |
+| Wizard | 34/34 | all re-recorded with R lines; done |
 | Sniper | 19/34 | see Sniper notes |
-| Bomb | 28/34 | open: 003/005/025/205 throws, 004/032 positions |
+| Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
 | Beast Handler | 9/34 | |
 | Engineer | 7/34 | |
@@ -132,8 +146,39 @@ TOWERS.md has the longer per-tower notes.
 ## Now (top = next)
 
 ### Owner-reported UI fixes (2026-11-01, must be done; not forgotten)
-1. Boomerang Monkey's spinning glaives: the spin doesn't look right. It should ease (slow up,
-   speed down), follow a perfect circle, and the glaives should have their purple trail effect.
+- (2026-11-02, owner screenshot: the Prince's undead bloons were huge grey ovals, its undead MOAB
+  off the track) FIXED in the exporters, all projectiles re-exported: export_projectiles.py drew
+  each atlas-trimmed sprite image over its full m_Rect, stretching it (UnpoppedArmyBloon's 120 x
+  170 art over 256 x 256 = 23.5 units, a bloon is ~12); images are now padded back to the rect
+  (552 PNGs changed: nearly every projectile sprite was too big and distorted). export_model.py
+  baked a prefab root's own position in (UnpoppedArmyMoab 64.9, Bfb 128.5, Barracuda, Piranha,
+  ammo crates, Goliath missile); prefab exports now drop it. Not checked on screen.
+  Then (owner: undead MOABs turned, bloons odd, flashing; the Prince stuck facing away): the prefab
+  root's rotation is dropped too (UnpoppedArmyMoab / Bfb roots turned 90 about x; Moab3D's is
+  plain); layers record a mirroring parent as flip y and the renderer mirrors about the pivot (18
+  projectiles, incl. UnpoppedArmyBloon, WallOfFire, MagusWallOfFire, Nail: likely the owner's Wall
+  of Fire "angle"); TravelAlongPath projectiles face the track (Game::track_heading) since their
+  `vel` swings -0.42 / +0.01 every other frame (the undead flipped 180 each frame); a tower none of
+  whose attacks turns it any more is drawn at its placement facing (Prince of Darkness).
+0. (2026-11-02, owner) Wizard: Wall of Fire's look is close but its angle is wrong; the Necromancer
+   raises no undead in sandbox (the game wakes NecromancerTargetTrackWithinRange only on two round
+   events TargetTrack.Initialise @0xe07c50 subscribes, generic MethodRefs 0x184f598c8 / 0x184f59790
+   not named yet; owner: the real sandbox raises undead from sent bloons' pops, so HYPOTHESIS
+   P-SANDBOXNECRO: sandbox Necromancers always have their track points; FIXED in the clone); sandbox abilities were dead (FIXED: Ability.IsReady
+   / Process use AreRoundsActive, true in sandbox) and Reset Cooldowns gave 33% (FIXED: entries set to
+   0); an upgrade's new ability now starts at 33% like Initialise. Owner doubted a lone Archmage
+   soloing a BAD: recording wizard_500_bad (round 100, CHIMPS) shows the real one does, and the
+   clone MATCHES it (7683 frames).
+1. DONE (2026-11-02, not hand-tested): Glaive Lord's orbiting glaives are drawn where the sim's
+   Orbit puts them (eased 3 <-> 15 degrees a frame, exact circle), each turned by its RotateModel
+   (-720 x 0.016666668 = -12 degrees a frame, RotateModel.ctor @0x1811faeb0; `OrbitState::age`), with
+   its purple Glow trail (proj_ effect). They wobbled: export_projectiles.py took a tilted node's
+   height (4 up) as an in-plane offset and dropped every z; sprite layers now use full 3D transforms
+   (all 368 layered prefabs re-exported, 22 changed: the 3 orbit glaives and acid puddles lost a height,
+   WallOfFire, WolfSpirit, Sky arrows, NauticSeige dart, Herald lance and others gained their forward /
+   back z). A sprite turned -90 about x (UnpoppedArmyBloon) lies along -z: its image is mirrored, which
+   the layer format can't say (not new). Open, not done: plain spinning projectiles (boomerangs) use +spin and ignore
+   their start rotation; the y flip says it should be -(start + spin x age), unverified on screen.
 2. DONE (2026-11-01, not hand-tested): the "i" button on a selected tower shows a description for
    all 3 paths at once, not just the highest (owner's meaning): the next upgrade, else the one the
    path has, else a closed path's first upgrade.
@@ -142,8 +187,51 @@ TOWERS.md has the longer per-tower notes.
    description pop-up on the left, which goes away when the mouse is released.
 4. DONE (2026-11-01, not hand-tested): Sandbox: with the bloon menu open, a press on the map only
    closes it and never selects a tower.
-5. In-game Powers menu: implement it.
-6. Sandbox: the Powers button is missing.
+5. In-game Powers menu: the MENU is built (2026-11-02, not hand-tested), `renderer/src/powers_menu.rs`:
+   the shop's PowersButton opens / closes the game's PowersMenu prefab with its PowersSlideOut clips
+   (Open / Close, Wide in the bottom-bar layout: HYPOTHESIS P-POWERSWIDE), one button per Power not
+   isHidden that SkuSettings.CanShowPower allows (as the Powers screen), in ui/runtime/powers.json order
+   (HYPOTHESIS P-POWERORDER: RebuildPowers' generic wrapper @0x184f63918 not named), its bg from
+   StandardPowerButton.UpdateIcon, its count from local_profile.powers (N0; "∞" in sandbox,
+   HYPOTHESIS P-SANDBOXCOUNT), the icon in lockedColor when it can't be used (no count, CHIMPS via
+   ArePowersAllowed's "Clicks", or RoundDisabled), wheel scrolling. Covers the shop / map input under it.
+   USING Powers (2026-11-02): a press on a usable Power takes it in hand (Action::Power, main.rs
+   `power_pick`, its Selected glow), the next map click runs Game::use_power (`game/powers.rs`,
+   PowerManager.Activate @0x180f37920) and PowerUseSuccess takes one from the profile (not in sandbox:
+   HYPOTHESIS P-SANDBOXNOCONSUME, dontUsePlayerInventory). Built: Super Monkey Storm (DamageAll.Activate
+   @0x180f31f00) and Monkey Boost (MonkeyBoost.Activate @0x180f34c60, durationFrames = (int)(duration x 60),
+   TimedMutator like Vigilante's), Thrive (Thrive.Activate @0x180f42a60: roundsLeft 2, OnRoundStart
+   @0x180f42ee0 counts down; pop cash x GetCashModifierFromSimBehaviors @0x180b46ae0 in
+   DistributeCash.PostDegrade @0x180fea0e0, isUnique so two don't stack; HUD ThriveGlow), Cash Drop
+   (CashDrop.Activate @0x180f312d0: game.json `power_projectiles`, a 2500 collectable picked up like
+   bananas; its CashDropCollect mesh planned by export_powers.py, display_plans/Powers.json). Dart Time
+   (DartTime.Activate @0x180f32170: endFrame = now + (int)(duration x 60); TowerTimeSlowMutatorClass.Mutate
+   @0x1811138a0: WeaponModel.rate x 1 / towerAttackSpeed (and animationSpeed, Heli / Path / Fighter
+   movement speeds x towerAttackSpeed: not modelled); BloonTimeSlowMutatorClass.Mutate @0x1810fd010:
+   BloonModel.speed x bloonSpeed as a "DartTime" Slow effect (GrowModel / bloonSpeed not modelled);
+   BloonSpawned / TowerCreated: new ones too, hooked in spawn_at and compute_buffs). Types behind
+   il2cpp TypeInfo usages: `python -I tools/il2cpp/type_usage.py 0x...` names them, through the binary's
+   Il2CppMetadataRegistration.types (4 slots before fieldOffsetsCount).
+   Track items DONE: Road Spikes, Glue Trap, MOAB Mine, Camo Trap (TrackPower.CheckLocation @0x180f43250:
+   a path within 5, HYPOTHESIS P-TRACKPOWERRANGE; CreateProjectile @0x180f43420: the projectileModel at
+   the spot), from game.json power_projectiles, their displays planned in display_plans/Powers.json. Then
+   Tower Powers: game.json `power_towers` (build_game_data.py power_towers(): each Power's TowerModel through
+   tower() / tower_tiers(), plus "unmodelled": its tower behaviours the clone doesn't simulate); Game::new
+   adds the ones with none as extra tower defs (never in the shop) and use_power places them free
+   (HYPOTHESIS P-POWERTOWERPLACE). Cave Monkey and Banana Farmer (CollectCashZone as Banana Farm x-x-5's,
+   P-COLLECT) qualify; Dungeon Statue (hidden, Dark Dungeons) has no tower display to export. Setup exports all 17 models
+   (export_tower_assets.py in bloon_models v7). NEXT for the rest, by what each needs: TowerExpireModel
+   (Sword of Power, She-Ra, Skeletor), IgnoreAllMutatorsTowerModel, AbilityModel on a Power tower (Tech
+   Bot, Battle Cat, beacons), CollectCashZoneModel for Banana Farmer Pro (with PowerProTowerModel), AddMakeshiftAreaModel (Pontoon,
+   Portable Lakes), EnergisingTotemBehaviorModel, SavedSubTowerModel (Dungeon Statue), PowerProTowerModel.
+   Not done for any: the full-screen effects, sounds, the real placement drag (StartPowerPlacement
+   @0x180ac09b0) and CheckLocation. Also not done: the
+   Powers / Pro filter toggles (ToggleFilterPowers @0x180ae25b0, ToggleFilterPowersPro @0x180ae2380), GetMoreButton
+   (ShowPurchasePowerUpScreen), touch-drag scrolling.
+6. DONE (2026-11-02, not hand-tested): sandbox Powers button. The clone hid the bloon menu's
+   SBPowersBtn; it now opens / closes the Powers menu (BloonMenu.TogglePowers @0x180b5e500; its
+   powersAnimator icon flip not done). The shop's PowersButton is off in sandbox: ToggleBloons has its
+   exact rect (HYPOTHESIS P-SANDBOXPOWERSBTN).
 7. Sandbox test bloons (2026-11-01, not hand-tested): rendering FIXED: every bloon sprite is DrawMode
    Simple, so size comes from pixels / ppu, not the stale m_Size (Test Bloon was stretched to 23.7 x
    23.7, Regrow bloons 18% too wide, plain ones 5% too big); art trim applied; Test MOAB turns along the
@@ -153,6 +241,126 @@ TOWERS.md has the longer per-tower notes.
    Animator's LOD_1; export_animated.py now finds the clips' root. Fixed 31 models: all five frozen
    paragons, Dan D Monke, Druid's tree and others.
 
+### Tower parity (the main goal)
+0. **Glue 33/34 (last: glue_upgrades_r30, first difference rt 970)**: game bloon 811 (clone 40) loses a layer
+   every frame 968-971 (Pink -> gone) on DoTs alone (no H lines); its neighbour 694 loses one every 30 (Dissolver's
+   interval). 811 still carries Corrosive Glue's DoT from before the 900 upgrade. The game's rule, VERIFIED-DISASM:
+   DamageOverTime.CheckTick (@0x180fe4fb0) ticks when now - lastTick >= intervalFrames, lastTick = now;
+   DamageOverTime.PostDegrade (@0x180fe54d0), run for each of the parent's DamageOverTime behaviours in order, sets
+   the CHILD'S FIRST DamageOverTime's lastTick to its own (so the first ends with the last behaviour's lastTick);
+   Initialise (@0x180fe5340): lastTick = now + initialDelay. With [Dissolver, Corrosive] the Dissolver gets
+   Corrosive's old lastTick (938) on every pop, so it's due each frame: the 968-971 chain. Tried 2026-11-02 in
+   `damage` (child's first applied DoT tick = parent's last applied DoT tick): 968-971 right but a new pop at 939
+   (Black split at 938; the game's order there must put Dissolver last, so the list order after
+   CopyMutatorsFromBloon / the middle insert matters). Replace the fitted P-DOTDEGRADE hypotheses (tower phase:
+   "another DoT due now waits", "a split resets the other DoTs to now") with PostDegrade once the mutator order
+   through copies is modelled (Mutable.AddMutator @0xf53a30, CopyMutatorsFromBloon).
+1. **Bomb (33/34, done but bomb_032's 1-ulp frags)**: re-record its scenarios with `# seed` first (ground rule), then
+   work through the first differences (open: 003/005/025/205 throws, 004/032 positions).
+   Re-recording (2026-11-02): bomb_000 re-recorded with its seed (no R lines: a 0-0-0 makes no synced
+   draws) and MATCHES; all 34 now re-recorded with seeds: still 28/34. DIFF: 003 (throw #12), 005 / 205 (first
+   throw game 132, clone 127), 025 (throw #38), 004 (801 position frames only), 032 (9 position frames).
+   bomb_005 (0-0-5): SOLVED rt 78: the Cluster fragments' ProjectileModel has dontUseCollisionChecker
+   (CollisionChecker.Process @0x180f31590 skips it; `Proj::no_checker`, not in the instant pass), so they
+   never hit the MOAB they're made in. SOLVED rt 87: RandomRangeTravelStrait.Initialise (@0x180cd46c0)
+   draws lifespanFrames = (int)(((max - min) x synced NextDouble + min) / speed x 60 + 0.5) per fragment
+   (`random_range`; the clone's draws now equal the R lines). NEXT: throw #1 (the second throw) is at 132 in
+   the game, 127 in the clone (first position difference rt 88, empty lists: a count difference).
+   (Fixed too: compare.sh --one dropped RNG lines, a missing `|` in its filter.)
+   SOLVED rt 88: the formula fits once read with Bomb Blitz's own range (20..30, not another model's
+   22..40): expiry = made + lifespanFrames; the fragment was cut short by a tree, but CollisionChecker
+   skips map blockers too for dontUseCollisionChecker. SOLVED rt 120: AbilityDamageAll.Activate
+   (@0x180df6800) for the scenario's ability (Bomb Storm). 003 and 004 now MATCH. NEXT (005 / 025 / 205, rt
+   1190) SOLVED: AbilityModel.activateOnPreLeak (Ability.OnPreLivesLost @0x180dfa8e0 -> Activate -> IsReady):
+   the Bomb Storm goes off when a bloon is about to leak and pops it too; abilities start at cooldownFrames x
+   0.33 (Ability.Initialise; none with startOffCooldown, all with resetCooldownOnTierUpgrade; P-ABILITYINIT:
+   set on the first tick); maxActivationsPerRound counted (reset at round start); the harness's scenario
+   ability is Activate(true), which keeps the cooldown; this frame's Spawner bloons exist for the storm
+   (`frame_spawns`). 005 / 025 / 205 MATCH. bomb_032 (left, bloons and weapons exact): at rt 1738 four of a
+   0-3-2 blast's 8 frags (rotations -100.13512, -55.135117, 79.86488, 124.86489) are 1 ulp off in position
+   because one direction component is (velocity 5 x dir, so sin/cos of the angle): the same open 1-ulp
+   Vector2.Rotate question as the Lord Phoenix drift (Wizard notes). Left for the sin/cos investigation.
+2. **NOW: Sniper 19/34** (see Sniper notes): all 34 re-recorded with seeds (2026-11-02, still 19). sniper_040
+   (Supply Drop): toggled-off abilities can't activate (ToggleableAbilityBehavior via CanUseAbility; AmmoSwap
+   starts off: `toggled_off`, P-TOGGLE); RandomPositionBasic.GetTargets exact (MoveNext @0x180dd9e70: r =
+   d1 x (max - min) + min, angle = (float)(d2 x 2 pi) in double, redrawn until Map.IsPointOnMap(p,
+   -mapBorder)); an Instant shot follows a newer bloon at its previous spot (the TrackTarget born rule).
+   First difference 121 -> 1902: Bouncing Bullet 1541 (pierce 4 -> 1, bounces used up) is gone in the game at
+   1902 (Retarget doesn't expire it: Collide just returns at currentBounceCount 0); the clone keeps it.
+   Find what ends it (the Instant's target, the frags' EmitOnDamage, or pierce). Its RetargetOnContact: distance
+   40, maxBounces 9999999, delay 0.1, expireIfNoTargetFound; Collide (@0xcf6ae0) spends a bounce and destroys
+   it when GetTarget finds nothing (no pierce check); pierce is 1 on both sides at 1901.
+   NOTE: H lines are written BEFORE their frame's F line (they belong to the next F, SimRecorder.cs
+   CollideBloonPatch). Read that way, sniper_205 (and its _close / _last / _strong, 10 position frames each)
+   rt 954-955: shot 2643 leaves bloon 2626 at 0 hp at 954; shot 2633, made at 954 aimed at it, collides with
+   it at 955 (pierce stays 1) and is removed that frame (PL x2633); the clone's shot outlives its target by
+   5 frames. sniper_040's bullet also goes in the frame of its rt 1902 collision. Likely one rule: an Instant
+   shot is removed after it collides with its Target (or with a Target that died); confirm in InstantModel /
+   Projectile.CollideBloon before coding it. Checked: Instant.Process (@0x180cc1b30) doesn't: with an
+   invalid Target it destroys only with destroyIfInvalid (+0x30); when the Target's bloon id changes
+   (lastBloonId +0x70) it becomes a position Target at lastBloonPosition (+0x74). So look at the emission
+   (InstantDamageEmission) and the projectile's AgeModel next: in sniper_205 the clone's shot had 6 frames
+   of life left at 954. Also checked: InstantDamageEmission.Process (@0x180c421e0) collides its proj
+   with its target once, the frame after Emit, whatever the bloon's state; Projectile.CollideBloon
+   (@0x180c8b970) returns at IsCollisionValid false without using pierce (so the H line of a dead
+   target shows pierce unchanged); InstantDamageEmission.OnDestroy only clears fields. destroyIfInvalid is
+   false for the 2-0-5 shot (lifespan 0.1 s). Projectile.IsCollisionValid (@0x180c8d840) has no destroy either. Still open: what removes it at 955 (
+   @? and its callers, Exhausted, PL list handling in SimRecorder).
+   sniper_005 (5 position frames, first rt 457) is the same pattern: shot 3838 (the missed-frame second shot)
+   targets 3801, which shot 3848 pops at 456; at 457 its H lines are with dead 3801 and with Yellow 3819 (an old
+   bloon, not a child) and it's gone that frame. KEY: SimRecorder logs H on every Projectile.CollideBloon CALL,
+   valid or not (hp / pierce unchanged = refused). FilterAllExceptTarget.FilterBloon (@0x180c1d3c0): valid
+   Target -> ObjectId.op_Equality(target, bloon); invalid Target -> false, so 3819 was refused. So in all three
+   recordings (040, 205_x, 005) the game removes an Instant shot whose Target is dead / done at its next
+   collision step, without any valid hit. Still to find in the decompile: what does it (candidates: the
+   CollisionChecker's handling of a refused CollideBloon, Age). Live Projectile.CollideBloons @0x180c8bd70 (grid)
+   calls IsCollisionValid first and only then CollideBloon(force=1), so a refused bloon there makes no H line;
+   the H with Yellow 3819 must come from the other overload @0x180c8bce0 (FUN_1824b4110 loop) or another
+   caller: find which, then what destroys the shot.
+   Lifetimes in sniper_205 (P lines): 7 shots live the full 6 frames (lifespan 0.1) though their Target is dead and
+   their H lines are refused too (e.g. 4727 at 3206: target 4649 already dead when made) - the clone gets these
+   right. The 3 that live 1 frame (1893 at 198, 2633 at 954, 3363 at 1869) had a target alive when made and killed
+   that same frame by the sibling shot of a missed-frame double (2633 made before 2643, which pops 2626). So the
+   rule is about that order (Instant lastBloonId set at creation, then the bloon dies; or the emission's once
+   collide), not a dead target as such.
+   (2026-11-02, later) This one rule is what 9 of the 15 failing recordings show (005, 020, 025, 205 x4,
+   420_close, 520: bloons and weapons exact, only position frames). Ruled out in the decompile, none
+   destroys or ages the shot: CollisionChecker.Process (@0x180f31590: grid query -> Projectile.CollideBloons
+   list overload @0x180c8bce0, the source of the refused H lines; its only Destroy is a map-blocker hit),
+   Projectile.CollideBloon (@0x180c8b970: Bloon.PreCollision first, a refused one returns 1),
+   Bloon.PreCollision (@0x180fb59f0: bloon behaviours only), ProjectileFilter.FilterCollision
+   (@0x180cd1f90), FilterAllExceptTarget.FilterBloon (@0x180c1d3c0), InstantDamageEmission.Emit / Process,
+   Emission.BaseEmit (@0x180c3dce0: the double-shot flag isn't passed on; slot 105 is set_EmittedBy),
+   Weapon.SpawnDart (@0x180c51420: the missed shot is Emit(..., doubleShot=1)). Age.Process (@0x180c862d0)
+   expires at lifespanFrames <= now - the projectile's creation time (an interface call, slot 0xf); its
+   only caller of SetToExpire is CreateProjectileOnTowerDestroy.CreateProjectile (@0x180d14910: unrelated). Note InstantDamageEmission keeps ONE `proj`:
+   a double's second Emit overwrites the first, so the first never gets the once-collide. Next:
+   check where a Projectile's creation time is set (could a double shot's be backdated
+   by the missed frame?), and the map-blocker branch (an instant shot at its dead target's
+   lastBloonPosition, z?). The game also draws
+   `R r 0 1000` at 119 (Supply Drop) that the clone doesn't (no later draws, so no desync yet). Then Tack 17/25, Sub 16/32, Beast Handler 9/34, Engineer 7/34,
+   Desperado 6/34, then the 0/x towers.
+3. Powers still to build (item 5 above has the list): the tower Powers that need TowerExpire on a
+   parentless tower (spawn_sub needs a parent), abilities on Power towers, makeshift water, Energising
+   Totem, Pro Powers; their effects / sounds / placement drag.
+
+## Wizard notes (done, 34/34; kept for reference)
+
+0. **Wizard re-recorded (2026-11-01, R lines in 10)**. Necromancer graveyard: NecromancerZone hears
+   a degrade only from a bloon it subscribed (BloonEnter, @0xd4bd80); a heard degrade uses the
+   subscription up, every new bloon (first child too) enters afresh on the next Process
+   (P-GRAVESUB, `grave_zone`, `grave_zones()` before the tower phase); with a Prince (tier 5)
+   every degrade is heard (P-GRAVET5). wizard_004 / 005 / 025 MATCH. Phoenix 040/050/052/250
+   MATCH: PathMovementFromScreenCenter.Process moves the Phoenix in 3D, Vector3.MoveTowards
+   (@0xf47cf0, dx² + dy² + dz² unfused) to (point, 250) by speedFrames = speed x 0.016666668 (the
+   model's .ctor @0x1225980); the Phoenix starts at z 250 (P-PHOENIXZ0); the point switch is
+   Vector2.DistanceSquared unfused. wizard_052: OverrideCamoDetectionModel (Monkey Sense) gives
+   the tower and its sub-towers camo detection (`Tier.detect_camo`, a buff), so the Phoenix takes
+   a Rainbow Camo off the map's edge (Tutorial's path points are all targetable).
+   500 and 520 MATCH (a non-turning attack ejects from the tower's rotation in degrees);
+   502_strong MATCHES: TargetStrongPrioCamo's FindBestBloon lead is camo bloons only; without one,
+   TargetStrong's own order (the path's First lead first, then First's order, strictly higher
+   danger wins) for both prio and plain Strong.
 1. **Lord Phoenix (wizard_050 / 052 / 250)**: flight ported (committed): harness `sync_pets`; `circle_subs` = PathMovementFromScreenCenter.Process (360 points
    radius 70 round (0, 0), closest first, next within speedFrames x 5, MoveTowards, LerpAngle 0.1);
    starts on its tower and waits its first frame; shoots from its rotation (`circling` grot).
@@ -204,7 +412,6 @@ TOWERS.md has the longer per-tower notes.
    upgrades_r30 differ only in projectile positions): all now carry the seed; work through their first differences.
 2. **wizard_500** (Guided Magic steering, open rule in TOWERS.md) and wizard_502_strong (2
    frames).
-3. Then the other towers in Status, lowest-hanging first (Sniper, Ninja, Engineer...).
 
 ## Sniper notes (2026-11-01)
 
@@ -343,6 +550,55 @@ P-OFFTRACKORDER: newest factory object first). (The wind_seg filing above now on
 seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
+
+- 2026-11-02: Sniper notes: H-line timing, the Instant-shot removal pattern in sniper_040 / 205_x.
+
+- 2026-11-02: Toggled-off abilities, exact RandomPositionBasic, Instant follows newer bloons' previous spot.
+  sniper_040 121 -> 1902. Regression unchanged.
+
+- 2026-11-02: Pre-leak abilities (Bomb Blitz), abilities start at 33% cooldown, per-round limits, harness keeps
+  cooldown on the scenario ability. Bomb 30 -> 33/34; rest unchanged.
+
+- 2026-11-02: AbilityDamageAll (Bomb Storm), dontUseCollisionChecker skips map blockers too. Bomb 28 -> 30/34;
+  rest of the regression unchanged.
+
+- 2026-11-02: dontUseCollisionChecker projectiles skip collisions; RandomRangeTravelStrait lifespans drawn from
+  syncedRandom. bomb_005 first difference 78 -> 88. Full regression unchanged.
+
+- 2026-11-02: Now reordered: Wizard is done (its notes moved to Wizard notes), Bomb is next.
+
+- 2026-11-02: Banana Farmer Power placeable (CollectCashZone already simulated); 16 Power tower models exported.
+  Regression: dart 70/70, boomerang 99/99.
+
+- 2026-11-02: Tower Powers: data for all 17, Cave Monkey placeable (the only one with every behaviour
+  simulated). Full regression unchanged: dart 70, boomerang 99, wizard 34, sub 16, tack 17, bomb 28,
+  sniper 19, ninja 34, engineer 7, desperado 6.
+
+- 2026-11-02: tools/il2cpp/type_usage.py names the class behind a TypeInfo slot.
+
+- 2026-11-02: Dart Time Power (bloon speed x 0.3, tower rate x 1 / 0.7 for 10 s). Regression: dart 70/70,
+  boomerang 99/99.
+
+- 2026-11-02: Track Powers (Road Spikes, Glue Trap, MOAB Mine, Camo Trap) and their displays. Regression:
+  dart 70/70, boomerang 99/99.
+
+- 2026-11-02: Cash Drop Power (its crate projectile and mesh). Regression: dart 70/70, boomerang 99/99.
+
+- 2026-11-02: Thrive Power (pop cash x 1.25 this round and the next, ThriveGlow). Regression: dart 70/70,
+  boomerang 99/99.
+
+- 2026-11-02: Using Powers: Super Monkey Storm and Monkey Boost (pick in the menu, click the map). Tests pass;
+  regression dart 70/70, boomerang 99/99.
+
+- 2026-11-02: game/powers.json keyed by the Powers' ids (Pro: powerId), so the menu finds Pro rules.
+
+- 2026-11-02: In-game Powers menu (open / close, Power buttons, counts, states); sandbox SBPowersBtn opens it.
+  Using a Power not built yet. Tests pass (powers_menu, sandbox, hud).
+
+- 2026-11-02: Setup exports the in-game Powers menu's Animators (slide in / out).
+
+- 2026-11-02: Glaive Lord orbit glaives drawn from the sim (eased, circular), RotateModel spin, Glow
+  trail; sprite layer export in 3D. Regression: dart 70/70, boomerang 99/99.
 
 - 2026-11-01: Wind chance / distance from the synced RNG. Regression unchanged.
 

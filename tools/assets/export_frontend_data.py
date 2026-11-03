@@ -8,11 +8,9 @@ import json
 import sys
 from pathlib import Path
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
-TypeTreeHelper.read_typetree_boost = False
 game, extracted = map(Path,sys.argv[1:3])
 base = game/"BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full"
-env = UnityPy.load(glob.glob(str(base/"game_data_assets_all_*.bundle"))[0],glob.glob(str(base/"*_monoscripts_*.bundle"))[0])
+env = UnityPy.load(*(glob.glob(str(base/"game_data_assets_all_*.bundle")) + glob.glob(str(base/"*_monoscripts_*.bundle"))))
 prefabs = json.loads((extracted/"catalog_prefabs.json").read_text())
 sprite_names = json.loads((extracted/"catalog_sprites.json").read_text())
 gd = env.container["Assets/Data/GameData.asset"]
@@ -162,7 +160,7 @@ if model_file.exists():
                  "icon":icon,"cost":f["cost"],"order":f.get("orderPriority",0),
                  "animated_icon":prefabs.get(f.get("animatedIcon","")),
                  "pro":pro,"store":f.get("storeNavigateToId",""),"hidden":bool(f.get("isHidden")),
-                 "achievement":f.get("linkedToAchievement",0),"showAsNew":bool(f.get("showAsNew")),
+                 "showAsNew":bool(f.get("showAsNew")),
                  "linked":linked.get(power_id,""),"discounts":discounts}
         if pro:
             # GameModel.GetXpCostForProUpgrade / PowersProDataHelper.GetXpForPowerProCurrentUpgrade walk

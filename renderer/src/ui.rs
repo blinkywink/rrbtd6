@@ -302,10 +302,22 @@ impl Fonts {
         gl_use_material(&self.mat);
         let lines: Vec<&str> = b.text.trim_end_matches('\n').split('\n').collect();
         let block_h = (f.ascent - f.descent + (lines.len() as f32 - 1.0) * f.line_height) * k;
-        // TMP vertical alignment: Top 256, Middle 512, Bottom 1024 (others treated as Middle).
+        // TMP vertical alignment: Top 256, Middle 512, Bottom 1024, Geometry 4096 (the glyphs'
+        // own extent centred; one line); others treated as Middle.
         let top = match b.v_align {
             256 => b.rect.y,
             1024 => b.rect.bottom() - block_h,
+            4096 if lines.len() == 1 => {
+                let gs = lines[0].chars().filter_map(|c| f.glyphs.get(&c)).filter(|g| g.src.h > 1.0);
+                let (hi, lo) = gs.fold((f32::MIN, f32::MAX), |(hi, lo), g| (hi.max(g.bearing.y), lo.min(g.bearing.y - g.src.h)));
+                if hi > lo {
+                    // The glyph box [lo, hi] above the baseline, centred in the rect: baseline at
+                    // the centre + its middle (screen y down); `top` is the baseline less ascent.
+                    b.rect.y + b.rect.h / 2.0 + (hi + lo) / 2.0 * k - f.ascent * k
+                } else {
+                    b.rect.y + (b.rect.h - block_h) / 2.0
+                }
+            }
             _ => b.rect.y + (b.rect.h - block_h) / 2.0,
         };
         let p = f.padding;
@@ -363,6 +375,7 @@ pub struct Sprite {
 pub struct Sprites {
     index: HashMap<String, (PathBuf, [f32; 4], f32)>,
     loaded: HashMap<String, Option<Sprite>>,
+    fallbacks:HashMap<String,String>,
 }
 
 // UI PNGs always use the same linear, non-mipmapped sampling. Reuse uploads
@@ -388,7 +401,7 @@ fn shared_ui_texture_with(path:&Path,decoded:Option<&Image>)->Option<std::rc::Rc
         if let Some(texture)=cache.paths.get(path).and_then(|key|cache.textures.get(key)).and_then(std::rc::Weak::upgrade){return Some(texture);}
         let bytes=std::fs::read(path).ok()?;let key=blake3::hash(&bytes);
         let texture=if let Some(texture)=cache.textures.get(&key).and_then(std::rc::Weak::upgrade){texture}else{
-            let texture=std::rc::Rc::new(match decoded{Some(img)=>Texture2D::from_image(img),None=>Texture2D::from_file_with_format(&bytes,Some(ImageFormat::Png))});
+            let texture=std::rc::Rc::new(match decoded{Some(img)=>Texture2D::from_image(img),None=>Texture2D::from_image(&Image::from_file_with_format(&bytes,Some(ImageFormat::Png)).ok()?)});
             texture.set_filter(FilterMode::Linear);cache.textures.insert(key,std::rc::Rc::downgrade(&texture));texture
         };
         cache.paths.insert(path.to_owned(),key);Some(texture)
@@ -442,11 +455,24 @@ impl Sprites {
         index
     }
 
-    pub fn new(root:&Path,extra:&[PathBuf])->Self{Self{index:Self::build_index(root,extra),loaded:HashMap::new()}}
+    pub fn new(root:&Path,extra:&[PathBuf])->Self{Self{index:Self::build_index(root,extra),loaded:HashMap::new(),fallbacks:HashMap::new()}}
     pub async fn load(root:&Path,extra:&[PathBuf])->Self{
         let root=root.to_owned();let extra=extra.to_vec();
         let index=crate::load_work::spawn(move||Self::build_index(&root,&extra)).await;
-        Self{index,loaded:HashMap::new()}
+        Self{index,loaded:HashMap::new(),fallbacks:HashMap::new()}
+    }
+
+    /// Mods changed: forget the sprites loaded from the mods folder so they reload.
+    pub fn clear_mod_files(&mut self) {
+        let stale: Vec<String> = self.index.iter().filter(|(_, (p, _, _))| p.components().any(|c| c.as_os_str() == "mods")).map(|(n, _)| n.clone()).collect();
+        for n in stale { self.loaded.remove(&n); }
+    }
+
+    /// Index optional artwork without uploading offscreen mod icons.
+    pub(crate) fn register_file(&mut self,name:&str,path:&Path,fallback:&str){
+        UI_TEXTURES.with(|cache|{cache.borrow_mut().paths.remove(path);});
+        self.index.insert(name.to_owned(),(path.to_owned(),[0.0;4],10.8));
+        self.fallbacks.insert(name.to_owned(),fallback.to_owned());self.loaded.remove(name);
     }
 
     /// A sprite of this name exists.
@@ -507,6 +533,10 @@ impl Sprites {
             let s = self.index.get(name).and_then(|(path, border, ppu)| {
                 let tex = shared_ui_texture(path)?;
                 Some(Sprite { tex, border: *border, ppu: *ppu })
+            });
+            let s=s.or_else(||{
+                let fallback=self.fallbacks.get(name)?.clone();
+                self.get(&fallback).map(|s|Sprite{tex:s.tex.clone(),border:s.border,ppu:s.ppu})
             });
             self.loaded.insert(name.to_string(), s);
         }
@@ -575,7 +605,8 @@ pub static UPGRADE_ICONS: std::sync::OnceLock<std::collections::HashMap<String, 
 
 pub fn find_icon(icons: &std::collections::HashMap<String, String>, name: &str, tower: &str, path: usize, tier: usize) -> Option<String> {
     // The upgrade's own icon reference first; the name matching below only covers what wasn't exported.
-    if let Some(icon) = UPGRADE_ICONS.get().and_then(|m| m.get(name)) {
+    // (Only when that sprite was exported: a stale entry falls through to the name matching.)
+    if let Some(icon) = UPGRADE_ICONS.get().and_then(|m| m.get(name)).and_then(|i| icons.get(&icon_key(i))) {
         return Some(icon.clone());
     }
     // The tower's own copy of a name several towers share ("TackShooter__FasterShooting...").

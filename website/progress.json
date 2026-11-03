@@ -4,7 +4,7 @@
   "towers": [
     ["Dart Monkey", 70, 70],
     ["Boomerang Monkey", 99, 99],
-    ["Bomb Shooter", 28, 34],
+    ["Bomb Shooter", 33, 34],
     ["Tack Shooter", 17, 25],
     ["Ice Monkey", 20, 25],
     ["Glue Gunner", 33, 34],
@@ -16,7 +16,7 @@
     ["Heli Pilot", 0, 0],
     ["Mortar Monkey", 0, 24],
     ["Dartling Gunner", 0, 23],
-    ["Wizard Monkey", 34, 34],
+    ["Wizard Monkey", 35, 35],
     ["Super Monkey", 0, 0],
     ["Ninja Monkey", 34, 34],
     ["Alchemist", 0, 34],

@@ -15,8 +15,6 @@ GAME, OUT, *SCENES = sys.argv[1:]
 import glob
 import os
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
-TypeTreeHelper.read_typetree_boost = False
 base = Path(GAME)/"BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full"
 patterns = os.environ.get('RRBTD6_UI_BUNDLES', '*_monoscripts_*.bundle;ui_scenes_all_*.bundle;asset_references_assets_all_*.bundle').split(';')
 env = UnityPy.load(*(glob.glob(str(base/p))[0] for p in patterns))

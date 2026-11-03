@@ -9,7 +9,7 @@ pub use match_flow::{Action,Input,Frame,MatchStart,STEPS_PER_FRAME,IN_FLIGHT};
 pub use transport::{Client, Options};
 use serde::{Deserialize,Serialize};
 
-pub const VERSION:u32=8;
+pub const VERSION:u32=9;
 pub const MAX_PLAYERS:usize=4;
 pub const MAX_FRAME:usize=64*1024;
 pub const ALPN:&[u8]=b"rrbtd6/private-coop/1";
@@ -28,7 +28,16 @@ impl Settings{
     }
 }
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
-pub struct Player{pub slot:u8,pub name:String,pub ready:bool,pub connected:bool}
+pub struct Player{pub slot:u8,pub name:String,pub ready:bool,pub connected:bool,#[serde(default)]pub profile:PlayerProfile}
+/// What the lobby shows of a player (CoopPlayerPanel): the hero picked, the profile avatar and
+/// banner, the rank. Sent by each player whenever it changes.
+#[derive(Clone,Debug,Default,Serialize,Deserialize,PartialEq)]
+pub struct PlayerProfile{pub hero:String,pub avatar:String,pub banner:String,pub level:u32}
+impl PlayerProfile{
+    fn valid(&self)->bool{
+        [&self.hero,&self.avatar,&self.banner].iter().all(|s|s.len()<=64&&s.chars().all(|c|c.is_ascii_alphanumeric()||c=='_'||c=='-'))
+    }
+}
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
 pub struct Room{pub revision:u64,pub settings:Settings,pub players:Vec<Player>,#[serde(default)]pub mods:Vec<ModPackage>}
 impl Room{
@@ -38,7 +47,7 @@ impl Room{
         if !self.settings.valid()||self.players.is_empty()||self.players.len()>MAX_PLAYERS{return false;}
         let mut seen=[false;MAX_PLAYERS];
         for p in &self.players{
-            if p.slot as usize>=MAX_PLAYERS||seen[p.slot as usize]||p.name.chars().count()>32||p.name.chars().any(char::is_control){return false;}
+            if p.slot as usize>=MAX_PLAYERS||seen[p.slot as usize]||p.name.chars().count()>32||p.name.chars().any(char::is_control)||!p.profile.valid(){return false;}
             seen[p.slot as usize]=true;
         }
         seen[0]
@@ -46,7 +55,7 @@ impl Room{
 }
 
 #[derive(Clone,Debug)]
-pub enum Command{Settings(Settings),Mods(Vec<ModPackage>),Ready(bool),Leave,Start,Loaded([u8;32]),Input{sequence:u64,action:Action},Advance,Ack{frame:u64,digest:[u8;32]}}
+pub enum Command{Profile(PlayerProfile),Settings(Settings),Mods(Vec<ModPackage>),Ready(bool),Leave,Start,Loaded([u8;32]),Input{sequence:u64,action:Action},Advance,Ack{frame:u64,digest:[u8;32]}}
 #[derive(Clone,Debug)]
 pub enum Event{
     Hosting{invite:String},Joined{slot:u8},Room(Room),Error(String),Disconnected(String),
@@ -57,7 +66,7 @@ pub enum Event{
 #[derive(Clone,Debug,Serialize,Deserialize)]
 enum Wire{
     Hello{version:u32,token:String,identity:String,name:String},
-    Welcome{version:u32,slot:u8,room:Room},Room(Room),Settings(Settings),Ready(bool),
+    Welcome{version:u32,slot:u8,room:Room},Room(Room),Settings(Settings),Ready(bool),Profile(PlayerProfile),
     Ping(u64),Pong(u64),Reject(String),
     Prepare(MatchStart),Loaded([u8;32]),Running,Input{sequence:u64,action:Action},Frame(Frame),Ack{frame:u64,digest:[u8;32]},
 }
@@ -86,11 +95,11 @@ struct State{room:Room}
 impl State{
     fn new(settings:Settings,host:&str)->Result<Self,String>{
         if !settings.valid(){return Err("Invalid room settings".into());}
-        Ok(Self{room:Room{revision:1,settings,players:vec![Player{slot:0,name:name(host),ready:false,connected:true}],mods:Vec::new()}})
+        Ok(Self{room:Room{revision:1,settings,players:vec![Player{slot:0,name:name(host),ready:false,connected:true,profile:Default::default()}],mods:Vec::new()}})
     }
     fn join(&mut self,player:&str)->Result<u8,String>{
         let slot=(1..MAX_PLAYERS).find(|&s|!self.room.settings.closed[s]&&!self.room.players.iter().any(|p|p.slot as usize==s)).ok_or("Room is full")?;
-        self.room.players.push(Player{slot:slot as u8,name:name(player),ready:false,connected:true});
+        self.room.players.push(Player{slot:slot as u8,name:name(player),ready:false,connected:true,profile:Default::default()});
         self.room.revision+=1;Ok(slot as u8)
     }
     fn leave(&mut self,slot:u8){self.room.players.retain(|p|p.slot!=slot);self.room.revision+=1;}
@@ -109,6 +118,11 @@ impl State{
             if self.room.settings.custom_mode.as_ref().is_some_and(|id|!mods::mode_ids(&mods).contains(id)){self.room.settings.custom_mode=None;self.room.settings.mode=0;}
             self.room.mods=mods;for p in &mut self.room.players{p.ready=false;}self.room.revision+=1;}
         Ok(())
+    }
+    fn profile(&mut self,slot:u8,profile:PlayerProfile)->Result<(),String>{
+        if !profile.valid(){return Err("Invalid player profile".into());}
+        let p=self.room.players.iter_mut().find(|p|p.slot==slot).ok_or("Player has left")?;
+        if p.profile!=profile{p.profile=profile;self.room.revision+=1;}Ok(())
     }
     fn ready(&mut self,slot:u8,ready:bool)->Result<(),String>{
         let p=self.room.players.iter_mut().find(|p|p.slot==slot).ok_or("Player has left")?;

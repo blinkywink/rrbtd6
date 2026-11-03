@@ -115,6 +115,7 @@ async fn host(endpoint:&Endpoint,options:&Options,settings:Settings,mut commands
                 Some(Command::Mods(mods))=>{if flow.start.is_some(){emit(events,Event::Error("Match mods are locked".into()));}else if let Err(e)=state.mods(0,mods){emit(events,Event::Error(e));}},
                 Some(Command::Settings(settings))=>{if flow.start.is_some(){emit(events,Event::Error("Match settings are locked".into()));}else if let Err(e)=state.settings(0,settings){emit(events,Event::Error(e));}},
                 Some(Command::Ready(ready))=>{if flow.start.is_none(){state.ready(0,ready)?;}},
+                Some(Command::Profile(profile))=>{if flow.start.is_none(){let _=state.profile(0,profile);}},
                 Some(Command::Start)=>{match flow.begin(&state.room){Ok(start)=>publish_match(&peers,events,Wire::Prepare(start))?,Err(e)=>emit(events,Event::Error(e))}},
                 Some(Command::Advance)=>{if let Some(frame)=flow.advance()?{publish_match(&peers,events,Wire::Frame(frame))?;}},
                 Some(Command::Loaded(digest))=>{if let Some(w)=game_message(&mut flow,0,Wire::Loaded(digest))?{publish_match(&peers,events,w)?;}},
@@ -150,6 +151,7 @@ async fn host(endpoint:&Endpoint,options:&Options,settings:Settings,mut commands
                     if let Some(peer)=peers.iter().find(|p|p.slot==slot&&p.generation==id){
                         match message{
                             Wire::Ready(ready)=>{if flow.start.is_none(){let _=state.ready(slot,ready);}},
+                            Wire::Profile(profile)=>{if flow.start.is_none(){let _=state.profile(slot,profile);}},
                             Wire::Ping(n)=>{let _=peer.tx.try_send(Wire::Pong(n));},
                             message @ (Wire::Loaded(_)|Wire::Input{..}|Wire::Ack{..})=>{if let Some(w)=game_message(&mut flow,slot,message)?{publish_match(&peers,events,w)?;}},
                             _=>{let _=peer.tx.try_send(Wire::Reject("Only the host can change room settings".into()));},
@@ -236,6 +238,7 @@ async fn guest(endpoint:&Endpoint,options:&Options,invite:Invite,mut commands:ch
         result=&mut receiver=>{let _=result;emit(events,Event::Disconnected("Host disconnected".into()));break;},
         command=commands.recv()=>match command{
             Some(Command::Ready(ready))=>write(&mut send,&Wire::Ready(ready)).await?,
+            Some(Command::Profile(profile))=>{if !prepared{write(&mut send,&Wire::Profile(profile)).await?;}},
             Some(Command::Settings(_)|Command::Mods(_))=>emit(events,Event::Error("Only the host can change the room".into())),
             Some(Command::Start|Command::Advance)=>emit(events,Event::Error("Only the host can start or advance the match".into())),
             Some(Command::Loaded(digest))=>write(&mut send,&Wire::Loaded(digest)).await?,

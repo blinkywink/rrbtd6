@@ -10,7 +10,10 @@ With --match the target is the source re-baked (the Sun Temple head: turned 180 
 scaled, its vertices reordered): that similarity transform and vertex order are found from the
 idle poses, and each source frame is carried through it whole.
 
-Usage: python -I tools/assets/graft_clips.py [--match] <target model dir (anim_q.bin)> <source dir (anim.bin)> <clip>...
+Blended frames can't be expressed as skinning matrices, so a grafted target is stored as vertex
+frames (anim_q.bin) and its skin.bin removed; source and target may be either form.
+
+Usage: python -I tools/assets/graft_clips.py [--match] <target model dir> <source dir> <clip>...
 Idempotent: a clip already in the target is replaced.
 """
 import json
@@ -20,6 +23,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pack_anims import read_bytes
+import skin_anims
 
 import numpy as np
 
@@ -29,6 +33,8 @@ QT = [("p", "<u2", 3), ("n", "i1", 3), ("pad", "i1")]
 def load_target(d):
     meta = json.load(open(os.path.join(d, "meta.json")))
     n = meta["vertex_count"]
+    if (Path(d) / "skin.bin").exists():
+        return meta, skin_anims.float_frames(d).astype(np.float64)
     q = np.frombuffer(read_bytes(Path(d) / "anim_q.bin"), dtype=QT).reshape(-1, n)
     lo, hi = np.array(meta["quant"]["min"]), np.array(meta["quant"]["max"])
     span = np.where(hi - lo > 1e-9, hi - lo, 1.0)
@@ -69,7 +75,10 @@ def main():
     n = meta["vertex_count"]
     if smeta["vertex_count"] != n:
         sys.exit(f"vertex counts differ: {n} vs {smeta['vertex_count']}")
-    sdata = np.frombuffer(read_bytes(Path(src) / "anim.bin"), dtype=np.float32).reshape(-1, n, 6).astype(np.float64)
+    if (Path(src) / "skin.bin").exists():
+        sdata = skin_anims.float_frames(src).astype(np.float64)
+    else:
+        sdata = np.frombuffer(read_bytes(Path(src) / "anim.bin"), dtype=np.float32).reshape(-1, n, 6).astype(np.float64)
     t_idle = meta["anims"][idle_index(meta["anims"])]
     s_idle = smeta["anims"][idle_index(smeta["anims"])]
     base_t, base_s = frames[t_idle["offset"]], sdata[s_idle["offset"]]
@@ -103,6 +112,9 @@ def main():
     out["p"] = np.round((pos - lo) / span * 65535.0).clip(0, 65535).astype(np.uint16)
     out["n"] = np.round(nor.clip(-1, 1) * 127.0).astype(np.int8)
     out.tofile(os.path.join(tgt, "anim_q.bin"))
+    Path(tgt, "skin.bin").unlink(missing_ok=True)
+    for packed in ("anim_q.bin.z", "anim_q.bin.dz", "anim_q.bin.wz"):
+        Path(tgt, packed).unlink(missing_ok=True)
     meta["anims"] = anims
     meta["quant"] = {"min": lo.tolist(), "max": hi.tolist()}
     json.dump(meta, open(os.path.join(tgt, "meta.json"), "w"), indent=1)

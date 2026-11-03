@@ -51,6 +51,9 @@ def main():
             continue
         s = o.read()
         atlas = atlas_of.get(o.path_id, "_unpacked")
+        # Achievement-only art is not part of RustTD6. Shared gameplay/UI atlases remain.
+        if "achievement" in atlas.lower() or s.m_Name.lower() in {"achievementsbtn", "achievementsicon"}:
+            continue
         if want and atlas not in want:
             continue
         d = os.path.join(out, atlas)

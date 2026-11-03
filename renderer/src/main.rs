@@ -6,13 +6,22 @@
 //! Space / Go button = start next round, F = toggle 1x/3x speed, A = auto-start,
 //! gear button / Esc = pause screen, Esc = cancel placement, V = toggle 3D / 2D view.
 
+mod boss_logic;
+mod mem_guard;
+mod map_routes;
 mod anim;
+mod instanced;
 mod animation_storage;
 mod runtime_anim_export;
 mod audio;
 mod data;
 mod game;
 mod modding;
+mod mod_assets;
+mod mod_runtime;
+mod mod_entities;
+mod mod_ui;
+mod mod_maps;
 mod load_work;
 mod frame_bench;
 mod frame_pacer;
@@ -36,9 +45,13 @@ mod static_map;
 mod sandbox;
 mod temple_popup;
 mod support_popup;
+mod welcome_popup;
 mod geraldo_shop;
+mod powers_menu;
 mod ui;
 mod uitree;
+mod callouts;
+mod tower_xp;
 
 use game::{FPS, Game};
 use hud::Hud;
@@ -57,7 +70,7 @@ type AttackIndex=HashMap<String,Vec<(String,[f32;3],usize)>>;
 fn tower_metadata(root:&std::path::Path,names:&[String])->(Vec<HashMap<String,String>>,Vec<AttackIndex>){
     let mut tier_index=Vec::new();let mut attack_index=Vec::new();
     for name in names {
-        let a: serde_json::Value = std::fs::read_to_string(root.join("models").join(name).join("tiers").join("attack.json"))
+        let a: serde_json::Value = std::fs::read_to_string(mod_assets::model(root,name).join("tiers").join("attack.json"))
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
@@ -80,7 +93,7 @@ fn tower_metadata(root:&std::path::Path,names:&[String])->(Vec<HashMap<String,St
                 })
                 .unwrap_or_default(),
         );
-        let idx = std::fs::read_to_string(root.join("models").join(name).join("tiers").join("index.json"))
+        let idx = std::fs::read_to_string(mod_assets::model(root,name).join("tiers").join("index.json"))
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
@@ -117,6 +130,10 @@ fn marker_at(game: &Game, picking: Option<usize>, selected: Option<usize>, in_ma
         return in_map.then_some(mouse);
     }
     let t = selected?;
+    if game.is_necro(t) {
+        // (Its own TargetGreen effect marks the chosen segment.)
+        return None;
+    }
     game.uses_point(t).then_some(game.towers[t].point).flatten()
 }
 
@@ -169,14 +186,53 @@ pub fn spaced(s: &str) -> String {
     out
 }
 
+fn overlay_mod_visuals(game:&Game,tiers:&mut [HashMap<String,String>],attacks:&mut [AttackIndex]){
+    for (i,definitions) in game.tower_tiers.iter().enumerate(){if let Some(definitions)=definitions{
+        for (key,model) in &definitions.visuals{
+            tiers[i].insert(key.clone(),model.clone());tiers[i].remove(&format!("{key}_top"));
+            attacks[i].remove(key);
+        }
+    }}
+}
+
 /// Where the extracted game data lives: a `local_extracted` folder next to the exe (portable
-/// copies), else in the working directory, else the source tree's (development builds).
+/// copies), next to a macOS app bundle (RustTD6.app/Contents/MacOS/<exe>), else in the working
+/// directory, else the source tree's (development builds).
+/// An app bundle is read-only, and the game saves beside its data. So on iOS the root is a folder in
+/// Documents linking to each bundled item; an item it has itself (settings, the profile) stays its own. The
+/// bundle's path changes on every install, so the links are made again each launch.
+#[cfg(target_os = "ios")]
+fn ios_root() -> Option<PathBuf> {
+    let bundled = std::env::current_exe().ok()?.parent()?.join("local_extracted");
+    let root = PathBuf::from(std::env::var_os("HOME")?).join("Documents").join("local_extracted");
+    std::fs::create_dir_all(&root).ok()?;
+    for entry in std::fs::read_dir(&bundled).ok()?.flatten() {
+        let link = root.join(entry.file_name());
+        // A link is replaced; anything else is the player's own file.
+        if link.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            let _ = std::fs::remove_file(&link);
+        }
+        if !link.exists() {
+            let _ = std::os::unix::fs::symlink(entry.path(), &link);
+        }
+    }
+    Some(root)
+}
+
 fn root() -> PathBuf {
+    #[cfg(target_os = "ios")]
+    if let Some(root) = ios_root() {
+        return root;
+    }
     let has_data = |p: &PathBuf| p.join("game").join("game.json").exists();
-    let beside_exe = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("local_extracted")));
+    let exe = std::env::current_exe().ok();
+    let beside_exe = exe.as_ref().and_then(|e| e.parent().map(|d| d.join("local_extracted")));
+    let beside_app = exe.as_ref().and_then(|e| e.ancestors().nth(4).map(|d| d.join("local_extracted")))
+        .filter(|_| exe.as_ref().is_some_and(|e| e.ancestors().nth(3).is_some_and(|a| a.extension().is_some_and(|x| x == "app"))));
     let cwd = std::env::current_dir().ok().map(|d| d.join("local_extracted"));
     beside_exe
         .into_iter()
+        .chain(beside_app)
         .chain(cwd)
         .find(has_data)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("local_extracted"))
@@ -224,7 +280,9 @@ fn map_keys(root: &std::path::Path) -> Vec<String> {
         .filter(|e| e.path().join("map.json").exists())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
+    v.extend(mod_maps::catalog(root).into_keys());
     v.sort_by_key(|k| (k != "tutorial", k.clone()));
+    v.dedup();
     v
 }
 
@@ -235,6 +293,16 @@ fn game_data(root: &std::path::Path, json: &str, hero: Option<&str>, map: &str,l
     let mut d = with_hero(compiled.as_deref().unwrap_or(json), hero);
     // The difficulty from settings.json ("mode"), Medium by default.
     d.mode = read_settings(root)["mode"].as_str().unwrap_or("Medium").to_string();
+    d.map_difficulty = std::fs::read(root.join("ui/mapset.json")).ok()
+        .and_then(|b| serde_json::from_slice::<Vec<serde_json::Value>>(&b).ok())
+        .and_then(|rows| rows.into_iter().find(|r| r["id"].as_str().is_some_and(|id| frontend::map_key(id) == map)))
+        .and_then(|r| r["difficulty"].as_u64()).map(|x| x as usize);
+    if let Some(custom)=d.mod_maps.get(map){
+        d.map_difficulty = None;
+        custom.validate().expect("validated custom map");
+        d.map=serde_json::from_value(custom.data.clone()).expect("validated map geometry");
+        return d;
+    }
     match std::fs::read_to_string(simulation_path(root,PathBuf::from("maps").join(map).join("map.json"))).map(|s| serde_json::from_str(&s)) {
         Ok(Ok(m)) => d.map = m,
         Ok(Err(e)) => eprintln!("map {map}: map.json doesn't load ({e}); using game.json's map"),
@@ -264,13 +332,13 @@ fn win_size() -> (i32, i32) {
         .unwrap_or((1600, 900))
 }
 
-/// The window and taskbar icon: brand/icon{16,32,64}.rgba from the player's own game.
-fn game_icon(root: &std::path::Path) -> Option<miniquad::conf::Icon> {
-    let read = |n: u32| std::fs::read(root.join(format!("brand/icon{n}.rgba"))).ok();
+/// The window and taskbar icon: our own "R" (assets/icon, tools/assets/make_icon.py; see
+/// DEVIATIONS.md), not the game's.
+fn game_icon(_root: &std::path::Path) -> Option<miniquad::conf::Icon> {
     Some(miniquad::conf::Icon {
-        small: read(16)?.try_into().ok()?,
-        medium: read(32)?.try_into().ok()?,
-        big: read(64)?.try_into().ok()?,
+        small: *include_bytes!("../assets/icon/icon16.rgba"),
+        medium: *include_bytes!("../assets/icon/icon32.rgba"),
+        big: *include_bytes!("../assets/icon/icon64.rgba"),
     })
 }
 
@@ -410,10 +478,57 @@ struct ProjLayer {
     offset: [f32; 2],
     /// Degrees, plus `spin` degrees per second (CustomRotationSimple).
     angle: f32,
+    /// Mirrored in x / y (SpriteRenderer flipX / flipY, or a mirroring parent).
+    flip: [bool; 2],
     spin: f32,
     color: [u8; 4],
-    /// CustomScaleAnimator: (duration, [(time, scale)]) looping.
-    scale_anim: Option<(f32, Vec<(f32, f32)>)>,
+    /// A scale animator on it or a parent: its curve over `duration`, looping or held at its end.
+    scale_anim: Option<LayerAnim>,
+    /// A colour animator (UnpoppedArmyBloon's glow fades out in 0.3 s): Color.Lerp(from, to,
+    /// curve) replaces the renderer's colour.
+    color_anim: Option<(LayerAnim, [f32; 4], [f32; 4])>,
+}
+
+struct LayerAnim {
+    duration: f32,
+    keys: Vec<(f32, f32)>,
+    looping: bool,
+}
+
+impl LayerAnim {
+    /// The curve at `age` seconds (keys joined linearly).
+    fn at(&self, age: f32) -> f32 {
+        let t = if self.duration <= 0.0 { 1.0 } else if self.looping { (age / self.duration).fract() } else { (age / self.duration).min(1.0) };
+        let keys = &self.keys;
+        match keys.iter().position(|k| k.0 > t) {
+            Some(0) => keys[0].1,
+            Some(j) => {
+                let (a, b) = (keys[j - 1], keys[j]);
+                a.1 + (b.1 - a.1) * ((t - a.0) / (b.0 - a.0).max(1e-6))
+            }
+            None => keys.last().map_or(1.0, |k| k.1),
+        }
+    }
+}
+
+/// The overlay prefabs a bloon shows: "<BloonModel.overlayClass><mutator overlayType>" (e.g.
+/// WhiteRegrowGlueBasic, MoabIce; MiniLych's are LychMini...), one per distinct overlay among its
+/// effects, in their order. HYPOTHESIS: every distinct overlay it has shows at once.
+fn bloon_overlays(d: &data::BloonDef, b: &game::Bloon) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if d.overlay_class.is_empty() {
+        return out;
+    }
+    let class = if d.overlay_class == "MiniLych" { "LychMini" } else { d.overlay_class.as_str() };
+    for e in &b.effects {
+        if !e.overlay.is_empty() {
+            let name = format!("{class}{}", e.overlay);
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
 }
 
 /// Draws a layered projectile at Unity (x, y, z), flying along `heading` (radians), `age` seconds
@@ -421,22 +536,18 @@ struct ProjLayer {
 fn draw_layers(layers: &[ProjLayer], x: f32, y: f32, z: f32, heading: f32, age: f32) {
     for (i, l) in layers.iter().enumerate() {
         let a = heading + (l.angle + l.spin * age).to_radians();
-        let k = l.scale_anim.as_ref().map_or(1.0, |(dur, keys)| {
-            let t = if *dur > 0.0 { (age / dur).fract() } else { 0.0 };
-            match keys.iter().position(|k| k.0 > t) {
-                Some(0) => keys[0].1,
-                Some(j) => {
-                    let (a, b) = (keys[j - 1], keys[j]);
-                    a.1 + (b.1 - a.1) * ((t - a.0) / (b.0 - a.0).max(1e-6))
-                }
-                None => keys.last().map_or(1.0, |k| k.1),
-            }
+        let k = l.scale_anim.as_ref().map_or(1.0, |an| an.at(age));
+        let color = l.color_anim.as_ref().map_or(l.color, |(an, from, to)| {
+            let t = an.at(age).clamp(0.0, 1.0);
+            std::array::from_fn(|c| ((from[c] + (to[c] - from[c]) * t).clamp(0.0, 1.0) * 255.0) as u8)
         });
         // Sprite-plane offset: x across the flight, y along it.
         let (fx, fz) = (heading.cos(), heading.sin());
         let (rx, rz) = (fz, -fx);
         let (px, pz) = (x + rx * l.offset[0] + fx * l.offset[1], z + rz * l.offset[0] + fz * l.offset[1]);
-        render3d::flat_sprite_tinted(&l.tex, px, y + i as f32 * 0.01, pz, l.w * k, l.h * k, l.pivot, [a.cos(), a.sin()], l.color);
+        // SpriteRenderer flipX / flipY (and a mirroring parent): mirrored about the pivot.
+        let (sx, sy) = (if l.flip[0] { -1.0 } else { 1.0 }, if l.flip[1] { -1.0 } else { 1.0 });
+        render3d::flat_sprite_tinted(&l.tex, px, y + i as f32 * 0.01, pz, l.w * k * sx, l.h * k * sy, l.pivot, [a.cos(), a.sin()], color);
     }
 }
 
@@ -480,18 +591,36 @@ async fn loading_task<F:std::future::Future>(future:F,front:&mut frontend::Front
 }
 
 fn main() {
+    mem_guard::limit_process();
+    // A crash leaves its reason in ~/RustTD6-crash.log (a Mac app has no console to read).
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            use std::io::Write;
+            let path = PathBuf::from(home).join("RustTD6-crash.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                let _ = writeln!(f, "{info}
+data folder: {}
+{}
+", root().display(), std::backtrace::Backtrace::force_capture());
+            }
+        }
+        default_hook(info);
+    }));
     macroquad::Window::from_config(conf(),presentation_check::wrap(game_main()));
 }
 
 async fn game_main() {
+    if std::env::var_os("RRBTD6_MENU_SNAPSHOT_CHECK").is_some(){menus::verify_menu_snapshot();return;}
     let load_t0 = std::time::Instant::now();
     let mark = |what: &str| if std::env::var("RRBTD6_TIMING").is_ok() { eprintln!("load: {what} at {:.0} ms, {} MB", load_t0.elapsed().as_secs_f64() * 1e3, private_mb()) };
     let root = root();
+    uitree::set_loc(menus::load_loc(&root.join("text").join("English.xml")));
     mark("json");
     let json = std::sync::Arc::new(std::fs::read_to_string(simulation_path(&root,"game/game.json"))
         .expect("local_extracted/game/game.json missing: run tools/assets/build_game_data.py"));
     let mut hero: Option<String> = read_settings(&root)["hero"].as_str().map(str::to_string);
-    let maps = map_keys(&root);
+    let mut maps = map_keys(&root);
     let mut map_key: String = read_settings(&root)["map"].as_str().filter(|m| maps.iter().any(|k| k == m)).unwrap_or("tutorial").to_string();
     let mut game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,true));
     modding::apply_new_sandbox(&root,&mut game,true);
@@ -576,7 +705,7 @@ async fn game_main() {
     if std::env::var_os("RRBTD6_TIMING").is_some(){eprintln!("sprite-storage: decoded {} MiB, retained {} MiB",decoded_sprite_bytes/1048576,if legacy_sprite_storage{decoded_sprite_bytes/1048576}else{0});}
 
     mark("map model");
-    let mut map_model = boot!(2, "Trimming the Gardens...", render3d::Model::load(&root.join("models").join(format!("map_{map_key}"))));
+    let mut map_model = boot!(2, "Trimming the Gardens...", render3d::Model::load(&mod_maps::model_dir(&root,&map_key)));
     if map_model.is_none() {
         eprintln!("map model for {map_key} failed to load");
     }
@@ -585,6 +714,7 @@ async fn game_main() {
     let ntowers = game.tower_defs.len();
     let mut tower_models: Vec<Option<render3d::Model>> = (0..ntowers).map(|_| None).collect();
     let mut models_loaded = vec![false; ntowers];
+    let mut instancer = instanced::Instancer::new();
     let mut shaders = anim::Shaders::new();
     // Per-tier display prefabs (tools/assets/export_dart_tiers.py): tier key ("030") -> model dir,
     // loaded on first use since each one is 8-18 MB of baked animation.
@@ -593,10 +723,21 @@ async fn game_main() {
     let mut tower_visual_ids:Vec<_>=game.tower_defs.iter().enumerate().map(|(i,(id,_))|(id.clone(),game.tower_model(i).to_owned())).collect();
     let names:Vec<_>=tower_visual_ids.iter().map(|(_,model)|model.clone()).collect();
     let (mut tier_index,mut attack_index)=tower_metadata(&root,&names);
+    overlay_mod_visuals(&game,&mut tier_index,&mut attack_index);
     let mut tower_anims:Vec<Option<anim::AnimModel>>=(0..ntowers).map(|_|None).collect();
     let mut tier_anims: HashMap<(usize, String), Option<anim::AnimModel>> = HashMap::new();
     // Each tower body's current idle (clip, start): idle variants play out whole (anim.rs idle_pose).
     let mut idle_picks: HashMap<u64, (usize, f32)> = HashMap::new();
+    // Each tower model drawn this frame: (tower, model dir) -> (clip, seconds, position, yaw), so
+    // its particle systems can follow the joints they hang from (anim::AnimModel::attach_mats).
+    let mut model_poses: HashMap<(u64, String), (usize, f32, [f32; 3], f32)> = HashMap::new();
+    // Per tower: (seconds into its attack clip, its attack_t when last drawn). The Attack state
+    // isn't interruptible (MonkeyAnimationController animationStates: Attack interruptibleBehaviour
+    // 0, Glaive Dominus and Apex Plasma Master): a throw while the clip plays doesn't restart it,
+    // so a tower that throws faster than its clip (Glaive Dominus: every 0.04 s, a 0.15 s clip)
+    // plays it through instead of freezing on its first frames.
+    // The bool: a throw came while it played, so it plays again from its end.
+    let mut attack_phase: HashMap<u64, (f32, f32, bool)> = HashMap::new();
     let mut prefetch = anim::Prefetch::default();
     let retire_predictions=std::env::var_os("RRBTD6_NO_PREDICTIVE_RETIRE").is_none();
     let mut prediction_key=None;
@@ -630,7 +771,7 @@ async fn game_main() {
             let d: usize = $d;
             if !models_loaded[d] {
                 models_loaded[d] = true;
-                let dir = root.join("models").join(game.tower_model(d));
+                let dir = mod_assets::model(&root,game.tower_model(d));
                 tower_models[d] = load_work::complete_asset(render3d::Model::load(&dir));
                 tower_anims[d] = load_work::complete_asset(anim::AnimModel::load(&dir));
             }
@@ -638,7 +779,7 @@ async fn game_main() {
     }
     if let Some(d) = game.tower_defs.iter().position(|(n, _)| n == "DartMonkey") {
         models_loaded[d] = true;
-        let dir = root.join("models").join(game.tower_model(d));
+        let dir = mod_assets::model(&root,game.tower_model(d));
         tower_models[d] = boot!(3, "Training Monkeys...", render3d::Model::load(&dir));
         tower_anims[d] = boot!(4, "Preparing Darts...", anim::AnimModel::load(&dir));
     }
@@ -651,10 +792,11 @@ async fn game_main() {
     // Projectile displays (tools/assets/export_projectiles.py): DisplayModel GUID -> sprite or mesh.
     let proj_root = root.join("models").join("projectiles");
     mark("projectiles");
-    let proj_index: HashMap<String, String> = std::fs::read_to_string(proj_root.join("index.json"))
+    let mut proj_index: HashMap<String, String> = std::fs::read_to_string(proj_root.join("index.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
+    mod_assets::register(&root,&mut proj_index);
     // Loaded when a projectile (or orbit) first shows them, not all at startup.
     let mut proj_displays: HashMap<String, ProjDisplay> = HashMap::new();
     let mut proj_tried: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -666,6 +808,11 @@ async fn game_main() {
                 let Some(t) = tex(dir.join(l["png"].as_str().unwrap_or(""))).await else { continue };
                 let f = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0) as f32;
                 let c = |i: usize| (f(&l["color"][i]).clamp(0.0, 1.0) * 255.0) as u8;
+                let anim = |a: &serde_json::Map<String, serde_json::Value>| LayerAnim {
+                    duration: a["duration"].as_f64().unwrap_or(1.0) as f32,
+                    keys: a["keys"].as_array().into_iter().flatten().map(|k| (f(&k[0]), f(&k[1]))).collect(),
+                    looping: a.get("loop").and_then(|v| v.as_bool()).unwrap_or(true),
+                };
                 layers.push((f(&l["order"]), f(&l["w"]) * f(&l["h"]), ProjLayer {
                     tex: t,
                     w: f(&l["w"]),
@@ -673,11 +820,13 @@ async fn game_main() {
                     pivot: [f(&l["pivot"][0]), f(&l["pivot"][1])],
                     offset: [f(&l["offset"][0]), f(&l["offset"][1])],
                     angle: f(&l["angle"]),
+                    flip: [l["flip"][0].as_bool().unwrap_or(false), l["flip"][1].as_bool().unwrap_or(false)],
                     spin: f(&l["spin"]),
                     color: [c(0), c(1), c(2), c(3)],
-                    scale_anim: l["scale_anim"].as_object().map(|a| {
-                        (a["duration"].as_f64().unwrap_or(1.0) as f32,
-                         a["keys"].as_array().into_iter().flatten().map(|k| (f(&k[0]), f(&k[1]))).collect())
+                    scale_anim: l["scale_anim"].as_object().map(|a| anim(a)),
+                    color_anim: l["color_anim"].as_object().map(|a| {
+                        let col = |i: usize| std::array::from_fn(|c| f(&a["colors"][i][c]));
+                        (anim(a), col(0), col(1))
                     }),
                 }));
             }
@@ -754,6 +903,14 @@ async fn game_main() {
     let mut crit_texts: Vec<([f32; 2], f32)> = Vec::new();
     // Effect prefabs (Unity particle systems): upgrade effects so far.
     let mut particles = particles::Particles::new(&root);
+    // Paragon purchases in progress (game.sacrifices): the effect data, the Paragon's "during"
+    // effect tag, each orb (tag, start, direction, distance, scale), finished.
+    let mut sacrifices: Vec<(game::Sacrifice, data::SacrificeFx, u64, Vec<(u64, [f32; 2], [f32; 2], f32, f32)>, bool)> = Vec::new();
+    // ParagonTower.CreateDegreeText effects: (tag, the sim frame their lifespan ends).
+    let mut degree_texts: Vec<(u64, u64)> = Vec::new();
+    let mut fx_tag: u64 = 0xFA00_0000_0000_0000;
+    // Tier effects that follow their model's joints: (tower, model dir) -> (tag, effect).
+    let mut attached_fx: HashMap<(u64, String), (u64, String)> = HashMap::new();
     particles.spawn_ambient(&map_key);
     // Particle systems inside tower prefabs (export_particles.py tiers:<Tower>): model dir ->
     // effect, per tower type; and which models' effects each placed tower is playing.
@@ -770,6 +927,7 @@ async fn game_main() {
         .collect();
     macro_rules! refresh_mod_models {($front:ident) => {{
         let ids:Vec<_>=game.tower_defs.iter().enumerate().map(|(i,(id,_))|(id.clone(),game.tower_model(i).to_owned())).collect();
+        mod_assets::register(&root,&mut proj_index);
         if ids!=tower_visual_ids {
             let names:Vec<_>=ids.iter().map(|(_,model)|model.clone()).collect();let worker_root=root.clone();
             let (tiers,attacks,effects)=loading_task(load_work::spawn(move||{
@@ -779,6 +937,7 @@ async fn game_main() {
                 (tiers,attacks,effects)
             }),&mut $front,&mut hud,&mut audio,adv.fps_cap).await;
             tier_index=tiers;attack_index=attacks;tier_fx=effects;
+            overlay_mod_visuals(&game,&mut tier_index,&mut attack_index);
             models_loaded=vec![false;ids.len()];tower_models=(0..ids.len()).map(|_|None).collect();tower_anims=(0..ids.len()).map(|_|None).collect();
             tier_anims.clear();idle_picks.clear();tower_visual_ids=ids;
         }
@@ -793,6 +952,12 @@ async fn game_main() {
     let mut proj_fx_live: std::collections::HashSet<u64> = std::collections::HashSet::new();
     /// Tags of projectile effects, apart from tower ids.
     const PROJ_FX_TAG: u64 = 1 << 62;
+    /// With PROJ_FX_TAG: an orbiting glaive's effect (tower id << 8 | glaive), apart from projectile uids.
+    const ORBIT_FX_TAG: u64 = 1 << 61;
+    // NecromancerTargetTrackWithinRange.StartDraw: its display (TargetGreen) on the chosen spawn
+    // segment while the tower is selected.
+    const NECRO_FX_TAG: u64 = (1 << 62) - 1;
+    let mut necro_fx: Option<[f32; 2]> = None;
     let cursor_up = boot!(6, "Waking the Sun God...", tex(root.join("ui").join("HandCursor.png")));
     let cursor_down = boot!(7, "Summoning Heroes...", tex(root.join("ui").join("HandCursorDown.png")));
     if cursor_up.is_some() && cursor_down.is_some() {
@@ -809,19 +974,28 @@ async fn game_main() {
     let mut scratch = Vec::new();
 
     let mut placing: Option<usize> = None;
-    // Placing by dragging from the shop: the tower drops where the mouse is released.
-    let mut dragging = false;
+    // InputManager's placement state: entityPositionWorld, cursorMode (0 follows the cursor,
+    // 1 nudged by a third of the cursor's movement, 2 locked) and cursorPositionWorld (the next
+    // frame's cursorPositionWorldLast). EnterPlacementMode starts at cursorMode 0.
+    let (mut place_at, mut place_mode, mut place_cursor, mut place_def) = ([0.0f32; 2], 0u8, [0.0f32; 2], None);
     let mut selected: Option<usize> = None;
+    // The removeable clicked on the map, and the model parts hidden for those bought so far.
+    let mut selected_removeable: Option<usize> = None;
+    let mut memory_guard = mem_guard::MemGuard::default();
+    let mut hidden_parts: Vec<usize> = Vec::new();
     // "Set Target": the tower whose aim point the next map click sets.
     let mut picking: Option<usize> = None;
     // A tower-targeted ability (Overclock) waiting for the player to click a tower.
     let mut ability_pick: Option<String> = None;
     // A Geraldo shop item in hand: the next map click uses it there.
     let mut item_pick: Option<usize> = None;
+    // A Power picked in the Powers menu, used on the next map click.
+    let mut power_pick: Option<String> = None;
     mark("rest");
     if std::env::var_os("RRBTD6_SHARED_ASSET_CHECK").is_some(){ui::verify_shared_ui_textures(&root);render3d::verify_cooperative_upload().await;}
     if std::env::var_os("RRBTD6_RENDER_CHECK").is_some(){anim::verify_draw_submission(&root).await;render3d::verify_sprite_submission().await;}
     if std::env::var_os("RRBTD6_PREFETCH_CHECK").is_some(){anim::verify_prefetch(&root).await;}
+    if std::env::var_os("RRBTD6_INSTANCE_CHECK").is_some(){instanced::verify(&root).await;}
     if std::env::var_os("RRBTD6_TEXT_CACHE_CHECK").is_some(){uitree::verify_text_layout_cache(&root).await;}
     if std::env::var_os("RRBTD6_PARTICLE_TEXTURE_CHECK").is_some(){particles::verify_texture_sharing(&root).await;}
     if std::env::var_os("RRBTD6_UPGRADE_PREP_CHECK").is_some(){particles::verify_upgrade_preparation(&root).await;}
@@ -864,6 +1038,7 @@ async fn game_main() {
     let mut pause_options_test=if std::env::var_os("RRBTD6_AUTOTEST").is_some(){std::env::var("RRBTD6_PAUSE_OPTIONS").ok()}else{None};
     let mut options_back_test=if std::env::var_os("RRBTD6_AUTOTEST").is_some(){std::env::var("RRBTD6_OPTIONS_BACK_FRAME").ok().and_then(|s|s.parse::<u32>().ok())}else{None};
     let mut front = frontend::FrontEnd::new(&root);
+    boot!(8,"Trimming the Gardens...",async{menus::warm_menu_snapshot();});
     if startup.is_some() {
         let mut names=boot!(8,"Trimming the Gardens...",front.prepare_home_entry());
         if std::env::var_os("RRBTD6_NO_TITLE_PRELOAD").is_none(){names.extend(startup::title_sprites(&root));}
@@ -911,7 +1086,6 @@ async fn game_main() {
     }
     // A map to load at the top of the next frame (front end Play, N key).
     let mut pending_map: Option<String> = None;
-    let mut race_config:Option<serde_json::Value>=None;
 
     // Self-test: place towers at the first valid spots near the track, play, screenshot, exit.
     let autotest = std::env::var("RRBTD6_AUTOTEST").ok();
@@ -932,6 +1106,7 @@ async fn game_main() {
     let bench_warmup=std::env::var("RRBTD6_BENCH_WARMUP").ok().and_then(|v|v.parse::<u32>().ok()).unwrap_or(300);
     let gallery = std::env::var("RRBTD6_GALLERY").is_ok();
     mark("loop");
+    let mut front_open_after=autotest.as_ref().and_then(|_|std::env::var("RRBTD6_FRONT_OPEN_AFTER").ok()).and_then(|v|{let (frame,page)=v.split_once(':')?;Some((frame.parse::<u32>().ok()?,frontend::MenuPage::from_name(page)?))});
     let mut frames = 0u32;
     let mut refresh_models_after_menu=false;
     let frontend_timing=std::env::var("RRBTD6_TIMING").is_ok();
@@ -975,7 +1150,18 @@ async fn game_main() {
             .map(|s| s.split(',').filter_map(|v| v.trim().parse().ok()).collect())
             .filter(|v: &Vec<f32>| !v.is_empty())
             .unwrap_or_else(|| vec![300.0, 520.0, 700.0]);
-        'outer: for &d in &spots {
+        // RRBTD6_PLACE_AT: "x,y;x,y;..." exact positions (the clone's: the game's y negated), as a
+        // SimRecorder scenario places them, instead of next to track distances.
+        let at: Vec<[f32; 2]> = std::env::var("RRBTD6_PLACE_AT").ok().map(|s| s.split(';').filter_map(|p| {
+            let v: Vec<f32> = p.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            (v.len() == 2).then(|| [v[0], v[1]])
+        }).collect()).unwrap_or_default();
+        for p in &at {
+            if game.place(autotest_towers[placed % autotest_towers.len()], *p) {
+                placed += 1;
+            }
+        }
+        'outer: for &d in if at.is_empty() { &spots[..] } else { &[] } {
             let c = game.track.pos(d);
             // Further out when the near ring has no room (water towers need the pond).
             'ring: for r in [24.0f32, 40.0, 60.0, 90.0, 130.0] {
@@ -995,6 +1181,15 @@ async fn game_main() {
             for t in 0..game.towers.len() {
                 for path in s.bytes().filter_map(|b| b.checked_sub(b'0').map(usize::from)).filter(|&p| p < 3) {
                     while game.upgrade(t, path) {}
+                }
+            }
+        }
+        // RRBTD6_NECRO_PICK: each Necromancer's spawn segment set at the track nearest it.
+        if std::env::var("RRBTD6_NECRO_PICK").is_ok() {
+            for t in 0..game.towers.len() {
+                if game.is_necro(t) {
+                    let p = game.towers[t].pos;
+                    game.necro_select(t, p);
                 }
             }
         }
@@ -1077,12 +1272,15 @@ async fn game_main() {
             round_bench::setup(&mut game,round,degree);selected=None;auto_start=false;
         }
         game.start_round();
-        // RRBTD6_SANDBOX=<bloon>: the sandbox menu open, 10 of that bloon sent.
+        // RRBTD6_SANDBOX=<bloon>: the sandbox menu open, RRBTD6_SANDBOX_COUNT (10) of that bloon sent
+        // RRBTD6_SANDBOX_SPACING (0.3) apart.
         if let Ok(b) = std::env::var("RRBTD6_SANDBOX") {
             if let Some(h) = hud.as_mut() {
                 h.sandbox.open = true;
             }
-            game.sandbox_spawn(&b, false, false, false, 10, 0.3);
+            let count = std::env::var("RRBTD6_SANDBOX_COUNT").ok().and_then(|v| v.parse().ok()).unwrap_or(10);
+            let spacing = std::env::var("RRBTD6_SANDBOX_SPACING").ok().and_then(|v| v.parse().ok()).unwrap_or(0.3);
+            game.sandbox_spawn(&b, false, false, false, count, spacing);
         }
         speed = std::env::var("RRBTD6_SPEED").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
     }
@@ -1122,7 +1320,7 @@ async fn game_main() {
             save_setting(&root, "map", serde_json::json!(map_key));
             let worker_root=root.clone();let worker_json=json.clone();let worker_map=map_key.clone();
             let worker_hero=if coop_config.is_some(){None}else{hero.clone()};
-            let worker_local=coop_config.is_none()&&race_config.is_none();
+            let worker_local=coop_config.is_none();
             let worker_mods=coop_config.as_ref().map(|c|c.room.mods.clone()).unwrap_or_default();
             let worker_mode=coop_config.as_ref().map(|c|c.room.settings.custom_mode.clone().unwrap_or_else(||["Easy","Medium","Hard"][c.room.settings.difficulty as usize].to_owned()));
             game=loading_task(load_work::spawn(move||{
@@ -1134,16 +1332,17 @@ async fn game_main() {
                 game
             }),&mut front,&mut hud,&mut audio,adv.fps_cap).await;
             refresh_mod_models!(front);
-            if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
             terrain = None;
             terrain_loaded = false;
             if let Some(h) = hud.as_mut() { front.draw_loading(h); }
             next_frame().await;
-            map_model = loading_task(render3d::Model::load(&root.join("models").join(format!("map_{map_key}"))),&mut front,&mut hud,&mut audio,adv.fps_cap).await;
+            map_model = loading_task(render3d::Model::load(&mod_maps::model_dir(&root,&map_key)),&mut front,&mut hud,&mut audio,adv.fps_cap).await;
             particles.spawn_ambient(&map_key);
             if let Some(h) = hud.as_mut() { front.draw_loading(h); }
             next_frame().await;
             hud = loading_task(Hud::load(&root, &game),&mut front,&mut hud,&mut audio,adv.fps_cap).await;
+            // A new Hud's menus start at full volume: the settings' sliders are one set.
+            if let Some(h) = hud.as_mut() { h.menus.volumes = [front.sliders[0], front.sliders[1], front.sliders[2]]; }
             if let Some(config)=&coop_config{
                 game.freeplay_seed=config.seed;
                 if std::env::var_os("RRBTD6_COOP_PLAYTEST").is_some()&&autotest.is_some(){
@@ -1171,7 +1370,7 @@ async fn game_main() {
             for d in &shop {
                 if let Some(dir) = tier_index[*d].get("000").or(tier_index[*d].get("100")) {
                     if !tier_anims.contains_key(&(*d, dir.clone())) {
-                        prefetch.request(root.join("models").join(game.tower_model(*d)).join("tiers").join(dir));
+                        prefetch.request(mod_assets::tier(&root,game.tower_model(*d),&dir));
                     }
                 }
             }
@@ -1185,12 +1384,12 @@ async fn game_main() {
             for (k, d) in shop.iter().enumerate() {
                 for upcoming in shop.iter().skip(k).take(4){
                     if let Some(dir)=tier_index[*upcoming].get("000").or(tier_index[*upcoming].get("100")){
-                        if !tier_anims.contains_key(&(*upcoming,dir.clone())){prefetch.request(root.join("models").join(game.tower_model(*upcoming)).join("tiers").join(dir));}
+                        if !tier_anims.contains_key(&(*upcoming,dir.clone())){prefetch.request(mod_assets::tier(&root,game.tower_model(*upcoming),&dir));}
                     }
                 }
                 if let Some(dir) = tier_index[*d].get("000").or(tier_index[*d].get("100")).cloned() {
                     if !tier_anims.contains_key(&(*d, dir.clone())) {
-                        let path = root.join("models").join(game.tower_model(*d)).join("tiers").join(&dir);
+                        let path = mod_assets::tier(&root,game.tower_model(*d),&dir);
                         tier_anims.insert((*d, dir),loading_task(prefetch.load_cooperative(&path),&mut front,&mut hud,&mut audio,adv.fps_cap).await);
                     }
                 }
@@ -1263,6 +1462,9 @@ async fn game_main() {
                     continue;
                 }
             }
+            if front_open_after.is_some_and(|(frame,_)|frames>=frame){
+                if let Some((_,page))=front_open_after.take(){front.screen=frontend::Screen::Menu(page);}
+            }
             let front_t0=frontend_timing.then(std::time::Instant::now);
             let mut act = None;
             if options_back_test.is_some_and(|n|frames>=n) {options_back_test=None;front.request_back();}
@@ -1283,33 +1485,15 @@ async fn game_main() {
                     act = Some(frontend::FrontAction::Play { map: m, mode: md });
                 }
             }
-            if std::env::var_os("RRBTD6_FRONT_RACE").is_some()&&frames>=5{
-                if let Some(data)=frontend::race_entry(&root){act=Some(frontend::FrontAction::Race(data));}
-            }
-            if let Ok(key)=std::env::var("RRBTD6_FRONT_DAILY"){if frames>=5{
-                if let Some(data)=frontend::daily_entry(&root,&key){act=Some(frontend::FrontAction::Race(data));}
-            }}
             match act {
                 Some(frontend::FrontAction::Coop(config))=>{
                     (placing,selected,picking,ability_pick)=(None,None,None,None);
-                    race_config=None;front.begin_loading();pending_map=Some(config.room.settings.map.clone());
+                    front.begin_loading();pending_map=Some(config.room.settings.map.clone());
                     coop_config=Some(config);coop_runtime=None;coop_error=None;
                     (end_shown,reviewing,menu)=(false,false,None);speed=1;auto_start=false;acc=0.0;in_front=false;
                 }
-                Some(frontend::FrontAction::Race(data))=>{
-                    if let Some(map)=data["challenge"]["map"].as_str(){
-                        let map=frontend::map_key(map);
-                        let difficulty=data["challenge"]["difficulty"].as_str().unwrap_or("Medium");
-                        let rules=data["challenge"]["mode"].as_str().unwrap_or("Standard");
-                        let mode=match rules{"Standard"=>difficulty.to_owned(),"Impoppable"=>"Impoppable".into(),"Clicks"=>"CHIMPS".into(),other=>format!("{difficulty} {other}")};
-                        save_setting(&root,"mode",serde_json::json!(mode));
-                        race_config=Some(data);front.begin_loading();pending_map=Some(map);
-                        (end_shown,reviewing,menu)=(false,false,None);speed=1;auto_start=false;acc=0.0;in_front=false;
-                    }
-                }
                 Some(frontend::FrontAction::Play { map, mode }) => {
                     front.coop_stop();coop_config=None;coop_runtime=None;coop_error=None;
-                    race_config=None;
                     front.begin_loading();
                     save_setting(&root, "mode", serde_json::json!(mode));
                     pending_map = Some(map);
@@ -1338,7 +1522,7 @@ async fn game_main() {
                     }
                     save_settings(&root, v);
                 }
-                Some(frontend::FrontAction::Mods(ids))=>{save_setting(&root,"mods",serde_json::json!(ids));}
+                Some(frontend::FrontAction::Mods(ids))=>{save_setting(&root,"mods",serde_json::json!(ids));front.refresh_maps(&root);maps=map_keys(&root);if let Some(h)=hud.as_mut(){h.sprites.clear_mod_files();}tower_visual_ids.clear();proj_displays.clear();proj_tried.clear();projectile_upload=None;prefetch=anim::Prefetch::default();warm_projectiles.clear();warm_towers.clear();}
                 Some(frontend::FrontAction::ModSettings(settings))=>{save_setting(&root,"mod_settings",serde_json::json!(settings));}
                 Some(frontend::FrontAction::Jukebox(change))=>{
                     save_setting(&root,"jukebox",serde_json::json!(change.tracks.iter().map(|(id,_)|id).collect::<Vec<_>>()));
@@ -1401,7 +1585,7 @@ async fn game_main() {
             // texture data serve both preparation and immediate first-use draws.
             if projectile_upload.is_none(){
                 if let Some(name)=warm_projectiles.iter().find(|name|!proj_tried.contains(*name)){
-                    projectile_upload=Some((name.clone(),Box::pin(load_proj(proj_root.join(name)))));
+                    projectile_upload=Some((name.clone(),Box::pin(load_proj(mod_assets::projectile(&root,name)))));
                 }
             }
             if let Some((name,task))=projectile_upload.as_mut(){
@@ -1429,6 +1613,15 @@ async fn game_main() {
             clear_background(BLACK);
             backdrop.draw();
             let mut close = is_key_pressed(KeyCode::Escape);
+            // The end screens show the HUD as it is, sharp over the blurred map and under the
+            // screen's Lightbox (the real VictoryUI / DefeatUI frames: the HUD unchanged there).
+            if matches!(kind, menus::Menu::Victory | menus::Menu::Defeat) {
+                if let Some(h) = hud.as_mut() {
+                    uitree::block_input(true);
+                    let _ = h.draw(&game, None, None, speed, auto_start);
+                    uitree::block_input(false);
+                }
+            }
             if let Some(h) = hud.as_mut() {
                 // MusicItem.locKey names the track; else a name made from the clip id.
                 h.menus.track_name = audio.track_loc().and_then(|k| h.menus.loc.get(k).cloned())
@@ -1454,11 +1647,13 @@ async fn game_main() {
                             else{auto_start = !auto_start;save_setting(&root, "auto_start", serde_json::json!(auto_start));}
                         }
                         menus::MenuAction::Track(d) => audio.skip_track(d),
+                        menus::MenuAction::DragAndDrop(v) => save_setting(&root, "drop_and_lock", serde_json::json!(!v)),
                         menus::MenuAction::ToggleLoop => audio.loop_track = !audio.loop_track,
                         menus::MenuAction::ToggleShuffle => audio.shuffle = !audio.shuffle,
                         menus::MenuAction::Volume(v) => {
                             audio.sfx_volume = audio::DEFAULT_SFX * v[1];
                             audio.set_music_volume(audio::DEFAULT_MUSIC * v[0]);
+                            front.sliders[..3].copy_from_slice(&v);
                             save_settings(&root, v);
                         }
                         menus::MenuAction::Home => {
@@ -1466,16 +1661,15 @@ async fn game_main() {
                             front.return_home();
                             coop_config=None;coop_runtime=None;coop_error=None;
                             (placing, selected, picking, ability_pick) = (None, None, None, None);
-                            (dragging, acc) = (false, 0.0);
+                            acc = 0.0;
                             (end_shown, reviewing) = (false, false);
                             close = true;
                         }
                         menus::MenuAction::Restart => {
                             if coop_runtime.is_none(){
-                            game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,coop_config.is_none()&&race_config.is_none()));
+                            game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,coop_config.is_none()));
             refresh_models_after_menu=true;
-                            modding::apply_new_sandbox(&root,&mut game,coop_config.is_none()&&race_config.is_none());
-            if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
+                            modding::apply_new_sandbox(&root,&mut game,coop_config.is_none());
                             pops.clear();
                             (placing, selected, speed, acc) = (None, None, 1, 0.0);
                             (end_shown, reviewing) = (false, false);
@@ -1535,6 +1729,7 @@ async fn game_main() {
             Some([a.parse().ok()?, b.parse().ok()?])
         });
         let cam = render3d::camera(look.unwrap_or([0.0, 0.0]), vw, vh);
+        fx::set_camera(&cam);
         if frames%30==10&&std::env::var_os("RRBTD6_VIEWPORT_CHECK").is_some(){
             for p in [[0.0,0.0],[-100.0,-60.0],[100.0,60.0],[-100.0,60.0],[100.0,-60.0]]{
                 let s=render3d::to_screen(&cam,[p[0],0.0,p[1]],vw,vh);
@@ -1554,7 +1749,9 @@ async fn game_main() {
         // Input.
         // Hotkeys (keybinds.rs, rebindable in Settings > Hotkeys); none while a sandbox text
         // field is being typed in.
-        binds.muted = hud.as_ref().is_some_and(|h| h.sandbox.typing());
+        if let Some(h)=hud.as_mut(){h.mod_ui.sync(&game);}
+        let mod_modal=hud.as_ref().is_some_and(|h|h.mod_ui.modal());
+        binds.muted = mod_modal||hud.as_ref().is_some_and(|h| h.sandbox.typing());
         if game.sandbox {
             let mut acts = Vec::new();
             for (a, _, _) in keybinds::SANDBOX.iter() {
@@ -1585,14 +1782,12 @@ async fn game_main() {
         // Play / fast forward: the Go button (start the round, or toggle fast forward).
         if binds.pressed("play") {
             if coop_runtime.is_some(){front.coop_input(if game.round_active{rrbtd6_coop::Action::Speed{value:if speed==1{3}else{1}}}else{rrbtd6_coop::Action::StartRound});}
-            else if game.race.is_some(){game.request_race_round();}
             else if game.round_active || game.sandbox {
                 speed = if speed == 1 { 3 } else { 1 };
             } else {
                 game.start_round();
             }
         }
-        if binds.pressed("send_next_round")&&game.race.is_some(){game.request_race_round();}
         // Tower special: Skywarden Focus / Spread stance; Monkey Bank collect.
         if let (true, Some(t)) = (binds.pressed("special"), selected) {
             if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Special{tower:game.towers[t].id});}
@@ -1621,8 +1816,9 @@ async fn game_main() {
                 }}
                 else if game.ability_targets_tower(&g.name) || game.ability_targets_point(&g.name) {
                     ability_pick = Some(g.name.clone());
-                } else {
-                    game.activate_ability(&g.name);
+                } else if game.activate_ability(&g.name) {
+                    // The player's activations, for the end screens' Abilities Used.
+                    game.stats.abilities += 1;
                 }
             }
         }
@@ -1640,10 +1836,9 @@ async fn game_main() {
             let back = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
             let next = order[(cur + if back { order.len() - 1 } else { 1 }) % order.len()];
             save_setting(&root, "mode", serde_json::json!(next));
-            game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,coop_config.is_none()&&race_config.is_none()));
+            game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,coop_config.is_none()));
             refresh_mod_models!(front);
-            modding::apply_new_sandbox(&root,&mut game,coop_config.is_none()&&race_config.is_none());
-            if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
+            modding::apply_new_sandbox(&root,&mut game,coop_config.is_none());
             eprintln!("difficulty: {next}");
         }
         // N: next map (Shift+N: previous), only before anything is placed. Saved to settings.json.
@@ -1662,16 +1857,16 @@ async fn game_main() {
                 let next = (cur + if back { ids.len() - 1 } else { 1 }) % ids.len();
                 hero = Some(ids[next].clone());
                 save_setting(&root, "hero", serde_json::json!(ids[next]));
-                game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,coop_config.is_none()&&race_config.is_none()));
+                game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,coop_config.is_none()));
             refresh_mod_models!(front);
-                modding::apply_new_sandbox(&root,&mut game,coop_config.is_none()&&race_config.is_none());
-            if let Some(config)=&race_config{if let Err(error)=game.configure_front_event(config){eprintln!("Race configuration: {error}");}}
+                modding::apply_new_sandbox(&root,&mut game,coop_config.is_none());
                 hud = load_work::complete_asset(Hud::load(&root, &game));
+                if let Some(h) = hud.as_mut() { h.menus.volumes = [front.sliders[0], front.sliders[1], front.sliders[2]]; }
                 placing = None;
                 selected = None;
             }
         }
-        if !hud.as_ref().is_some_and(|h|h.sandbox.typing()) && is_key_pressed(KeyCode::Escape) && placing.is_none() && selected.is_none()&&ability_pick.is_none()&&picking.is_none()&&item_pick.is_none() {
+        if !mod_modal && !hud.as_ref().is_some_and(|h|h.sandbox.typing()) && is_key_pressed(KeyCode::Escape) && placing.is_none() && selected.is_none()&&ability_pick.is_none()&&picking.is_none()&&item_pick.is_none()&&power_pick.is_none() {
             open_menu = Some(menus::Menu::Pause);
         }
         if is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right) {
@@ -1702,14 +1897,30 @@ async fn game_main() {
         if picking.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right)) {
             picking = None;
         }
-        dragging &= placing.is_some();
         if ability_pick.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right) || placing.is_some()) {
             ability_pick = None;
         }
         if item_pick.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right) || placing.is_some()) {
             item_pick = None;
         }
-        if let Some(i) = item_pick.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
+        if power_pick.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right) || placing.is_some()) {
+            power_pick = None;
+        }
+        if let Some(id) = power_pick.clone().filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
+            // PowersMenu.PowerUseSuccess (@0x180ae14c0): Btd6Player.ConsumePower(id, 1). HYPOTHESIS
+            // P-SANDBOXNOCONSUME: sandbox's menu has dontUsePlayerInventory, so nothing is used up.
+            let behaviors = hud.as_ref().and_then(|h| h.powers.behaviors(&id)).cloned();
+            if behaviors.is_some_and(|b| game.use_power(&id, &b, mouse_world)) {
+                if !game.sandbox {
+                    let _ = local_profile::update(&root, |p| {
+                        if let Some(n) = p.powers.get_mut(&id) {
+                            *n = n.saturating_sub(1);
+                        }
+                    });
+                }
+                power_pick = None;
+            }
+        } else if let Some(i) = item_pick.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
             // A spot it can't be used keeps it in hand.
             if game.use_item(i, mouse_world) {
                 item_pick = None;
@@ -1724,43 +1935,101 @@ async fn game_main() {
                     }
                 }
             }else if game.ability_targets_point(&name) {
-                game.activate_ability_at(&name, mouse_world);
+                if game.activate_ability_at(&name, mouse_world) {
+                    game.stats.abilities += 1;
+                }
             } else if let Some(t) = game.tower_at(mouse_world) {
-                game.activate_ability_on(&name, t);
+                if game.activate_ability_on(&name, t) {
+                    game.stats.abilities += 1;
+                }
                 selected = Some(t);
             }
             ability_pick = None;
         } else if let Some(t) = picking.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
-            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Point{tower:game.towers[t].id,at:mouse_world});}else{game.towers[t].point = Some(mouse_world);}
+            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Point{tower:game.towers[t].id,at:mouse_world});}else if game.is_necro(t){game.necro_select(t, mouse_world);}else{game.towers[t].point = Some(mouse_world);}
             picking = None;
         } else if let Some(def) = placing {
-            let drop = if dragging { is_mouse_button_released(MouseButton::Left) } else { is_mouse_button_pressed(MouseButton::Left) };
-            if drop&&in_map&&coop_runtime.is_some(){
-                front.coop_input(rrbtd6_coop::Action::Place{kind:game.tower_defs[def].0.clone(),at:mouse_world});placing=None;
-            } else if drop && in_map && game.place(def, mouse_world) {
-                placing = None;
-                let t = game.towers.len() - 1;
-                selected = Some(t);
-                // Like the game, a tower that only fires at a set point asks for it straight away.
-                if game.target_modes(t) == [game::TargetMode::Point] {
-                    picking = Some(t);
-                }
-            } else if drop && dragging {
-                // Dropped on the HUD or a spot it can't go: cancelled, nothing stays in hand.
-                placing = None;
+            // InputManager.Update (mouse, nudge mode on: Game.DisableNudgeMode is only offered
+            // on touch screens): CursorDown / CursorUp on the button's edges, then
+            // entityPositionWorld follows cursorMode. Lock & Drop is Game.DropAndLock.
+            let lock = hud.as_ref().is_some_and(|h| !h.menus.drag_and_drop);
+            if place_def != Some(def) {
+                (place_mode, place_cursor) = (0, mouse_world);
             }
-            dragging &= !drop;
+            let mut last = place_cursor;
+            if mouse_world[0] < 1e8 {
+                place_cursor = mouse_world;
+            }
+            let cursor = place_cursor;
+            // TryPlace at entityPositionWorld (no TowerSnappingData snap to lastValidPosition).
+            macro_rules! try_place {
+                () => {
+                    if coop_runtime.is_some() {
+                        front.coop_input(rrbtd6_coop::Action::Place { kind: game.tower_defs[def].0.clone(), at: place_at });
+                        placing = None;
+                    } else if game.place(def, place_at) {
+                        placing = None;
+                        let t = game.towers.len() - 1;
+                        selected = Some(t);
+                        // Like the game, a tower that only fires at a set point asks for it straight away.
+                        if game.target_modes(t) == [game::TargetMode::Point] {
+                            picking = Some(t);
+                        }
+                    }
+                };
+            }
+            // The RightMenu buttons' onClick runs before InputManager.Update's CursorUp.
+            match hud.as_mut().and_then(|h| h.placement_click()) {
+                Some(hud::PlaceClick::Cancel) => placing = None,
+                Some(hud::PlaceClick::Confirm) => try_place!(),
+                None => {}
+            }
+            if placing.is_some() && is_mouse_button_pressed(MouseButton::Left) {
+                // CursorDown: unless on the confirm / cancel button, a press within 10 of the
+                // tower picks it up (cursorMode 0), anywhere else nudges it (cursorMode 1).
+                if !hud.as_ref().is_some_and(|h| h.over_placement_button(vec2(mx, my))) {
+                    let d = [cursor[0] - place_at[0], cursor[1] - place_at[1]];
+                    place_mode = if d[0] * d[0] + d[1] * d[1] < 100.0 { 0 } else { 1 };
+                }
+                last = cursor;
+            }
+            if placing.is_some() && is_mouse_button_released(MouseButton::Left) {
+                // CursorUp: released off the world cancels (CancelAllPlacementActions). Drag &
+                // Drop tries to place; whatever is still in hand locks where it is (cursorMode 2).
+                if !in_map {
+                    placing = None;
+                } else {
+                    if !lock {
+                        try_place!();
+                    }
+                    place_mode = 2;
+                }
+            }
+            match place_mode {
+                0 => place_at = cursor,
+                1 => {
+                    // Constants.worldXMin/Max, worldZMin/Max.
+                    place_at[0] = (place_at[0] + (cursor[0] - last[0]) * 0.33).clamp(-150.0, 150.0);
+                    place_at[1] = (place_at[1] + (cursor[1] - last[1]) * 0.33).clamp(-116.0, 116.0);
+                }
+                _ => {}
+            }
         } else if in_map && is_mouse_button_pressed(MouseButton::Left) {
+            // With the sandbox's bloon menu open, a press on the map only closes it: towers can't be
+            // selected from that screen.
+            let menu_open = game.sandbox && hud.as_ref().is_some_and(|h| h.sandbox.owns_map_press(get_time()));
             if game.sandbox {
                 if let Some(h) = hud.as_mut() { h.sandbox.scene_hit(); }
             }
             let was = selected;
-            selected = game.tower_at(mouse_world);
+            if !menu_open { selected = game.tower_at(mouse_world); }
+            selected_removeable = if selected.is_none() && !menu_open && coop_runtime.is_none() { game.removeable_at(mouse_world) } else { None };
             // CreateSoundOnSelected: a hero says something when clicked.
             if let Some(t) = selected.filter(|&t| was != Some(t)) {
                 game.select_voice(t);
             }
         }
+        place_def = placing;
         if placing.is_some() {
             selected = None;
         }
@@ -1804,11 +2073,6 @@ async fn game_main() {
             }
         }
 
-        if autotest.is_some()&&game.race.is_some(){
-            if let Some(every)=std::env::var("RRBTD6_RACE_SEND_EVERY").ok().and_then(|v|v.parse::<u32>().ok()).filter(|n|*n>0){
-                if frames%every==0{game.request_race_round();}
-            }
-        }
         // Fixed-step simulation (P-TIME).
         if coop_runtime.is_none(){
             if let Some(steps)=bench_steps{acc=if bench_round.is_some()&&frames<bench_warmup{0.0}else{(steps as f32+0.01)/FPS};}else{acc += get_frame_time().min(0.25) * speed as f32;}
@@ -1817,16 +2081,20 @@ async fn game_main() {
             let t_step = std::time::Instant::now();
             let completed_before=game.round;
             game.step();
-            if game.round!=completed_before && !game.sandbox && game.race.is_none() && std::env::var_os("RRBTD6_AUTOTEST").is_none() && frontend::account_preview::is_local() {
-                let profile_root=root.clone();let completed_round=game.round;
-                std::thread::spawn(move||{if local_profile::update(&profile_root,|p|p.highest_round=p.highest_round.max(completed_round)).is_ok(){frontend::account_preview::refresh_local(&profile_root);}});
+            // InGame.RoundEnd -> DrainXpAndCheckLevelUp: the round's Monkey XP into the profile.
+            if game.round!=completed_before && std::env::var_os("RRBTD6_AUTOTEST").is_none() {
+                tower_xp::drain(&root, &mut game);
+            }
+            if game.round!=completed_before && !game.sandbox && std::env::var_os("RRBTD6_AUTOTEST").is_none() && frontend::account_preview::is_local() {
+                let profile_root=root.clone();let completed_round=game.round;let xp=((game.round.saturating_sub(completed_before)) as u64).saturating_mul(100);
+                std::thread::spawn(move||{if local_profile::update(&profile_root,|p|{p.highest_round=p.highest_round.max(completed_round);local_profile::add_experience(p,xp);}).is_ok(){frontend::account_preview::refresh_local(&profile_root);}});
             }
             let dt_step = t_step.elapsed().as_secs_f64();
             sim_stats.0 += dt_step;
             sim_stats.1 += 1;
             sim_stats.2 = sim_stats.2.max(dt_step);
             // Like the BTD6 setting: the first round is started by hand.
-            if auto_start && game.race.is_none() && !game.sandbox && game.round > 0 {
+            if auto_start && !game.sandbox && game.round > 0 {
                 game.start_round();
             }
             acc -= 1.0 / FPS;
@@ -1868,13 +2136,13 @@ async fn game_main() {
                         if !hero&&tw.tiers[path]>=5{continue;}
                         let mut tiers=tw.tiers;tiers[path]+=1;
                         if let Some(dir)=tier_index[tw.def].get(&format!("{}{}{}",tiers[0],tiers[1],tiers[2])){
-                            predicted_models.push(((tw.def,dir.clone()),root.join("models").join(game.tower_model(tw.def)).join("tiers").join(dir)));
+                            predicted_models.push(((tw.def,dir.clone()),mod_assets::tier(&root,game.tower_model(tw.def),&dir)));
                         }
                     }
                 }
                 if let Some(d)=placing{
                     if let Some(dir)=tier_index[d].get("000").or(tier_index[d].get("100")){
-                        predicted_models.push(((d,dir.clone()),root.join("models").join(game.tower_model(d)).join("tiers").join(dir)));
+                        predicted_models.push(((d,dir.clone()),mod_assets::tier(&root,game.tower_model(d),&dir)));
                     }
                 }
             }
@@ -1888,7 +2156,7 @@ async fn game_main() {
                 k[path] += 1;
                 if let Some(dir) = tier_index[tw.def].get(&format!("{}{}{}", k[0], k[1], k[2])) {
                     if !tier_anims.contains_key(&(tw.def, dir.clone())) {
-                        prefetch.request(root.join("models").join(game.tower_model(tw.def)).join("tiers").join(dir));
+                        prefetch.request(mod_assets::tier(&root,game.tower_model(tw.def),&dir));
                     }
                 }
             }
@@ -1897,7 +2165,7 @@ async fn game_main() {
         if let Some(d) = placing {
             if let Some(dir) = tier_index[d].get("000").or(tier_index[d].get("100")).cloned() {
                 if !tier_anims.contains_key(&(d, dir.clone())) {
-                    let path = root.join("models").join(game.tower_model(d)).join("tiers").join(&dir);
+                    let path = mod_assets::tier(&root,game.tower_model(d),&dir);
                     tier_anims.insert((d, dir), prefetch.load(&path));
                 }
             }
@@ -1927,7 +2195,7 @@ async fn game_main() {
                 for (dir, _, _) in attack_index[t.def].get(&base).into_iter().flatten() {
                     let key = (t.def, dir.clone());
                     if !tier_anims.contains_key(&key) {
-                        let path = root.join("models").join(game.tower_model(t.def)).join("tiers").join(dir);
+                        let path = mod_assets::tier(&root,game.tower_model(t.def),&dir);
                         tier_anims.insert(key, prefetch.load(&path));
                     }
                 }
@@ -1935,7 +2203,7 @@ async fn game_main() {
                     if let Some(dir) = tier_index[t.def].get(&k) {
                         let key = (t.def, dir.clone());
                         if !tier_anims.contains_key(&key) {
-                            let path = root.join("models").join(game.tower_model(t.def)).join("tiers").join(dir);
+                            let path = mod_assets::tier(&root,game.tower_model(t.def),&dir);
                             tier_anims.insert(key, prefetch.load(&path));
                         }
                     }
@@ -1990,11 +2258,26 @@ async fn game_main() {
             } else {
                 set_camera(&cam);
             }
+            // Parts of what has been bought; a new game gives them back.
+            if hidden_parts != game.logic.hide_parts {
+                if let Some(m) = &mut map_model {
+                    hidden_parts.iter().for_each(|&p| m.set_part_hidden(p, false));
+                    game.logic.hide_parts.iter().for_each(|&p| m.set_part_hidden(p, true));
+                }
+                hidden_parts = game.logic.hide_parts.clone();
+            }
             if let Some(m) = &map_model {
                 m.draw_map(if scaled{None}else{cam.viewport});
             }
+            // ParagonTower.SetTowerActive (Steam build @0xd53930): a Paragon not yet active (its
+            // purchase playing) has its display scaled to zero, shadow and attack displays with it
+            // (recording dart_paragon_fx: scale 0 from the purchase until Finish).
+            let hidden = |t: &game::Tower| t.paragon.is_some() && game.sim_elapsed < t.paragon_active_at;
             // Tower ground shadows, under the range circles.
             for t in &game.towers {
+                if hidden(t) {
+                    continue;
+                }
                 let (key,_)=model_keys(&game,t,&tier_index[t.def]);
                 if let Some(a) = &t.air {
                     let m = game.tier_of(t).and_then(|tr| tr.air.as_ref()).and_then(|s| s.display.as_ref());
@@ -2012,24 +2295,27 @@ async fn game_main() {
                 // A base under turning attack models (Sun Temple, True Sun God, Dartling pads)
                 // whose attacks never turn the tower keeps the placement facing, whatever an
                 // earlier tier (Sun Avatar) left it at.
-                let fixed_base = attack_index[t.def].contains_key(&key)
-                    && game.tier_of(t).is_some_and(|tr| !tr.attacks.is_empty() && tr.attacks.iter().all(|a| !a.turn_body));
+                // So does a tower none of whose attacks turns it any more (Prince of Darkness after
+                // a 0-0-4 that aimed: owner, the real one faces front once bought).
+                let fixed_base = (attack_index[t.def].contains_key(&key)
+                    && game.tier_of(t).is_some_and(|tr| !tr.attacks.is_empty() && tr.attacks.iter().all(|a| !a.turn_body)))
+                    || game.tier_of(t).is_some_and(|tr| !tr.attacks.is_empty() && !tr.attacks.iter().any(|a| (a.rotate && a.turn_body) || a.face_middle || a.rotate_always));
                 let yaw = if t.air.is_some() || fixed_base { std::f32::consts::PI } else { std::f32::consts::FRAC_PI_2 - t.angle };
                 if let Some(m) = model.or(tower_anims[t.def].as_ref()) {
                     m.draw_shadow([t.pos[0], 0.0, t.pos[1]], yaw);
                 }
             }
-            if let (Some(def), true) = (placing, in_map) {
+            if let (Some(def), true) = (placing, in_map || place_mode != 0) {
                 let in_hand=tier_index[def].get("000").or(tier_index[def].get("100"));
                 let model=in_hand.and_then(|dir|tier_anims.get(&(def,dir.clone()))).and_then(|m|m.as_ref());
                 if let Some(m) = model.or(tower_anims[def].as_ref()) {
-                    m.draw_shadow([mouse_world[0], 0.0, mouse_world[1]], std::f32::consts::PI);
+                    m.draw_shadow([place_at[0], 0.0, place_at[1]], std::f32::consts::PI);
                 }
             }
             // Range circles lie on the ground, under towers and bloons.
-            if let (Some(def), true) = (placing, in_map) {
-                let ok = game.can_place(def, mouse_world) && game.cash >= game.place_cost(def, mouse_world);
-                render3d::range_disc(mouse_world[0], mouse_world[1], placement_radius(&game.tower_defs[def].1), ok);
+            if let (Some(def), true) = (placing, in_map || place_mode != 0) {
+                let ok = game.can_place(def, place_at) && game.cash >= game.place_cost(def, place_at);
+                render3d::range_disc(place_at[0], place_at[1], placement_radius(&game.tower_defs[def].1), ok);
             }
             if let Some(t) = selected {
                 let p = game.attack_pos(t);
@@ -2038,14 +2324,21 @@ async fn game_main() {
             if let (Some(q), Some(tx)) = (marker_at(&game, picking, selected, in_map, mouse_world), &mortar_target) {
                 render3d::flat_sprite(tx, q[0], 0.4, q[1], MARKER_SIZE, MARKER_SIZE, [0.5, 0.5], [0.0, 1.0]);
             }
+            model_poses.clear();
             for (ti, t) in game.towers.iter().enumerate() {
+                if hidden(t) {
+                    continue;
+                }
                 let (key,top_key)=model_keys(&game,t,&tier_index[t.def]);
                 // A Heli's pad keeps its placement facing; the Heli itself turns.
                 // A base under turning attack models (Sun Temple, True Sun God, Dartling pads)
                 // whose attacks never turn the tower keeps the placement facing, whatever an
                 // earlier tier (Sun Avatar) left it at.
-                let fixed_base = attack_index[t.def].contains_key(&key)
-                    && game.tier_of(t).is_some_and(|tr| !tr.attacks.is_empty() && tr.attacks.iter().all(|a| !a.turn_body));
+                // So does a tower none of whose attacks turns it any more (Prince of Darkness after
+                // a 0-0-4 that aimed: owner, the real one faces front once bought).
+                let fixed_base = (attack_index[t.def].contains_key(&key)
+                    && game.tier_of(t).is_some_and(|tr| !tr.attacks.is_empty() && tr.attacks.iter().all(|a| !a.turn_body)))
+                    || game.tier_of(t).is_some_and(|tr| !tr.attacks.is_empty() && !tr.attacks.iter().any(|a| (a.rotate && a.turn_body) || a.face_middle || a.rotate_always));
                 let yaw = if t.air.is_some() || fixed_base { std::f32::consts::PI } else { std::f32::consts::FRAC_PI_2 - t.angle };
                 // Blink ~every 4 s for 0.12 s, phase-shifted per tower.
                 let blink = (get_time() as f32 + ti as f32 * 1.37) % 4.0 < 0.12;
@@ -2110,20 +2403,51 @@ async fn game_main() {
                 // The body keeps its idle pick (variants) between frames; other parts just idle.
                 let mut pick = idle_picks.get(&t.id).copied().unwrap_or((usize::MAX, 0.0));
                 let attacked = t.attack_t < f32::MAX;
+                let prev_phase = attack_phase.get(&t.id).copied();
+                let mut body_phase: Option<(f32, f32, bool)> = None;
+                // (seconds into the attack clip of length `dur`, throw pending): it runs on from
+                // the last frame; a throw restarts it only once it has finished, one that came
+                // while it played starts it again from its end.
+                let phase = |dur: f32| -> (f32, bool) {
+                    if !attacked {
+                        return (f32::MAX, false);
+                    }
+                    let (p, pending) = match prev_phase {
+                        Some((ph, last, pending)) if t.attack_t >= last => (ph + (t.attack_t - last), pending),
+                        Some((ph, _, _)) if ph < dur => (ph + t.attack_t, true),
+                        _ => (t.attack_t, false),
+                    };
+                    if p >= dur && pending { (p - dur, false) } else { (p, pending) }
+                };
+                let last_pose = std::cell::Cell::new((0usize, 0.0f32));
                 let mut pose = |m: &mut anim::AnimModel, body: bool, yaw: f32| match m.attack_clip() {
                     _ if shown(m).is_some() => {
                         let (c, at) = shown(m).unwrap();
+                        last_pose.set((c, at));
                         m.meshes(c, at, pos, yaw, outline_scale, blink, sel_outline)
                     }
-                    Some(a) if t.attack_t < m.clip_duration(a) => m.meshes(a, t.attack_t, pos, yaw, outline_scale, blink, sel_outline),
+                    Some(a) if phase(m.clip_duration(a)).0 < m.clip_duration(a) => {
+                        let (ph, pending) = phase(m.clip_duration(a));
+                        if body {
+                            body_phase = Some((ph, t.attack_t, pending));
+                        }
+                        last_pose.set((a, ph));
+                        m.meshes(a, ph, pos, yaw, outline_scale, blink, sel_outline)
+                    }
                     _ => {
                         let mut other = (usize::MAX, 0.0);
                         let (c, at) = m.idle_pose(attacked, t.idle_t, if body { &mut pick } else { &mut other });
+                        last_pose.set((c, at));
                         m.meshes(c, at, pos, yaw, outline_scale, blink, sel_outline)
                     }
                 };
+                let body_dir = (fan_model.is_none() && tier_model.is_some()).then(|| tier_index[t.def].get(&key).cloned()).flatten();
                 if let Some(m) = fan_model.or(tier_model).or(tower_anims[t.def].as_mut()) {
                     let (body, outline) = pose(m, true, yaw);
+                    if let Some(dir) = body_dir.clone() {
+                        let (c, at) = last_pose.get();
+                        model_poses.insert((t.id, dir), (c, at, pos, yaw));
+                    }
                     // The Paragon's attack display, on top; both outlines go under both bodies.
                     // Its attacks' RotateToTargetModel with rotateTower false (Apex Plasma
                     // Master) turns only this display to the target: the legs keep their facing.
@@ -2133,10 +2457,14 @@ async fn game_main() {
                     } else {
                         yaw
                     };
-                    let (tb, to) = match top.and_then(|dir| tier_anims.get_mut(&(t.def, dir))).and_then(|m| m.as_mut()) {
+                    let (tb, to) = match top.clone().and_then(|dir| tier_anims.get_mut(&(t.def, dir))).and_then(|m| m.as_mut()) {
                         Some(m) => pose(m, false, top_yaw),
                         None => (Vec::new(), Vec::new()),
                     };
+                    if let (Some(dir), false) = (top, tb.is_empty() && to.is_empty()) {
+                        let (c, at) = last_pose.get();
+                        model_poses.insert((t.id, dir), (c, at, pos, top_yaw));
+                    }
                     // Attack displays (Dartling gun, Super Monkey arm...): on the tower, turned to
                     // the attack's aim, animating with its throws.
                     let (mut ab, mut ao) = (Vec::new(), Vec::new());
@@ -2166,6 +2494,10 @@ async fn game_main() {
                     }
                     anim::draw_meshes(&shaders, &[&outline, &to, &ao], &[&body, &tb, &ab]);
                     idle_picks.insert(t.id, pick);
+                    match body_phase {
+                        Some(p) => { attack_phase.insert(t.id, p); }
+                        None => { attack_phase.remove(&t.id); }
+                    }
                     continue;
                 }
                 match &tower_models[t.def] {
@@ -2173,12 +2505,28 @@ async fn game_main() {
                     None => draw_sphere(render3d::gl(t.pos[0], 6.0, t.pos[1]), 6.0, None, BROWN),
                 }
             }
+            // Tower parts with the game's translated effect shaders (Apex Plasma Master's lightning).
+            anim::draw_fx(get_time() as f32);
             let bloon_t0 = get_time();
             // Bloons: far (larger z) first.
             // Positions computed once (not inside the sort comparator), then far-to-near.
             bloon_order.clear();
             bloon_order.extend(game.bloons.iter().enumerate().map(|(i, b)| (game.bloon_pos(b), i)));
             bloon_order.sort_unstable_by(|a, b| b.0[1].total_cmp(&a.0[1]).then_with(||game.bloons[a.1].id.cmp(&game.bloons[b.1].id)));
+            // Bloons all but level (a pop's children moving together) differ by rounding noise
+            // that changes every frame: each run closer than 0.05 apart goes by id, or their
+            // overlapping overlays (glue) would flicker as the order swaps.
+            let mut s = 0;
+            while s < bloon_order.len() {
+                let mut e = s + 1;
+                while e < bloon_order.len() && bloon_order[e - 1].0[1] - bloon_order[e].0[1] < 0.05 {
+                    e += 1;
+                }
+                if e - s > 1 {
+                    bloon_order[s..e].sort_unstable_by_key(|x| game.bloons[x.1].id);
+                }
+                s = e;
+            }
             // MOAB-class models: the one furthest along the track draws over every one behind it
             // (bunched-up MOABs show the leader whole). Each is pushed toward the camera by its
             // rank; with the orthographic camera that only changes which is in front.
@@ -2193,13 +2541,36 @@ async fn game_main() {
                     moab_rank.insert(i, (k + 100).saturating_sub(n) as f32);
                 }
             }
+            let bloon_viewport = if scaled { None } else { cam.viewport };
+            // Overlay prefabs (glue, ice, bleed...) seen for the first time (models/projectiles/<name>).
+            for b in &game.bloons {
+                if b.effects.iter().any(|e| !e.overlay.is_empty()) {
+                    for n in bloon_overlays(&game.defs[b.kind], b) {
+                        if proj_tried.insert(n.clone()) {
+                            if let Some(d) = load_work::complete_asset(load_proj(mod_assets::projectile(&root, &n))) {
+                                proj_displays.insert(n, d);
+                            }
+                        }
+                    }
+                }
+            }
             for &(p, i) in &bloon_order {
                 let b = &game.bloons[i];
                 let d = &game.defs[b.kind];
-                let model = d
-                    .model_at(b.hp as f32 / d.max_health.max(1) as f32)
-                    .and_then(|m| bloon_models.get_mut(m))
-                    .and_then(|m| m.as_mut());
+                let overlays = if b.effects.iter().any(|e| !e.overlay.is_empty()) { bloon_overlays(d, b) } else { Vec::new() };
+                let overlays: Vec<&ProjDisplay> = overlays.iter().filter_map(|n| proj_displays.get(n)).collect();
+                let model_name = d.model_at(b.hp as f32 / d.max_health.max(1) as f32);
+                let model = model_name.and_then(|m| bloon_models.get_mut(m)).and_then(|m| m.as_mut());
+                // Consecutive MOAB-class bloons draw as GPU instances (instanced.rs); anything
+                // else drawn here ends the run first, keeping the painter's order. One with an
+                // overlay draws on its own, the overlay right over it.
+                let instance = model.as_ref().is_some_and(|m| !m.has_fx()) && instancer.is_some() && overlays.is_empty();
+                if !instance {
+                    if let Some(inst) = instancer.as_mut().filter(|x| x.pending()) {
+                        inst.flush(&mut bloon_models, &shaders, get_time() as f32, outline_scale, bloon_viewport);
+                    }
+                }
+                let model = model_name.and_then(|m| bloon_models.get_mut(m)).and_then(|m| m.as_mut());
                 if let Some(m) = model {
                     sprite_batch.flush(); // keep painter's order around 3D models
                     // Path.DistanceToPointInfoBloon: MOAB-class displays sit at height 120, moved
@@ -2212,8 +2583,20 @@ async fn game_main() {
                     let lift = moab_rank.get(&i).copied().unwrap_or(0.0) * MOAB_STEP;
                     let a = render3d::PITCH_DEG.to_radians();
                     let pos = [p[0], h + lift * a.sin(), p[1] - h / 60f32.to_radians().tan() - lift * a.cos()];
+                    if instance {
+                        if let Some(inst) = instancer.as_mut() {
+                            inst.push(model_name.unwrap_or_default(), pos, std::f32::consts::FRAC_PI_2 - heading);
+                        }
+                        continue;
+                    }
                     let idle = m.idle_clip();
                     m.draw(&shaders, idle, get_time() as f32, pos, std::f32::consts::FRAC_PI_2 - heading, outline_scale, false, None);
+                    // The overlay mesh (MoabGlueBasic...): a child of the display, same space.
+                    for o in &overlays {
+                        if let ProjDisplay::Mesh(om) = o {
+                            om.draw_at(pos, std::f32::consts::FRAC_PI_2 - heading, &mut scratch);
+                        }
+                    }
                     continue;
                 }
                 match &bloon_tex[b.kind] {
@@ -2221,9 +2604,11 @@ async fn game_main() {
                     Some(t) => match d.display.first() {
                         // Sim position: y -= 4, height 20 (Path.DistanceToPointInfoBloon); Unity from
                         // sim via inverse ToSimulationSpace(tilt 60): u.z = -s.y - s.z / tan(60).
-                        // STAND-IN tints for the game's frozen / glued bloon overlays.
+                        // STAND-IN tints for frozen / glued bloons without an overlay prefab.
                         Some(l) => {
-                            let tint = if b.frozen() {
+                            let tint = if !overlays.is_empty() {
+                                [255; 4]
+                            } else if b.frozen() {
                                 [150, 210, 255, 255]
                             } else if b.glue() > 0 {
                                 [255, 240, 120, 255]
@@ -2231,9 +2616,39 @@ async fn game_main() {
                                 [255; 4]
                             };
                             let y = p[1] - 20.0 / 60f32.to_radians().tan();
+                            // A sprite MOAB-class bloon (Test MOAB): lies at the MOAB height and
+                            // turns along the track like the 3D ones (rotateToFollowPath).
+                            if d.rotate_to_follow_path {
+                                sprite_batch.flush();
+                                let h = 120.0;
+                                let ahead = game.tracks[b.path as usize].bloon_pos(b.dist + 1.0);
+                                let heading = (ahead[1] - p[1]).atan2(ahead[0] - p[0]);
+                                let lift = moab_rank.get(&i).copied().unwrap_or(0.0) * MOAB_STEP;
+                                let a = render3d::PITCH_DEG.to_radians();
+                                let (fx, fz) = (heading.cos(), heading.sin());
+                                let x = p[0] + fz * l.trim[0] + fx * l.trim[1];
+                                let z = p[1] - h / 60f32.to_radians().tan() - lift * a.cos() - fx * l.trim[0] + fz * l.trim[1];
+                                render3d::flat_sprite_tinted(t, x, h + lift * a.sin(), z, l.w, l.h, [0.5, 0.5], [fx, fz], tint);
+                                continue;
+                            }
+                            sprite_batch.shift_next(l.trim);
                             match (&atlas, bloon_uv[b.kind]) {
                                 (Some(a), Some(uv)) => sprite_batch.billboard_uv(&a.tex, uv, p[0], y, 20.0, l.w, l.h, tint),
                                 _ => sprite_batch.billboard(t, p[0], y, 20.0, l.w, l.h, tint),
+                            }
+                            // Its overlay sprites (BlueGlueBasic...), untrimmed, centred on the
+                            // bloon like the display they're parented to.
+                            for o in &overlays {
+                                match o {
+                                    ProjDisplay::Layers(ls) => {
+                                        for ol in ls {
+                                            sprite_batch.shift_next([ol.offset[0], ol.offset[1]]);
+                                            sprite_batch.billboard(&ol.tex, p[0], y, 20.0, ol.w, ol.h, ol.color);
+                                        }
+                                    }
+                                    ProjDisplay::Sprite { tex, w, h, .. } => sprite_batch.billboard(tex, p[0], y, 20.0, *w, *h, [255; 4]),
+                                    ProjDisplay::Mesh(_) => {}
+                                }
                             }
                         }
                         None => {
@@ -2245,6 +2660,9 @@ async fn game_main() {
                 }
             }
             sprite_batch.flush();
+            if let Some(inst) = instancer.as_mut() {
+                inst.flush(&mut bloon_models, &shaders, get_time() as f32, outline_scale, bloon_viewport);
+            }
             bloon_time += get_time() - bloon_t0;
             let tilt = 1.0 / 60f32.to_radians().tan();
             // Projectile displays seen for the first time this frame (projectiles and orbits).
@@ -2260,7 +2678,7 @@ async fn game_main() {
             for n in wanted {
                 if proj_tried.insert(n.clone()) {
                     let display=if projectile_upload.as_ref().is_some_and(|(name,_)|name==&n){load_work::complete_asset(projectile_upload.take().unwrap().1)}
-                        else{load_work::complete_asset(load_proj(proj_root.join(&n)))};
+                        else{load_work::complete_asset(load_proj(mod_assets::projectile(&root,&n)))};
                     if let Some(d) = display {
                         proj_displays.insert(n, d);
                     }
@@ -2284,14 +2702,15 @@ async fn game_main() {
                 } else {
                     wrath_display.as_ref().or(p.spec.display.as_ref())
                 };
-                // Ring and explosion hits have no projectile graphic (drawn as bursts).
-                if p.spec.link_radius || display.map(String::as_str) == Some("") {
+                // Ring and explosion hits have no projectile graphic (drawn as bursts); "#empty" is
+                // a display whose prefab is the game's empty placeholder (nothing drawn).
+                if p.spec.link_radius || matches!(display.map(String::as_str), Some("" | "#empty")) {
                     continue;
                 }
                 // Landed spikes and bananas lie on the ground.
                 let (y, z) = if (n > 0 || p.spec.cash.is_some()) && p.vel == [0.0, 0.0] { (1.0, p.pos[1] - tilt) } else { (10.0, z) };
                 // RotateModel spins the display (boomerangs) instead of facing the flight direction.
-                let heading = if p.spec.spin != 0.0 { (p.spec.spin * p.age / FPS).to_radians() } else { p.vel[1].atan2(p.vel[0]) };
+                let heading = if p.spec.spin != 0.0 { (p.spec.spin * p.age / FPS).to_radians() } else { game.track_heading(p).unwrap_or_else(|| p.vel[1].atan2(p.vel[0])) };
                 match display.and_then(|g| proj_index.get(g)).and_then(|n| proj_displays.get(n)) {
                     // A plain sprite is a stand-in for a particle-only prefab: skipped when its
                     // real particle effect plays (real sprite prefabs load as Layers).
@@ -2308,7 +2727,11 @@ async fn game_main() {
                         m.draw_at([x, y, z], std::f32::consts::FRAC_PI_2 - heading, &mut scratch);
                         continue;
                     }
-                    // STAND-IN for particle-only area projectiles (Wall of Fire): a fiery disc.
+                    // A particle-only prefab (Wall of Fire): its own particle effect is all the game
+                    // draws.
+                    None if display.and_then(|g| proj_index.get(g)).is_some_and(|n| proj_fx.contains_key(n)) => continue,
+                    // STAND-IN for particle-only area projectiles whose effect wasn't exported: a
+                    // fiery disc.
                     None if p.vel == [0.0, 0.0] && p.frames_left > 6.0 => {
                         let r = p.spec.radius;
                         render3d::ground_band(p.pos[0], p.pos[1], r, r, Color::new(1.0, 0.75, 0.2, 0.35), Color::new(1.0, 0.3, 0.0, 0.55));
@@ -2326,23 +2749,23 @@ async fn game_main() {
                     }
                 }
             }
-            // Glaive Lord's orbiting glaives. STAND-IN: OrbitModel has no speed field; the turn
-            // rate (1 turn/s) and the glaive spin are guesses.
+            // Glaive Lord's orbiting glaives where the simulation's Orbit put them (its eased speed,
+            // Vector2.Rotate on the circle), each turned by its RotateModel: rotationFrames = angle x
+            // 0.016666668 a frame (RotateModel.ctor @0x1811faeb0), so -12 degrees; the clone's y is
+            // flipped, so it turns the other way here. HYPOTHESIS P-GLAIVEROT0: rotation 0 when made.
             for t in 0..game.towers.len() {
                 let Some(orbit) = game.tier(t).and_then(|tier| tier.orbit.clone()) else { continue };
                 let Some(disp) = orbit.display.as_ref().and_then(|g| proj_index.get(g)).and_then(|n| proj_displays.get(n)) else {
                     continue;
                 };
-                let c = game.towers[t].pos;
-                let turn = get_time() as f32 * std::f32::consts::TAU;
-                for k in 0..orbit.count {
-                    let a = turn + k as f32 * std::f32::consts::TAU / orbit.count as f32;
-                    let (x, z) = (c[0] + orbit.range * a.cos(), c[1] + orbit.range * a.sin() - 10.0 * tilt);
-                    let spin = -turn * 4.0;
+                let Some(st) = game.towers[t].orbit.as_ref() else { continue };
+                let spin = -(orbit.spin * (1.0 / 60.0) * st.age as f32).to_radians();
+                for g in &st.glaives {
+                    let (x, z) = (g[0], g[1] - 10.0 * tilt);
                     match disp {
                         ProjDisplay::Sprite { tex, w, h, pivot } => render3d::flat_sprite(tex, x, 10.0, z, *w, *h, *pivot, [spin.cos(), spin.sin()]),
                         ProjDisplay::Mesh(m) => m.draw_at([x, 10.0, z], std::f32::consts::FRAC_PI_2 - spin, &mut scratch),
-                        ProjDisplay::Layers(ls) => draw_layers(ls, x, 10.0, z, spin, get_time() as f32),
+                        ProjDisplay::Layers(ls) => draw_layers(ls, x, 10.0, z, spin, st.age as f32 / FPS),
                     }
                 }
             }
@@ -2411,7 +2834,7 @@ async fn game_main() {
                     seen.push(key);
                     let Some(name) = lf.beam.as_ref().and_then(|g| proj_index.get(g)).cloned() else { continue };
                     if !beam_strips.contains_key(&name) {
-                        let dir = proj_root.join(&name);
+                        let dir = mod_assets::projectile(&root,&name);
                         let meta: Option<serde_json::Value> = std::fs::read_to_string(dir.join("meta.json")).ok().and_then(|s| serde_json::from_str(&s).ok());
                         let strip = match meta {
                             Some(m) => {
@@ -2428,7 +2851,7 @@ async fn game_main() {
                         beam_strips.insert(name.clone(), strip);
                     }
                     if proj_tried.insert(name.clone()) {
-                        if let Some(d) = load_work::complete_asset(load_proj(proj_root.join(&name))) {
+                        if let Some(d) = load_work::complete_asset(load_proj(mod_assets::projectile(&root,&name))) {
                             proj_displays.insert(name.clone(), d);
                         }
                     }
@@ -2472,7 +2895,7 @@ async fn game_main() {
                 let names: Vec<String> = bl.displays.iter().filter_map(|g| proj_index.get(g).cloned()).collect();
                 for name in &names {
                     if proj_tried.insert(name.clone()) {
-                        if let Some(d) = load_work::complete_asset(load_proj(proj_root.join(name))) {
+                        if let Some(d) = load_work::complete_asset(load_proj(mod_assets::projectile(&root,name))) {
                             proj_displays.insert(name.clone(), d);
                         }
                     }
@@ -2495,13 +2918,13 @@ async fn game_main() {
                 let (mx, mz) = ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5 - 10.0 * tilt);
                 render3d::flat_sprite(t, mx, 12.0, mz, *w, dist, [0.5, 0.5], [dx / dist, dy / dist]);
             }
-            if let (Some(def), true) = (placing, in_map) {
+            if let (Some(def), true) = (placing, in_map || place_mode != 0) {
                 let in_hand = tier_index[def].get("000").or(tier_index[def].get("100")).cloned();
                 if let Some(m) = in_hand.and_then(|dir| tier_anims.get_mut(&(def, dir))).and_then(|m| m.as_mut()).or(tower_anims[def].as_mut()) {
                     let idle = m.idle_clip();
-                    m.draw(&shaders, idle, get_time() as f32, [mouse_world[0], 0.0, mouse_world[1]], std::f32::consts::PI, outline_scale, false, None);
+                    m.draw(&shaders, idle, get_time() as f32, [place_at[0], 0.0, place_at[1]], std::f32::consts::PI, outline_scale, false, None);
                 } else if let Some(m) = &tower_models[def] {
-                    m.draw_at([mouse_world[0], 0.0, mouse_world[1]], std::f32::consts::PI, &mut scratch);
+                    m.draw_at([place_at[0], 0.0, place_at[1]], std::f32::consts::PI, &mut scratch);
                 }
             }
             // Particle effects: upgrades. Played at game speed (Unity's timeScale), paused with
@@ -2512,6 +2935,102 @@ async fn game_main() {
             for (p, fx, k) in game.place_fx.drain(..) {
                 particles.spawn(&fx, [p[0], 0.0, p[1]], k);
             }
+            // A Paragon purchase (ParagonTower.StartSacrifice / MakeNewInvestmentEffect / Process
+            // / Finish): an investment orb at each sacrificed tower at investmentEffectHeight
+            // (display height: drawn back along the camera tilt like MOABs, over its tower), sized
+            // effectMinScale..effectMaxScale over investStartScale..investEndScale cash (the Tier5
+            // orb, unscaled, for a tier-5 tower). The orbs fly to the Paragon (+ its
+            // investmentEffectDestYOffset in y) until 1.5 s (serialized as effectsStartMovingAtFrame)
+            // along start + dir * dist * e^((t - 1) * investmentEffectExponent), then shrink to
+            // nothing over effectScaleDownTime. effectDuring plays on the Paragon until Finish,
+            // which plays endEffect. (Finish's degree text, ParagonDegree.prefab, isn't exported
+            // yet, so it isn't shown.)
+            let disp = |p: [f32; 2], h: f32| [p[0], h, p[1] - h / 60f32.to_radians().tan()];
+            for s in game.sacrifices.drain(..) {
+                let Some(fx) = game.towers.iter().find(|t| t.id == s.tower)
+                    .and_then(|t| game.tower_tiers[t.def].as_ref()).and_then(|x| x.paragon.as_ref()).and_then(|p| p.sacrifice.clone()) else { continue };
+                fx_tag += 1;
+                let during = fx_tag;
+                // (StartSacrifice / MakeNewInvestmentEffect / Finish: Simulation.SpawnEffect at
+                // rotation 0, a persistent effect entity whose display shows at angle 180 (recording
+                // dart_paragon_fx); sprite or 3D by its prefab (particles::Particles::spawn_display).)
+                if let Some((name, k)) = &fx.during {
+                    particles.spawn_display(name, [s.at[0], 0.0, s.at[1]], *k, 180.0, false, Some(during));
+                }
+                let h = fx.get("investmentEffectHeight");
+                let dest = [s.at[0], s.at[1] + fx.get("investmentEffectDestYOffset")];
+                let mut orbs = Vec::new();
+                for &(p, cash, t5) in &s.orbs {
+                    let (lo, hi) = (fx.get("investStartScale"), fx.get("investEndScale"));
+                    let (mn, mx) = (fx.get("effectMinScale"), fx.get("effectMaxScale"));
+                    let c = cash as f32;
+                    let k = if c <= lo { mn } else if c >= hi { mx } else { (c - lo) / (hi - lo) * (mx - mn) + mn };
+                    let (eff, scale) = match (&fx.invest_t5, &fx.invest) {
+                        (Some((n, _)), _) if t5 => (n.clone(), 1.0),
+                        (_, Some((n, m))) => (n.clone(), k * m),
+                        _ => continue,
+                    };
+                    fx_tag += 1;
+                    if particles.spawn_display(&eff, disp(p, h), scale, 180.0, false, Some(fx_tag)) {
+                        let d = [dest[0] - p[0], dest[1] - p[1]];
+                        let dist = (d[0] * d[0] + d[1] * d[1]).sqrt();
+                        let dir = if dist > 0.0 { [d[0] / dist, d[1] / dist] } else { [0.0, 0.0] };
+                        orbs.push((fx_tag, p, dir, dist, scale));
+                    }
+                }
+                sacrifices.push((s, fx, during, orbs, false));
+            }
+            let frame = game.sim_elapsed;
+            for (s, fx, during, orbs, ended) in sacrifices.iter_mut() {
+                let el = frame.saturating_sub(s.start) as f32;
+                let move_f = (fx.get("effectsStartMovingAtFrame") * 60.0).round().max(1.0);
+                let shrink_f = (fx.get("effectScaleDownTime") * 60.0).round().max(1.0);
+                let h = fx.get("investmentEffectHeight");
+                let kx = fx.get("investmentEffectExponent");
+                orbs.retain(|&(tag, p, dir, dist, scale)| {
+                    if el < move_f {
+                        let f = ((el / move_f - 1.0) * kx).exp() * dist;
+                        particles.set_pos(tag, disp([p[0] + dir[0] * f, p[1] + dir[1] * f], h));
+                        true
+                    } else if el < move_f + shrink_f {
+                        particles.set_pos(tag, disp([p[0] + dir[0] * dist, p[1] + dir[1] * dist], h));
+                        particles.set_scale(tag, scale * (move_f + shrink_f - el) / shrink_f);
+                        true
+                    } else {
+                        particles.kill(tag);
+                        false
+                    }
+                });
+                if !*ended && frame >= s.active_at {
+                    *ended = true;
+                    particles.kill(*during);
+                    if let Some((name, k)) = &fx.end {
+                        particles.spawn_display(name, [s.at[0], 0.0, s.at[1]], *k, 180.0, false, None);
+                    }
+                    // ParagonTower.Finish -> CreateDegreeText (VERIFIED-DISASM @0xd50630, Steam
+                    // build): the degree (its mutator's, LocalizationManager.FormatInt) as the
+                    // text of degreeTextEffectId (Simulation.CreateTextEffect, its lifespan), at
+                    // the tower kept 20 inside worldXMin / worldXMax and 50 above worldZMin
+                    // (game y; the clone's y is flipped).
+                    if let Some((name, life)) = &fx.degree_text {
+                        fx_tag += 1;
+                        let at = [s.at[0].clamp(-150.0 + 20.0, 150.0 - 20.0), s.at[1].min(116.0 - 50.0)];
+                        // (Scene.PresentText: a sprite display too.)
+                        if particles.spawn_display(name, [at[0], 0.0, at[1]], 1.0, 0.0, true, Some(fx_tag)) {
+                            particles.set_text(fx_tag, &s.degree.to_string());
+                            degree_texts.push((fx_tag, frame + (life * 60.0).round() as u64));
+                        }
+                    }
+                }
+            }
+            degree_texts.retain(|&(tag, end)| {
+                let keep = frame < end;
+                if !keep {
+                    particles.kill(tag);
+                }
+                keep
+            });
+            sacrifices.retain(|(_, _, _, orbs, ended)| !*ended || !orbs.is_empty());
             // Each tower's own particle systems (Ring of Fire's flames...), restarted when its
             // models change (upgrades) and stopped when it's gone.
             {
@@ -2521,8 +3040,10 @@ async fn game_main() {
                     let key = model_keys(&game, t, &tier_index[t.def]).0;
                     let mut want: Vec<String> = Vec::new();
                     if t.sub.is_none() && t.paragon.is_none() {
+                        // (A model exported with its joints' matrices carries its effects below.)
                         let dirs = tier_index[t.def].get(&key).into_iter().chain(attack_index[t.def].get(&key).into_iter().flatten().map(|(d, _, _)| d));
-                        want.extend(dirs.filter_map(|d| tier_fx[t.def].get(d).cloned()));
+                        let attached = |d: &String| tier_anims.get(&(t.def, d.clone())).and_then(|m| m.as_ref()).is_some_and(|m| m.has_attach());
+                        want.extend(dirs.filter(|d| !attached(d)).filter_map(|d| tier_fx[t.def].get(d).cloned()));
                     }
                     // Avatar of Wrath's glow for how strong Wrath is now.
                     if let Some((lvl, v)) = game.towers.iter().position(|o| o.id == t.id).and_then(|i| game.wrath_level(i)) {
@@ -2551,6 +3072,35 @@ async fn game_main() {
                     }
                     keep
                 });
+                // Particle systems on a model's joints (Apex Plasma Master's SunBeamCore orb on its
+                // weapon): the tier prefab's effect, the display turned by the model's yaw (a 3D
+                // display: RotationCache's AngleAxis about up), each joint where the model's clip
+                // puts it this frame (export_animated.py attach.bin).
+                for ((id, dir), &(c, at, p, yaw)) in &model_poses {
+                    let Some(def) = game.towers.iter().find(|t| t.id == *id).map(|t| t.def) else { continue };
+                    let Some(m) = tier_anims.get(&(def, dir.clone())).and_then(|m| m.as_ref()).filter(|m| m.has_attach()) else { continue };
+                    let Some(fx) = tier_fx[def].get(dir) else { continue };
+                    let key = (*id, dir.clone());
+                    if attached_fx.get(&key).map(|x| &x.1) != Some(fx) {
+                        if let Some((old, _)) = attached_fx.remove(&key) {
+                            particles.kill(old);
+                        }
+                        fx_tag += 1;
+                        if particles.spawn_tagged(fx, p, fx_tag) {
+                            attached_fx.insert(key.clone(), (fx_tag, fx.clone()));
+                        }
+                    }
+                    if let Some(&(tag, _)) = attached_fx.get(&key) {
+                        particles.set_attach(tag, p, yaw, &m.attach_mats(c, at));
+                    }
+                }
+                attached_fx.retain(|key, (tag, _)| {
+                    let keep = model_poses.contains_key(key);
+                    if !keep {
+                        particles.kill(*tag);
+                    }
+                    keep
+                });
             }
             // Each projectile's own particle systems (bolt glows, trails) follow it; when it's
             // gone they stop emitting and what they left fades out.
@@ -2568,6 +3118,21 @@ async fn game_main() {
                         particles.set_pos(tag, at);
                     }
                 }
+                // The orbiting glaives' own effects (Glaive Lord's purple Glow trail).
+                for (t, tw) in game.towers.iter().enumerate() {
+                    let Some(st) = tw.orbit.as_ref() else { continue };
+                    let Some(fx) = game.tier(t).and_then(|tr| tr.orbit.as_ref()).and_then(|o| o.display.as_ref()).and_then(|g| proj_index.get(g)).and_then(|n| proj_fx.get(n)) else { continue };
+                    for (k, g) in st.glaives.iter().enumerate() {
+                        let uid = ORBIT_FX_TAG | tw.id << 8 | k as u64;
+                        let at = [g[0], 10.0, g[1] - 10.0 * tilt];
+                        seen.insert(uid);
+                        if proj_fx_live.insert(uid) {
+                            particles.spawn_tagged(fx, at, PROJ_FX_TAG | uid);
+                        } else {
+                            particles.set_pos(PROJ_FX_TAG | uid, at);
+                        }
+                    }
+                }
                 proj_fx_live.retain(|uid| {
                     let keep = seen.contains(uid);
                     if !keep {
@@ -2575,6 +3140,16 @@ async fn game_main() {
                     }
                     keep
                 });
+            }
+            {
+                let want = selected.filter(|&t| t < game.towers.len() && game.is_necro(t)).and_then(|t| game.necro_marker(t));
+                if want != necro_fx {
+                    particles.kill(NECRO_FX_TAG);
+                    if let Some(q) = want {
+                        particles.spawn_tagged("TargetGreen", [q[0], 0.0, q[1]], NECRO_FX_TAG);
+                    }
+                    necro_fx = want;
+                }
             }
             if menu.is_none() {
                 particles.update(get_frame_time().min(0.1) * speed as f32);
@@ -2654,17 +3229,48 @@ async fn game_main() {
                     h.float_text(&format!("+${}", v.floor()), vec2(s.x, y), 130.0 * pop, Color::new(1.0, 0.848, 0.0, a));
                 }
             }
-            // CritText.prefab: white "Crit!" over the bloon for ShowTextOnHitModel.lifespan (1 s).
-            // STAND-IN P-CRITANIM: its Animation clip isn't read; the cash text's pop and rise.
+            // CritText.prefab (ShowTextOnHitModel, lifespan 1 s): "Crit!" 18.333 above the hit in
+            // TextMeshPro's four-corner gradient (gold top, orange-red bottom), played by its
+            // CritTextFloatUp clip: position y 0 -> 20 over 1 s, scale 0 -> 1.5 at 1/6 s -> 1 at
+            // 1/3 s, alpha 1 until 0.75 s then 0 at 1 s. INFERRED: fontSize 100 as a 10-unit em
+            // (TextMeshPro 3D scale), the title font's black outline material, linear keys.
+            // Effects' world-space TextMeshPro nodes (the Paragon degree): projected like the crit
+            // text, fontSize / 10 world units an em, scaled by their nodes (animators applied).
+            if let Some(h) = hud.as_ref() {
+                for wt in particles.texts() {
+                    let st = &wt.style;
+                    let em = st.size / 10.0 * wt.scale.y;
+                    let s0 = render3d::to_screen(&cam, [wt.at.x, wt.at.y, wt.at.z], vw, vh);
+                    let (up, rt) = (wt.rot * Vec3::Y * em, wt.rot * Vec3::X);
+                    let s1 = render3d::to_screen(&cam, [wt.at.x + up.x, wt.at.y + up.y, wt.at.z + up.z], vw, vh);
+                    let sx = render3d::to_screen(&cam, [wt.at.x + rt.x, wt.at.y + rt.y, wt.at.z + rt.z], vw, vh);
+                    let px = (s0.y - s1.y).abs();
+                    if px > 0.5 {
+                        let (ux, uy) = ((sx.x - s0.x).abs(), px / em.max(1e-6));
+                        let (w, hh) = (st.rect[0] * wt.scale.x * ux, st.rect[1] * wt.scale.y * uy);
+                        let rect = Rect::new(s0.x - w * st.pivot[0], s0.y - hh * (1.0 - st.pivot[1]), w, hh);
+                        let c = st.color;
+                        let g = st.gradient.unwrap_or([c; 4]).map(|q| Color::new(q[0] * c[0], q[1] * c[1], q[2] * c[2], q[3] * c[3]));
+                        h.effect_text(&wt.text, rect, px, g, st.h_align, st.v_align);
+                    }
+                }
+            }
             crit_texts.extend(game.hit_texts.drain(..).map(|p| (p, now)));
             crit_texts.retain(|(_, t0)| now - t0 < 1.0);
             if let Some(h) = hud.as_ref() {
                 for (p, t0) in &crit_texts {
                     let k = (now - t0) as f32;
-                    let s = render3d::to_screen(&cam, [p[0], 12.0, p[1]], vw, vh);
-                    let pop = if k < 0.12 { 0.6 + 0.4 * k / 0.12 } else { 1.0 };
-                    let a = if k > 0.7 { 1.0 - (k - 0.7) / 0.3 } else { 1.0 };
-                    h.float_text("Crit!", vec2(s.x, s.y - 40.0 * Hud::canvas_scale() * k), 110.0 * pop, Color::new(1.0, 1.0, 1.0, a));
+                    let y = 18.333 + 20.0 * k.min(1.0);
+                    let scale = if k < 1.0 / 6.0 { 1.5 * k * 6.0 } else if k < 1.0 / 3.0 { 1.5 - 0.5 * (k - 1.0 / 6.0) * 6.0 } else { 1.0 };
+                    let a = if k < 0.75 { 1.0 } else { (1.0 - (k - 0.75) / 0.25).max(0.0) };
+                    let s0 = render3d::to_screen(&cam, [p[0], y, p[1]], vw, vh);
+                    let s1 = render3d::to_screen(&cam, [p[0], y + 10.0, p[1]], vw, vh);
+                    let px = (s0.y - s1.y).abs() * scale;
+                    if px > 0.5 {
+                        let top = Color::new(1.0, 0.7864, 0.2206, a);
+                        let bottom = Color::new(1.0, 0.3103, 0.0, a);
+                        h.gradient_text("Crit!", s0, px, [top, Color::new(1.0, 0.7882, 0.2196, a), bottom, Color::new(1.0, 0.3098, 0.0, a)]);
+                    }
                 }
             }
         } else {
@@ -2676,7 +3282,7 @@ async fn game_main() {
             let (lo, hi) = game.bounds;
             if !terrain_loaded {
                 terrain_loaded = true;
-                terrain = load_work::complete_asset(tex(root.join("maps").join(&map_key).join("terrain.png")));
+                terrain = load_work::complete_asset(tex(mod_maps::terrain_file(&root,&map_key)));
             }
             if let Some(t) = &terrain {
                 let a = view.to_screen([lo[0], hi[1]]);
@@ -2753,9 +3359,9 @@ async fn game_main() {
             }
             // Placement preview.
             if let Some(def) = placing {
-                if in_map {
-                    let ok = game.can_place(def, mouse_world) && game.cash >= game.place_cost(def, mouse_world);
-                    let c = vec2(mx, my);
+                if in_map || place_mode != 0 {
+                    let ok = game.can_place(def, place_at) && game.cash >= game.place_cost(def, place_at);
+                    let c = view.to_screen(place_at);
                     // Range.png lookup colours (see render3d::range_disc).
                     let col = if ok { Color::from_rgba(0, 59, 99, 51) } else { Color::from_rgba(255, 9, 8, 89) };
                     draw_circle(c.x, c.y, placement_radius(&game.tower_defs[def].1) * view.s, col);
@@ -2774,6 +3380,7 @@ async fn game_main() {
         if let Some(h) = hud.as_mut() {
             let t0 = get_time();
             h.geraldo.armed = item_pick;
+            h.powers.armed = power_pick.clone();
             let coop_blocked=h.coop_blocks(mouse_position().into());
             // In game no front-end popup owns the input: a block a menu left set (the saved-game
             // warning's Start New used to) must not leave every HUD button dead.
@@ -2784,6 +3391,27 @@ async fn game_main() {
                 h.toggle_sandbox(&mut selected);
                 eprintln!("autotest: sandbox toggle selected={selected:?} open={}", h.sandbox.open);
             }
+            // RRBTD6_SET_VALUE=cash|health: opens Set Cash / Set Health at frame 30.
+            if autotest.is_some() && frames == 30 {
+                match std::env::var("RRBTD6_SET_VALUE").as_deref() {
+                    Ok("cash") => h.sandbox.edit_resource(sandbox::Resource::Cash, &game),
+                    Ok("health") => h.sandbox.edit_resource(sandbox::Resource::Lives, &game),
+                    _ => {}
+                }
+            }
+            if autotest.is_some()&&frames==30 {
+                if let Ok(spec)=std::env::var("RRBTD6_MOD_EVENT"){
+                    if let Some((owner,event))=spec.split_once('/') {game.mod_event(event,Some(owner));}
+                }
+            }
+            // An end screen opening this frame: its background is the map alone, blurred
+            // (Backdrop::capture_map_blur), so it's taken before the HUD draws.
+            let end_opening = open_menu.is_some_and(|m| matches!(m, menus::Menu::Victory | menus::Menu::Defeat))
+                || ((game.won || game.game_over) && (!end_shown || (reviewing && is_mouse_button_pressed(MouseButton::Left))));
+            let mut end_map = end_opening.then(menus::Backdrop::capture_map_blur);
+            h.show_placement_buttons(placing.is_some(), placing.is_some() && !h.menus.drag_and_drop);
+            if selected.is_some() || placing.is_some() { selected_removeable = None; }
+            h.removeable = selected_removeable.and_then(|i| game.removeable(i)).map(|r| (r.cost, game.cash >= r.cost as f64));
             let mut actions = h.draw(&game, selected, placing, speed, auto_start);
             if coop_blocked{uitree::block_input(false);actions.clear();}
             h.draw_coop(&game,coop_config.as_ref(),front.coop_slot(),coop_runtime.as_ref().map(|r|&r.replica.requests),coop_runtime.as_ref().map_or(0,|r|r.replica.frame),&mut actions);
@@ -2793,6 +3421,8 @@ async fn game_main() {
                     game.sfx.push(game::Sfx { name: "UIClick01".into(), group: None });
                 }
                 match a {
+                    hud::Action::ModEvent(owner,event)=>{if coop_runtime.is_none(){game.mod_event(&event,Some(&owner));}},
+                    hud::Action::ModDismiss=>{game.mod_runtime.popup=None;game.mod_runtime.revision+=1;},
                     hud::Action::Coop(action)=>{if coop_runtime.is_some(){front.coop_input(action);}},
                     // A tap only selects the shop tower (its name shows); towers are dragged out
                     // of the shop to place them (or picked up with their hotkey).
@@ -2801,12 +3431,10 @@ async fn game_main() {
                     }
                     hud::Action::Drag(i) => {
                         placing = Some(i);
-                        dragging = true;
                         selected = None;
                     }
                     hud::Action::Go => {
                         if coop_runtime.is_some(){front.coop_input(if game.round_active{rrbtd6_coop::Action::Speed{value:if speed==1{3}else{1}}}else{rrbtd6_coop::Action::StartRound});}
-                        else if game.race.is_some(){game.request_race_round();}
                         else if game.round_active || game.sandbox {
                             // Sandbox: fast forward only; rounds are sent from its menu.
                             speed = if speed == 1 { 3 } else { 1 };
@@ -2837,6 +3465,11 @@ async fn game_main() {
                             game.upgrade(t, path);
                         }
                     }
+                    hud::Action::SellRemoveable => {
+                        if let Some(i) = selected_removeable.take() {
+                            game.sell_removeable(i);
+                        }
+                    }
                     hud::Action::Sell => {
                         if let Some(t) = selected.take() {
                             if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Sell{tower:game.towers[t].id});}else{game.sell(t);}
@@ -2848,6 +3481,11 @@ async fn game_main() {
                         }
                     }
                     hud::Action::SetPoint => picking = selected,
+                    hud::Action::DefaultPoint => {
+                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
+                            game.towers[t].point = None;
+                        }
+                    }
                     // Not synchronised in co-op yet.
                     hud::Action::BankCollect(all) => {
                         if coop_runtime.is_none() {
@@ -2867,6 +3505,11 @@ async fn game_main() {
                             game.reverse_air(t);
                         }
                     }
+                    hud::Action::Stance => {
+                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
+                            game.toggle_stance(t);
+                        }
+                    }
                     hud::Action::Submerge => {
                         if let Some(t) = selected.filter(|&t| coop_runtime.is_none() && game.can_submerge(t)) {
                             game.towers[t].submerged = !game.towers[t].submerged;
@@ -2884,6 +3527,12 @@ async fn game_main() {
                         }
                     }
                     // Not synchronised in co-op yet.
+                    // Not synchronised in co-op yet.
+                    hud::Action::Power(id) => {
+                        if coop_runtime.is_none() {
+                            power_pick = Some(id);
+                        }
+                    }
                     hud::Action::GeraldoItem(i) => {
                         if coop_runtime.is_none() {
                             if game.item_needs_target(i) {
@@ -2900,8 +3549,8 @@ async fn game_main() {
                         }continue;}
                         if game.ability_targets_tower(&name) || game.ability_targets_point(&name) {
                             ability_pick = Some(name);
-                        } else {
-                            game.activate_ability(&name);
+                        } else if game.activate_ability(&name) {
+                            game.stats.abilities += 1;
                         }
                     }
                     hud::Action::Sandbox(a) => {
@@ -2916,20 +3565,23 @@ async fn game_main() {
             // Review Map a click brings them back.
             let ended = game.won || game.game_over;
             if ended && (!end_shown || (reviewing && is_mouse_button_pressed(MouseButton::Left))) {
-                if game.won&&!end_shown{
-                    if let Some(race)=&game.race{
-                        let path=root.join("race-practice-results.json");
-                        let mut results:serde_json::Value=std::fs::read(&path).ok().and_then(|b|serde_json::from_slice(&b).ok()).filter(|v:&serde_json::Value|v.is_object()).unwrap_or_else(||serde_json::json!({}));
-                        let row=&mut results[&race.event_id];
-                        let best=row["bestFrames"].as_u64().map_or(race.elapsed,|n|n.min(race.elapsed));
-                        *row=serde_json::json!({"bestFrames":best,"lastFrames":race.elapsed,"practiceOnly":true});
-                        if let Ok(bytes)=serde_json::to_vec(&results){let _=std::fs::write(path,bytes);}
-                    }
-                }
-                if !end_shown && !game.sandbox && game.race.is_none() && std::env::var_os("RRBTD6_AUTOTEST").is_none() && frontend::account_preview::is_local() {
+                if !end_shown && !game.sandbox && std::env::var_os("RRBTD6_AUTOTEST").is_none() && frontend::account_preview::is_local() {
                     let profile_root=root.clone();let won=game.won;let completed_round=game.round;
-                    std::thread::spawn(move||{if local_profile::update(&profile_root,|p|{if won{p.wins+=1;}else{p.losses+=1;}p.highest_round=p.highest_round.max(completed_round);}).is_ok(){frontend::account_preview::refresh_local(&profile_root);}});
+                    let mode=game.mode_name.clone();let coop=coop_runtime.is_some();
+                    let canonical_map=local_profile::map_id(&root,&map_key);
+                    let eligible=true; // Daily challenges are removed (DEVIATIONS.md 10).
+                    // Trophies for the win (DEVIATIONS.md), shown on the victory screen.
+                    let tier=game.map_difficulty.unwrap_or(0);
+                    let reward=if won{local_profile::trophy_reward(&local_profile::get(&root),&canonical_map,&mode,coop,tier)}else{0};
+                    h.menus.trophy_reward=reward;
+                    std::thread::spawn(move||{if local_profile::update(&profile_root,|p|{
+                        if eligible && won {p.trophies=p.trophies.saturating_add(reward);}
+                        if eligible {local_profile::record_result(p,&canonical_map,&mode,coop,won,completed_round);}
+                        else {p.highest_round=p.highest_round.max(completed_round);}
+                    }).is_ok(){frontend::account_preview::refresh_local(&profile_root);}});
+
                 }
+                h.menus.open_end(game.won, end_shown);
                 end_shown = true;
                 reviewing = false;
                 open_menu = Some(if game.won { menus::Menu::Victory } else { menus::Menu::Defeat });
@@ -2939,7 +3591,9 @@ async fn game_main() {
                 selected = None;
                 placing = None;
                 let back = match m {
-                    menus::Menu::Victory | menus::Menu::Defeat | menus::Menu::Paragon => menus::Backdrop::capture_sharp(),
+                    // The end screens: the blurred map, the HUD drawn over it each frame.
+                    menus::Menu::Victory | menus::Menu::Defeat => end_map.take().unwrap_or_else(menus::Backdrop::capture_map_blur),
+                    menus::Menu::Paragon => menus::Backdrop::capture_sharp(),
                     _ => menus::Backdrop::capture(),
                 };
                 menu = Some((m, back));
@@ -2951,6 +3605,13 @@ async fn game_main() {
         }
         if front.loading_closing() {
             if let Some(h) = hud.as_mut() { front.draw_loading(h); }
+        }
+        if memory_guard.tick(get_time(), get_frame_time() as f64, game.sandbox && !in_front) {
+            game.clear_bloons();
+        }
+        if let Some(message) = memory_guard.message(get_time()) {
+            draw_rectangle(0.0, 0.0, screen_width(), 34.0, Color::from_rgba(150, 20, 20, 225));
+            draw_text(message, 12.0, 24.0, 22.0, WHITE);
         }
         if coop_runtime.is_some(){
             let message=coop_error.as_deref().map(|e|format!("Co-op stopped: {e}. Esc opens Home.")).unwrap_or_else(||format!("Private co-op prototype | Player {} wallet | heroes and sacrifices unfinished",front.coop_slot()+1));
@@ -3011,6 +3672,24 @@ async fn game_main() {
             }
             let last = std::env::var("RRBTD6_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(420u32);
             if let Some(m) = autotest_menu.filter(|_| if pause_options_test.is_some(){frames==5}else{frames + 3 == last}) {
+                // RRBTD6_END_T=<s>: the end screen that far into its opening clip;
+                // RRBTD6_END_REOPEN: opened as after Review Map (Summary In).
+                if matches!(m, menus::Menu::Victory | menus::Menu::Defeat) {
+                    // RRBTD6_END_REGROW=<n>: that many regrow pops (a Fumigator callout).
+                    if let Some(n) = std::env::var("RRBTD6_END_REGROW").ok().and_then(|v| v.parse().ok()) {
+                        game.stats.regrow_pops = n;
+                    }
+                    // RRBTD6_END_LEAKS=Red:1,Ceramic:104: leaks just before the end (Bloons Leaked).
+                    for l in std::env::var("RRBTD6_END_LEAKS").unwrap_or_default().split(',').filter(|l| !l.is_empty()) {
+                        if let Some((id, d)) = l.split_once(':') {
+                            game.leaks.push((id.to_string(), d.parse().unwrap_or(0.0), game.sim_elapsed));
+                        }
+                    }
+                    if let Some(h) = hud.as_mut() {
+                        h.menus.open_end(m == menus::Menu::Victory, std::env::var_os("RRBTD6_END_REOPEN").is_some());
+                        h.menus.end_rewind(std::env::var("RRBTD6_END_T").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0));
+                    }
+                }
                 if m == menus::Menu::Upgrades {
                     if let Some(h) = hud.as_mut() {
                         let id = &game.tower_defs[autotest_towers[0]].0;
@@ -3084,7 +3763,14 @@ async fn game_main() {
                     game.towers.iter().map(|t| t.tier_key()).collect::<Vec<_>>());
             }
             let round_complete=bench_round.is_some()&&frames>bench_warmup&&!game.round_active&&game.bloons.is_empty();
-            if frames == std::env::var("RRBTD6_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(420) || round_complete {
+            // RRBTD6_SIMFRAMES: the screenshot at that simulation frame instead (rendered frames
+            // can carry several sim steps; SimRecorder's shots count sim frames).
+            let sim_shot = std::env::var("RRBTD6_SIMFRAMES").ok().and_then(|v| v.parse::<u64>().ok());
+            let shot_now = match sim_shot {
+                Some(n) => game.sim_elapsed >= n,
+                None => frames == std::env::var("RRBTD6_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(420),
+            };
+            if shot_now || round_complete {
                 if round_complete{eprintln!("round-bench: completed round {} at frame {frames}, popped {}",bench_round.unwrap(),game.popped);}
                 get_screen_data().export_png(path);
                 for tw in &game.towers {

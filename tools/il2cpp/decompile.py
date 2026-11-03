@@ -13,11 +13,14 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-GAME = r"C:\Program Files\Epic Games\BloonsTD6\GameAssembly.dll"
+sys.path.insert(0, os.path.dirname(__file__))
+from codegen import game_dir  # noqa: E402
+GAME = os.path.join(game_dir(), "GameAssembly.dll")
 EXT = os.path.join(ROOT, "tools", "external")
 PROJ = os.path.join(EXT, "ghidra_proj")
 OUT = os.path.join(ROOT, "research", "dumps", "decomp")
@@ -31,8 +34,29 @@ def headless():
     return found[0]
 
 
+def same_build():
+    """The method map and Ghidra project are for one GameAssembly.dll (its size and mtime in
+    ghidra_tmp/build.txt). Another install's (Epic vs Steam builds differ in every address): the
+    old ones move aside to <name>_<stamp> and are rebuilt for this one."""
+    st = os.stat(GAME)
+    stamp = f"{st.st_size}_{int(st.st_mtime)}"
+    path = os.path.join(TMP, "build.txt")
+    old = open(path).read().strip() if os.path.exists(path) else None
+    if old == stamp:
+        return
+    if old is not None or os.path.exists(os.path.join(TMP, "methods_live.tsv")):
+        tag = old or "unstamped"
+        for d in (TMP, PROJ):
+            if os.path.exists(d):
+                os.replace(d, f"{d}_{tag}")
+        print(f"decompile: GameAssembly.dll changed ({tag} -> {stamp}); rebuilding the method map and project", flush=True)
+    os.makedirs(TMP, exist_ok=True)
+    open(path, "w").write(stamp + "\n")
+
+
 def methods():
     """(va, type, method) for the installed build (live_methods.py; built on first use)."""
+    same_build()
     live = os.path.join(TMP, "methods_live.tsv")
     if not os.path.exists(live):
         subprocess.run([sys.executable, "-I", os.path.join(ROOT, "tools", "il2cpp", "live_methods.py"), live], check=True)
@@ -73,7 +97,12 @@ def main():
     os.makedirs(PROJ, exist_ok=True)
     exists = os.path.exists(os.path.join(PROJ, "btd6.gpr"))
     cmd = [headless(), PROJ, "btd6"]
-    cmd += (["-process", "GameAssembly.dll"] if exists else ["-import", GAME]) + ["-noanalysis"]
+    src = GAME
+    if not exists and "(" in GAME:
+        # analyzeHeadless.bat breaks on parentheses in an argument ("Program Files (x86)").
+        src = os.path.join(TMP, "GameAssembly.dll")
+        shutil.copyfile(GAME, src)
+    cmd += (["-process", "GameAssembly.dll"] if exists else ["-import", src]) + ["-noanalysis"]
     cmd += ["-scriptPath", os.path.join(ROOT, "tools", "il2cpp", "ghidra"),
             "-postScript", "DecompileVAs.java", vas, names, raw]
     # Ghidra 12 needs JDK 25+: RRBTD6_JDK, else a JetBrains IDE's bundled JBR.

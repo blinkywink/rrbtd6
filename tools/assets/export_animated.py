@@ -8,23 +8,23 @@ skins (linear blend), and writes per-frame positions and normals.
 Usage:
   tools/.venv/Scripts/python.exe tools/assets/export_animated.py <game install> <out_dir> <bundle-glob> <prefab container path> [fps]
 
-Output (<out_dir>/): meta.json {parts, anims: [{name, frames, fps, loop, events, offset}]},
-verts.bin (rest pose: f32 x y z u v), idx.bin (u32), tex/*.png,
-anim.bin (per anim, per frame, per vertex: f32 px py pz nx ny nz). Unity prefab space.
+Output (<out_dir>/): meta.json {parts, anims: [{name, frames, fps, loop, events, offset}], quant},
+verts.bin (rest pose: f32 x y z u v), idx.bin (u32), tex/*.png, skin.bin (skin_anims.py: each
+vertex's slot weights and every frame's slot matrices; the runtime rebuilds the vertex frames).
+RRBTD6_VERTEX_ANIMS=1 writes the older anim.bin instead (per anim, per frame, per vertex: f32 px
+py pz nx ny nz). Unity prefab space.
 """
 import glob
 import json
 import os
-import struct
 import sys
 import zlib
+from pathlib import Path
 
 import numpy as np
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 from UnityPy.helpers.MeshHelper import MeshHandler
 
-TypeTreeHelper.read_typetree_boost = False
 GAME, OUT, BUNDLE, PREFAB = sys.argv[1:5]
 FPS = float(sys.argv[5]) if len(sys.argv) > 5 else 60.0
 BAKED_OUTLINE = 0.97
@@ -33,6 +33,38 @@ AA = os.path.join(GAME, "BloonsTD6_Data", "StreamingAssets", "aa", "StandaloneWi
 sys.path.insert(0, os.path.dirname(__file__))
 sys.argv = [sys.argv[0], GAME, OUT, "prefab", BUNDLE]  # reuse helpers from export_model
 import export_model as em  # noqa: E402
+from export_cache import PrefabIndex, ClipCopies
+
+_prefabs = PrefabIndex()
+_clips = ClipCopies()
+
+# Effect materials drawn with the game's own shader translated to GLSL (fx.rs), as maps do:
+# export_model.TRANSLATED plus the tower ones (Apex Plasma Master's APMLightning: a 2x2 atlas
+# flipbook). Their GLSL goes to local_extracted/shaders.
+ANIM_TRANSLATED = em.TRANSLATED | {"Lightning"}
+_le = os.path.abspath(OUT)
+while os.path.basename(_le) != "local_extracted" and os.path.dirname(_le) != _le:
+    _le = os.path.dirname(_le)
+if os.path.basename(_le) == "local_extracted":
+    em.SHADER_DIR = os.path.join(_le, "shaders")
+
+
+def translated(mat_obj, mt):
+    """{shader, shader_file, props, queue} for a material whose shader is translated, else {}."""
+    sh = em.shader_name(mat_obj, mt)
+    if sh not in ANIM_TRANSLATED or not em.export_shader(mat_obj, mt, sh):
+        return {}
+    sp = mt["m_SavedProperties"]
+    texs = {}
+    for k, e in sp.get("m_TexEnvs", []):
+        if e["m_Texture"]["m_PathID"]:
+            x = em.export_tex_prop(mat_obj, e)
+            if x:
+                texs[k] = x
+    return {"shader": sh, "shader_file": em.shader_file(sh), "queue": mt.get("m_CustomRenderQueue", -1),
+            "props": {"floats": dict(sp.get("m_Floats", [])),
+                      "colors": {k: [c["r"], c["g"], c["b"], c["a"]] for k, c in sp.get("m_Colors", [])},
+                      "textures": texs}}
 
 
 def quat_mat(q):
@@ -56,69 +88,12 @@ def euler_quat(e):
 
 def trs_mat(p, q, s):
     m = np.eye(4)
-    m[:3, :3] = quat_mat(q) @ np.diag(s)
+    m[:3, :3] = quat_mat(q) * np.asarray(s)  # R @ diag(s): each column scaled
     m[:3, 3] = p
     return m
 
 
-class Clip:
-    def __init__(self, t):
-        self.name = t["m_Name"]
-        mc = t["m_MuscleClip"]
-        c = mc["m_Clip"]["data"]
-        self.start, self.stop = mc["m_StartTime"], mc["m_StopTime"]
-        self.loop = bool(mc["m_LoopTime"])
-        self.events = [(e["time"], e["functionName"]) for e in t.get("m_Events", [])]
-        sc = c["m_StreamedClip"]
-        self.n_streamed = sc["curveCount"]
-        raw = struct.pack(f"<{len(sc['data'])}I", *sc["data"])
-        self.keys = [[] for _ in range(self.n_streamed)]
-        p = 0
-        while p < len(raw):
-            time, n = struct.unpack_from("<fI", raw, p)
-            p += 8
-            for _ in range(n):
-                idx, a, b, cc, d = struct.unpack_from("<I4f", raw, p)
-                p += 20
-                if idx < self.n_streamed:
-                    self.keys[idx].append((time, a, b, cc, d))
-        dc = c["m_DenseClip"]
-        self.n_dense = dc["m_CurveCount"]
-        self.dense = np.array(dc["m_SampleArray"], dtype=np.float64).reshape(-1, self.n_dense) if self.n_dense else None
-        self.dense_rate, self.dense_begin = dc["m_SampleRate"], dc["m_BeginTime"]
-        self.const = c["m_ConstantClip"]["data"]
-        self.bindings = t["m_ClipBindingConstant"]["genericBindings"]
-
-    def values(self, t):
-        out = []
-        for keys in self.keys:
-            v = 0.0
-            for k in keys:
-                if k[0] <= t:
-                    dt = t - k[0]
-                    v = ((k[1] * dt + k[2]) * dt + k[3]) * dt + k[4]
-                else:
-                    break
-            out.append(v)
-        if self.n_dense:
-            f = (t - self.dense_begin) * self.dense_rate
-            i0 = int(np.clip(np.floor(f), 0, len(self.dense) - 1))
-            i1 = min(i0 + 1, len(self.dense) - 1)
-            u = float(np.clip(f - i0, 0, 1))
-            out.extend((self.dense[i0] * (1 - u) + self.dense[i1] * u).tolist())
-        out.extend(self.const)
-        return out
-
-    def pose(self, t):
-        """{path_hash: {attr: value tuple}}"""
-        vals = self.values(t)
-        res, ci = {}, 0
-        for b in self.bindings:
-            n = {1: 3, 2: 4, 3: 3, 4: 3}.get(b["attribute"], 1) if b["typeID"] == 4 else 1
-            if b["typeID"] == 4:
-                res.setdefault(b["path"], {})[b["attribute"]] = tuple(vals[ci:ci + n])
-            ci += n
-        return res
+from mecanim_clip import Clip  # noqa: E402
 
 
 def single_bone_indices(mesh_obj, n):
@@ -164,7 +139,6 @@ def main():
     env = em._envs.get(os.path.basename(bundle)) or UnityPy.load(bundle)
     em._envs[os.path.basename(bundle)] = env
     os.makedirs(OUT, exist_ok=True)
-    ab = next(o for o in env.objects if o.type.name == "AssetBundle").read_typetree()
     parent_world = np.eye(4)
     if PREFAB.startswith("scene:"):
         cab, wanted = PREFAB[6:].split("|", 1)
@@ -184,8 +158,7 @@ def main():
             # Scene actor driven by an external Animator (e.g. the title plane).
             parent_world = np.eye(4)
     else:
-        pid = next(v["asset"]["m_PathID"] for k, v in ab["m_Container"] if k == PREFAB)
-        root = next(o for o in env.objects if o.path_id == pid)
+        root = _prefabs.root(env, PREFAB)
     af = root.assets_file
 
     def comp(go, name):
@@ -248,6 +221,10 @@ def main():
                         continue
                     t_mb = mb.read_typetree()
                     states = [s for k in ("animationStates", "attackIdleConfigs", "IdleVariants") for s in t_mb.get(k, [])]
+                    # A plain clip player next to the Animator (animationClip, playbackSpeed: the
+                    # Wizard's Phoenix flapping its wings): its one looping clip.
+                    if not states and isinstance(t_mb.get("animationClip"), dict) and "playbackSpeed" in t_mb:
+                        states = [{"animationClip": t_mb["animationClip"]}]
                     objs = [em.resolve(af, s["animationClip"]) for s in states]
                     if any(objs):
                         animator = (tid, [o for o in objs if o is not None])
@@ -283,26 +260,30 @@ def main():
     # Path hashes relative to the Animator's transform.
     a_tid = animator[0] if animator else order[0]
 
-    def rel_path(tid):
+    def rel_path(tid, base):
         names = []
-        while tid is not None and tid != a_tid:
+        while tid is not None and tid != base:
             names.append(T[tid]["name"])
             tid = T[tid]["parent"]
-        return "/".join(reversed(names)) if tid == a_tid else None
+        return "/".join(reversed(names)) if tid == base else None
 
-    by_hash = {}
-    for tid in order:
-        p = rel_path(tid)
-        if p is not None:
-            by_hash[zlib.crc32(p.encode("utf-8"))] = tid
+    def hashes_from(base):
+        out = {}
+        for tid in order:
+            p = rel_path(tid, base)
+            if p is not None:
+                out[zlib.crc32(p.encode("utf-8"))] = tid
+        return out
+
+    by_hash = hashes_from(a_tid)
 
     if animator:
-        clips = [Clip(o.read_typetree()) for o in animator[1]]
+        clips = [_clips.get(o, Clip) for o in animator[1]]
         by_id = {a.path_id: c for c, a in zip(clips, animator[1])}
         for o, role, weight in role_clips:
             c = by_id.get(o.path_id)
             if c is None:
-                c = by_id[o.path_id] = Clip(o.read_typetree())
+                c = by_id[o.path_id] = _clips.get(o, Clip)
                 clips.append(c)
             if getattr(c, "role", None) is None:
                 c.role, c.weight = role, weight
@@ -312,8 +293,19 @@ def main():
         clips = [c for c in clips if c.name == os.environ["RRBTD6_ANIM_CLIP"]]
         if not clips:
             raise ValueError("Requested source animation clip not found")
-    bound = sum(1 for c in clips for b in c.bindings if b["typeID"] == 4 and b["path"] in by_hash)
-    total = sum(1 for c in clips for b in c.bindings if b["typeID"] == 4)
+    keyed = [b["path"] for c in clips for b in c.bindings if b["typeID"] == 4]
+    bound = sum(1 for h in keyed if h in by_hash)
+    total = len(keyed)
+    # Paragon prefabs keep their Animator on LOD_1 while the clips are relative to the model below
+    # it (ParagonGlaiveDominus): by that Animator nothing binds and the model stays in its bind
+    # pose. The transform most of the clips' paths hang from is the clips' root.
+    if bound * 2 < total:
+        best = max(order, key=lambda tid: sum(1 for h in keyed if h in hashes_from(tid)) if T[tid]["name"] else 0)
+        candidate = hashes_from(best)
+        matched = sum(1 for h in keyed if h in candidate)
+        if matched > bound:
+            print(f"clips are relative to {T[best]['name']}: {matched} bindings instead of {bound}")
+            by_hash, bound = candidate, matched
     print(f"{len(T)} transforms, {len(clips)} clips, {bound}/{total} transform bindings resolved")
     # RRBTD6_ANIM_DEBUG: which transforms each clip animates (and which bindings miss).
     if os.environ.get("RRBTD6_ANIM_DEBUG"):
@@ -371,23 +363,27 @@ def main():
                     axis /= np.linalg.norm(axis)
                     spins[target.path_id] = (axis, fields["speed"])
 
+    rest_mats = {tid: trs_mat(n["p"], n["q"], n["s"]) for tid, n in T.items()}
+
     def world_mats_fast(pose, time=0.0):
         W = {}
         for tid in order:
             n = T[tid]
-            p, q, s = n["p"], n["q"], n["s"]
-            if pose is not None and tid in hash_of:
-                h = pose.get(hash_of[tid], {})
+            h = pose.get(hash_of[tid], {}) if pose is not None and tid in hash_of else {}
+            if not h and tid not in spins:
+                m = rest_mats[tid]
+            else:
+                p, q, s = n["p"], n["q"], n["s"]
                 p = h.get(1, p)
                 q = h.get(2, q)
                 if 4 in h:
                     q = euler_quat(h[4])
                 s = h.get(3, s)
-            if tid in spins:
-                axis, speed = spins[tid]
-                angle = time * speed * np.pi
-                q = [*(axis * np.sin(angle)), np.cos(angle)]
-            m = trs_mat(p, q, s)
+                if tid in spins:
+                    axis, speed = spins[tid]
+                    angle = time * speed * np.pi
+                    q = [*(axis * np.sin(angle)), np.cos(angle)]
+                m = trs_mat(p, q, s)
             W[tid] = parent_world @ m if n["parent"] is None else W[n["parent"]] @ m
         return W
 
@@ -460,13 +456,16 @@ def main():
                 # per vertex: rgb = the source material's _OutlineColor, a = 1 if it had an outline.
                 baked = "_Outline" not in floats and col is not None
                 subs.append((np.array(sub, dtype=np.uint32).reshape(-1), em.export_texture(mat_obj), mt["m_Name"],
-                             floats.get("_Outline", 0.0), [oc["r"], oc["g"], oc["b"], oc["a"]], baked))
+                             floats.get("_Outline", 0.0), [oc["r"], oc["g"], oc["b"], oc["a"]], baked, {**translated(mat_obj, mt), **em.shader_cull(mat_obj, mt)}))
             renderers.append({"tid": tid, "name": n["name"], "v": v, "n": nrm, "uv": uv, "skin": skin, "subs": subs,
                               "col": col})
 
+    for r in renderers:
+        r["vh"] = np.c_[r["v"], np.ones(len(r["v"]))]
+        r["nh"] = np.c_[r["n"], np.zeros(len(r["n"]))]
+
     def pose_vertices(W, r):
-        vh = np.c_[r["v"], np.ones(len(r["v"]))]
-        nh = np.c_[r["n"], np.zeros(len(r["n"]))]
+        vh, nh = r["vh"], r["nh"]
         if r["skin"] is not None:
             bones, bind, w, bi = r["skin"]
             mats = np.stack([(W[b] if b in W else np.eye(4)) @ (bind[i] if i < len(bind) else np.eye(4))
@@ -490,7 +489,7 @@ def main():
     voff = ioff = 0
     for r in renderers:
         pos, _ = pose_vertices(W0, r)
-        for ind, tex, mname, outline, ocol, baked in r["subs"]:
+        for ind, tex, mname, outline, ocol, baked, fx in r["subs"]:
             used = np.unique(ind)
             rm = np.zeros(len(r["v"]), dtype=np.uint32)
             rm[used] = np.arange(len(used), dtype=np.uint32)
@@ -505,7 +504,7 @@ def main():
             idxs.append(rm[ind])
             remaps.append((r, used))
             parts.append({"name": r["name"], "material": mname, "texture": tex, "tint": [[1, 1, 1, 1]],
-                          "outline": outline, "outline_color": ocol,
+                          "outline": outline, "outline_color": ocol, **fx,
                           "vcount": int(len(used)), "icount": int(len(ind)), "voff": voff, "ioff": ioff,
                           "skinned": r["skin"] is not None})
             voff += len(used)
@@ -532,8 +531,30 @@ def main():
                   "alpha": c.get("a", 1.0)}
         break
 
+    # Transforms carrying a ParticleSystem (Apex Plasma Master's SunBeamCore on its weapon joint):
+    # their world matrix (prefab-root space, Unity axes) every frame in attach.bin, beside
+    # anim.bin's vertex frames, so tier effects follow the joints they hang from.
+    def path_of(tid):
+        names = []
+        while tid is not None:
+            names.append(T[tid]["name"])
+            tid = T[tid]["parent"]
+        return "/".join(reversed(names))
+    attach = [tid for tid in order if comp(T[tid]["go"], "ParticleSystem") is not None]
+    af_attach = open(os.path.join(OUT, "attach.bin"), "wb") if attach else None
+
     anims = []
-    with open(os.path.join(OUT, "anim.bin"), "wb") as f:
+    # Skinning slots: each skinned renderer's bones, one transform per rigid renderer.
+    # A prefab without meshes keeps the empty anim.bin the runtime already reads.
+    vertex_frames = os.environ.get("RRBTD6_VERTEX_ANIMS") == "1" or not remaps
+    slot_base, nslot = {}, 0
+    for r, used in remaps:
+        if id(r) not in slot_base:
+            slot_base[id(r)] = nslot
+            nslot += len(r["skin"][0]) if r["skin"] is not None else 1
+    frame_mats = []
+    import contextlib
+    with (open(os.path.join(OUT, "anim.bin"), "wb") if vertex_frames else contextlib.nullcontext()) as f:
         off = 0
         for c in clips:
             dur = max(c.stop - c.start, 1.0 / FPS)
@@ -550,6 +571,21 @@ def main():
             for k in range(nframes):
                 t = c.start + k / FPS
                 W = world_mats_fast(c.pose(t), t)
+                if af_attach:
+                    for tid in attach:
+                        af_attach.write(np.asarray(W[tid], dtype=np.float32)[:3, :4].tobytes())
+                if not vertex_frames:
+                    mats = np.zeros((nslot, 3, 4), dtype=np.float64)
+                    for r, used in remaps:
+                        b0 = slot_base[id(r)]
+                        if r["skin"] is None:
+                            mats[b0] = W[r["tid"]][:3, :4]
+                        else:
+                            bones, bind = r["skin"][0], r["skin"][1]
+                            for i, bone in enumerate(bones):
+                                mats[b0 + i] = ((W[bone] if bone in W else np.eye(4)) @ (bind[i] if i < len(bind) else np.eye(4)))[:3, :4]
+                    frame_mats.append(mats)
+                    continue
                 cache = {}
                 for r, used in remaps:
                     key = id(r)
@@ -566,6 +602,43 @@ def main():
             off += nframes
             print(f"  clip {c.name}: {nframes} frames, loop={c.loop}, events={c.events}")
 
+    if af_attach:
+        af_attach.close()
+    quant = None
+    if not vertex_frames:
+        import skin_anims
+        K = max([r["skin"][2].shape[1] for r, _ in remaps if r["skin"] is not None] or [1])
+        rows = []
+        for r, used in remaps:
+            b0 = slot_base[id(r)]
+            idx = np.zeros((len(used), K), dtype=np.uint16)
+            wts = np.zeros((len(used), K), dtype=np.float32)
+            if r["skin"] is None:
+                idx[:, 0], wts[:, 0] = b0, 1
+            else:
+                w, bi = r["skin"][2], r["skin"][3]
+                idx[:, :w.shape[1]], wts[:, :w.shape[1]] = bi[used] + b0, w[used]
+            rows.append((r["v"][used], r["n"][used], idx, wts))
+        v = np.concatenate([x[0] for x in rows]).astype(np.float32).reshape(-1, 3)
+        nrm = np.concatenate([x[1] for x in rows]).astype(np.float32).reshape(-1, 3)
+        idx = np.concatenate([x[2] for x in rows]).reshape(-1, K)
+        wts = np.concatenate([x[3] for x in rows]).reshape(-1, K)
+        exact = np.stack(frame_mats) if frame_mats else np.zeros((0, nslot, 3, 4))
+        mats = exact.astype(np.float32)
+        # Large matrices can lose more than rounding to the frames' 16-bit grid in f32; such a
+        # model keeps baked vertex frames (anim.bin, compacted afterwards) instead.
+        lo, hi, worst = skin_anims.check(v, nrm, idx, wts, mats, exact)
+        if worst > 1.5:
+            print(f"  skinning in f32 is {worst:.1f} grid steps off; storing vertex frames", flush=True)
+            with open(os.path.join(OUT, "anim.bin"), "wb") as f:
+                for _, p, q in skin_anims.poses(v, nrm, idx, wts, exact, dtype=np.float64):
+                    f.write(np.c_[p, q].astype(np.float32).tobytes())
+            Path(OUT, "skin.bin").unlink(missing_ok=True)
+        else:
+            skin_anims.write(OUT, v, nrm, idx, wts, mats)
+            quant = {"min": lo.tolist(), "max": hi.tolist()}
+        for stale in ("anim.bin.z", "anim.bin.dz", "anim_q.bin", "anim_q.bin.z", "anim_q.bin.dz", "anim_q.bin.wz") + (("anim.bin",) if quant else ()):
+            Path(OUT, stale).unlink(missing_ok=True)
     with open(os.path.join(OUT, "verts.bin"), "wb") as f:
         for x in verts:
             f.write(x.tobytes())
@@ -575,9 +648,13 @@ def main():
     with open(os.path.join(OUT, "outline.bin"), "wb") as f:
         for x in vout:
             f.write(x.tobytes())
-    json.dump({"parts": parts, "anims": anims, "vertex_count": voff, "shadow": shadow},
-              open(os.path.join(OUT, "meta.json"), "w"), indent=1)
-    print(f"{len(parts)} parts, {voff} verts; anim.bin {sum(a['frames'] for a in anims)} frames")
+    meta = {"parts": parts, "anims": anims, "vertex_count": voff, "shadow": shadow,
+            # attach.bin: per frame (the clips' frame order), per path, a 3 x 4 row-major f32 matrix.
+            "attach": [path_of(tid) for tid in attach]}
+    if quant is not None:
+        meta["quant"] = quant
+    json.dump(meta, open(os.path.join(OUT, "meta.json"), "w"), indent=1)
+    print(f"{len(parts)} parts, {voff} verts; {sum(a['frames'] for a in anims)} frames")
 
 
 if __name__ == "__main__":

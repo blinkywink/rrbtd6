@@ -12,6 +12,7 @@ from pathlib import Path
 import UnityPy
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from export_sprites import full_rect
+from sprite_resolver import SpriteImages
 
 
 def main():
@@ -19,18 +20,24 @@ def main():
     wanted = set()
     def walk(node):
         for component in node.get('comps', []):
-            if component.get('type') == 'Image' and component.get('sprite'):
+            if component.get('type') in ('Image', 'SpriteRenderer') and component.get('sprite'):
                 wanted.add(component['sprite'])
+            # A script's Sprite field (CalloutUiData, the victory screen's award icons).
+            if component.get('sprite_name'):
+                wanted.add(component['sprite_name'])
         for child in node.get('children', []):
             walk(child)
     for source in (root/'ui/prefabs').glob('*.json'):
         walk(json.loads(source.read_text(encoding='utf8')))
     available = {p.stem for p in (root/'sprites').glob('*/*.png')}
     wanted -= available
+    # The title screen's real logo extras, replaced on purpose (DEVIATIONS.md).
+    wanted -= {'TitlePlus', 'TitleKidsPlus'}
     dest = root/'sprites/MenuChrome'
     dest.mkdir(parents=True, exist_ok=True)
     metadata = {}
     base = game/'BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full'
+    images = SpriteImages(base)
     for pattern in ('ui_scenes_all_*.bundle', 'asset_references_assets_all_*.bundle'):
         env = UnityPy.load(glob.glob(str(base/pattern))[0])
         for obj in env.objects:
@@ -39,7 +46,12 @@ def main():
             sprite = obj.read()
             if sprite.m_Name not in wanted:
                 continue
-            full_rect(sprite).save(dest/(sprite.m_Name+'.png'))
+            try:
+                # Late-bound sprites keep their pixels in the sprite atlas bundle.
+                source = images.source(sprite)
+            except KeyError:
+                continue  # Another copy of this name may hold them; else reported as unresolved.
+            full_rect(source).save(dest/(sprite.m_Name+'.png'))
             border = sprite.m_Border
             metadata[sprite.m_Name] = [border.x,border.y,border.z,border.w,sprite.m_PixelsToUnits]
             wanted.remove(sprite.m_Name)

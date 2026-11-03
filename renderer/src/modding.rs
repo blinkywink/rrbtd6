@@ -1,4 +1,4 @@
-//! Versioned, data-only local mods. No work runs on the frame/simulation loop.
+//! Versioned content mods, with optional bounded local event scripts.
 use serde::{Deserialize, Serialize};
 use std::{collections::{HashSet,BTreeMap}, path::{Path, PathBuf}};
 
@@ -222,6 +222,17 @@ pub fn room_packages(root:&Path,ids:&[String])->Result<Vec<rrbtd6_coop::ModPacka
 pub fn room_json(json:&str,packages:&[rrbtd6_coop::ModPackage])->Result<Option<String>,String>{
     rrbtd6_coop::mods::validate(packages)?;if packages.is_empty(){return Ok(None);}
     let manifests:Vec<_>=packages.iter().map(|p|Manifest::parse(p.manifest.as_bytes())).collect::<Result<_,_>>()?;
+    fn custom_art(value:&serde_json::Value)->bool{match value{
+        serde_json::Value::String(s)=>s.starts_with("mod:"),
+        serde_json::Value::Array(a)=>a.iter().any(custom_art),
+        serde_json::Value::Object(o)=>o.values().any(custom_art),_=>false,
+    }}
+    for manifest in &manifests {for edit in &manifest.content {
+        if matches!(edit,content::Edit::Script{..}){return Err(format!("{} uses event scripts; synchronized script support is not available in co-op yet",manifest.name));}
+        if !matches!(edit,content::Edit::Menu{..}) && custom_art(&serde_json::to_value(edit).map_err(|e|e.to_string())?){
+            return Err(format!("{} uses custom models. Co-op asset transfer is not available yet; use this mod locally.",manifest.name));
+        }
+    }}
     content::compile(json,&manifests.iter().collect::<Vec<_>>()).map(Some)
 }
 
@@ -232,6 +243,7 @@ pub fn apply_new_sandbox(root:&Path,game:&mut crate::game::Game,local:bool){
     match Catalog::scan(&directory(root)).compile_with(&selected,&overrides(root)){
         Ok(rules)=>{
             rules.apply(local,game.sandbox,&mut game.cash,&mut game.lives);
+            game.last_set_health=game.lives;
             eprintln!("mods: {} enabled; new local Sandbox cash={} lives={}",selected.len(),game.cash,game.lives);
         },
         Err(error)=>eprintln!("Mods not applied: {error}"),

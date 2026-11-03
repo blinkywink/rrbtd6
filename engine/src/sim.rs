@@ -14,6 +14,16 @@ use crate::bloons::{BloonDef, BloonTypeId, Bloons};
 use crate::path::Path;
 use crate::rounds::{ActiveRound, Round};
 
+/// SMath.Math::LerpAngle, as renderer/src/game.rs.
+fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
+    let d = b - a;
+    let mut n = (d - (d / 360.0).floor() * 360.0).clamp(0.0, 360.0);
+    if n > 180.0 {
+        n -= 360.0;
+    }
+    a + n * t.clamp(0.0, 1.0)
+}
+
 /// `Spawner.Emit` start distance for bosses (@0x183F75F84).
 pub const BOSS_START_DISTANCE: f32 = 40.0;
 /// Spawn-clamp radius factor (@0x183F75E00).
@@ -30,6 +40,13 @@ pub struct Simulation {
     /// `Simulation.health`. A KonFuze double in the original.
     pub lives: f64,
     pub leaked: u32,
+    /// `immunityFromBloonTypes` (Simulation+0x170, List<string>): bloon base
+    /// IDs that deal 0 lives damage when leaked. VERIFIED H-LEAK-2.
+    pub immunity_from_bloon_types: Vec<String>,
+    /// `bloonLivesLostOverride` (Simulation+0x230, int; -1 = no cap): if
+    /// `Some(n)`, caps each leaked bloon's damage at `n` lives.
+    /// VERIFIED H-LEAK-2.
+    pub bloon_lives_lost_override: Option<i32>,
     rounds: Vec<ActiveRound>,
     next_id: u32,
     /// Ids leaked during the last frame (reused buffer, no per-frame alloc).
@@ -47,6 +64,8 @@ impl Simulation {
             map_wide_bloon_speed: 1.0,
             lives,
             leaked: 0,
+            immunity_from_bloon_types: Vec::new(),
+            bloon_lives_lost_override: None,
             rounds: Vec::with_capacity(4),
             next_id: 1,
             leak_scratch: Vec::with_capacity(256),
@@ -138,9 +157,8 @@ impl Simulation {
             b.y[i] = q.pos.y;
             b.z[i] = q.pos.z;
             if def.rotate_to_follow_path {
-                // HYPOTHESIS H-ROT-1: LerpAngle(prev, target, tsf * 0.5)
-                // is not yet transcribed; snap to the target rotation.
-                b.rotation[i] = q.rotation;
+                // VERIFIED H-ROT-1: LerpAngle transcribed from SMath.Math::LerpAngle @0x180EA7840 [V-asm]
+                b.rotation[i] = lerp_angle(b.rotation[i], q.rotation, tsf * 0.5);
             }
         }
 
@@ -158,12 +176,27 @@ impl Simulation {
         }
     }
 
-    /// `Bloon.Leaked`. HYPOTHESIS H-LEAK-2: lives lost = total leak damage
-    /// with no `CalcDamageFromBloon` modifiers (difficulty, shields,
-    /// mutators) applied yet.
+    /// `Bloon.Leaked`. VERIFIED H-LEAK-2: CalcDamageFromBloon transcribed from
+    /// Simulation::CalcDamageFromBloon @0x180A75430 [V-asm].
     fn leak(&mut self, i: usize) {
         let def = &self.defs[self.bloons.kind[i].0 as usize];
-        self.lives -= def.total_leak_damage as f64;
+        // VERIFIED H-LEAK-2: Simulation::CalcDamageFromBloon @0x180A75430 [V-asm]
+        // 1. If bloon's baseId is in immunityFromBloonTypes, deal 0 damage.
+        // Note: the real game uses bloonModel.baseId (BloonModel+0x30). In this
+        // engine, defs store base types only so def.id == baseId in practice.
+        let immune = self.immunity_from_bloon_types.iter().any(|s| s == &def.id);
+        if immune {
+            self.leaked += 1;
+            self.leak_scratch.push(self.bloons.id[i]);
+            self.bloons.dead[i] = true;
+            return;
+        }
+        let mut damage = def.total_leak_damage;
+        // 2. bloonLivesLostOverride (Simulation+0x230): if >= 0, cap damage.
+        if let Some(cap) = self.bloon_lives_lost_override {
+            damage = damage.min(cap as f32);
+        }
+        self.lives -= damage as f64;
         self.leaked += 1;
         self.leak_scratch.push(self.bloons.id[i]);
         self.bloons.dead[i] = true;

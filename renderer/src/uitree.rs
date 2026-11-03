@@ -136,7 +136,7 @@ pub enum Layout {
 pub struct CommonPanel {
     pub heading: String,
     pub money: bool, pub buy_money: bool, pub knowledge: bool, pub buy_knowledge: bool,
-    pub back: bool, pub change_hero: bool, pub friends: bool, pub extras: bool, pub perks: bool,
+    pub back: bool, pub change_hero: bool, pub extras: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -223,6 +223,12 @@ fn pad(v: &Value) -> [f32; 4] {
 }
 
 impl Node {
+    /// Not a button: no press animation or highlight.
+    pub fn clear_button(&mut self) {
+        self.button = false;
+        self.selectable = None;
+    }
+
     pub fn from_json(v: &Value) -> Node {
         let mut n = Node {
             name: v["name"].as_str().unwrap_or("").to_string(),
@@ -266,7 +272,7 @@ impl Node {
                         money: b(&c["showMonkeyMoney"]), buy_money: b(&c["showBuyMonkeyMoney"]),
                         knowledge: b(&c["showKnowledge"]), buy_knowledge: b(&c["showBuyKnowledge"]),
                         back: b(&c["showBackButton"]), change_hero: b(&c["showChangeHeroButton"]),
-                        friends: b(&c["showFriendsButton"]), extras: b(&c["showExtraSettings"]), perks: b(&c["showPerkButton"]),
+                        extras: b(&c["showExtraSettings"]),
                     }));
                 }
                 "Image" => {
@@ -290,7 +296,7 @@ impl Node {
                     n.txt = Some(Txt {
                         cached_layout:Default::default(),
                         tint:WHITE,
-                        text: c["m_text"].as_str().unwrap_or("").to_string(),
+                        text: localized(c).unwrap_or_else(|| c["m_text"].as_str().unwrap_or("").to_string()),
                         font: c["font"].as_str().unwrap_or("Btd6FontTitleSDF").to_string(),
                         size: f(&c["m_fontSize"], 36.0),
                         auto: b(&c["m_enableAutoSizing"]),
@@ -484,6 +490,21 @@ impl Node {
 
 /// While set, `Node::clicked` reports nothing (a modal popup owns the input).
 static INPUT_BLOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// English.xml by id, for NK_TextMeshProUGUI.localizeKey (set once at startup).
+static LOC: std::sync::OnceLock<std::collections::HashMap<String, String>> = std::sync::OnceLock::new();
+
+pub fn set_loc(loc: std::collections::HashMap<String, String>) {
+    let _ = LOC.set(loc);
+}
+
+/// NK_TextMeshProUGUI.Start -> LocalizationUtils.LocalizeText: a non-empty localizeKey replaces
+/// the text with LocalizationManager.GetText(key), which falls back to the key itself.
+fn localized(c: &Value) -> Option<String> {
+    let key = c["localizeKey"].as_str().filter(|k| !k.is_empty())?;
+    let loc = LOC.get()?;
+    Some(loc.get(key).cloned().unwrap_or_else(|| key.to_string()))
+}
 
 pub fn block_input(on: bool) {
     INPUT_BLOCKED.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -807,6 +828,7 @@ fn draw_node(n: &mut Node, r: R, pt: T, alpha: f32, ctx: &mut Ctx) {
     let bounds = spin.map_or(screen, |(a, p)| rotated_bounds(screen, a, p));
     n.unclipped_screen = bounds;
     n.screen = ctx.clip.map_or(bounds, |c| intersect(bounds, c));
+
     if let Some(selectable)=n.selectable.as_mut().filter(|s|s.transition==1) {
         let inside=n.screen.contains(mouse_position().into());
         if is_mouse_button_pressed(MouseButton::Left){selectable.pressed=inside;}

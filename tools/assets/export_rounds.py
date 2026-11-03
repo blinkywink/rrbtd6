@@ -9,9 +9,7 @@ import os
 import sys
 
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 
-TypeTreeHelper.read_typetree_boost = False  # native parser segfaults on this build
 
 
 def main():

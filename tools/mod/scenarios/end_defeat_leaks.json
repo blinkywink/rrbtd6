@@ -1,0 +1,1 @@
+{"map": "Tutorial", "difficulty": "Easy", "mode": "Standard", "frames": 100000, "cash": -1, "fast": false, "towers": [], "quit": true, "end_frame": 90, "name": "end_defeat_leaks", "round": 25, "end": "defeat", "end_shots": [3.0], "end_next": -1, "end_leaks": [["Red", "1"], ["Ceramic", "104"], ["Moab", "616"]]}

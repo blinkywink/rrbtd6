@@ -84,6 +84,7 @@ impl Game{
                     EffectKind::Unarmor{bits}=>{feed!(h,11u8,bits);},
                     EffectKind::Knock{m}=>{feed!(h,12u8,m.to_bits());},
                     EffectKind::Carry{uids,..}=>{feed!(h,14u8,uids);},
+                    EffectKind::PopFx{..}=>15u8.feed(h),
                 }
             }
         }

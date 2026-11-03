@@ -3,7 +3,9 @@
 # Usage: bash tools/assets/export_all_maps.sh [map keys...]   (default: every map_<key>_scenes_all bundle)
 # Skips maps already exported. Proprietary output: local_extracted/ only.
 set -u
-GAME="${BTD6_DIR:-C:/Program Files/Epic Games/BloonsTD6}"
+# The install: $BTD6_DIR, else Steam (the launcher's first choice), else Epic.
+GAME="${BTD6_DIR:-}"
+[ -n "$GAME" ] || { [ -f "C:/Program Files (x86)/Steam/steamapps/common/BloonsTD6/GameAssembly.dll" ] && GAME="C:/Program Files (x86)/Steam/steamapps/common/BloonsTD6" || GAME="C:/Program Files/Epic Games/BloonsTD6"; }
 PY=tools/.venv/Scripts/python.exe
 AA="$GAME/BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full"
 if [ $# -gt 0 ]; then KEYS="$*"; else

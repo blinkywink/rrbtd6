@@ -45,6 +45,8 @@ impl Game{
     }
     pub(super) fn collect_projectile_cash(&mut self,pr:&Projectile){
         if let Some(t)=self.towers.iter_mut().find(|t|t.id==pr.owner){t.cash_earned+=pr.value;}
+        // The end screens' Cash Generated (ecoEarned): a 0-0-3 Farm's 1,260 over rounds 39-41.
+        self.stats.eco+=pr.value;
         if self.coop_wallets.is_none(){self.earn(pr.value);return;}
         if pr.spec.cash.as_ref().is_some_and(|c|c.bonus_shared){
             self.earn_for(pr.owner,pr.cash_base);self.earn(pr.value-pr.cash_base);

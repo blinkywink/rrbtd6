@@ -1,0 +1,6 @@
+# Shell scripts run on macOS and Linux too: always LF, even in a Windows checkout.
+*.sh text eol=lf
+# Raw pixel and compiled resource files: never line-ending converted.
+*.rgba binary
+*.res binary
+*.ico binary

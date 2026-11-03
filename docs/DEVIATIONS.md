@@ -439,6 +439,13 @@ claimed from the single final capture (concurrent asset work affects timings).
   none). Bought items are enabled and can be toggled and favourited; they don't change anything in
   game yet.
 - Monkey Teams isn't in this game: the victory screen never shows its card.
+- Golden bloons aren't in this game: none spawn, and the victory screen never shows the golden bloon.
+- The balance at the top of the menus is trophies, in Monkey Money's place, and the difficulty screen
+  shows its rewards in trophies. There are no Monkey Knowledge points.
+- Powers cost their Monkey Money price divided by 7.5, rounded up; ones the game only sells for real
+  money cost 50. Monkey Knowledge costs 10 trophies (a rank level's worth, what a point was), plus any
+  Monkey Money price divided by 7.5. Bought Powers can't be used in a game yet, and Knowledge doesn't
+  change anything in game yet.
 
 ## Co-op lobby player info (2026-10-31)
 
@@ -448,3 +455,11 @@ claimed from the single final capture (concurrent asset work affects timings).
   shared).
 - Trophy Store avatars and banners must be bought before they can be equipped; unbought ones show
   their price in the picker, as the game does.
+
+## Memory failsafe (2026-11-01)
+
+- In the sandbox, the bloons are cleared with a message when the game holds too much memory, when it's large
+  and the PC is nearly out, or after 3 frames in a row of over a second. Sending 10,000 ZOMGs froze Windows and left
+  the display at 60 Hz with broken scaling until a restart.
+- In every mode, the process has a hard memory limit of half the PC's total commit (6 to 16 GB). Past it the
+  game crashes, instead of taking the PC down.

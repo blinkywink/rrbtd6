@@ -44,23 +44,12 @@ pub struct Advanced {
     /// Always load full-size textures (otherwise 4K map textures are halved on screens up to
     /// 2048 px, where it looks the same).
     pub full_textures: bool,
-    /// Main menu: hide the Legends button (the Legends DLCs aren't supported).
-    pub hide_legends: bool,
-    /// Main menu: hide the Shop button.
-    pub hide_store: bool,
-    /// Main menu event buttons on the right, each hidden on its own (the rest close up).
-    pub hide_race: bool,
+    /// Main menu: hide the boss event button on the right.
     pub hide_boss: bool,
-    pub hide_boss_rush: bool,
-    pub hide_odyssey: bool,
-    pub hide_contested_territory: bool,
-    pub hide_social_season: bool,
     /// Start at the main menu, skipping the splash, loading and title screens.
     pub skip_startup: bool,
-    pub hide_perks:bool,
     pub hide_double_cash:bool,
     pub hide_fast_track:bool,
-    pub hide_map_friends:bool,
     pub show_mods:bool,
     pub double_cash_enabled:bool,
     pub fast_track_enabled:bool,
@@ -80,9 +69,8 @@ impl Default for Advanced {
             cash_spent: false,
             memory_opt: false,
             show_fps: false, fps_cap: 0, vsync: true, render_scale: 1.0, sharpen: true, msaa: 4, full_textures: false,
-            hide_legends: false, hide_store: false, hide_race: false, hide_boss: false, hide_boss_rush: false,
-            hide_odyssey: false, hide_contested_territory: false, hide_social_season: false, skip_startup: false,hide_perks:false,hide_double_cash:false,hide_fast_track:false,
-            hide_map_friends:false,show_mods:false,double_cash_enabled:false,fast_track_enabled:false,
+            hide_boss: false, skip_startup: false,hide_double_cash:false,hide_fast_track:false,
+            show_mods:false,double_cash_enabled:false,fast_track_enabled:false,
             fullscreen:false }
     }
 }
@@ -125,8 +113,7 @@ impl Advanced {
     /// The main menu event kinds turned off.
     pub fn hidden_events(&self) -> Vec<crate::frontend::home_events::EventKind> {
         use crate::frontend::home_events::EventKind as K;
-        [(self.hide_race, K::Race), (self.hide_boss, K::Boss), (self.hide_boss_rush, K::BossRush), (self.hide_odyssey, K::Odyssey),
-         (self.hide_contested_territory, K::ContestedTerritory), (self.hide_social_season, K::SocialSeason)]
+        [(self.hide_boss, K::Boss)]
             .into_iter().filter(|(on, _)| *on).map(|(_, k)| k).collect()
     }
 
@@ -148,20 +135,10 @@ impl Advanced {
                 "Smooths jagged edges. Higher costs more. Applies after a restart."),
             Row::Toggle("Full Resolution Textures", self.full_textures,
                 "Always load full-size map textures. Off halves 4K textures on screens up to 2048 pixels, where they look the same."),
-            Row::Toggle("Hide Legends Button", self.hide_legends, "Hides Legends on the main menu. The Legends DLCs aren't supported."),
-            Row::Toggle("Hide Shop Button", self.hide_store, "Hides the Shop button on the main menu. The Trophy Store moves up into its place."),
-            Row::Toggle("Hide Race Button", self.hide_race, "Hides the race event button on the right of the main menu."),
             Row::Toggle("Hide Boss Button", self.hide_boss, "Hides the boss event button on the right of the main menu."),
-            Row::Toggle("Hide Boss Rush Button", self.hide_boss_rush, "Hides the Boss Rush button on the right of the main menu."),
-            Row::Toggle("Hide Odyssey Button", self.hide_odyssey, "Hides the Odyssey button on the right of the main menu."),
-            Row::Toggle("Hide Contested Territory Button", self.hide_contested_territory,
-                "Hides the Contested Territory button on the right of the main menu."),
-            Row::Toggle("Hide Social Season Button", self.hide_social_season, "Hides the Social Season button on the right of the main menu."),
             Row::Toggle("Skip Startup Screen", self.skip_startup, "Go straight to the main menu instead of the startup screen."),
-            Row::Toggle("Hide Perks Button",self.hide_perks,"Hides the Perks button. Perks are unchanged."),
             Row::Toggle("Hide Double Cash Button",self.hide_double_cash,"Turns Double Cash off, then hides its control."),
             Row::Toggle("Hide Fast Track Button",self.hide_fast_track,"Turns Fast Track off, then hides its control."),
-            Row::Toggle("Hide Friends' Map Records",self.hide_map_friends,"Hides friends' best-round badges and the map records panel."),
             Row::Toggle("Fullscreen", self.fullscreen,
                 "Fill the screen. You can also press F11 to switch fullscreen on or off."),
             Row::Toggle("Show Mods Button",self.show_mods,"Shows the local mod manager on the main menu. Hiding the button does not disable installed mods."),
@@ -175,21 +152,12 @@ impl Advanced {
             2 => self.vsync = !self.vsync,
             4 => self.sharpen = !self.sharpen,
             6 => self.full_textures = !self.full_textures,
-            7 => self.hide_legends = !self.hide_legends,
-            8 => self.hide_store = !self.hide_store,
-            9 => self.hide_race = !self.hide_race,
-            10 => self.hide_boss = !self.hide_boss,
-            11 => self.hide_boss_rush = !self.hide_boss_rush,
-            12 => self.hide_odyssey = !self.hide_odyssey,
-            13 => self.hide_contested_territory = !self.hide_contested_territory,
-            14 => self.hide_social_season = !self.hide_social_season,
-            15 => self.skip_startup = !self.skip_startup,
-            16 => self.hide_perks=!self.hide_perks,
-            17 => self.hide_double_cash=!self.hide_double_cash,
-            18 => self.hide_fast_track=!self.hide_fast_track,
-            19 => self.hide_map_friends=!self.hide_map_friends,
-            20 => self.fullscreen = !self.fullscreen,
-            21 => self.show_mods = !self.show_mods,
+            7 => self.hide_boss = !self.hide_boss,
+            8 => self.skip_startup = !self.skip_startup,
+            9 => self.hide_double_cash=!self.hide_double_cash,
+            10 => self.hide_fast_track=!self.hide_fast_track,
+            11 => self.fullscreen = !self.fullscreen,
+            12 => self.show_mods = !self.show_mods,
             _ => {}
         }
         self.disable_hidden_features();
@@ -213,18 +181,18 @@ mod hidden_features_tests{
     #[test]
     fn mods_button_is_opt_in_and_visibility_roundtrips(){
         let mut settings=Advanced::default();assert!(!settings.show_mods);
-        settings.toggle(21);assert!(settings.show_mods);
+        settings.toggle(12);assert!(settings.show_mods);
         assert!(Advanced::load(&serde_json::json!({"advanced":settings})).show_mods);
-        settings.toggle(21);assert!(!settings.show_mods);
+        settings.toggle(12);assert!(!settings.show_mods);
     }
     #[test]
     fn fullscreen_toggle_migrates_old_preferences_and_roundtrips() {
         let mut a = Advanced::default();
-        a.toggle(20);
+        a.toggle(11);
         assert!(a.fullscreen);
         let b = Advanced::load(&serde_json::json!({"advanced": a}));
         assert!(b.fullscreen);
-        a.toggle(20);
+        a.toggle(11);
         assert!(!a.fullscreen);
         for mode in [1, 2] {
             assert!(Advanced::load(&serde_json::json!({"advanced": {"window_mode": mode}})).fullscreen);
@@ -236,17 +204,10 @@ mod hidden_features_tests{
     fn hiding_double_cash_and_fast_track_switches_them_off_without_reenabling(){
         let mut a=Advanced::default();
         a.double_cash_enabled=true;a.fast_track_enabled=true;
-        for i in 17..=18{a.toggle(i);}
+        for i in 9..=10{a.toggle(i);}
         assert!(!a.double_cash_enabled && !a.fast_track_enabled);
-        for i in 17..=18{a.toggle(i);}
+        for i in 9..=10{a.toggle(i);}
         assert!(!a.double_cash_enabled && !a.fast_track_enabled);
-    }
-    #[test]
-    fn perks_visibility_has_no_feature_switch(){
-        let mut a=Advanced::default();a.double_cash_enabled=true;a.fast_track_enabled=true;
-        a.toggle(16);assert!(a.hide_perks&&a.double_cash_enabled&&a.fast_track_enabled);
-        a.toggle(19);assert!(a.hide_map_friends&&a.hide_perks);
-        a.toggle(16);assert!(!a.hide_perks&&a.hide_map_friends);
     }
     #[test]
     fn loading_old_or_inconsistent_preferences_cannot_enable_hidden_features(){

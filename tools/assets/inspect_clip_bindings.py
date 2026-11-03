@@ -10,9 +10,7 @@ import sys
 import zlib
 
 import UnityPy
-from UnityPy.helpers import TypeTreeHelper
 
-TypeTreeHelper.read_typetree_boost = False
 GAME, BUNDLE, PREFAB = sys.argv[1:4]
 sys.argv = [sys.argv[0], GAME, "local_extracted/models/_inspect", BUNDLE, PREFAB]
 sys.path.insert(0, os.path.dirname(__file__))
