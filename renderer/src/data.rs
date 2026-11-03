@@ -934,6 +934,10 @@ pub struct Attack {
     /// RandomPositionModel (areaType Land): the random spot must be placeable land, clear by this radius.
     #[serde(default)]
     pub random_land: Option<f32>,
+    /// RandomPositionModel (Land): minDistance, maxDistance, pointDistance, targetRadius,
+    /// idealDistanceWithinTrack.
+    #[serde(default)]
+    pub random_pos: Option<RandomPos>,
     /// Throws this brew at towers instead of attacking bloons.
     #[serde(default)]
     pub brew: Option<Brew>,
@@ -2456,4 +2460,13 @@ pub struct Bounty {
     pub max: f32,
     #[serde(default)]
     pub range_add: f32,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+pub struct RandomPos {
+    pub min: f32,
+    pub max: f32,
+    pub point: f32,
+    pub radius: f32,
+    pub ideal: f32,
 }

@@ -1131,6 +1131,11 @@ def main():
             if rpm and random_position is None:
                 random_position = [rpm["minDistance"], rpm["maxDistance"]]
                 random_land = rpm.get("targetRadius", 0.0) if rpm.get("areaType") == "Land" else None
+            # RandomPosition (VERIFIED-DISASM): rings of candidate offsets, shuffled, sorted into
+            # in / out of idealDistanceWithinTrack x placeable with / without blocking towers.
+            random_pos = ({"min": rpm["minDistance"], "max": rpm["maxDistance"], "point": rpm["pointDistance"],
+                           "radius": rpm.get("targetRadius", 0.0), "ideal": rpm.get("idealDistanceWithinTrack", 0.0)}
+                          if rpm and rpm.get("areaType") == "Land" else None)
             friendly_ignore = ",".join(x["f"].get("ignoreList") or "" for x in items(af["behaviors"])
                                        if x and x["type"] == "TargetFriendlyModel")
             attack_brew = next((br for w in items(af["weapons"]) if w
@@ -1175,7 +1180,7 @@ def main():
                     "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
                     "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
-                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic,
+                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
                     "fire_without_target": af.get("fireWithoutTarget", False),
                     # AttackModel.attackThroughWalls: no Map.IsTargetLineClear check.
                     "through_walls": bool(af.get("attackThroughWalls", False)),

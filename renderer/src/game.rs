@@ -682,6 +682,46 @@ pub enum EffectKind {
     PopFx { fx: std::sync::Arc<str>, scale: f32 },
 }
 
+/// RandomPosition's state (VERIFIED-DISASM @0x180dd2fa0 ff.): its shuffled offsets (game
+/// frame), the shuffle's draw buffer length, the four lists CheckPositions fills, the index.
+pub struct RandPosState {
+    pub tier: [u8; 3],
+    pub offsets: Vec<[f32; 2]>,
+    pub buf: usize,
+    pub lists: [Vec<[f32; 2]>; 4],
+    pub index: i32,
+    pub dirty: bool,
+}
+
+/// RandomPosition.CalculatePossibleOffsets (VERIFIED-DISASM @0x180dd23b0), game frame: rings
+/// k x pointDistance + minDistance for k < (int)((max - min) / pointDistance); each from (0, r),
+/// then every 2 x asin(pointDistance x 0.5 / r) degrees (90 past that domain) while k x step <
+/// (360 - step) + 0.01, (0, 1) Vector2.Rotate-d by it, x r.
+fn rand_pos_offsets(m: &crate::data::RandomPos) -> Vec<[f32; 2]> {
+    let mut out = Vec::new();
+    let rings = ((m.max - m.min) / m.point) as i32;
+    for i in 0..rings {
+        let r = i as f32 * m.point + m.min;
+        out.push([0.0, r]);
+        let x = (m.point * 0.5) / r;
+        let mut step = 90.0f32;
+        if (0.0..=1.0).contains(&x) {
+            let a = (x as f64).asin() as f32;
+            step = RAD2DEG * a + RAD2DEG * a;
+        }
+        let limit = (360.0 - step) + 0.01;
+        let mut k = 1;
+        while (k as f32 * step) < limit {
+            let deg = k as f32 * step;
+            let (sa, ca) = crt_sin_cos(DEG2RAD * -deg);
+            let v = [ca * 0.0 - sa * 1.0, ca * 1.0 + sa * 0.0];
+            out.push([v[0] * r, v[1] * r]);
+            k += 1;
+        }
+    }
+    out
+}
+
 /// Where Mutable.AddMutator (VERIFIED-DISASM @0x180f34f20) puts a new mutator: its
 /// SortedListLite insert (@0x181ffcdb0; binary search @0x18014ca90 on Mutable.SortMutators'
 /// priority, highest first, an equal one at the probed middle) puts one of equal priority at
@@ -1297,6 +1337,8 @@ pub struct Sacrifice {
 
 pub struct Tower {
     pub id: u64,
+    /// RandomPosition per attack (by model name).
+    pub randpos: Vec<(String, RandPosState)>,
     /// Spin's angle per spinning weapon (by name): (name, angle, angle before this frame's step).
     pub spin: Vec<(String, f32, f32)>,
     /// Layers popped by this tower's projectiles.
@@ -4166,6 +4208,71 @@ impl Game {
         true
     }
 
+    /// RandomPosition's target for tower `t`'s attack `key` (clone frame). UpdateValidPositions
+    /// (VERIFIED-DISASM @0x180dd3470) when the tower gets the model: the offsets, shuffled
+    /// (@0x181921d10: syncedRandom.Next(count) for each slot of its reused buffer, then from the
+    /// end each entry swapped with the drawn one), index 0. CheckPositions (@0x180dd27f0) when
+    /// due (made, or a tower created since): tower position + offset, TruncateVector2(2), on the
+    /// map, then in / out of idealDistanceWithinTrack (a path segment's point within it) x
+    /// placeable clear of towers / placeable at all. GetTargets (MoveNext @0x180dd9350): the
+    /// first non-empty list, index + 1 (wrapping to 0) taken.
+    fn random_pos_target(&mut self, t: usize, key: &str, m: crate::data::RandomPos) -> Option<[f32; 2]> {
+        let tiers = self.towers[t].tiers;
+        let k = match self.towers[t].randpos.iter().position(|x| x.0 == key) {
+            Some(k) => k,
+            None => {
+                self.towers[t].randpos.push((key.to_string(), RandPosState { tier: [255; 3], offsets: Vec::new(), buf: 0, lists: Default::default(), index: 0, dirty: true }));
+                self.towers[t].randpos.len() - 1
+            }
+        };
+        if self.towers[t].randpos[k].1.tier != tiers {
+            let mut offs = rand_pos_offsets(&m);
+            let n = offs.len();
+            let buf = self.towers[t].randpos[k].1.buf.max(n);
+            let rnd: Vec<usize> = (0..buf).map(|_| (self.synced_double() * n as f64) as usize).collect();
+            let mut i = n;
+            while i >= 2 {
+                i -= 1;
+                offs.swap(rnd[i % buf], i);
+            }
+            let st = &mut self.towers[t].randpos[k].1;
+            (st.tier, st.offsets, st.buf, st.index, st.dirty) = (tiers, offs, buf, 0, true);
+        }
+        if self.towers[t].randpos[k].1.dirty {
+            let tp = [self.towers[t].pos[0], -self.towers[t].pos[1]];
+            let trunc = |v: f32| (((v * 100.0) as f64).trunc() / 100.0f32 as f64) as f32;
+            let mut lists: [Vec<[f32; 2]>; 4] = Default::default();
+            for off in self.towers[t].randpos[k].1.offsets.clone() {
+                let pc = [trunc(tp[0] + off[0]), -trunc(tp[1] + off[1])];
+                if !on_map(pc, 0.0) {
+                    continue;
+                }
+                let near = m.ideal <= 0.0
+                    || self.track_segs.iter().flatten().any(|q| (q[0] - pc[0]).powi(2) + (q[1] - pc[1]).powi(2) <= m.ideal * m.ideal);
+                if !self.land_clear(pc, m.radius) {
+                    continue;
+                }
+                let clear = self.towers.iter().all(|o| {
+                    let rr = m.radius + self.tower_defs[o.def].1.radius;
+                    rr * rr <= (o.pos[0] - pc[0]).powi(2) + (o.pos[1] - pc[1]).powi(2)
+                });
+                lists[if near { 0 } else { 2 } + if clear { 0 } else { 1 }].push(pc);
+            }
+            let st = &mut self.towers[t].randpos[k].1;
+            st.lists = lists;
+            st.dirty = false;
+        }
+        let st = &mut self.towers[t].randpos[k].1;
+        let l = st.lists.iter().find(|l| !l.is_empty())?;
+        let mut idx = st.index + 1;
+        if idx as usize >= l.len() {
+            idx = 0;
+        }
+        let q = l[idx as usize];
+        st.index = idx;
+        Some(q)
+    }
+
     /// The map part of `can_place`: placeable land for a circle of radius `r` at `p`.
     fn land_clear(&self, p: [f32; 2], r: f32) -> bool {
         if !on_map(p, -r) {
@@ -4400,6 +4507,12 @@ impl Game {
             self.place_fx.push((p, fx, scale));
         }
         let deck = self.deck_at(def, p).map(|(sh, h)| (self.towers[sh].id, h));
+        // RandomPosition's OnTowerCreated: calcPositionsNextFrame.
+        for tw in &mut self.towers {
+            for (_, rp) in &mut tw.randpos {
+                rp.dirty = true;
+            }
+        }
         self.towers.push(Tower {
             id,
             pops: 0,
@@ -4419,6 +4532,7 @@ impl Game {
             aim: -std::f32::consts::FRAC_PI_2,
             game_rot: None,
             spin: Vec::new(),
+            randpos: Vec::new(),
             base_rot: 0.0,
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
@@ -4915,6 +5029,12 @@ impl Game {
         if let Some((Some(fx), k)) = spec.place_fx.clone() {
             self.place_fx.push((p, fx, k));
         }
+        // RandomPosition's OnTowerCreated: calcPositionsNextFrame.
+        for tw in &mut self.towers {
+            for (_, rp) in &mut tw.randpos {
+                rp.dirty = true;
+            }
+        }
         self.towers.push(Tower {
             id,
             pops: 0,
@@ -4934,6 +5054,7 @@ impl Game {
             aim: -std::f32::consts::FRAC_PI_2,
             game_rot: None,
             spin: Vec::new(),
+            randpos: Vec::new(),
             base_rot: 0.0,
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
@@ -4998,6 +5119,15 @@ impl Game {
             flip: false,
         });
         let n = self.towers.len() - 1;
+        // Its Attacks are in the process list from when it is made, mid-frame (recording
+        // wizard_040: the Phoenix; engineer_100: a Sentry aims where its Pink is after the move).
+        {
+            let stamp = self.sim_elapsed * 4 + self.phase as u64;
+            let names: Vec<String> = self.towers[n].sub.as_ref().map(|s| s.spec.tier.attacks.iter().map(|a| a.model_name.clone()).collect()).unwrap_or_default();
+            for nm in names {
+                self.towers[n].attack_born.insert(nm, stamp);
+            }
+        }
         // A free-flying sub-tower without movement modes (Etienne's drones) chases bloons.
         // STAND-IN P-DRONE: Pursuit (the game's drones follow Etienne's targeting).
         if self.towers[n].sub.as_ref().is_some_and(|s| s.spec.tier.air.as_ref().is_some_and(|a| a.patterns.is_empty()) && s.spec.tier.air_modes.is_empty() && s.spec.tier.grapple.is_none()) {
@@ -8430,7 +8560,10 @@ impl Game {
                 }
                 // HYPOTHESIS P-RANDPOS: RandomPositionBasicModel picks a uniform direction and a
                 // distance in [minRadius, maxRadius], kept inside the map bounds.
-                if let Some([lo, hi]) = attack.random_position {
+                if let Some(rp) = attack.random_pos.filter(|_| self.sandbox || self.round_active || !self.bloons.is_empty()) {
+                    let key = attack.model_name.clone();
+                    best = self.random_pos_target(t, &key, rp).map(|q| (0.0, q, 0));
+                } else if let Some([lo, hi]) = attack.random_position {
                     best = if (self.sandbox || self.round_active || !self.bloons.is_empty()) {
                         // HYPOTHESIS P-RANDLAND: RandomPositionModel (areaType Land) redraws
                         // until the spot is placeable land clear by targetRadius; no shot if 20
@@ -8713,7 +8846,9 @@ impl Game {
                             // at -6.6).
                             // (A turret on a turning base still turns: recording dart_paragon_r40.)
                             let body_turns = attack.turn_body || tier.base_rotation;
-                            let body_rot = (!body_turns).then(|| tw.game_rot.unwrap_or(0.0));
+                            // HYPOTHESIS P-SUBEJECT: a sub-tower's turret aimed at a bloon ejects along its aim
+                            // (recording engineer_100: a Sentry's dart from its gun turned to -58.45).
+                            let body_rot = (!body_turns && (target_id == 0 || tw.sub.is_none())).then(|| tw.game_rot.unwrap_or(0.0));
                             if grot.is_some() && body_turns {
                                 tw.game_rot = grot;
                                 tw.turret_rel = grot.unwrap() - tw.base_rot;
