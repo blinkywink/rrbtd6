@@ -117,7 +117,7 @@ Ground rules follow.
 ## Regression baseline (must not drop)
 
 Last full run (2026-11-02, every set): dart 70/70, boomerang 99/99, wizard 34/34, ninja 34/34, bomb 33/34,
-glue 33/34, ice 20/25, sniper 19/34, tack 17/25, sub 16/32, beast 9/34, engineer 7/34, desperado 6/34, and 0
+glue 34/34, ice 25/25, sniper 19/34, tack 21/25, sub 16/32, beast 9/34, engineer 7/34, desperado 6/34, and 0
 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar, spike, super, village.
 Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -128,9 +128,11 @@ checkpoint that changes `renderer/src/game.rs`.
 |---|---|---|
 | Dart | 70/70 | done |
 | Boomerang | 99/99 | done (paragon too) |
-| Tack | 17/25 | open: 040/050/052/250 throw counts, 500/502/520, upgrades_r30 |
-| Sub | 16/32 | open: 001/002/004 positions; 005/025/030/032/040/050/052/205/250 throws |
+| Tack | 21/25 | re-recorded with seeds 2026-11-03; open: 500/502 (meteor 1 ulp at rt 522), 520, upgrades_r30 |
+| Sub | 16/32 | re-recorded with seeds 2026-11-03; see Sub notes (Tack section) |
 | Wizard | 34/34 | all re-recorded with R lines; done |
+| Glue | 34/34 | done (mutator order, PostDegrade) |
+| Ice | 25/25 | done (re-recorded with seeds 2026-11-02) |
 | Sniper | 19/34 | see Sniper notes |
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
@@ -242,6 +244,36 @@ TOWERS.md has the longer per-tower notes.
    paragons, Dan D Monke, Druid's tree and others.
 
 ### Tower parity (the main goal)
+0. **Sub 16/32 (re-recorded with seeds 2026-11-03)**, next to work on. Groups:
+   - 040 / 050 / 052 / 250 fire their first shot one frame early (clone 476, game 477, the same aim
+     -27.256102): the bloon is in range from 474, so it's the line-of-sight test (map Logs). The only data
+     difference from 030 (which fires right) is the eject point (y 25 vs 19.5): check whether
+     Map.IsTargetLineClear runs from the eject point, or the tower position plus something.
+   - 005 / 025 / 205: Airburst's split angles are k x 25 + r + start in the game (exact 25 steps from
+     r = -37.498184); the clone's r (the parent dart's direction rotation, Projectile::dir_rot) is a float
+     step off. Not atan2's precision (an AMD libm atan2f port changed nothing anywhere) and not a missing
+     direction: compare the dart's direction vector to the game's frame by frame.
+   - 001 / 002 / 004 / 502_* / upgrades_r30: bloon-exact, projectile positions only.
+0. **Tack 21/25 (2026-11-03)**, re-recorded with seeds. Spin (VERIFIED-DISASM @0x180c92af0 / b30): every
+   SpinModel weapon of the tier (ability attacks' too) has an angle from when the tower has the model,
+   + rotationPerSecond x 1/60 per frame, wrapped only at >= 360; a shot reads it before that frame's step and
+   is turned by it (Vector3Boxed.Rotate) with rotation + angle (Blade Maelstrom at -810.00006). Ability
+   attacks' lifespan counts round-clock frames (a held clock frame isn't counted) and an activation between
+   frames doesn't count the others again. Open: tack_500/502, the Inferno Ring meteor's y is 1 ulp off at
+   rt 522 (TrackTarget / TravelStrait / Vector3Boxed.Rotate all match the decompile: look at AngleBetween's
+   atan2f and the target point); tack_520; tack_upgrades_r30.
+0. **Ice 25/25 (done 2026-11-03)**, all re-recorded with seeds. What it took, all VERIFIED-DISASM:
+   AddBehaviorToBloon.Collide draws syncedRandom for chance > 0 (Icicles 25%) after its filters, also on a
+   hit immune to the damage (Projectile.CollideBloon's passes before the DamageModel run regardless:
+   `pre_damage_effects`); Slow.Collide skips immune bloons only for "Permafrost" ids; FilterMutatedTarget
+   (projectiles, `skip_mutated`) with Mutable.IsMutatedBy's id / idMajor / idMajorMinor match (icicles ignore
+   bloons carrying Ice:*); copies made by a degrade get their mutators with the parent's time left as their
+   total (a refresh restores that), their own CarryProjectile icicles (collidedWith = the popped bloon's
+   layerId), and EmitOnPop re-armed only on copies; RemoveMutatorsById destroys carried projectiles at once.
+   OPEN (INFERRED): CopyMutatorsFrom passes the source TimedMutator's removeAt (0x18) as the copy's duration,
+   so a copy's totalDuration should be the parent's time left; ice_025 needs that for freezes, but glue_005 /
+   glue_025 need copied glue mutators to keep the full lifespan on refresh. Applied to freezes only; find what
+   differs (removeAt may be absolute, or Slow / AddBehaviorToBloon refresh another way).
 0. **Glue 34/34 (done 2026-11-02)**: the last recording (glue_upgrades_r30) needed the game's mutator and
    behaviour order, now modelled from the disassembly: Mutable.AddMutator's SortedListLite insert (@0x181ffcdb0,
    binary search @0x18014ca90, Mutable.SortMutators by priority; Slow and AddBehaviorToBloon mutators are all

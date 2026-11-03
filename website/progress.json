@@ -1,13 +1,13 @@
 {
   "_how": "Edit the numbers, then run: python website/build_progress.py. Towers: recorded scenarios that match the real game frame by frame / all recorded. Areas: rough estimates out of 10.",
-  "updated": "2026-11-02",
+  "updated": "2026-11-03",
   "towers": [
     ["Dart Monkey", 70, 70],
     ["Boomerang Monkey", 99, 99],
     ["Bomb Shooter", 33, 34],
-    ["Tack Shooter", 17, 25],
-    ["Ice Monkey", 20, 25],
-    ["Glue Gunner", 33, 34],
+    ["Tack Shooter", 21, 25],
+    ["Ice Monkey", 25, 25],
+    ["Glue Gunner", 34, 34],
     ["Desperado", 6, 34],
     ["Sniper Monkey", 19, 34],
     ["Monkey Sub", 16, 32],

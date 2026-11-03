@@ -704,6 +704,23 @@ fn copy_order(effects: Vec<Effect>) -> Vec<Effect> {
 }
 
 impl Bloon {
+    /// Mutable.IsMutatedBy(string) (VERIFIED-DISASM @0x180f36670): a mutator whose id, or (an id
+    /// split by ':', BehaviorMutator.Initialise) its idMajor or idMajorMinor, is `s`.
+    pub fn mutated_by(&self, s: &str) -> bool {
+        self.effects.iter().any(|e| {
+            let id = e.id.as_str();
+            if id == s {
+                return true;
+            }
+            let mut parts = id.split(':');
+            let major = parts.next().unwrap_or("");
+            match parts.next() {
+                Some(minor) => major == s || (s.len() == major.len() + 1 + minor.len() && s.starts_with(major) && s[major.len()..].starts_with(':') && s.ends_with(minor)),
+                None => false,
+            }
+        })
+    }
+
     /// Whether a projectile with this hit list already hit it or a bloon it came from.
     pub fn hit_by(&self, hit: &HitSet) -> bool {
         !hit.is_empty() && (hit.contains(&self.layer) || self.lineage.as_ref().is_some_and(|l| l.iter().any(|x| hit.contains(x))))
@@ -1280,6 +1297,8 @@ pub struct Sacrifice {
 
 pub struct Tower {
     pub id: u64,
+    /// Spin's angle per spinning weapon (by name): (name, angle, angle before this frame's step).
+    pub spin: Vec<(String, f32, f32)>,
     /// Layers popped by this tower's projectiles.
     pub pops: u64,
     /// Health its projectiles took off bloons (the panel's Damage: hits on a MOAB count before
@@ -1457,6 +1476,8 @@ pub struct TempAttack {
     pub delay: f32,
     /// ActivateAttack.Activate runs it at the activation (processOnActivate or isOneShot).
     pub now: bool,
+    /// The round clock its lifespan was last counted at.
+    pub counted: Option<i64>,
 }
 
 /// One ability button: every tower's copy of the ability `name`.
@@ -1932,6 +1953,10 @@ pub struct Projectile {
     pub owner: u64,
     /// Instant projectiles: the only bloon they can hit. Bouncing glaives: the bloon they home in on.
     pub target: Option<u64>,
+    /// CollideOnlyWithTarget's Target for a travelling shot (SetTarget at emission and when its
+    /// TrackTarget takes a new one), and its ignoreFirstCheck.
+    pub cot: Option<u64>,
+    pub ignore_first: bool,
     /// Where the shot came from (instant), or the start of its path (follow-path).
     origin: [f32; 2],
     /// Frames left before a retargeted shot hits; bounces so far; can bounce to camo bloons.
@@ -3932,6 +3957,9 @@ impl Game {
                 }
                 if let Some(best) = pick {
                     pr.seek = best.map(|x| x.0);
+                    if pr.spec.only_target && best.is_some() {
+                        pr.cot = pr.seek;
+                    }
                     let off = best.and_then(|(id, ci)| ci.zip(self.bloons.iter().find(|b| b.id == id))).map(|(ci, b)| self.circle_off(b, ci as usize));
                     self.projectiles[p].seek_off = off;
                 }
@@ -4361,6 +4389,7 @@ impl Game {
             angle: -std::f32::consts::FRAC_PI_2,
             aim: -std::f32::consts::FRAC_PI_2,
             game_rot: None,
+            spin: Vec::new(),
             base_rot: 0.0,
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
@@ -4875,6 +4904,7 @@ impl Game {
             angle: -std::f32::consts::FRAC_PI_2,
             aim: -std::f32::consts::FRAC_PI_2,
             game_rot: None,
+            spin: Vec::new(),
             base_rot: 0.0,
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
@@ -5551,6 +5581,7 @@ impl Game {
                     pauses: x.turn_off_existing,
                     delay: x.delay * FPS,
                     now: x.one_shot || x.process_on_activate,
+                    counted: None,
                 });
             }
         }
@@ -6893,9 +6924,29 @@ impl Game {
                 .cloned()
                 .map(|mut e| {
                     // The other children's mutators are new (CopyMutatorsFromBloon): their
-                    // EmitOnPop is initialised again.
+                    // EmitOnPop is initialised again. The first is the parent object, its
+                    // behaviour as it was (recording ice_520: a Black's copy made and degraded
+                    // again by one hit leaves Reds that don't shatter the next frame).
                     if let EffectKind::PopEmit { ignore, skip, .. } = &mut e.kind {
-                        *skip = n > 0 && *ignore;
+                        if n > 0 {
+                            *skip = *ignore;
+                        }
+                    }
+                    // Mutable.CopyMutatorsFrom (@0x180f35ac0) passes the source TimedMutator's removeAt
+                    // (0x18) as the copy's duration, which becomes its totalDuration (0x28); a refresh
+                    // (AddMutator: removeAt < new duration -> totalDuration) gives it that back
+                    // (recording ice_025: a re-frozen copy thaws when its parent would have).
+                    // INFERRED, freezes only: glue_005 / glue_025 need a copy's glue mutators to get
+                    // their full lifespan back (see HANDOFF, Ice notes).
+                    if n > 0 && matches!(e.kind, EffectKind::Freeze) {
+                        e.total = e.frames_left;
+                    }
+                    // A copy's CarryProjectile is new: Attatched makes its own projectiles
+                    // (recording ice_005: an Icicles Rainbow's Blacks and Whites each carry one).
+                    if let EffectKind::Carry { uids, .. } = &mut e.kind {
+                        if n > 0 {
+                            uids.clear();
+                        }
                     }
                     e
                 })
@@ -7060,6 +7111,15 @@ impl Game {
                 }
                 b.prev_dist = d0;
                 b.track_mult = tm;
+            }
+        }
+        // The copies' carried projectiles, where the degrade put them.
+        if top {
+            let made: Vec<usize> = (0..self.bloons.len())
+                .filter(|&k| self.bloons[k].effects.iter().any(|e| matches!(&e.kind, EffectKind::Carry { uids, .. } if uids.is_empty())))
+                .collect();
+            for k in made {
+                self.attach_carries_as(k, Some(layer));
             }
         }
         // (They come once the degrade has placed its children, each a pop of its own: recording
@@ -7662,6 +7722,12 @@ impl Game {
                 self.towers[t].show = Some((crate::anim::PLACE_CLIP.into(), 0.0));
             }
             if only_temp.is_none() {
+                // SpinModel weapons: (weapon name, rotationPerSecond x 1/60).
+                let spins: Vec<(String, f32)> = self.tier(t).map(|tr| tr.attacks.iter()
+                    .chain(tr.abilities.iter().flat_map(|a| a.activate.iter().flat_map(|x| x.attacks.iter())))
+                    .flat_map(|a| a.weapons.iter())
+                    .filter(|w| w.spin != 0.0)
+                    .map(|w| (w.name.clone(), w.spin * FRAME_TIME)).collect()).unwrap_or_default();
                 let abilities_now: Vec<(String, f32, bool, bool)> = self.tier(t).map(|tr| tr.abilities.iter()
                     .filter(|a| !self.towers[t].ability_cd.contains_key(&a.name))
                     .map(|a| (a.name.clone(), a.cooldown, a.ready, a.full_start)).collect()).unwrap_or_default();
@@ -7672,6 +7738,25 @@ impl Game {
                 tw.idle_t += 1.0 / FPS;
                 if let Some(s) = tw.show.as_mut() {
                     s.1 += 1.0 / FPS;
+                }
+                // Spin.Process (VERIFIED-DISASM @0x180c92af0): angle + rotationPerFrame, less 360
+                // once at or past 360 (never wrapped below 0: recording tack_040, -720.00006 when
+                // Blade Maelstrom first fires at 121).
+                // Every spinning weapon of its tier, an ability's attack's too: those weapons exist
+                // (and spin) from when the tower has the model, not from the activation.
+                // (The shot reads the angle as it was before this frame's step: Weapon.Process
+                // fires before Spin.Process; recording tack_050.)
+                for (name, step) in &spins {
+                    let x = match tw.spin.iter().position(|x| &x.0 == name) {
+                        Some(k) => &mut tw.spin[k],
+                        None => {
+                            tw.spin.push((name.clone(), 0.0, 0.0));
+                            tw.spin.last_mut().unwrap()
+                        }
+                    };
+                    x.2 = x.1;
+                    let v = x.1 + step;
+                    x.1 = if 360.0 <= v { v - 360.0 } else { v };
                 }
                 for ab in &mut tw.brews {
                     ab.frames_left -= 1.0;
@@ -8859,6 +8944,27 @@ impl Game {
                             }
                             for pr in &mut self.projectiles[start..] {
                                 pr.aim = (target_id != 0).then_some(target_id);
+                                // CollideOnlyWithTarget.SetTarget (VERIFIED-DISASM @0x180c9ce60).
+                                if pr.spec.only_target && !pr.spec.instant {
+                                    pr.cot = (target_id != 0).then_some(target_id);
+                                    pr.ignore_first = target_id == 0 && pr.spec.first_if_invalid;
+                                }
+                            }
+                            // Spin.ProjectilesCreated (VERIFIED-DISASM @0x180c92b30): each new shot's
+                            // direction turned by the angle (Vector3Boxed.Rotate) and its rotation + it
+                            // (recording tack_040: Blade Maelstrom at -810.00006 / -630.00006).
+                            if weapon.spin != 0.0 {
+                                let ang = self.towers[t].spin.iter().find(|x| x.0 == weapon.name).map_or(0.0, |x| x.2);
+                                let (sn, cs) = crt_sin_cos(DEG2RAD * -ang);
+                                for pr in &mut self.projectiles[start..] {
+                                    if let Some(d) = pr.dir {
+                                        let nd = [cs * d[0] - sn * d[1], cs * d[1] + sn * d[0]];
+                                        let sf = pr.spec.speed * FRAME_TIME;
+                                        pr.dir = Some(nd);
+                                        pr.vel = [nd[0] * sf, -nd[1] * sf];
+                                    }
+                                    pr.grot = pr.grot.map(|g| g + ang);
+                                }
                             }
                             if !ambient {
                                 self.sound(&weapon.fire_sounds, None);
@@ -9086,6 +9192,22 @@ impl Game {
                     k += 1;
                     continue;
                 }
+                // (An ability used between frames runs only its own new attacks at once
+                // (ActivateAttack.Activate): the others' lifespans aren't counted again.)
+                if only_temp.is_some() && !x.now {
+                    i0 += n;
+                    k += 1;
+                    continue;
+                }
+                // The lifespan runs on roundTime: a frame the round clock doesn't move isn't counted
+                // (recording tack_250: Super Maelstrom's last throw at 659 though the clock held at
+                // 255 for a step).
+                if x.counted == Some(self.round_clock) {
+                    i0 += n;
+                    k += 1;
+                    continue;
+                }
+                x.counted = Some(self.round_clock);
                 x.frames_left -= 1.0;
                 let fired = tw.weapons.get(i0..i0 + n).is_some_and(|c| c.iter().any(|w| w.last != NEVER && w.anim < 0));
                 let done = if x.one_shot { fired || x.frames_left < -FPS } else { x.frames_left <= 0.0 };
@@ -10233,12 +10355,61 @@ impl Game {
         self.tier(t).map(|tr| tr.sounds.clone()).unwrap_or_default()
     }
 
+    /// Projectile.CollideBloon's behaviours before the DamageModel's pass:
+    /// RemoveMutatorsFromBloon (-50), then the effects that go on before the damage
+    /// (AddBehaviorToBloon -1, slows...). They run whether or not the damage can hurt the bloon
+    /// (recording ice_004: a blast on a Zebra still draws its Icicles chance).
+    fn pre_damage_effects(&mut self, i: usize, p: usize, dmg: f32) {
+        let spec = &self.projectiles[p].spec;
+        // HYPOTHESIS P-REMOVEMUT: a key removes effects whose mutator id contains it;
+        // "Ice" also covers freezes and "Glue" glue slows whatever their id.
+        if !spec.remove_effects.is_empty() {
+            let keys = spec.remove_effects.clone();
+            let mut gone_carried: Vec<u64> = Vec::new();
+            self.bloons[i].effects.retain(|e| {
+                let keep = !keys.iter().any(|k| {
+                    k.strip_prefix('=').map_or_else(|| e.id.contains(k.as_str()), |x| e.id == x)
+                        || (k == "Ice" && matches!(e.kind, EffectKind::Freeze))
+                        || (k == "Glue" && matches!(e.kind, EffectKind::Slow { glue: 1.., .. }))
+                });
+                if !keep {
+                    if let EffectKind::Carry { uids, .. } = &e.kind {
+                        gone_carried.extend(uids.iter().copied());
+                    }
+                }
+                keep
+            });
+            // Mutable.RemoveMutatorsById (VERIFIED-DISASM) applies the mutation at
+            // once: CarryProjectile.OnDestroy takes its projectiles with it before they
+            // collide again this pass (recording ice_025: a Yellow whose Icicles a
+            // blast took isn't popped by its own icicle).
+            if !gone_carried.is_empty() {
+                for pr in self.projectiles.iter_mut().filter(|pr| gone_carried.contains(&pr.uid)) {
+                    pr.pierce = 0.0;
+                    pr.frames_left = 0.0;
+                }
+            }
+        }
+        if !self.projectiles[p].spec.effects.is_empty() {
+            let (mut spec, owner) = (self.projectiles[p].spec.clone(), self.projectiles[p].owner);
+            // SlowMinusAbilityDuration.GetLifespanFrames (VERIFIED-DISASM @0xcddc50):
+            // lifespanFrames + activation time - now; the projectile is made as the
+            // ability goes off (recording ninja_040: Sabotage halves a MOAB's speed).
+            let age = self.projectiles[p].age;
+            for e in spec.effects.iter_mut().filter(|e| e.minus_age) {
+                e.lifespan = (e.lifespan - age / FPS).max(0.0);
+            }
+            self.apply_effects(i, &spec, owner, dmg, false);
+        }
+    }
+
     /// Put projectile `spec`'s effects on bloon `i` (before its damage, so children of a popped
     /// bloon inherit them through `layers`).
     /// `after`: the effects that go on after the damage (FreezeModel.applyAfterDamage), else the rest.
     fn apply_effects(&mut self, i: usize, spec: &Proj, owner: u64, dmg: f32, after: bool) {
         let d = &self.defs[self.bloons[i].kind];
-        let has = |t: &str| d.tags.iter().any(|x| x == t);
+        let tags = d.tags.clone();
+        let has = |t: &str| tags.iter().any(|x| x == t);
         let props = self.bloons[i].properties(d);
         // AddBehaviorToBloon.Collide (VERIFIED-DISASM @0xc9fea0), applyOnlyIfDamaged: Bloon
         // .WillDamageBloon (not immune, damage >= 1) for its parentDamageModel, then for the
@@ -10260,10 +10431,23 @@ impl Game {
                     continue;
                 }
             }
+            // Slow.Collide (VERIFIED-DISASM @0x180cde360): a slow whose mutation id contains
+            // "Permafrost" isn't put on a bloon immune to the projectile's DamageModel
+            // (Bloon.IsImmuneByProperty; recording ice_300: Whites under Arctic Wind's blast).
+            if e.kind == "slow" && e.id.contains("Permafrost") && spec.damage_model && spec.immune & props != 0 {
+                continue;
+            }
             // Freeze.Collide (VERIFIED-DISASM @0xcdcc60): bossImmunity spares Bads and Minibosses.
             if (e.kind == "freeze" && ((!e.moabs && has("Moabs")) || (e.boss_immunity && (has("Bad") || has("Miniboss")))))
                 || (e.moabs_only && !has("Moabs"))
             {
+                continue;
+            }
+            // AddBehaviorToBloon.Collide (VERIFIED-DISASM @0x180c81390): after its filters and
+            // applyOnlyIfDamaged, a chance > 0 draws Simulation.syncedRandom.NextDouble and puts
+            // nothing on when chance < the draw (recording ice_005: Icicle Impale's 25% Icicles
+            // left the MOAB it hit at 81 without one).
+            if e.chance > 0.0 && (e.chance as f64) < self.synced_double() {
                 continue;
             }
             let (mut mult, mut lifespan) = (e.mult, e.lifespan);
@@ -10338,7 +10522,7 @@ impl Game {
                 // left. It can't be entranced again for `cooldown` seconds after.
                 "trance" => {
                     let b = &self.bloons[i];
-                    if b.has_effect(&format!("{}Cooldown", e.id)) || e.immune & b.properties(d) != 0 {
+                    if b.has_effect(&format!("{}Cooldown", e.id)) || e.immune & b.properties(&self.defs[b.kind]) != 0 {
                         continue;
                     }
                     let Some(c) = self.towers.iter().find(|t| t.id == owner).map(|t| t.pos) else { continue };
@@ -10353,7 +10537,7 @@ impl Game {
                         centre: c,
                         radius: r,
                         angle: (b.pos[1] - c[1]).atan2(b.pos[0] - c[0]),
-                        rate: d.speed * f / FPS / r,
+                        rate: self.defs[self.bloons[i].kind].speed * f / FPS / r,
                     }
                 }
                 "emit" => match &e.projectile {
@@ -10496,6 +10680,14 @@ impl Game {
     /// its rotation, at its height (recording ice_004: an Icicles MOAB's icicle out in the
     /// collision pass that put the mutator on).
     fn attach_carries(&mut self, i: usize) {
+        self.attach_carries_as(i, None);
+    }
+
+    /// `attach_carries` for a copy a degrade made: its behaviours run before it has a layerId of
+    /// its own (Bloon.UpdateLayerId), so its projectiles' collidedWith gets `layer`, the popped
+    /// bloon's, which every child has in its lineage (recording ice_005: an Icicles Rainbow's
+    /// Blacks and Whites don't pop each other).
+    fn attach_carries_as(&mut self, i: usize, layer_as: Option<u64>) {
         let todo: Vec<(usize, Box<Proj>, Box<Emission>, u64)> = self.bloons[i]
             .effects
             .iter()
@@ -10508,7 +10700,7 @@ impl Game {
         for (k, proj, emission, owner) in todo {
             let b = &self.bloons[i];
             let rot = if self.defs[b.kind].rotate_to_follow_path { b.rot } else { 0.0 };
-            let (pos, z, id) = (b.pos, b.height, b.id);
+            let (pos, z, id, layer) = (b.pos, b.height, b.id, layer_as.unwrap_or(b.layer));
             let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
             let start = self.projectiles.len();
             self.emit_rot = Some(rot);
@@ -10517,8 +10709,11 @@ impl Game {
             self.emit_z = 0.0;
             self.emit_rot = None;
             let mut made = Vec::new();
+            // CarryProjectile.Emit (VERIFIED-DISASM @0x180fe1630): each projectile's collidedWith
+            // gets the bloon's layerId, so it never hits its carrier or what that becomes.
             for pr in &mut self.projectiles[start..] {
                 pr.carrier = id;
+                pr.hit.push(layer);
                 made.push(pr.uid);
             }
             if let EffectKind::Carry { uids, .. } = &mut self.bloons[i].effects[k].kind {
@@ -10858,6 +11053,8 @@ impl Game {
                 tiers,
                 owner,
                 target: None,
+                cot: None,
+                ignore_first: false,
                 origin: pos,
                 wait: 0.0,
                 retarget_at: None,
@@ -11420,8 +11617,14 @@ impl Game {
                         // CollideOnlyWithTarget.FilterCollision (VERIFIED-DISASM @0xcbb6e0): only its
                         // Target while that is valid; none once it is gone (recording boomerang_500: a
                         // MoabDot whose glaive's target popped sits out its life, its pierce unused).
-                        // INFERRED: a target-less one takes any (ignoreFirstCheck, pierce 1 here).
-                        || (pr.spec.only_target && !pr.spec.instant && pr.target.is_some_and(|t| t != b.id))
+                        // VERIFIED-DISASM @0x180c9cbd0: with no valid Target it takes only its first
+                        // collision, when ignoreFirstCheck was set (SetTarget with no bloon and
+                        // collideWithFirstIfInvalidTarget); else nothing (recording tack_520: Inferno
+                        // Ring's meteor whose MOAB popped flies past a Black).
+                        || (pr.spec.only_target && !pr.spec.instant && match pr.target.or(pr.cot) {
+                            Some(t) => t != b.id,
+                            None => !pr.ignore_first,
+                        })
                         || b.hit_by(&pr.hit)
                         || pr.carrier == b.id
                         // Projectile.IsCollisionValid (VERIFIED-DISASM @0xcac350): with
@@ -11429,6 +11632,10 @@ impl Game {
                         // bloon (recording bomb_100: a blast misses a Yellow behind the entrance trees).
                         || (pr.spec.los_blocked && !$s.line_clear(pp, 0.0, bp))
                         || pr.spec.exclude_bloons.iter().any(|x| $s.names[b.kind].starts_with(x.as_str()))
+                        // FilterMutatedTarget.FilterBloon (VERIFIED-DISASM @0x180c20240): recording
+                        // ice_005, icicles never hit a bloon carrying Ice:Icicles.
+                        || pr.spec.skip_mutated.iter().any(|m| b.mutated_by(m))
+                        || (!pr.spec.need_mutated.is_empty() && !pr.spec.need_mutated.iter().all(|m| b.mutated_by(m)))
                         || pr.spec.exclude_tags.iter().any(|t| d.tags.contains(t))
                         || (pr.spec.glue_filter > 0 && b.glue() >= pr.spec.glue_filter)
                         || (pr.spec.skip_frozen && b.frozen())
@@ -11563,6 +11770,7 @@ impl Game {
                             $s.projectiles[$p].frames_left = 0.0;
                             immune_destroyed = true;
                         }
+                        $s.pre_damage_effects(i, $p, dmg);
                     }
                     if !immune {
                         let spec = &$s.projectiles[$p].spec;
@@ -11578,38 +11786,7 @@ impl Game {
                                 }
                             }
                         }
-                        // HYPOTHESIS P-REMOVEMUT: a key removes effects whose mutator id contains it;
-                        // "Ice" also covers freezes and "Glue" glue slows whatever their id.
-                        let had: Vec<String> = if spec.remove_effects.is_empty() { Vec::new() } else { $s.bloons[i].effects.iter().map(|e| e.id.clone()).collect() };
-                        if !spec.remove_effects.is_empty() {
-                            let keys = spec.remove_effects.clone();
-                            $s.bloons[i].effects.retain(|e| {
-                                !keys.iter().any(|k| {
-                                    k.strip_prefix('=').map_or_else(|| e.id.contains(k.as_str()), |x| e.id == x)
-                                        || (k == "Ice" && matches!(e.kind, EffectKind::Freeze))
-                                        || (k == "Glue" && matches!(e.kind, EffectKind::Slow { glue: 1.., .. }))
-                                })
-                            });
-                        }
-                        if !$s.projectiles[$p].spec.effects.is_empty() {
-                            let (mut spec, owner) = ($s.projectiles[$p].spec.clone(), $s.projectiles[$p].owner);
-                            // RemoveMutatorsFromBloon (pass -50) takes a mutator off by the bloon's
-                            // next Process: an isUnique one the hit puts on again finds it still there
-                            // and isn't added (recording ice_004: a second Cryo blast on an Icicles
-                            // MOAB leaves it without icicles).
-                            let gone: Vec<String> = had.iter().filter(|id| spec.remove_effects.iter().any(|k| k.strip_prefix('=') == Some(id.as_str()))).cloned().collect();
-                            if !gone.is_empty() {
-                                spec.effects.retain(|e| !gone.contains(&e.id));
-                            }
-                            // SlowMinusAbilityDuration.GetLifespanFrames (VERIFIED-DISASM @0xcddc50):
-                            // lifespanFrames + activation time - now; the projectile is made as the
-                            // ability goes off (recording ninja_040: Sabotage halves a MOAB's speed).
-                            let age = $s.projectiles[$p].age;
-                            for e in spec.effects.iter_mut().filter(|e| e.minus_age) {
-                                e.lifespan = (e.lifespan - age / FPS).max(0.0);
-                            }
-                            $s.apply_effects(i, &spec, owner, dmg, false);
-                        }
+                        $s.pre_damage_effects(i, $p, dmg);
                         // HYPOTHESIS P-LEADGOLD: Lead to Gold pays its flat amount when a hit pops a
                         // bloon with the tag (the game attaches it to the bloon for its next pop).
                         let gold = $s.projectiles[$p].spec.cash_on_pop.as_ref().filter(|c| $s.defs[$s.bloons[i].kind].tags.contains(&c.tag)).map(|c| c.amount as f64);
@@ -11825,6 +12002,7 @@ impl Game {
                     // CollideBloon adds the layer it hit; what that layer became carries it in its
                     // lineage.
                     pr.hit.push(layer);
+                    pr.ignore_first = false;
                     // CollideBloon: timeSinceLastCollisionCheck = 0.
                     pr.check_t = 0;
                     // TrackTarget.Collide (VERIFIED-DISASM @0xd128d0): hitting its own target, it

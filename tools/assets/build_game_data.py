@@ -306,6 +306,7 @@ def main():
             ts = {"speed": rr["speed"], "lifespan": (rr["minRange"] + rr["maxRange"]) / 2 / rr["speed"]}
             random_range = [rr["minRange"], rr["maxRange"], rr["speed"]]
         filters, exclude_bloons, exclude_tags = [], [], []
+        skip_mutated, need_mutated = [], []
         glue_filter, skip_frozen, cant_hit = 0, False, 0
         out_require_effects = None
         for fm in pb.get("ProjectileFilterModel", []):
@@ -324,6 +325,11 @@ def main():
                         glue_filter = x["f"]["glueLevel"]
                     if x["type"] == "FilterFrozenBloonsModel":
                         skip_frozen = True
+                    # FilterMutatedTargetModel (Icicles' IcicleIgnoreFrozen: "Ice", "AbsoluteZero"):
+                    # FilterMutatedTarget.FilterBloon, Mutable.IsMutatedBy per id; inverse: must be.
+                    if x["type"] == "FilterMutatedTargetModel":
+                        ids = [m for m in items(x["f"].get("mutationIds")) if isinstance(m, str)] or                               [m.strip() for m in (x["f"].get("mutationId") or "").split(",") if m.strip()]
+                        (need_mutated if x["f"].get("inverse") else skip_mutated).extend(ids)
                     # FilterOveridingMutatedTargetModel: [mutationOverideOrder, highest, default]
                     # (FilterOveridingMutatedTarget.FilterBloon).
                     if x["type"] == "FilterOveridingMutatedTargetModel":
@@ -472,6 +478,10 @@ def main():
             if sf.get("collisionPass", -1) >= 1:
                 for e in effects[n0:]:
                     e["after_damage"] = True
+            # AddBehaviorToBloonModel.chance (Icicles 0.25): a syncedRandom draw per hit.
+            if sf.get("chance", 0.0) > 0.0:
+                for e in effects[n0:]:
+                    e["chance"] = sf["chance"]
         # RemoveDamageTypeModifierModel (Embrittlement, Relentless Glue): the hit bloon (and
         # `layers` of its children) loses these bloonProperties (Lead 1, Frozen 16) for
         # `lifespan`: sharp shots can pop it.
@@ -591,7 +601,12 @@ def main():
             # CollideOnlyWithTargetModel (Sniper, Boomerang glaives...): only its target.
             "only_target": "FilterAllExceptTargetModel" in filters or bool(pb.get("CollideOnlyWithTargetModel"))
                            or any(x and x["type"] == "FilterAllExceptTargetModel" for x in items(f.get("filters"))),
+            # CollideOnlyWithTargetModel.collideWithFirstIfInvalidTarget: emitted without a target,
+            # its first collision goes through (ignoreFirstCheck).
+            "first_if_invalid": bool((pb.get("CollideOnlyWithTargetModel") or [{"f": {}}])[0]["f"].get("collideWithFirstIfInvalidTarget")),
             "exclude_bloons": exclude_bloons,
+            "skip_mutated": skip_mutated,
+            "need_mutated": need_mutated,
             "exclude_tags": exclude_tags,
             "glue_filter": glue_filter,
             "skip_frozen": skip_frozen,
@@ -1053,6 +1068,10 @@ def main():
                                 "flip_eject": next(([bool(x["f"].get("flipTowerDisplayX")), bool(x["f"].get("flipTowerDisplayY"))]
                                                     for x in items(w["f"].get("behaviors")) if x and x["type"] == "FlipFollowPathModel"), None),
                                 "start_cooldown": bool(w["f"].get("startInCooldown")),
+                                # SpinModel.rotationPerSecond (Blade Maelstrom, The Tack Zone): Spin turns
+                                # each shot by its running angle.
+                                "spin": next((x["f"].get("rotationPerSecond", 0.0) for x in items(w["f"].get("behaviors"))
+                                              if x and x["type"] == "SpinModel"), 0.0),
                                 "custom_start": w["f"].get("customStartCooldown", 0.0),
                                 "max_subs": max_subs,
                                 "eject": [w["f"].get("ejectX", 0.0), w["f"].get("ejectY", 0.0), w["f"].get("ejectZ", 0.0)],

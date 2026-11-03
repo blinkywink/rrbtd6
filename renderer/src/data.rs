@@ -989,6 +989,9 @@ pub struct Weapon {
     /// bloonInRangeAttackSpeedBuff, maxBloonAttackSpeedBuff.
     #[serde(default)]
     pub vagrant: Option<[f32; 4]>,
+    /// SpinModel.rotationPerSecond (0: none).
+    #[serde(default)]
+    pub spin: f32,
     /// WeaponModel.animationOffset: the attack animation starts this many seconds before the shot.
     #[serde(default)]
     pub animation_offset: f32,
@@ -1494,6 +1497,12 @@ pub struct Proj {
     /// FilterOutBloonModel ids: bloons this projectile ignores.
     #[serde(default)]
     pub exclude_bloons: Vec<String>,
+    /// FilterMutatedTargetModel: it ignores bloons mutated by any of these (`Bloon::mutated_by`),
+    /// or with `need_mutated` (inverse) those not mutated by every one.
+    #[serde(default)]
+    pub skip_mutated: Vec<String>,
+    #[serde(default)]
+    pub need_mutated: Vec<String>,
     /// FilterAllModel: hits nothing (a Mortar shell in flight; its explosion does the damage).
     #[serde(default)]
     pub no_hit: bool,
@@ -1613,6 +1622,9 @@ pub struct Proj {
     /// FilterAllExceptTargetModel: hits only its target bloon.
     #[serde(default)]
     pub only_target: bool,
+    /// CollideOnlyWithTargetModel.collideWithFirstIfInvalidTarget.
+    #[serde(default)]
+    pub first_if_invalid: bool,
     /// TravelAlongPathModel: moves along the track.
     #[serde(default)]
     pub track_travel: Option<TrackTravel>,
@@ -2299,6 +2311,9 @@ pub struct EffectSpec {
     pub interval: f32,
     #[serde(default)]
     pub immune: u32,
+    /// AddBehaviorToBloonModel.chance (0: always).
+    #[serde(default)]
+    pub chance: f32,
     /// applyOnlyIfDamaged: it only goes on a bloon that its parentDamageModel (`parent`: damage,
     /// immunities) and the projectile's own DamageModel would damage (Bloon.WillDamageBloon).
     #[serde(default)]
