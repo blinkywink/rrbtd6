@@ -242,19 +242,14 @@ TOWERS.md has the longer per-tower notes.
    paragons, Dan D Monke, Druid's tree and others.
 
 ### Tower parity (the main goal)
-0. **Glue 33/34 (last: glue_upgrades_r30, first difference rt 970)**: game bloon 811 (clone 40) loses a layer
-   every frame 968-971 (Pink -> gone) on DoTs alone (no H lines); its neighbour 694 loses one every 30 (Dissolver's
-   interval). 811 still carries Corrosive Glue's DoT from before the 900 upgrade. The game's rule, VERIFIED-DISASM:
-   DamageOverTime.CheckTick (@0x180fe4fb0) ticks when now - lastTick >= intervalFrames, lastTick = now;
-   DamageOverTime.PostDegrade (@0x180fe54d0), run for each of the parent's DamageOverTime behaviours in order, sets
-   the CHILD'S FIRST DamageOverTime's lastTick to its own (so the first ends with the last behaviour's lastTick);
-   Initialise (@0x180fe5340): lastTick = now + initialDelay. With [Dissolver, Corrosive] the Dissolver gets
-   Corrosive's old lastTick (938) on every pop, so it's due each frame: the 968-971 chain. Tried 2026-11-02 in
-   `damage` (child's first applied DoT tick = parent's last applied DoT tick): 968-971 right but a new pop at 939
-   (Black split at 938; the game's order there must put Dissolver last, so the list order after
-   CopyMutatorsFromBloon / the middle insert matters). Replace the fitted P-DOTDEGRADE hypotheses (tower phase:
-   "another DoT due now waits", "a split resets the other DoTs to now") with PostDegrade once the mutator order
-   through copies is modelled (Mutable.AddMutator @0xf53a30, CopyMutatorsFromBloon).
+0. **Glue 34/34 (done 2026-11-02)**: the last recording (glue_upgrades_r30) needed the game's mutator and
+   behaviour order, now modelled from the disassembly: Mutable.AddMutator's SortedListLite insert (@0x181ffcdb0,
+   binary search @0x18014ca90, Mutable.SortMutators by priority; Slow and AddBehaviorToBloon mutators are all
+   priority 1) puts a new mutator at index count / 2; CopyMutatorsFrom (@0x180f35ac0) re-adds the parent's in order
+   on each new child; a bloon keeps its behaviours when its model changes and adds new ones last (`Effect::seq`);
+   DamageOverTime.PostDegrade (@0x180fe54d0) gives each child's first DamageOverTime the parent's last lastTick
+   (only the first mutator with an id is applied). New children's DoTs start over (Initialise). The fitted
+   P-DOTDEGRADE hypotheses are gone. Every other set is unchanged.
 1. **Bomb (33/34, done but bomb_032's 1-ulp frags)**: re-record its scenarios with `# seed` first (ground rule), then
    work through the first differences (open: 003/005/025/205 throws, 004/032 positions).
    Re-recording (2026-11-02): bomb_000 re-recorded with its seed (no R lines: a 0-0-0 makes no synced

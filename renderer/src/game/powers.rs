@@ -127,7 +127,7 @@ impl Game {
     /// bloonSpeed (regrow) and the DartTimeBloonBehaviorModel it adds.
     fn dart_time_slow(&mut self, i: usize, frames: f32, speed: f32) {
         let added = self.sim_elapsed;
-        self.bloons[i].effects.push(Effect { overlay: Default::default(), kind: EffectKind::Slow { mult: speed, glue: 0 }, id: "DartTime".into(), frames_left: frames, total: frames,
+        self.bloons[i].effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Slow { mult: speed, glue: 0 }, id: "DartTime".into(), frames_left: frames, total: frames,
             added, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
     }
 

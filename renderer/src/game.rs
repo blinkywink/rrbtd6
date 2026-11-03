@@ -572,6 +572,10 @@ pub struct Effect {
     pub added: u64,
     /// Its mutator's overlayType (display only; empty: none).
     pub overlay: std::sync::Arc<str>,
+    /// When its behaviour was made (`Game::effect_seq`): the bloon's behaviour order. A bloon
+    /// keeps the behaviours it has when its model changes and adds new ones last, so this differs
+    /// from the mutator list's order (the Vec's) once the middle insert moves a mutator.
+    pub seq: u64,
 }
 
 /// FxHash (rustc's): a fast hasher for the sim's bloon-id maps, looked up thousands of times a
@@ -643,7 +647,9 @@ pub enum EffectKind {
     /// DamageOverTime: `interval` in frames; `tick` is lastTick on the round clock (whole frames).
     /// `mods`: its DamageModifierForTag models (DamageOverTime.DealDamage, per tick on what the
     /// bloon is then).
-    Dot { damage: f32, interval: f32, tick: f32, immune: u32, mods: std::sync::Arc<[TagMod]> },
+    /// `start`: Initialise's lastTick offset from the clock (initialDelayFrames; triggerImmediate:
+    /// None, lastTick -999999999), used again when a degrade makes its behaviour anew.
+    Dot { damage: f32, interval: f32, tick: f32, immune: u32, mods: std::sync::Arc<[TagMod]>, start: Option<f32> },
     Brittle { damage: f32 },
     Emit { interval: f32, tick: f32, proj: Box<Proj> },
     /// EmitOnPopModel: fired where the bloon pops.
@@ -674,6 +680,27 @@ pub enum EffectKind {
     Cooldown,
     /// CreateEffectOnPopModel: its effect (name, scale) where the bloon pops (visual only).
     PopFx { fx: std::sync::Arc<str>, scale: f32 },
+}
+
+/// Where Mutable.AddMutator (VERIFIED-DISASM @0x180f34f20) puts a new mutator: its
+/// SortedListLite insert (@0x181ffcdb0; binary search @0x18014ca90 on Mutable.SortMutators'
+/// priority, highest first, an equal one at the probed middle) puts one of equal priority at
+/// index count / 2. Slow and AddBehaviorToBloon mutators are all priority 1 (BehaviorMutator
+/// ctor @0x180f310c0 from SlowMutator @0x1811ff250 / AddBehaviorToBloonModel.Mutator
+/// @0x1811cbd20).
+fn mutator_slot(effects: &[Effect]) -> usize {
+    effects.len() / 2
+}
+
+/// Bloon.CopyMutatorsFromBloon -> Mutable.CopyMutatorsFrom (VERIFIED-DISASM @0x180f35ac0): the
+/// source's mutators in its order, each through AddMutator (`mutator_slot`) on the new bloon.
+fn copy_order(effects: Vec<Effect>) -> Vec<Effect> {
+    let mut out: Vec<Effect> = Vec::new();
+    for e in effects {
+        let at = out.len() / 2;
+        out.insert(at, e);
+    }
+    out
 }
 
 impl Bloon {
@@ -2626,6 +2653,8 @@ pub struct Game {
     pub sacrifices: Vec<Sacrifice>,
     /// Towers placed this frame: (position, placement effect prefab, scale).
     pub place_fx: Vec<([f32; 2], String, f32)>,
+    /// The next `Effect::seq`.
+    pub effect_seq: u64,
     /// The round Monkey City's free Dart Monkey was taken.
     free_tower_round: Option<usize>,
     /// MOAB classes a hero has already warned about this round
@@ -3069,6 +3098,7 @@ impl Game {
             upgrade_fx: Vec::new(),
             sacrifices: Vec::new(),
             place_fx: Vec::new(),
+            effect_seq: 0,
             voice_warned: Vec::new(),
             free_tower_round: None,
             pop_emits: Vec::new(),
@@ -4584,7 +4614,7 @@ impl Game {
                 let lead = self.bloons.iter().find(|b| b.id == grabbed[0]).map_or(pos, |b| b.pos);
                 for b in self.bloons.iter_mut().filter(|b| grabbed.contains(&b.id)) {
                     b.effects.retain(|e| e.id != "BeastGrab");
-                    b.effects.push(Effect { overlay: Default::default(), kind: EffectKind::Slow { mult: 0.0, glue: 0 }, id: "BeastGrab".into(), frames_left: 2.0, total: 2.0, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false });
+                    b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Slow { mult: 0.0, glue: 0 }, id: "BeastGrab".into(), frames_left: 2.0, total: 2.0, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false });
                 }
                 let a = self.towers[t].air.as_mut().unwrap();
                 a.pos = lead;
@@ -5584,8 +5614,8 @@ impl Game {
             moabs.sort_by(|a, b| b.0.total_cmp(&a.0));
             for &(_, i) in moabs.iter().take(br.targets as usize) {
                 self.bloons[i].effects.push(Effect {
-                    overlay: Default::default(),
-                    kind: EffectKind::Dot { damage: br.damage, interval: br.interval * FPS, tick: self.round_clock as f32, immune: br.immune, mods: Default::default() },
+                    overlay: Default::default(), seq: 0,
+                    kind: EffectKind::Dot { damage: br.damage, interval: br.interval * FPS, tick: self.round_clock as f32, immune: br.immune, mods: Default::default(), start: Some(0.0) },
                     id: "MoabBarrage".into(),
                     frames_left: br.lifespan * FPS,
                     total: br.lifespan * FPS,
@@ -6731,6 +6761,18 @@ impl Game {
         // copy the rest (CopyMutatorsFromBloon) and DamageOverTime.PostDegrade (@0x1003fe0) gives
         // their DamageOverTime the parent's lastTick.
         let moab_pop = self.defs[kind].is_moab;
+        // DamageOverTime.PostDegrade (VERIFIED-DISASM @0x180fe54d0), for each of the parent's
+        // DamageOverTime behaviours in order, gives the child's first DamageOverTime its own
+        // lastTick: the first ends with the last one's.
+        // (ApplyMutation applies only the first mutator with an id: a later copy has no behaviour.)
+        let parent_tick = b
+            .effects
+            .iter()
+            .enumerate()
+            .filter(|(k, e)| !b.effects[..*k].iter().any(|x| x.id == e.id))
+            .filter_map(|(_, e)| if let EffectKind::Dot { tick, .. } = e.kind { Some((e.seq, tick)) } else { None })
+            .max_by_key(|x| x.0)
+            .map(|x| x.1);
         let inherited: Vec<Effect> = b
             .effects
             .iter()
@@ -6748,7 +6790,7 @@ impl Game {
                 .enumerate()
                 .filter(|(k, e)| !(e.keep || KEPT_ON_MOAB_POP.contains(&e.id.as_str())) && !b.effects[..*k].iter().any(|x| x.id == e.id))
                 .filter_map(|(_, e)| match e.kind {
-                    EffectKind::Dot { damage, interval, tick, immune, ref mods } if clock - tick as i64 >= (interval as f64).round_ties_even() as i64 => {
+                    EffectKind::Dot { damage, interval, tick, immune, ref mods, .. } if clock - tick as i64 >= (interval as f64).round_ties_even() as i64 => {
                         Some((dot_damage(damage, mods, &self.defs[kind].tags), immune, e.owner, e.distribute))
                     }
                     _ => None,
@@ -6858,6 +6900,33 @@ impl Game {
                     e
                 })
                 .collect();
+            // The first child is the parent object, its mutator list as it was; the others copy it.
+            let mut keep = if n == 0 { keep } else { copy_order(keep) };
+            // Each child's DamageOverTime behaviours are made anew for its model (Initialise:
+            // lastTick = now + initialDelay, or -999999999 with triggerImmediate), then
+            // PostDegrade gives the first the parent's last lastTick (recording
+            // glue_upgrades_r30: a Pink's Dissolver gets Corrosive Glue's old lastTick on every
+            // pop and pops a layer a frame, 968..971).
+            // (The first child is the parent object: it keeps its behaviours, their lastTicks
+            // and order; a new one makes them in its mutator order.)
+            let now = self.round_clock as f32;
+            if n > 0 {
+                for e in &mut keep {
+                    e.seq = self.effect_seq;
+                    self.effect_seq += 1;
+                    if let EffectKind::Dot { tick, start, .. } = &mut e.kind {
+                        *tick = start.map_or(-999999999.0, |s| now + s);
+                    }
+                }
+            }
+            let first = (0..keep.len())
+                .filter(|&k| !keep[..k].iter().any(|x| x.id == keep[k].id) && matches!(keep[k].kind, EffectKind::Dot { .. }))
+                .min_by_key(|&k| keep[k].seq);
+            if let (Some(k), Some(t)) = (first, parent_tick) {
+                if let EffectKind::Dot { tick, .. } = &mut keep[k].kind {
+                    *tick = t;
+                }
+            }
             let child = self.bloons.last_mut().unwrap();
             // Made in the collision pass, before this frame's movement: new objects, they move
             // from the next frame (the first child is the parent object and moves on, unless that
@@ -9359,7 +9428,10 @@ impl Game {
         if b.fresh {
             return;
         }
-        for k in 0..b.effects.len() {
+        // In behaviour order (`Effect::seq`).
+        let mut by_seq: Vec<usize> = (0..b.effects.len()).collect();
+        by_seq.sort_by_key(|&k| b.effects[k].seq);
+        for k in by_seq {
             // (Only the first mutator with an id applies: ApplyMutation's limiter.)
             let behind = b.effects[..k].iter().any(|x| x.id == b.effects[k].id);
             let e = &mut b.effects[k];
@@ -9379,7 +9451,7 @@ impl Game {
                 // round clock is intervalFrames past lastTick (Initialise: the clock when it
                 // went on), it ticks and lastTick = now (recording boomerang_500: on at 77,
                 // 100 damage at 137).
-                EffectKind::Dot { damage, interval, tick, immune, mods } => {
+                EffectKind::Dot { damage, interval, tick, immune, mods, .. } => {
                     if round_clock - *tick as i64 >= (*interval as f64).round_ties_even() as i64 {
                         let prev = *tick;
                         *tick = round_clock as f32;
@@ -10257,6 +10329,7 @@ impl Game {
                     tick: if e.trigger_immediate { -999999999.0 } else { self.round_clock as f32 + (e.initial_delay * FPS).round() },
                     immune: e.immune,
                     mods: e.tag_mods.clone().into(),
+                    start: if e.trigger_immediate { None } else { Some((e.initial_delay * FPS).round()) },
                 },
                 "brittle" => EffectKind::Brittle { damage: e.damage },
                 // HYPOTHESIS P-TRANCE: the bloon leaves its track spot and circles the tower that
@@ -10272,7 +10345,7 @@ impl Game {
                     let f = if has("Moabs") { e.moab_mult } else { e.mult };
                     let r = e.radius.max(1.0);
                     add.push((
-                        Effect { overlay: Default::default(), kind: EffectKind::Cooldown, id: format!("{}Cooldown", e.id), frames_left: (lifespan + e.cooldown) * FPS, total: (lifespan + e.cooldown) * FPS, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false },
+                        Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Cooldown, id: format!("{}Cooldown", e.id), frames_left: (lifespan + e.cooldown) * FPS, total: (lifespan + e.cooldown) * FPS, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false },
                         false,
                         false,
                     ));
@@ -10326,10 +10399,11 @@ impl Game {
             // (recording ninja_005 rt 204: a 0.325 s stun on a MOAB, 19.5 in f32, lasts 19
             // frames; no other recording changes).
             let lf = { let f = lifespan * FPS; if f.is_finite() && f < 1e9 { f.trunc() } else { f } };
-            add.push((Effect { kind, id: e.id.clone(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: e.layers.max(1), owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into() }, e.refresh, e.replace));
+            add.push((Effect { kind, id: e.id.clone(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: e.layers.max(1), owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into(), seq: 0 }, e.refresh, e.replace));
         }
         let kind = self.bloons[i].kind;
         add.retain(|(e, _, _)| !self.bad_immune_to(kind, &e.id));
+        let mut next_seq = self.effect_seq;
         let b = &mut self.bloons[i];
         // The same model's mutator: a slow is told by its multiplier, glue level and lifespan.
         let same_model = |x: &Effect, e: &Effect| match (&x.kind, &e.kind) {
@@ -10386,7 +10460,7 @@ impl Game {
                         EffectKind::Dot { tick, .. } => *tick,
                         _ => unreachable!(),
                     };
-                    let added = x.added;
+                    let (added, old_seq) = (x.added, x.seq);
                     let at = b.effects.len() / 2;
                     let first = b.effects.iter().position(|x| x.id == eff.id).unwrap();
                     let mut eff = eff;
@@ -10397,13 +10471,24 @@ impl Game {
                         // (The same DamageOverTime behaviour: it isn't new this frame; recording
                         // glue_205, Corrosive Glue's tick at 201 with a new copy put on then.)
                         eff.added = added;
+                        eff.seq = old_seq;
+                    } else {
+                        eff.seq = next_seq;
+                        next_seq += 1;
                     }
                     b.effects.insert(at, eff);
                 }
                 Some(_) => {}
-                None => b.effects.push(eff),
+                None => {
+                    let mut eff = eff;
+                    eff.seq = next_seq;
+                    next_seq += 1;
+                    let at = mutator_slot(&b.effects);
+                    b.effects.insert(at, eff);
+                }
             }
         }
+        self.effect_seq = next_seq;
         self.attach_carries(i);
     }
 
@@ -11580,7 +11665,7 @@ impl Game {
                                 if !ok || b.effects.iter().any(|e| matches!(e.kind, EffectKind::Knock { .. })) {
                                     continue;
                                 }
-                                b.effects.push(Effect { overlay: Default::default(), kind: EffectKind::Knock { m }, id: "Knockback".into(), frames_left: (kb.lifespan * FPS).round(), total: (kb.lifespan * FPS).round(), added: $s.sim_elapsed, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
+                                b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Knock { m }, id: "Knockback".into(), frames_left: (kb.lifespan * FPS).round(), total: (kb.lifespan * FPS).round(), added: $s.sim_elapsed, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
                                 if b.dist != b.prev_dist {
                                     let s = speed_frames(b.model_speed(b.frozen_speed(&$s.defs[b.kind], $s.defs[b.kind].speed)));
                                     b.dist = (b.prev_dist + s * b.track_mult * 1.0 * b.mult).max(0.0);
@@ -12135,20 +12220,29 @@ impl Game {
         let order: FastMap<u64, u64> = self.bloons.iter().map(|b| (b.id, b.order)).collect();
         let mut dots = dots;
         dots.sort_by_key(|d| order.get(&d.0).copied().unwrap_or(u64::MAX));
-        // HYPOTHESIS P-DOTDEGRADE: once a DoT tick degrades a bloon its behaviours are made
-        // again and don't run until the next frame: another DoT due now waits (its lastTick kept)
-        // and ticks then (recording glue_upgrades_r30, a Dissolved Pink's due ticks pop a layer a
-        // frame, 969..972).
+        // Bloon.Process runs the behaviours in order, each DamageOverTime ticking and dealing its
+        // damage in turn: once one degrades the bloon its behaviours are new (see degrade), and
+        // the old ones after it don't run.
+        let clock = self.round_clock as f32;
         let mut degraded: Vec<u64> = Vec::new();
-        for (id, damage, immune, owner, distribute, eid, prev) in dots {
+        for k in 0..dots.len() {
+            let (id, damage, immune, owner, distribute, _, _) = dots[k].clone();
             if degraded.contains(&id) {
-                if let Some(e) = self.bloons.iter_mut().find(|b| b.id == id).and_then(|b| b.effects.iter_mut().find(|e| e.id == eid)) {
-                    if let EffectKind::Dot { tick, .. } = &mut e.kind {
-                        *tick = prev;
-                    }
-                }
                 continue;
             }
+            // The bloon's later DamageOverTime behaviours haven't run yet: their lastTick is still
+            // the old one while this one's damage lands (what PostDegrade hands on).
+            let later: Vec<(String, f32)> = dots[k + 1..].iter().filter(|d| d.0 == id).map(|d| (d.5.clone(), d.6)).collect();
+            let set_ticks = |g: &mut Self, from: bool| {
+                let Some(b) = g.bloons.iter_mut().find(|b| b.id == id) else { return };
+                for (eid, prev) in &later {
+                    let (a, z) = if from { (clock, *prev) } else { (*prev, clock) };
+                    if let Some(EffectKind::Dot { tick, .. }) = b.effects.iter_mut().map(|e| (e.id == *eid, &mut e.kind)).find(|(m, k)| *m && matches!(k, EffectKind::Dot { tick, .. } if *tick == a)).map(|(_, k)| k) {
+                        *tick = z;
+                    }
+                }
+            };
+            set_ticks(self, true);
             let Some(i) = self.bloons.iter().position(|b| b.id == id) else { continue };
             if immune & self.bloons[i].properties(&self.defs[self.bloons[i].kind]) != 0 {
                 continue;
@@ -12157,24 +12251,12 @@ impl Game {
             let tally0 = self.damage_tally;
             self.pop_after_move = true;
             self.distribute = distribute;
-            let kids0 = kids.len();
             let n = self.damage(i, damage.round() as i32, &mut kids);
             (self.pop_after_move, self.distribute) = (false, (true, false));
-            // HYPOTHESIS P-DOTDEGRADE: a DoT tick that splits the bloon into more than one child
-            // starts its other DamageOverTime behaviours over (lastTick = now): recording
-            // glue_upgrades_r30, a Black's Corrosive Glue DoT never ticks after Bloon Dissolver's
-            // splits it, while its second Pink's (a copy) still does.
-            let clock = self.round_clock as f32;
-            let split = kids.len() - kids0 > 1;
-            if self.bloons.iter().find(|b| b.id == id).is_some_and(|b| b.kind != kind0) {
+            if self.bloons.iter().find(|b| b.id == id).is_some_and(|b| b.kind != kind0) || !self.bloons.iter().any(|b| b.id == id) {
                 degraded.push(id);
-            }
-            if let Some(b) = self.bloons.iter_mut().find(|b| b.id == id).filter(|b| b.kind != kind0 && split) {
-                for e in &mut b.effects {
-                    if let EffectKind::Dot { tick, .. } = &mut e.kind {
-                        *tick = tick.max(clock);
-                    }
-                }
+            } else {
+                set_ticks(self, false);
             }
             let self_tally_dealt = self.damage_tally - tally0;
             if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
@@ -13342,7 +13424,7 @@ mod tests {
             if let Some((lo, hi)) = std::env::var("RRBTD6_REC_AT").ok().and_then(|v| v.split_once("..").map(|(a, b)| (a.parse::<i64>().unwrap_or(0), b.parse::<i64>().unwrap_or(0)))) {
                 if (lo..=hi).contains(rt) {
                     eprintln!("  rt {rt} clone bloons {:?}", g.bloons.iter().map(|b| (b.id, g.names[b.kind].as_str(), b.dist, b.hp)).collect::<Vec<_>>());
-                    eprintln!("  rt {rt} clone effects {:?}", g.bloons.iter().map(|b| (b.id, b.effects.iter().map(|e| (e.id.clone(), e.frames_left)).collect::<Vec<_>>())).collect::<Vec<_>>());
+                    eprintln!("  rt {rt} clone effects {:?}", g.bloons.iter().map(|b| (b.id, b.effects.iter().map(|e| (e.id.clone(), e.frames_left, if let EffectKind::Dot { tick, .. } = e.kind { tick } else { f32::NAN })).collect::<Vec<_>>())).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone darts {:?}", g.projectiles.iter().map(|p| (p.pos, p.vel, p.pierce, p.frames_left, p.grot, p.z, g.blocker_hit(p.prev, p.spec.vs_blocker_radius, p.z), p.target.is_some(), p.aim, p.seek, p.seek_t)).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone towerpos {:?}", g.towers.iter().map(|t| (t.pos[0], -t.pos[1])).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone towers {:?}", g.towers.iter().enumerate().map(|(i, t)| (t.game_rot, t.base_rot, g.range(i), t.weapons.iter().map(|w| (w.last, w.anim)).collect::<Vec<_>>(), t.orbit.as_ref().map(|o| (o.speed, o.angle, o.seen)))).collect::<Vec<_>>());
