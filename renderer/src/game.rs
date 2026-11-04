@@ -11159,7 +11159,9 @@ impl Game {
                     (true, Some((_, _, tg))) => tg,
                     _ => pr.pos,
                 };
-                sub = Some((spec, at, pr.owner, pr.grot, pr.spec.create_parent_target));
+                // (CreateTypedTower.CreateTower, VERIFIED-DISASM @0xcb0df0, always takes the
+                // emitter's target type: recording engineer_420_close, Close Sentry Experts.)
+                sub = Some((spec, at, pr.owner, pr.grot, pr.spec.create_parent_target || n == 4));
             }
         (out, sub)
     }

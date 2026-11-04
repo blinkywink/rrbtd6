@@ -137,7 +137,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
 | Beast Handler | 9/34 | |
-| Engineer | 24/34 | re-recorded with seeds 2026-11-03; see Engineer notes (Tower parity 0.) |
+| Engineer | 27/34 | re-recorded with seeds 2026-11-03; see Engineer notes (Tower parity 0.) |
 | Ninja | 34/34 | done (all R-line recordings) |
 | Alchemist | 0/34 | throws match; potion hits differ from rt 132 |
 | Ace | 0/25 | recorder doesn't log the plane yet |
@@ -244,7 +244,7 @@ TOWERS.md has the longer per-tower notes.
    paragons, Dan D Monke, Druid's tree and others.
 
 ### Tower parity (the main goal)
-0. **Engineer 24/34 (re-recorded with seeds 2026-11-03)**, next to work on. Done: RandomTargetSpread exact
+0. **Engineer 27/34 (re-recorded with seeds 2026-11-03)**, next to work on. Done: RandomTargetSpread exact
    (Vector3.RandomOffsetFromRadius on syncedRandom), ArriveAtTarget with timeToTake 0 (3D distance from the eject
    point to the ground target / altSpeed, then its curve), SlowOnPopModel (Pin: a Slow only when
    Bloon.WillPopBloon). HYPOTHESIS P-SLOWONPOPUNIQUE: a SlowOnPop re-applied over its own stun keeps the time
@@ -271,7 +271,8 @@ TOWERS.md has the longer per-tower notes.
    Sentry Expert: CreateTypedTower.CalculateTowerModel ported (type chosen when fired). Freeze skips bloons
    its DamageModel is immune to (400 matches). Sentries are selectable/sellable/retargetable
    (ignoreTowerForSelection); TODO: a selected Sentry's panel still shows the Engineer's name and paths, not
-   the game's Sentry panel. Next: 420_* (Sentry Expert typed sentries), 004/005/030/205, upgrades_r30.
+   the game's Sentry panel. Typed sentries always take the Engineer's target type (420_* match). Next: 004/005/030/205,
+   032/052 (Pin re-stun), upgrades_r30.
    OPEN (032 / 052, Cleansing Foam): PathSegment's point has pointHeight = PointInfo z + 2 (VERIFIED-DISASM
    ctor @0xf6d050, literal 2.0 at 0x183e4fc3c), and ArriveAtTarget.SetTarget times altSpeed shots by the 3D
    |targetPos - origPos| (@0xc87ad0). engineer_032's foam to (-113.1, -18.9) eases in as if the target is at z 2
