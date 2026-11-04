@@ -102,7 +102,7 @@ impl Replica{
                 let Some(t)=self.tower(g,slot,*tower)else{return false;};
                 if g.is_necro(t){g.necro_select(t,*at);return true;}
                 if !g.uses_point(t){return false;}
-                g.towers[t].point=Some(*at);true
+                g.towers[t].point=Some(*at);g.towers[t].point_z=0.0;true
             },
             Action::StartRound=>{g.start_round();true},
             Action::Pointer{at}=>{self.pointers[slot as usize]=Some(*at);true},

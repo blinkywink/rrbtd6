@@ -1946,7 +1946,7 @@ async fn game_main() {
             }
             ability_pick = None;
         } else if let Some(t) = picking.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
-            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Point{tower:game.towers[t].id,at:mouse_world});}else if game.is_necro(t){game.necro_select(t, mouse_world);}else{game.towers[t].point = Some(mouse_world);}
+            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Point{tower:game.towers[t].id,at:mouse_world});}else if game.is_necro(t){game.necro_select(t, mouse_world);}else{game.towers[t].point = Some(mouse_world);game.towers[t].point_z = 0.0;}
             picking = None;
         } else if let Some(def) = placing {
             // InputManager.Update (mouse, nudge mode on: Game.DisableNudgeMode is only offered

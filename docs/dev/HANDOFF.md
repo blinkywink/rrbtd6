@@ -267,7 +267,21 @@ TOWERS.md has the longer per-tower notes.
    CreateProjectileOnTowerDestroyModel's BeforeExplosion at their base rotation on expiry; the explosion's
    radius is the sentry's range (LinkProjectileRadiusToTowerRange). useParentTargetPriority gives the Sentry
    the Engineer's target type. The First/Last/Strong keys and Close's rank use the frame-start (filed)
-   segment too. 100/200/250/300/320/500/502*/520 match. Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
+   segment too. 100/200/250/300/320/500/502*/520 match.
+   OPEN (032 / 052, Cleansing Foam): PathSegment's point has pointHeight = PointInfo z + 2 (VERIFIED-DISASM
+   ctor @0xf6d050, literal 2.0 at 0x183e4fc3c), and ArriveAtTarget.SetTarget times altSpeed shots by the 3D
+   |targetPos - origPos| (@0xc87ad0). engineer_032's foam to (-113.1, -18.9) eases in as if the target is at z 2
+   (0.662 / 0.974 of the way). Making start_track_point targets z 2 fixed 032 to rt 1990 but broke 040 / 050 / 250,
+   whose foam gets a RandomTargetSpread offset and is timed as if z 0, although RandomTargetSpread.Emit
+   (@0xc4b720) passes Target.Position's z on to RandomOffsetFromRadius (z + 0). Find what drops the z there
+   SOLVED: RandomTargetSpread.Emit makes the new Target at Map.GetTerrainHeight (committed, 032/052 to rt 2116).
+   Layers-0 slows now survive pops (AddMutatorForNumLayers adds no charge for 0).
+   OPEN P-SLOWONPOPUNIQUE: engineer_032 rt 2099 contradicts it. Green 1064 was pinned at 2057 (Pin: Stun:Weak,
+   1 s, layers 2, isUnique) and popped again at 2099; the game keeps it pinned to 2158 (a full refresh), while
+   engineer_002 keeps the old time. Refreshing for all drops 002/003/004 (Engineer 19). AddMutatorForNumLayers
+   (@0xfb01f0): with the model's +0x4e flag it resets the existing charge entry (ResetMutatorChargeCountForId),
+   else it appends a new one; the time refresh is in Mutable.AddMutator (vtable +0x2a8). Find what differs
+   between the two cases (charges left? which bloon the stun is added to, before or after Degrade?). Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
    upgrades_r30 groups.
 0. **Sub 21/32 (re-recorded with seeds 2026-11-03)**: Airburst's split angles are k x step + (rotation +
    startingOffset), the sum grouped (002 / 004 / 502_* match). Open groups:

@@ -1357,6 +1357,9 @@ pub struct Tower {
     pub target: TargetMode,
     /// The point a TargetSelectedPointModel attack aims at (Mortar target, Dartling lock).
     pub point: Option<[f32; 2]>,
+    /// The point's height: PathSegment's pointHeight (PointInfo z + 2, VERIFIED-DISASM ctor
+    /// @0xf6d050) when it came from a segment, else 0.
+    pub point_z: f32,
     /// Per (attack, weapon) Weapon state (timing, per-round count, crit count).
     pub weapons: Vec<WeaponState>,
     pub shots: u32,
@@ -4532,6 +4535,7 @@ impl Game {
             invested: cost,
             target: TargetMode::First,
             point: None,
+            point_z: 0.0,
             weapons: Vec::new(),
             shots: 0,
             angle: -std::f32::consts::FRAC_PI_2,
@@ -5055,6 +5059,7 @@ impl Game {
             invested: 0.0,
             target: TargetMode::First,
             point: None,
+            point_z: 0.0,
             weapons: Vec::new(),
             shots: 0,
             angle: -std::f32::consts::FRAC_PI_2,
@@ -8649,10 +8654,14 @@ impl Game {
                 // Point-aiming attacks fire at their point (below) and turn towards it at
                 // RotateToPointerModel.rate (HYPOTHESIS P-POINTER: turning shots fire along the barrel).
                 let mut turning = false;
+                // The target's height (Target.Position z) for ArriveAtTarget's altSpeed timing.
+                let mut aim_z = 0.0f32;
                 if mode.aims_at_point() {
                     if attack.point_start_track && self.towers[t].point.is_none() {
                         self.towers[t].point = self.start_track_point(t, &attack, range);
+                        self.towers[t].point_z = 2.0;
                     }
+                    aim_z = self.towers[t].point_z;
                     let tw = &self.towers[t];
                     let fwd = [pos[0] + tw.angle.cos() * 40.0, pos[1] + tw.angle.sin() * 40.0];
                     let aim = match mode {
@@ -9075,6 +9084,10 @@ impl Game {
                                 let gx = (cs * d * r - sn * 0.0) + target[0];
                                 let gy = (sn * d * r + cs * 0.0) + gy;
                                 target = [gx, -gy];
+                                // (Then a new Target at Map.GetTerrainHeight there, @0xc4b720:
+                                // recording engineer_040, a spread foam timed to z 0. STAND-IN:
+                                // no area heights, 0 on the track.)
+                                aim_z = 0.0;
                             }
                             // Launch from the weapon's eject point. HYPOTHESIS P-EJECT: x is to the
                             // tower's right and y forward, as for sprites facing +y.
@@ -9300,7 +9313,9 @@ impl Game {
                                     let t_take = if ar.time > 0.0 {
                                         ar.time
                                     } else {
-                                        let (dx, dy, dz) = (target[0] - pr.pos[0], target[1] - pr.pos[1], pr.z);
+                                        // (A segment point stands 2 up: recording engineer_032, Cleansing
+                                        // Foam eases in 0.662 / 0.974 of the way from 10.7 to 2.)
+                                        let (dx, dy, dz) = (target[0] - pr.pos[0], target[1] - pr.pos[1], pr.z - aim_z);
                                         (dx * dx + dy * dy + dz * dz).sqrt() / ar.alt_speed
                                     };
                                     if t_take > 0.0 && !ar.samples.is_empty() {
@@ -10829,7 +10844,10 @@ impl Game {
             // (recording ninja_005 rt 204: a 0.325 s stun on a MOAB, 19.5 in f32, lasts 19
             // frames; no other recording changes).
             let lf = { let f = lifespan * FPS; if f.is_finite() && f < 1e9 { f.trunc() } else { f } };
-            add.push((Effect { kind, id: e.id.clone(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: e.layers.max(1), owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into(), seq: 0 }, e.refresh, (e.replace, e.kind == "slow" && e.unique && !e.cascade && e.only_if_pop)));
+            // Bloon.AddMutatorForNumLayers (VERIFIED-DISASM @0xfb01f0) gives layer charges only
+            // for layers > 0: one with 0 is never depleted and goes to the children
+            // (CopyMutatorsFrom; recording engineer_032, a foamed Black's pinned Pink half speed).
+            add.push((Effect { kind, id: e.id.clone(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: if e.layers == 0 { u32::MAX } else { e.layers }, owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into(), seq: 0 }, e.refresh, (e.replace, e.kind == "slow" && e.unique && !e.cascade && e.only_if_pop)));
         }
         let kind = self.bloons[i].kind;
         add.retain(|(e, _, _)| !self.bad_immune_to(kind, &e.id));
