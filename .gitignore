@@ -30,3 +30,7 @@ __pycache__/
 hs_err_pid*.log
 replay_pid*.log
 /.claude/
+
+.claude/settings.local.json
+.claude/STOP_KEEP_GOING
+.claude/keep_going_wait

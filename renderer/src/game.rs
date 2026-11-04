@@ -2571,6 +2571,8 @@ pub struct Game {
     emit_dir_rot: Option<f32>,
     /// Height for the projectiles `emit` makes (Projectile.z).
     emit_z: f32,
+    /// The Target an emission is given, when it is a bloon (see `emit_height`).
+    emit_target: Option<u64>,
     /// In InstantDamageEmission.Process's collision pass (after the towers act).
     in_instant: bool,
     /// Path.bloonsList per path: bloon ids and whether they're still alive, in the game's order
@@ -3054,6 +3056,7 @@ impl Game {
             emit_rot: None,
             emit_dir_rot: None,
             emit_z: 0.0,
+            emit_target: None,
             in_instant: false,
             path_lists: Vec::new(),
             path_rank: Default::default(),
@@ -8881,7 +8884,9 @@ impl Game {
                         st.aim_at = p;
                         st.round_shots += 1;
                     }
-                    if st.anim >= 0 && st.anim + off <= now_t {
+                    // (Between rounds Process does nothing, so a throw in progress waits too: recording
+                    // sub_005, a throw due at the round's end leaves on the next round's first frame.)
+                    if rounds_on && st.anim >= 0 && st.anim + off <= now_t {
                         st.anim = -1;
                         spawns += 1;
                     }
@@ -9230,6 +9235,7 @@ impl Game {
                                 // (From the eject point too: recording tack_400, the ring sits
                                 // ejectZ / tan 60 below the tower.)
                                 self.emit_z = ez + self.tower_height(t);
+                                self.emit_target = (target_id != 0).then_some(target_id);
                                 self.emit(from, dir, emission, &spec, crit, tiers, owner);
                                 // EjectEffectModel: the muzzle effect at the eject point (visual).
                                 for (fx, k) in &weapon.eject_fx {
@@ -9243,6 +9249,7 @@ impl Game {
                                     self.emit(from, dir, &single, sec, None, tiers, owner);
                                 }
                                 self.emit_z = 0.0;
+                                self.emit_target = None;
                             } else {
                                 let bursts = self.bursts.len();
                                 // A seeking shot from a tower that doesn't turn leaves towards its
@@ -9266,9 +9273,11 @@ impl Game {
                                 };
                                 self.emit_rot = grot;
                                 self.emit_z = ez + self.tower_height(t);
+                                self.emit_target = (target_id != 0).then_some(target_id);
                                 self.emit(from, dir, emission, proj, crit, tiers, owner);
                                 self.emit_rot = None;
                                 self.emit_z = 0.0;
+                                self.emit_target = None;
                                 // MultiEmissionModel: its secondary projectile from the tower too.
                                 if let Some(sec) = &emission.secondary {
                                     let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
@@ -9344,9 +9353,11 @@ impl Game {
                                     let s0 = self.projectiles.len();
                                     self.emit_rot = grot;
                                     self.emit_z = ez + self.tower_height(t);
+                                self.emit_target = (target_id != 0).then_some(target_id);
                                     self.emit(from, dir, emission, proj, crit, tiers, owner);
                                     self.emit_rot = None;
                                     self.emit_z = 0.0;
+                                    self.emit_target = None;
                                     if proj.instant || emission.kind == "AtTarget" || emission.kind == "InstantDamage" {
                                         for pr in &mut self.projectiles[s0..] {
                                             pr.target = (target_id != 0).then_some(target_id);
@@ -11222,8 +11233,10 @@ impl Game {
             // own when the tower's isn't known.
             self.emit_rot = self.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).or(grot);
             self.emit_z = z;
+            self.emit_target = target;
             self.emit_dir_rot = Some(dir_rot);
             self.emit(pos, dir, &ex.emission, &ex.projectile, None, tiers, owner); // P-EXHAUST
+            self.emit_target = None;
             self.emit_dir_rot = None;
             self.emit_rot = None;
             self.emit_z = 0.0;
@@ -11238,6 +11251,17 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// Emission.BaseEmit (VERIFIED-DISASM @0xc3dce0): the emit point is raised to the Target's
+    /// height less its model's (20, or 120 for a MOAB; +0x88 of BloonModel): nothing for a bloon
+    /// at its own height, but a MOAB just popped into a Ceramic is still 120 up, so 100 (recording
+    /// sub_005: an Airburst dart popping its MOAB splits at z 100, over the 100-high logs).
+    fn emit_height(&self) -> f32 {
+        let z = self.emit_z;
+        let Some(b) = self.emit_target.and_then(|id| self.bloons.iter().find(|b| b.id == id)) else { return z };
+        let t = b.height - if self.defs[b.kind].is_moab { 120.0 } else { 20.0 };
+        if z < t { t } else { z }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -11394,7 +11418,7 @@ impl Game {
             self.proj_list.push(self.next_uid);
             self.projectiles.push(Projectile {
                 uid: self.next_uid,
-                z: self.emit_z,
+                z: self.emit_height(),
                 dir: gdir.map(|v| [v[0], -v[1]]),
                 seek_moved: false,
                 seek_t: self.sim_elapsed,
@@ -12541,7 +12565,11 @@ impl Game {
                     for c in pr.spec.on_contact.iter().filter(|c| !c.on_damage && !c.on_pop) {
                         $contacts.push((pr.prev, heading, c.clone(), pr.tiers, pr.owner, None, pr.z));
                     }
-                    $s.projectiles[$p].frames_left = 0.0;
+                    // CollisionChecker.Process (VERIFIED-DISASM @0xf31590): CollideMap, then
+                    // RootObject.Destroy: no Expire, so no expire projectiles (recording sub_005: an
+                    // Airburst dart into a log makes no splits, and no ids go to them).
+                    $s.projectiles.remove($p);
+                    continue;
                 }
                 // HYPOTHESIS P-ACIDPOOL: a splash that expires without hitting anything becomes a pool
                 // (lifespanIfMisses, radiusIfMisses, pierce).
