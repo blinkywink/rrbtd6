@@ -1366,6 +1366,10 @@ pub struct Exhaust {
     /// CreateProjectileOnExpireModel.useTargetPosition: made where the shot's target is.
     #[serde(default)]
     pub use_target: bool,
+    /// Runtime: the factory object (and aim offset) of a Target whose bloon is gone, looked up
+    /// when the projectile is made: a child made this frame may have taken it over.
+    #[serde(skip)]
+    pub stale_target: Option<(u32, [f32; 2])>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1439,6 +1443,9 @@ pub struct Proj {
     /// AgeModel.lifespan (seconds), when it has one.
     #[serde(default)]
     pub age_lifespan: Option<f32>,
+    /// CreateEffectProjectileAfterTimeModel with useTargetPosition: its timeFrames.
+    #[serde(default)]
+    pub effect_after_target: Option<i32>,
     pub pierce: f32,
     /// Shinobi Tactics' base: the pierce of the tower's first projectile with this one's id.
     #[serde(default)]

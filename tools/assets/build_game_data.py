@@ -591,6 +591,7 @@ def main():
             "random_range": random_range,
             # Its AgeModel's lifespan (Projectile.lifespan for the exhaust duration fraction).
             "age_lifespan": pb["AgeModel"][0]["f"].get("lifespan") if pb.get("AgeModel") else None,
+            "effect_after_target": next((int(m["f"]["time"] * 60) for m in pb.get("CreateEffectProjectileAfterTimeModel", []) if m["f"].get("useTargetPosition")), None),
             "display": "#empty" if disp.get("display") in empty_displays else disp.get("display"),
             "tag_mods": [tag_mod(b) for b in pb.get("DamageModifierForTagModel", [])],
             # DamageModifierWrathModel (Avatar of Wrath): + total RBE on screen / rbeThreshold x

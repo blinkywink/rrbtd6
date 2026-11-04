@@ -1049,6 +1049,9 @@ pub struct WeaponState {
     pub aim_off: [f32; 2],
     /// Which of the MOAB's collision circles that was (its shots steer at it).
     pub aim_circle: Option<u8>,
+    /// The attack's Target: the bloon's last position read during the throw, and its factory object.
+    pub aim_last: [f32; 2],
+    pub aim_obj: Option<u32>,
     pub rate_frames: i64,
     pub missed: f32,
     /// Weapon.bonusDamageCarryover (ApplyExtraDamagePrecision): what a weapon faster than 1/120 s
@@ -1088,6 +1091,8 @@ impl WeaponState {
             limit_until: 0,
             aim_off: [0.0; 2],
             aim_circle: None,
+            aim_last: [0.0; 2],
+            aim_obj: None,
             emits: 0,
             rate_frames: 1,
             missed: 0.0,
@@ -2052,6 +2057,15 @@ pub struct Projectile {
     instant_set: bool,
     /// An instant shot's Target when it is a spot, not a bloon (Wall of Fire's track point).
     instant_pos: Option<[f32; 2]>,
+    /// Target's cached position: where its bloon was when the Target was made (Target.GetPosition
+    /// gives it once the bloon is destroyed, the projectile's copy never being updated).
+    target_cache: Option<[f32; 2]>,
+    /// The factory object its Target's bloon lives in: pooled and reused, the Target follows
+    /// the new bloon's position though no longer valid (recording sub_050: a blast on the Pink
+    /// that took the object over).
+    target_obj: Option<u32>,
+    /// Where it goes back to after CreateEffectProjectileAfterTime moved it for a frame.
+    effect_back: Option<[f32; 2]>,
     /// Where its last lightning jump ended (visual).
     bolt_from: Option<[f32; 2]>,
     /// Arrive-and-stay projectiles (caltrops): frames until they reach their spot and stop.
@@ -8890,6 +8904,15 @@ impl Game {
                         st.anim = -1;
                         spawns += 1;
                     }
+                    // The attack's Target: Target.GetPosition, read while its throw runs, caches the
+                    // bloon's last position and keeps the object (recording sub_052: a missile whose
+                    // target died in the throw goes to that last spot).
+                    if st.anim >= 0 && st.aim_id != 0 {
+                        if let Some(b) = self.bloons.iter().find(|b| b.id == st.aim_id) {
+                            st.aim_last = [b.pos[0] + st.aim_off[0], b.pos[1] + st.aim_off[1]];
+                            st.aim_obj = Some(b.obj);
+                        }
+                    }
                     let (aimed, aim_id, aim_off, aim_circle) = (st.aim_at, st.aim_id, st.aim_off, st.aim_circle);
                     // RotateToTarget.Process (VERIFIED-DISASM @0xdf6be0) with onlyRotateDuringThrow:
                     // while a weapon is in its throw (Weapon.IsInThrow: animationStartedAt >= 0),
@@ -8934,8 +8957,10 @@ impl Game {
                         // calls Attack.FindTarget once lastEmission + rateFrames is reached; recording
                         // dart_040_club, rt 2378.)
                         let lost = locked.is_none() && !ambient && aim_id != 0;
+                        let lost_obj = self.towers[t].weapons[w].aim_obj.filter(|_| lost);
                         let (mut target, target_id) = match (locked, best) {
                             (Some((p, id)), _) => (p, id),
+                            (None, _) if lost && weapon.projectile.instant => (self.towers[t].weapons[w].aim_last, 0),
                             (None, Some((_, p, id))) => (p, id),
                             (None, None) if ambient => (pos, 0),
                             (None, None) => (aimed, 0),
@@ -9320,7 +9345,7 @@ impl Game {
                             // collides the two (Projectile.CollideBloon) the same frame (recording
                             // desperado_000: a Blue shot at 14 is a Red at 14).
                             // HYPOTHESIS P-ATTARGET: the Wererabbit's emission does the first part.
-                            if proj.instant && target_id == 0 && emission.kind != "AtTarget" && emission.kind != "InstantDamage" {
+                            if proj.instant && target_id == 0 && !lost && emission.kind != "AtTarget" && emission.kind != "InstantDamage" {
                                 // Instant.Process (VERIFIED-DISASM @0xcc1b30) puts it on its Target's
                                 // position; a new projectile isn't processed the frame it is made, so
                                 // that frame it is at the eject point (recording wizard_020: Wall of
@@ -9329,10 +9354,20 @@ impl Game {
                                     pr.instant_pos = Some(target);
                                 }
                             } else if proj.instant || emission.kind == "AtTarget" || emission.kind == "InstantDamage" {
-                                let bpos = self.bloons.iter().find(|b| b.id == target_id).map(|b| b.pos);
+                                let bfound = self.bloons.iter().find(|b| b.id == target_id).map(|b| (b.pos, b.obj));
+                                let (bpos, bobj) = (bfound.map(|f| f.0), bfound.map(|f| f.1).or(lost_obj));
                                 for pr in &mut self.projectiles[start..] {
                                     pr.target = (target_id != 0).then_some(target_id);
+                                    // Its target already dead (recording sub_052): made on the Target's
+                                    // cached spot, then Instant.Process puts it on lastBloonPosition,
+                                    // never set: the eject point.
+                                    if lost && proj.instant {
+                                        pr.target = Some(aim_id);
+                                        pr.effect_back = Some(pr.pos);
+                                    }
                                     pr.pos = target;
+                                    pr.target_cache = Some(target);
+                                    pr.target_obj = bobj;
                                     if let Some(bp) = bpos {
                                         pr.inst_off = [target[0] - bp[0], target[1] - bp[1]];
                                     }
@@ -9401,7 +9436,9 @@ impl Game {
                             }
                             if proj.seek.is_some() && !ambient {
                                 for pr in &mut self.projectiles[start..] {
-                                    pr.seek = Some(target_id);
+                                    // (A throw whose target died keeps that Target, invalid, until its first
+                                    // look 5 frames on: recording sub_001, a dart flies straight past a live Red.)
+                                    pr.seek = (!lost).then_some(target_id);
                                     pr.seek_off = aim_circle.map(|_| aim_off);
                                 }
                             }
@@ -11202,7 +11239,14 @@ impl Game {
                 // frame's move: recording boomerang_paragon_r63, a glaive on a Lead leaves
                 // its MoabDot where it was.)
                 let at = if pr.pierce <= 0.0 { pr.prev } else { pr.pos };
-                let at = if ex.use_target { pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map_or(at, |b| b.pos) } else { at };
+                // Projectile.GetPositionOfTarget (VERIFIED-DISASM @0xc8cba0): with the bloon gone, the
+                // Target's cached first spot (recording sub_030: a Ballistic Missile explodes where
+                // it first was, not where its bloon died); no target at all, its own position. A live
+                // target: its position plus the aim's collision circle (sub_032: a blast on a MOAB).
+                let at = if ex.use_target { pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).or_else(|| pr.target_obj.and_then(|o| self.bloons.iter().find(|b| b.obj == o))).map_or(pr.target_cache.unwrap_or(at), |b| [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]]) } else { at };
+                if ex.use_target && !pr.target.is_some_and(|id| self.bloons.iter().any(|b| b.id == id)) {
+                    ex.stale_target = pr.target_obj.map(|o| (o, pr.inst_off));
+                }
                 out.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
             }
             // CreateTypedTower.Exhausted: the towerModelToMake chosen when it was fired.
@@ -11227,6 +11271,9 @@ impl Game {
     #[allow(clippy::type_complexity)]
     fn spawn_exhausted(&mut self, exhausted: Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32))>) {
         for (pos, dir, ex, tiers, owner, target, (grot, z, dir_rot)) in exhausted {
+            // (Recording sub_250: a Ballistic Missile's blast on the child that took its dead
+            // target's object that very frame.)
+            let pos = ex.stale_target.and_then(|(o, off)| self.bloons.iter().find(|b| b.obj == o).map(|b| [b.prev[0] + off[0], b.prev[1] + off[1]])).unwrap_or(pos);
             let start = self.projectiles.len();
             // ArcEmission.GetDirection starts from the emitting tower's rotation now (recording
             // dart_500: a Juggernaut's burst turns with the tower's newer throw); the projectile's
@@ -11487,6 +11534,9 @@ impl Game {
                 inst_off: [0.0; 2],
                 instant_set: false,
                 instant_pos: None,
+                target_cache: None,
+                target_obj: None,
+                effect_back: None,
                 bolt_from: None,
                 moving: 0.0,
                 arrive_at: None,
@@ -11916,6 +11966,20 @@ impl Game {
                             (None, true) => {
                                 if pr.spec.instant_destroy {
                                     pr.frames_left = 0.0;
+                                }
+                                // CreateEffectProjectileAfterTime.SpawnEffect (VERIFIED-DISASM @0xca0540),
+                                // useTargetPosition: a new Position at GetPositionOfTarget, after this
+                                // frame's Instant.Process (which puts it back next frame). With the
+                                // target gone that is the Target's cached first spot (recording sub_030:
+                                // a Ballistic Missile 18 frames on, for one frame).
+                                if let Some(back) = pr.effect_back.take() {
+                                    pr.pos = back;
+                                }
+                                if let (Some(f), Some(c)) = (pr.spec.effect_after_target, pr.target_cache) {
+                                    if pr.born / 4 + f as u64 == $s.sim_elapsed {
+                                        pr.effect_back = Some(pr.pos);
+                                        pr.pos = pr.target_obj.and_then(|o| $s.bloons.iter().find(|b| b.obj == o)).map_or(c, |b| [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]]);
+                                    }
                                 }
                             }
                             // Bounced glaives (HYPOTHESIS P-BOUNCE-TRAVEL) home in on their next bloon
