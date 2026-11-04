@@ -157,6 +157,9 @@ pub struct HealthMod {
 pub struct BloonDef {
     #[serde(default)]
     pub modded:bool,
+    /// BloonModel.baseId ("Pink" for every Pink variant).
+    #[serde(default, rename = "baseId")]
+    pub base_id: String,
     /// CollisionGroupData (MOAB-class): (offset x, offset y along the heading, radius), game frame.
     #[serde(default)]
     pub circles: Vec<[f32; 3]>,
@@ -2026,6 +2029,9 @@ pub struct SubTowerSpec {
     /// CreateProjectileOnTowerDestroyModel: fired at the tower when it expires.
     #[serde(default)]
     pub on_destroy: Vec<OnDestroy>,
+    /// !TowerModel.ignoreTowerForSelection: it can be selected (targeted, sold) on its own.
+    #[serde(default)]
+    pub selectable: bool,
     /// PathMovementFromScreenCenterModel: circles the map centre.
     #[serde(default)]
     pub circle: Option<Circle>,

@@ -2018,6 +2018,8 @@ pub struct Projectile {
     camo: bool,
     /// Its tower sees camo by a support buff (which turns the FilterInvisibles off).
     buff_camo: bool,
+    /// CreateTypedTower's towerModelToMake (index into create_tower), chosen when fired.
+    typed: Option<usize>,
     /// Follow-path projectiles: throw direction (unit) and distance travelled along the path.
     /// Its rotation in the game's frame (degrees), when made the game's way (Vector2.Rotate):
     /// what its own emissions (exhaust) start from. None once something turns it.
@@ -5347,6 +5349,51 @@ impl Game {
         }
     }
 
+    /// CreateTypedTower.CalculateTowerModel (VERIFIED-DISASM @0xcb06a0, scores @0xcb00d0 /
+    /// @0xcafba0 / @0xcafde0 / @0xcb0290): from the share of each bloon baseId among all bloons
+    /// (BloonManager.GetProportionOfTotalBloonCountByBaseId) and the Sentries of each type out,
+    /// the highest score (strictly, from -99999) of crushing, boom, cold, energy; each score the
+    /// float Average of its terms (Enumerable.Average: a double sum) - 0.01 per own Sentry.
+    fn typed_tower_choice(&self) -> usize {
+        let total = self.bloons.len();
+        let count = |id: &str| self.bloons.iter().filter(|b| self.defs[b.kind].base_id == id).count();
+        let prop = |id: &str| if total > 0 { count(id) as f32 / total as f32 } else { 0.0 };
+        let sentries = |id: &str| self.towers.iter().filter(|t| t.sub.as_ref().is_some_and(|s| s.spec.id == id)).count() as i32;
+        let (pk, bk, wh, ld, pu, zb, rb, ce) = (prop("Pink"), prop("Black"), prop("White"), prop("Lead"), prop("Purple"), prop("Zebra"), prop("Rainbow"), prop("Ceramic"));
+        let (mo, bfb, zomg, ddt, bad) = (prop("Moab"), prop("Bfb"), prop("Zomg"), prop("Ddt"), prop("Bad"));
+        let (n_pink, n_cer, n_moab) = (count("Pink") as i32, count("Ceramic") as i32, count("Moab") as i32);
+        let (crush, boom, cold, energy) = (sentries("SentryCrushing"), sentries("SentryBoom"), sentries("SentryCold"), sentries("SentryEnergy"));
+        let avg = |v: &[f32]| (v.iter().map(|&x| x as f64).sum::<f64>() / v.len() as f64) as f32;
+        let k = -0.01f32;
+        let mut l = vec![ce, pu];
+        if crush == 0 && n_cer > 14 {
+            l.push(1.5);
+        }
+        let s_crush = avg(&l) + crush as f32 * k;
+        let mut l = vec![ld, bk * -1.0, mo * -0.5];
+        if boom < cold && n_pink > 19 {
+            l.push(1.5);
+        }
+        let s_boom = avg(&l) + boom as f32 * k;
+        let mut l = vec![pk, pu, ce, ld * -1.0, wh * -1.0];
+        if cold < boom && n_pink > 19 {
+            l.push(1.5);
+        }
+        let s_cold = avg(&l) + cold as f32 * k;
+        let mut l = vec![zb, rb, mo, bfb + bfb, zomg * 4.5, ddt * 2.5, bad * 10.0, pu * -1.0];
+        if n_moab > 9 && (cold == 0 || crush == 0) {
+            l.push(-4.0);
+        }
+        let s_energy = avg(&l) + energy as f32 * k;
+        let mut best = (0, -99999.0f32);
+        for (i, sc) in [s_crush, s_boom, s_cold, s_energy].into_iter().enumerate() {
+            if best.1 < sc {
+                best = (i, sc);
+            }
+        }
+        best.0
+    }
+
     /// Removes expired sub-towers (indices go to `removed`).
     fn expire_subs(&mut self, round_end: bool) {
         let mut gone = Vec::new();
@@ -6103,8 +6150,8 @@ impl Game {
 
     /// Next upgrade on `path`: Some((name, cost)) if one exists and crosspathing allows it.
     pub fn next_upgrade(&self, t: usize, path: usize) -> Option<(String, f64)> {
-        // A Paragon has no more upgrades.
-        if self.towers[t].paragon.is_some() {
+        // A Paragon has no more upgrades; a sub-tower has none.
+        if self.towers[t].paragon.is_some() || self.towers[t].sub.is_some() {
             return None;
         }
         if path < 3 && self.towers[t].tiers[path] == 5 && self.paragon_ready(t) {
@@ -6610,7 +6657,8 @@ impl Game {
         }
         let Some(t) = self.towers.iter().position(|x| x.id == id) else { return };
         let frac = self.sell_fraction(t);
-        let tw = self.towers.swap_remove(t);
+        // (Off the process list by an ordered RemoveAt, as an expired one: RootObject.Destroy.)
+        let tw = self.towers.remove(t);
         self.cash += (tw.invested * frac).floor() + tw.bank.floor();
         self.towers.retain(|o| !o.sub.as_ref().is_some_and(|s| (s.pet || s.spec.with_parent) && s.parent == tw.id));
     }
@@ -6834,7 +6882,8 @@ impl Game {
 
     pub fn tower_at(&self, p: [f32; 2]) -> Option<usize> {
         self.towers.iter().position(|t| {
-            if t.sub.is_some() {
+            // A sub-tower is picked only when its model allows it (Sentries yes, Phoenixes no).
+            if t.sub.as_ref().is_some_and(|s| !s.spec.selectable) {
                 return false;
             }
             let r = self.tower_defs[t.def].1.radius + 4.0;
@@ -9351,8 +9400,14 @@ impl Game {
                                     }
                                 }
                             }
+                            // CreateTypedTowerCurrentIndex.ProjectilesCreated (VERIFIED-DISASM @0xc70db0):
+                            // each new shot's CreateTypedTower picks its sentry now.
+                            let typed = (proj.create_tower.len() == 4).then(|| self.typed_tower_choice());
                             for pr in &mut self.projectiles[start..] {
                                 pr.camo = camo;
+                                if pr.spec.create_tower.len() == 4 {
+                                    pr.typed = typed;
+                                }
                             }
                             // RandomAngleOffset.ProjectilesCreated (VERIFIED-DISASM @0xc8fe40): per
                             // shot, in order, a syncedRandom NextDouble; g = (float)d x (max - min) -
@@ -10694,8 +10749,12 @@ impl Game {
             if e.kind == "slow" && e.id.contains("Permafrost") && spec.damage_model && spec.immune & props != 0 {
                 continue;
             }
-            // Freeze.Collide (VERIFIED-DISASM @0xcdcc60): bossImmunity spares Bads and Minibosses.
-            if (e.kind == "freeze" && ((!e.moabs && has("Moabs")) || (e.boss_immunity && (has("Bad") || has("Miniboss")))))
+            // Freeze.Collide (VERIFIED-DISASM @0xcdcc60): bossImmunity spares Bads and Minibosses;
+            // without a chance it freezes only a bloon the projectile's DamageModel isn't
+            // immune to (Bloon.IsImmuneByProperty; recording engineer_400: a Cold Sentry's
+            // blast leaves a Zebra moving).
+            if (e.kind == "freeze" && e.chance <= 0.0 && spec.damage_model && spec.immune & props != 0)
+                || (e.kind == "freeze" && ((!e.moabs && has("Moabs")) || (e.boss_immunity && (has("Bad") || has("Miniboss")))))
                 || (e.moabs_only && !has("Moabs"))
             {
                 continue;
@@ -11089,12 +11148,10 @@ impl Game {
                 let at = if ex.use_target { pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map_or(at, |b| b.pos) } else { at };
                 out.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
             }
-            // HYPOTHESIS P-TYPEDTOWER: typed sub-towers (Sentry Expert) take turns in
-            // crushing, boom, cold, energy order.
+            // CreateTypedTower.Exhausted: the towerModelToMake chosen when it was fired.
             let n = pr.spec.create_tower.len();
             if n > 0 {
-                let spec = pr.spec.create_tower[self.typed_made % n].clone();
-                self.typed_made += 1;
+                let spec = pr.spec.create_tower[pr.typed.unwrap_or(0).min(n - 1)].clone();
                 // CreateTower.Exhausted: positionAtTarget puts it on the projectile's Target
                 // (recording engineer_200: a Sentry on its point (-101.07, -1.13), not the
                 // arrive lerp's float off it).
@@ -11346,6 +11403,7 @@ impl Game {
                 bounces: 0,
                 camo: true,
                 buff_camo: self.towers.iter().position(|t| t.id == owner).is_some_and(|i| self.buffs.get(i).is_some_and(|b| b.camo)),
+                typed: None,
                 fwd: [c, s],
                 path_d: 0.0,
                 on_track: None,

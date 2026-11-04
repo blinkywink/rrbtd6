@@ -174,7 +174,7 @@ def main():
             "speed": f["speed"], "maxHealth": f["maxHealth"], "radius": f["radius"],
             # BloonModel.danger: what Strong targeting ranks by (Path.FindBestBloon).
             "danger": f.get("danger", 0.0),
-            "isMoab": f["isMoab"], "isCamo": f["isCamo"], "leakDamage": f["leakDamage"],
+            "isMoab": f["isMoab"], "isCamo": f["isCamo"], "leakDamage": f["leakDamage"], "baseId": f.get("baseId") or "",
             "bloonProperties": f.get("bloonProperties", 0), "tags": items(f.get("tags")),
             "layerNumber": f["layerNumber"], "children": children,
             "index": model_index.get(f["id"], len(model_index)),
@@ -1942,6 +1942,8 @@ def main():
                 "id": f.get("baseId") or f["_name"],
                 "with_parent": any(b["type"] == "TowerExpireOnParentDestroyedModel" for b in bs),
                 "on_destroy": on_destroy,
+                # TowerModel.ignoreTowerForSelection: Phoenixes can't be clicked; Sentries can.
+                "selectable": not f.get("ignoreTowerForSelection", False),
                 # CreateEffectOnPlaceModel / CreateEffectOnExpireModel (mini Sun Avatar): (effect, scale).
                 "place_fx": next(([prefab_name((deref(b["f"].get("effectModel")) or {}).get("f", {}).get("assetId")),
                                    (deref(b["f"].get("effectModel")) or {}).get("f", {}).get("scale", 1.0)]
