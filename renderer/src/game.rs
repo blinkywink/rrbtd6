@@ -322,6 +322,8 @@ pub struct Bloon {
     /// segment (Bloon.Move, which refiles it, doesn't run; recording ninja_020 rt 421: a Ninja
     /// targets a Red carried at 173.6 from its old segment in range).
     pub wind_seg: Option<f32>,
+    /// In a Gyrfalcon's claws (MoveWithAirUnit, offTrackCount): not filed on the path's segments.
+    pub held: bool,
     /// The wind was attached to it by a Wind hit (offTrackCount), not taken over from a parent.
     pub wind_direct: bool,
     /// The MoveWithWindModel carrying it (a child that copies the mutator draws with it).
@@ -3894,7 +3896,7 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
-        self.bloons.push(Bloon { id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, mult: 1.0, cell_pos: pos, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_seg: None, wind_direct: false, wind_model: None, grave_zone: (false, false), obj });
+        self.bloons.push(Bloon { held: false, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, mult: 1.0, cell_pos: pos, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_seg: None, wind_direct: false, wind_model: None, grave_zone: (false, false), obj });
         self.plist_add(id, path);
         self.dart_time_spawned();
         if self.grid_on {
@@ -4198,7 +4200,7 @@ impl Game {
         }
         // HYPOTHESIS P-SEEKOFFTRACK: a bloon the wind carries (offTrackCount) isn't a new target
         // (recording ninja_032 rt 3175: a shuriken passes over a Black blown back from its spot).
-        if b.wind.is_some() {
+        if b.wind.is_some() || b.held {
             return false;
         }
         // (A bloon made after the projectile hasn't moved yet when its TrackTarget looks: its
@@ -4914,7 +4916,7 @@ impl Game {
             // UpdateGrappleDamage.
             if !held.is_empty() && rt >= st.last_grapple + rate {
                 let ids = held.clone();
-                self.bird_hit(&ids, &g, g.initial, g.grapple_moab, owner, true);
+                self.bird_hit(&ids, &g, g.initial, g.grapple_moab, owner);
                 held.retain(|b| self.bloons.iter().any(|x| x.id == *b));
                 st.last_grapple = rt;
             }
@@ -5010,7 +5012,7 @@ impl Game {
                         st.hover = true;
                         st.idle = None;
                     }
-                    GyrTarget::Bloon(b, layer) if self.bloons.iter().any(|x| x.id == b && x.layer == layer) => {
+                    GyrTarget::Bloon(b, _) if self.bloons.iter().any(|x| x.id == b) => {
                         // The segment in range furthest from the exit. (UpdateMovement @0xdc8130: the
                         // target is snatched, or only hit if it has passed that segment or can't be,
                         // and so with what's around it, Targetting.GetTargets with Close around it,
@@ -5045,6 +5047,7 @@ impl Game {
                                 let n = held.len() as f32;
                                 self.bloons[i].path = p;
                                 self.bloons[i].dist = centre - (n + n);
+                                self.bloons[i].held = true;
                                 // All but the first sit 1 off the bird, (0, 1) turned by a NextDouble
                                 // x 360 (recording beast_001 rt 404).
                                 let off = if n > 0.0 {
@@ -5061,7 +5064,7 @@ impl Game {
                             if can_all {
                                 st.last_grapple = rt;
                             }
-                            self.bird_hit(&[x], &g, g.initial, g.initial_moab, owner, can);
+                            self.bird_hit(&[x], &g, g.initial, g.initial_moab, owner);
                             tagged.push(x);
                             if left <= 0.0 {
                                 break;
@@ -5111,7 +5114,7 @@ impl Game {
 
     fn gyr_valid(&self, st: &GyrState) -> bool {
         match st.target {
-            GyrTarget::Bloon(b, layer) => self.bloons.iter().any(|x| x.id == b && x.layer == layer),
+            GyrTarget::Bloon(b, _) => self.bloons.iter().any(|x| x.id == b),
             GyrTarget::None => false,
             _ => true,
         }
@@ -5133,6 +5136,7 @@ impl Game {
                     if let Some(d) = dists.iter().find(|d| d.0 == *h) {
                         b.dist = d.1;
                     }
+                    b.held = true;
                     if !b.effects.iter().any(|e| e.id == "BeastGrab") {
                         b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Slow { mult: 0.0, glue: 0 }, id: "BeastGrab".into(), frames_left: 2.0, total: 2.0, added: 0, layers: 1, owner: 0, distribute: (true, false), keep: false });
                     }
@@ -5145,6 +5149,7 @@ impl Game {
         for h in held.drain(..) {
             if let Some(b) = self.bloons.iter_mut().find(|b| b.id == h) {
                 b.effects.retain(|e| e.id != "BeastGrab");
+                b.held = false;
                 let off = st.dists.iter().find(|d| d.0 == h).map_or([0.0; 2], |d| d.2);
                 b.pos = [st.last_pos[0] + off[0], st.last_pos[1] + off[1]];
                 b.prev = b.pos;
@@ -5195,7 +5200,14 @@ impl Game {
             let k = (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize;
             self.seg_until_leak(b.path, k)
         };
-        let key = |b: &Bloon| match mode {
+        // Targetting.GetGlobalBest @0xffa100: Path.bestFirst / bestLast (FindBestBloon, as they were
+        // filed: the distance at the frame's start) before the segments.
+        let best = match mode {
+            TargetMode::First => self.bloons.iter().filter(|b| b.wind.is_none() && !b.held).max_by(|x, y| x.prev_dist.total_cmp(&y.prev_dist).then_with(|| self.path_rank.get(&y.id).map(|r| r.1).cmp(&self.path_rank.get(&x.id).map(|r| r.1)))).map(|b| b.id),
+            TargetMode::Last => self.bloons.iter().filter(|b| b.wind.is_none() && !b.held).min_by(|x, y| x.prev_dist.total_cmp(&y.prev_dist).then_with(|| self.path_rank.get(&x.id).map(|r| r.1).cmp(&self.path_rank.get(&y.id).map(|r| r.1)))).map(|b| b.id),
+            _ => None,
+        };
+        let key = |b: &Bloon| if Some(b.id) == best { f32::MIN } else { match mode {
             TargetMode::Last => -seg_leak(b),
             // (BloonManager.CompareBracketClose @0xfc9650: its segment's point.)
             TargetMode::Close => {
@@ -5204,14 +5216,14 @@ impl Game {
             }
             TargetMode::Strong => -(self.rbe[b.kind] as f32 * 1e4 + b.progress()),
             _ => seg_leak(b),
-        };
+        } };
         self.bloons
             .iter()
             .filter(|b| { let q = Self::gyr_at(b, stamp); (q[0] - home[0]).powi(2) + (q[1] - home[1]).powi(2) <= rr })
             .filter(|b| !self.towers.iter().any(|tw| tw.air.as_ref().is_some_and(|a| a.grab.contains(&b.id))))
             .filter(|b| self.grab_cost(b, g) <= g.amount)
             // (A bloon made after the bird isn't a target until it has moved: recording beast_502.)
-            .filter(|b| b.born <= stamp || b.born / 4 + 1 <= self.sim_elapsed)
+            .filter(|b| b.born <= stamp || b.born / 4 + 1 <= self.sim_elapsed || (b.born % 4 == 0 && b.lineage.is_some()))
             .filter(|b| self.bird_filter(b, g))
             .filter(|b| !held.contains(&b.id) && !tagged.contains(&b.id))
             // TargetCheck @0xdc7a30: not before the segment, within the range of the bird.
@@ -5219,7 +5231,8 @@ impl Game {
                 seg.is_none_or(|(p, k)| self.seg_span(p as usize, k).is_none_or(|(_, max)| max <= b.dist))
                     && (b.pos[0] - pos[0]).powi(2) + (b.pos[1] - pos[1]).powi(2) <= r * r
             }))
-            .min_by(|x, y| key(x).total_cmp(&key(y)))
+            // (On one segment, the first in the path's list.)
+            .min_by(|x, y| key(x).total_cmp(&key(y)).then_with(|| self.path_rank.get(&x.id).map(|r| r.1).cmp(&self.path_rank.get(&y.id).map(|r| r.1))))
             .map(|b| (b.id, b.layer))
     }
 
@@ -5284,13 +5297,13 @@ impl Game {
         let mut out: Vec<(u64, (f32, u64))> = Vec::new();
         for b in &self.bloons {
             // (One made after the bird this frame isn't there yet: as bird_target.)
-            if !self.bird_filter(b, g) || b.id == skip || held.contains(&b.id) || !(b.born <= stamp || b.born / 4 + 1 <= self.sim_elapsed) {
+            if !self.bird_filter(b, g) || b.id == skip || held.contains(&b.id) || !(b.born <= stamp || b.born / 4 + 1 <= self.sim_elapsed || (b.born % 4 == 0 && b.lineage.is_some())) {
                 continue;
             }
             let k = (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize;
             let Some(q) = self.track_segs.get(b.path as usize).and_then(|s| s.get(k)) else { continue };
             if (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= reach * reach {
-                out.push((b.id, ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2), b.order)));
+                out.push((b.id, ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2), self.path_rank.get(&b.id).map_or(u64::MAX, |r| r.1 as u64))));
             }
         }
         out.sort_by(|x, y| x.1.0.total_cmp(&y.1.0).then(x.1.1.cmp(&y.1.1)));
@@ -5327,7 +5340,7 @@ impl Game {
     }
 
     /// Hits the grabbed bloons for `dmg` (+`moab` on MOAB-class, +regrowDamageModifier on regrow).
-    fn bird_hit(&mut self, ids: &[u64], g: &crate::data::Grapple, dmg: f32, moab: f32, owner: u64, held: bool) {
+    fn bird_hit(&mut self, ids: &[u64], g: &crate::data::Grapple, dmg: f32, moab: f32, owner: u64) {
         let mut kids = Vec::new();
         for id in ids {
             kids.clear();
@@ -5342,15 +5355,6 @@ impl Game {
                 tw.damage += self_tally_dealt;
                 self.stats.pops += n;
                 self.stats.damage += self_tally_dealt;
-            }
-            // A held bloon has no children but the one that carries on (recording beast_001: a
-            // Black in the bird's claws becomes one Pink).
-            if held {
-                for k in kids.iter().rev().copied().filter(|k| k != id) {
-                    if let Some(j) = self.bloons.iter().position(|b| b.id == k) {
-                        self.unmake_bloon(j);
-                    }
-                }
             }
         }
     }
@@ -7322,7 +7326,28 @@ impl Game {
             self.damage(i,amount,&mut Vec::new());self.distribute=saved;
         }
     }
-    fn damage(&mut self, i: usize, mut dmg: i32, out_children: &mut Vec<u64>) -> u64 {
+    /// Bloon.Damage. (A bloon in a Gyrfalcon's claws has blockSpawnChildrenCount: of what it pops
+    /// into only the one carrying on is made, whatever hit it; recordings beast_001, beast_032.)
+    fn damage(&mut self, i: usize, dmg: i32, out_children: &mut Vec<u64>) -> u64 {
+        let held = self.pop_depth == 0 && self.bloons[i].held;
+        let (id, start) = (self.bloons[i].id, out_children.len());
+        let n = self.damage_inner(i, dmg, out_children);
+        if held {
+            for k in out_children[start..].iter().rev().copied().filter(|k| *k != id).collect::<Vec<_>>() {
+                if let Some(j) = self.bloons.iter().position(|b| b.id == k) {
+                    self.unmake_bloon(j);
+                }
+            }
+            let mut at = 0;
+            out_children.retain(|k| {
+                at += 1;
+                at <= start || *k == id
+            });
+        }
+        n
+    }
+
+    fn damage_inner(&mut self, i: usize, mut dmg: i32, out_children: &mut Vec<u64>) -> u64 {
         #[cfg(test)] let _damage_timer=(self.pop_depth==0).then(||sim_profile::Timer::new(0));
         if self.pop_depth==0&&self.mod_runtime.intercepts & crate::mod_runtime::DAMAGE!=0 {
             let event=serde_json::json!({"bloon":crate::mod_entities::bloon(self,i),"damage":dmg});
@@ -8829,7 +8854,7 @@ impl Game {
                     let b = &self.bloons[bi];
                     // Path.Process (VERIFIED-DISASM @0xf6fe60) files on its segments only the bloons
                     // with offTrackCount 0; the wind's are taken after them (below).
-                    if b.wind.is_some() {
+                    if b.wind.is_some() || b.held {
                         continue;
                     }
                     let d = &self.defs[b.kind];
@@ -9017,7 +9042,7 @@ impl Game {
                 // ninja_520 rt 334: a carried bloon is a target when nothing on the segments is;
                 // ninja_420_last: not over one).
                 if best.is_none() && mode != TargetMode::Point {
-                    let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| self.bloons[i].wind.is_some() && self.bloons[i].hp > 0).collect();
+                    let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].wind.is_some() || self.bloons[i].held) && self.bloons[i].hp > 0).collect();
                     off.sort_by_key(|&i| std::cmp::Reverse(self.bloons[i].obj));
                     for i in off {
                         let b = &self.bloons[i];
@@ -9317,6 +9342,16 @@ impl Game {
                         st.anim = -1;
                         spawns += 1;
                     }
+                    // CycleAnimation.GetAnimation (@0xc72140, the weapon's behaviours as the throw starts):
+                    // randomize takes a synced Next(min, max + 1), a draw whatever it's used for
+                    // (recording beast_052: Next(2, 5) at each of the pet's throws).
+                    if started.is_some() && weapon.cycle_random {
+                        let seed = self.freeplay_seed;
+                        let d = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
+                        if std::env::var_os("RRBTD6_RNG_LOG").is_some() {
+                            eprintln!("RNG {} {d:?}", self.round_clock);
+                        }
+                    }
                     // The Target's factory object, while its bloon lives. (Its cached spot is where
                     // the bloon was when the throw started: readers get copies of the struct;
                     // recording sub_052, a missile whose target died in the throw.)
@@ -9372,7 +9407,7 @@ impl Game {
                         let lost_obj = self.towers[t].weapons[w].aim_obj.filter(|_| lost);
                         let (mut target, target_id) = match (locked, best) {
                             (Some((p, id)), _) => (p, id),
-                            (None, _) if lost && weapon.projectile.instant => (aimed, 0),
+                            (None, _) if lost && (weapon.projectile.instant || (weapon.projectile.only_target && weapon.emission.kind == "InstantDamage")) => (aimed, 0),
                             (None, Some((_, p, id))) => (p, id),
                             (None, None) if ambient => (pos, 0),
                             (None, None) => (aimed, 0),
@@ -9777,6 +9812,14 @@ impl Game {
                                         pr.target = Some(aim_id);
                                         pr.effect_back = Some(pr.pos);
                                     }
+                                    // InstantDamageEmission with its target already dead (recording beast_025,
+                                    // the Microraptor's shot): no collision, so its pierce is never used; with
+                                    // no AgeModel it stays where it was aimed till the round's end, hitting
+                                    // nothing (FilterAllExceptTarget).
+                                    if lost && !proj.instant && emission.kind == "InstantDamage" && proj.only_target {
+                                        pr.target = Some(aim_id);
+                                        pr.frames_left = f32::INFINITY;
+                                    }
                                     pr.pos = target;
                                     pr.target_cache = Some(target);
                                     pr.target_obj = bobj;
@@ -10049,7 +10092,7 @@ impl Game {
             let mut segs: Vec<Vec<Vec<u32>>> = vec![Vec::new(); self.tracks.len()];
             for (bi, b) in self.bloons.iter().enumerate() {
                 // The wind's bloons aren't filed on segments (towers_phase skips them).
-                if b.wind.is_some() {
+                if b.wind.is_some() || b.held {
                     continue;
                 }
                 // (Its segment as of the frame's start: a tower processed after the bloons moved
@@ -10087,7 +10130,7 @@ impl Game {
         let mut lead: Vec<Option<(usize, f32, u32)>> = vec![None; self.tracks.len()];
         for (bi, b) in self.bloons.iter().enumerate() {
             let d = &self.defs[b.kind];
-            if (b.camo(d) && !camo) || (no_moab && d.tags.iter().any(|t| t == "Moabs")) || b.wind.is_some() {
+            if (b.camo(d) && !camo) || (no_moab && d.tags.iter().any(|t| t == "Moabs")) || b.wind.is_some() || b.held {
                 continue;
             }
             let rank = self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);

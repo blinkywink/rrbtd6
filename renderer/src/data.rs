@@ -979,6 +979,9 @@ fn yes() -> bool {
 
 #[derive(Deserialize, Clone)]
 pub struct Weapon {
+    /// CycleAnimationModel.randomize: a synced draw at each throw.
+    #[serde(default)]
+    pub cycle_random: bool,
     /// WeaponModel name without its prefix ("MainWeapon", "LongWeapon"...).
     #[serde(default)]
     pub name: String,

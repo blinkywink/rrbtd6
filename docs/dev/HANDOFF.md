@@ -136,7 +136,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Sniper | 19/34 | see Sniper notes |
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
-| Beast Handler | 31/34 | re-recorded with seeds 2026-11-04. Pets spawn at their spawner attack RandomPosition. GyrfalconPattern ported (fly_birds; state GyrState): flight, target First in handler range among bird_filter, snatch (SetPath seg centre - 2n, blockSpawnChildren: one child), carry to GetDestinationPathSegment (largest distanceUntilLeak in range), release, cooldown (rt >= cd_start + cd, cd_start starts -1), idle moves (R r / R d pairs; range + 1 INFERRED), bloons made after the bird use b.prev (gyr_at). Around the target it takes bloons on segments whose point is within grabRadius + 2 (Targetting.GetTargets). Open: 003 rt 2557, 004 rt 1431 (Rainbow vs Ceramic: damage), 005 rt 394, 502 rt 1864 (second bloon offset), 025 / 032 / 052 / 420_* / upgrades_r30 |
+| Beast Handler | 34/34 | Exact. Re-recorded with seeds 2026-11-04. GyrfalconPattern ported from the disasm (fly_birds, GyrState): targets through GetGlobalBest (bestFirst/bestLast) then segment brackets of the handler's target type, snatch/hit around the target by Close bracket order, grapple uses the initial damage, held bloons are off track (Bloon.held: not filed, taken by range + radius) with blockSpawnChildrenCount (unmake_bloon), idle moves through Map bounds. Pets start a frame after they're made and sync the handler's target. CycleAnimation randomize draws. InstantDamage shot with a dead target stays till round end. |
 | Engineer | 32/34 | see Engineer notes (Tower parity 0.); open: 032, 052 |
 | Ninja | 34/34 | done (all R-line recordings) |
 | Alchemist | 0/34 | throws match; potion hits differ from rt 132 |

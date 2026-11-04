@@ -1091,6 +1091,7 @@ def main():
                                 "vagrant": next(([x["f"].get("noTowersRateBonus", 0.0), x["f"].get("towerRangeBonusReduction", 0.0),
                                                   x["f"].get("bloonInRangeAttackSpeedBuff", 0.0), x["f"].get("maxBloonAttackSpeedBuff", 0.0)]
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "VagrantWeaponBehaviorModel"), None),
+                                "cycle_random": any(x and x["type"] == "CycleAnimationModel" and x["f"].get("randomize") for x in items(w["f"].get("behaviors"))),
                                 # LeakDangerAttackSpeedModel: up to maxRateIncreasePercent faster as bloons near the exit.
                                 "leak_danger": next((x["f"].get("maxRateIncreasePercent", 0.0) for x in items(w["f"].get("behaviors"))
                                                      if x and x["type"] == "LeakDangerAttackSpeedModel"), 0.0), "animation_offset": w["f"].get("animationOffset", 0.0),
