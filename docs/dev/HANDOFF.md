@@ -293,7 +293,13 @@ TOWERS.md has the longer per-tower notes.
    else it appends a new one; the time refresh is in Mutable.AddMutator (vtable +0x2a8). Find what differs
    between the two cases (charges left? which bloon the stun is added to, before or after Degrade?). Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
    upgrades_r30 groups.
-0. **Sub 21/32 (re-recorded with seeds 2026-11-03)**: Airburst's split angles are k x step + (rotation +
+0. **Sub 21/32 (re-recorded with seeds 2026-11-03)**: NEW (2026-11-03): sub_005 / sub_025 (Sub Commander) first
+   differ at rt 675: the main dart (TrackTargetModel, pierce 1, recorded at z 8.7, P line's emittedFrom z and
+   Position z) expires one frame after it's made and CreateProjectileOnExpire.Expired (@0xca4a00) emits the
+   Airburst splits at the projectile's vtable-0x828 position, which the recording shows at z 100 (85 such
+   lines, only in the x-x-5 recordings); the clone keeps 8.7, so a split meets a tree blocker the game's flies
+   over. Find what puts the dart at z 100 (TrackTarget? the Commander buff?).
+   Earlier notes: Airburst's split angles are k x step + (rotation +
    startingOffset), the sum grouped (002 / 004 / 502_* match). Open groups:
    - 040 / 050 / 052 / 250 fire their first shot one frame early (clone 476, game 477, the same aim
      -27.256102): the bloon is in range from 474, so it's the line-of-sight test (map Logs). The only data
