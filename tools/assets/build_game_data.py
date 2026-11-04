@@ -316,7 +316,9 @@ def main():
         for fm in pb.get("ProjectileFilterModel", []):
             for x in items(fm["f"]["filters"]):
                 if x:
-                    filters.append(x["type"])
+                    # (An inactive FilterInvisible passes everything: FilterBloon @0xc1fb70.)
+                    if not (x["type"] == "FilterInvisibleModel" and not x["f"].get("isActive", True)):
+                        filters.append(x["type"])
                     # FilterBloonIfDamageTypeModel: passes through bloons with these properties
                     # that its damage can't hurt.
                     if x["type"] == "FilterBloonIfDamageTypeModel":

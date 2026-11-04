@@ -2016,6 +2016,8 @@ pub struct Projectile {
     /// As Bloon.born.
     born: u64,
     camo: bool,
+    /// Its tower sees camo by a support buff (which turns the FilterInvisibles off).
+    buff_camo: bool,
     /// Follow-path projectiles: throw direction (unit) and distance travelled along the path.
     /// Its rotation in the game's frame (degrees), when made the game's way (Vector2.Rotate):
     /// what its own emissions (exhaust) start from. None once something turns it.
@@ -11343,6 +11345,7 @@ impl Game {
                 born: self.sim_elapsed * 4 + self.phase as u64,
                 bounces: 0,
                 camo: true,
+                buff_camo: self.towers.iter().position(|t| t.id == owner).is_some_and(|i| self.buffs.get(i).is_some_and(|b| b.camo)),
                 fwd: [c, s],
                 path_d: 0.0,
                 on_track: None,
@@ -11928,7 +11931,10 @@ impl Game {
                         // FilterInvisible: a shot from a tower without camo detection passes
                         // camo bloons (recording wizard_050: a Wall of Fire beside a Camo
                         // Rainbow keeps its pierce).
-                        || (!pr.camo && b.camo(d) && pr.spec.filters.iter().any(|f| f == "FilterInvisibleModel"))
+                        // FilterInvisible.FilterBloon (VERIFIED-DISASM @0xc1fb70): an active one
+                        // passes no camo bloon, whatever the attack sees (recording engineer_025:
+                        // the XXXL Trap's collision filter skips a Camo Rainbow its attack can aim at).
+                        || (!pr.buff_camo && b.camo(d) && pr.spec.filters.iter().any(|f| f == "FilterInvisibleModel"))
                         || cant_hit(pr.spec.cant_hit, &pr.spec, b.properties(d))
                         || pr.spec.override_filter.as_ref().is_some_and(|f| overriding_mutated(b, f))
                     {
