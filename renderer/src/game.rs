@@ -1049,8 +1049,7 @@ pub struct WeaponState {
     pub aim_off: [f32; 2],
     /// Which of the MOAB's collision circles that was (its shots steer at it).
     pub aim_circle: Option<u8>,
-    /// The attack's Target: the bloon's last position read during the throw, and its factory object.
-    pub aim_last: [f32; 2],
+    /// The attack's Target's factory object.
     pub aim_obj: Option<u32>,
     pub rate_frames: i64,
     pub missed: f32,
@@ -1091,7 +1090,6 @@ impl WeaponState {
             limit_until: 0,
             aim_off: [0.0; 2],
             aim_circle: None,
-            aim_last: [0.0; 2],
             aim_obj: None,
             emits: 0,
             rate_frames: 1,
@@ -3642,6 +3640,19 @@ impl Game {
     fn fact_kill(&mut self, i: usize) {
         let b = &self.bloons[i];
         if let Some(&k) = self.fact_at.get(b.obj as usize).filter(|&&k| k != u32::MAX) {
+            // HYPOTHESIS P-POOLBACK: a bloon made this frame and popped for good that frame (no children
+            // left) gives its object back at once, unlisted (the recordings' H lines show id 0) (recordings sub_250 / sub_052: the
+            // object a new bloon takes after the flush, seen through a Target that still holds it).
+            if b.fresh && self.defs[b.kind].children.is_empty() {
+                let o = b.obj;
+                self.fact.remove(k as usize);
+                for e in k as usize..self.fact.len() {
+                    self.fact_at[self.fact[e].0 as usize] = e as u32;
+                }
+                self.fact_at[o as usize] = u32::MAX;
+                self.pool.push(o);
+                return;
+            }
             self.fact[k as usize].1 = false;
         }
         // The collision grid is filled as the bloons start processing: one that was in it and
@@ -4266,6 +4277,14 @@ impl Game {
             while i >= 2 {
                 i -= 1;
                 offs.swap(rnd[i % buf], i);
+            }
+            // HYPOTHESIS P-RANDPOS98: with a x-x-5's Bloon Trap beside it, 98 more draws before the
+            // trap's (recording engineer_205: its two are the 201st and 202nd; who makes these
+            // isn't found: a shuffle of 98 somewhere, nothing else depends on it).
+            if tiers[2] >= 5 && self.towers[t].randpos[k].1.tier == [255; 3] {
+                for _ in 0..98 {
+                    self.synced_double();
+                }
             }
             let st = &mut self.towers[t].randpos[k].1;
             (st.tier, st.offsets, st.buf, st.index, st.dirty) = (tiers, offs, buf, 0, true);
@@ -6462,6 +6481,7 @@ impl Game {
         let was_temple = self.tier(t).and_then(|x| x.temple.as_ref()).map(|tp| tp.groups.iter().any(|g| g.two));
         let had_necro = self.tier(t).is_some_and(|x| x.attacks.iter().any(|a| a.necro.is_some()));
         let had_switch = self.tier(t).is_some_and(|x| x.switch_target.is_some());
+        let had_submerge = self.tier(t).is_some_and(|x| x.submerge.is_some());
         self.cash -= cost;
         self.stats.cash_spent += cost;
         let tw = &mut self.towers[t];
@@ -6482,6 +6502,12 @@ impl Game {
             if let Some(m) = self.tier(t).and_then(|x| x.switch_target.as_deref()).and_then(TargetMode::parse) {
                 self.towers[t].target = m;
             }
+        }
+        // Submerge.Attatched (VERIFIED-DISASM @0xd99ed0): a new Submerge sets the target type
+        // "Submerge" (recording sub_upgrades_r30: the pulse from the frame after the x-x-3 upgrade).
+        if !had_submerge && self.tier(t).is_some_and(|x| x.submerge.is_some()) {
+            self.towers[t].submerged = true;
+            self.towers[t].target = TargetMode::Submerge;
         }
         self.init_point(t);
         self.init_air(t);
@@ -8213,6 +8239,10 @@ impl Game {
             // RotateToMiddleOfTargetsModel on any attack: the body faces its attacks' targets'
             // midpoint instead of turning with each throw.
             let middle = tier.attacks.iter().any(|a| a.face_middle);
+            // CloseTargetTrack's draws come with its Attack's Process, after the RandomPosition's
+            // and ahead of the tower's Weapons' shots (recording engineer_205: the Bloon Trap's two
+            // before the Spawner's shot).
+            let mut track_draws: Option<(f32, f32)> = None;
             for (ai, attack) in tier.attacks.iter().chain(extra.iter()).enumerate() {
                 // At an activation only the ability's attacks act, those ActivateAttack.Activate
                 // (VERIFIED-DISASM @0xe20900) processes then: processOnActivate or isOneShot
@@ -8690,7 +8720,10 @@ impl Game {
                                 // and not held by LimitProjectile; recording engineer_205, two
                                 // draws a trap, none while it is out.)
                                 Some(q) if self.can_throw(t, wi, &attack) => {
-                                    let (d1, d2) = (self.synced_double() as f32, self.synced_double() as f32);
+                                    let (d1, d2) = match track_draws.take() {
+                                        Some(d) => d,
+                                        None => (self.synced_double() as f32, self.synced_double() as f32),
+                                    };
                                     let h = off * 0.5;
                                     aim_z = 2.0;
                                     Some((0.0, [q[0] + (d1 * off - h), -((d2 * off - h) + -q[1])], 0))
@@ -8721,6 +8754,16 @@ impl Game {
                 if let Some(rp) = attack.random_pos.filter(|_| self.sandbox || self.round_active || !self.bloons.is_empty()) {
                     let key = attack.model_name.clone();
                     best = self.random_pos_target(t, &key, rp).map(|q| (0.0, q, 0));
+                    if track_draws.is_none() && only_temp.is_none() {
+                        let mut k = 0;
+                        for a in tier.attacks.iter() {
+                            if a.track_closest && self.can_throw(t, k, a) && self.start_track_point(t, a, a.range).is_some() {
+                                track_draws = Some((self.synced_double() as f32, self.synced_double() as f32));
+                                break;
+                            }
+                            k += a.weapons.len();
+                        }
+                    }
                 } else if let Some([lo, hi]) = attack.random_position {
                     best = if (self.sandbox || self.round_active || !self.bloons.is_empty()) {
                         // HYPOTHESIS P-RANDLAND: RandomPositionModel (areaType Land) redraws
@@ -8904,12 +8947,11 @@ impl Game {
                         st.anim = -1;
                         spawns += 1;
                     }
-                    // The attack's Target: Target.GetPosition, read while its throw runs, caches the
-                    // bloon's last position and keeps the object (recording sub_052: a missile whose
-                    // target died in the throw goes to that last spot).
+                    // The Target's factory object, while its bloon lives. (Its cached spot is where
+                    // the bloon was when the throw started: readers get copies of the struct;
+                    // recording sub_052, a missile whose target died in the throw.)
                     if st.anim >= 0 && st.aim_id != 0 {
                         if let Some(b) = self.bloons.iter().find(|b| b.id == st.aim_id) {
-                            st.aim_last = [b.pos[0] + st.aim_off[0], b.pos[1] + st.aim_off[1]];
                             st.aim_obj = Some(b.obj);
                         }
                     }
@@ -8960,7 +9002,7 @@ impl Game {
                         let lost_obj = self.towers[t].weapons[w].aim_obj.filter(|_| lost);
                         let (mut target, target_id) = match (locked, best) {
                             (Some((p, id)), _) => (p, id),
-                            (None, _) if lost && weapon.projectile.instant => (self.towers[t].weapons[w].aim_last, 0),
+                            (None, _) if lost && weapon.projectile.instant => (aimed, 0),
                             (None, Some((_, p, id))) => (p, id),
                             (None, None) if ambient => (pos, 0),
                             (None, None) => (aimed, 0),
@@ -9369,7 +9411,7 @@ impl Game {
                                     pr.target_cache = Some(target);
                                     pr.target_obj = bobj;
                                     if let Some(bp) = bpos {
-                                        pr.inst_off = [target[0] - bp[0], target[1] - bp[1]];
+                                        pr.inst_off = if locked.is_some() { aim_off } else { [target[0] - bp[0], target[1] - bp[1]] };
                                     }
                                 }
                             }
@@ -11273,7 +11315,7 @@ impl Game {
         for (pos, dir, ex, tiers, owner, target, (grot, z, dir_rot)) in exhausted {
             // (Recording sub_250: a Ballistic Missile's blast on the child that took its dead
             // target's object that very frame.)
-            let pos = ex.stale_target.and_then(|(o, off)| self.bloons.iter().find(|b| b.obj == o).map(|b| [b.prev[0] + off[0], b.prev[1] + off[1]])).unwrap_or(pos);
+            let pos = ex.stale_target.and_then(|(o, off)| self.bloons.iter().find(|b| b.obj == o).map(|b| { let at = if b.prev[0].is_finite() { b.prev } else { b.pos }; [at[0] + off[0], at[1] + off[1]] })).unwrap_or(pos);
             let start = self.projectiles.len();
             // ArcEmission.GetDirection starts from the emitting tower's rotation now (recording
             // dart_500: a Juggernaut's burst turns with the tower's newer throw); the projectile's
@@ -12988,6 +13030,9 @@ impl Game {
                 pr.pos = [pr.prev[0] + pr.vel[0], pr.prev[1] + pr.vel[1]];
             }
         }
+        // (A blast on a dead Target's object goes after this frame's spawn, which may take it over:
+        // recording sub_032, on the Zebra entering that frame.)
+        let (stale_blasts, exhausted): (Vec<_>, Vec<_>) = exhausted.into_iter().partition(|e| e.2.stale_target.is_some());
         self.spawn_exhausted(exhausted);
         for (spec, pos, parent, rot, parent_target) in subs {
             let made = self.towers.len();
@@ -13025,6 +13070,7 @@ impl Game {
         for (k, path) in std::mem::take(&mut self.frame_spawns) {
             self.emit_frame_spawn(k, path);
         }
+        self.spawn_exhausted(stale_blasts);
         // ChurchillBaseRotation.Process (VERIFIED-DISASM @0xd26830), at the frame's end (what the turret's aim and the exhausts read is the
         // base as the frame began: recording dart_paragon_r40, rings at rt 216 / 217):
         // unless paused, the base takes the turret's angle as its target and turns

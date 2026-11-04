@@ -3514,6 +3514,7 @@ async fn game_main() {
                     hud::Action::Submerge => {
                         if let Some(t) = selected.filter(|&t| coop_runtime.is_none() && game.can_submerge(t)) {
                             game.towers[t].submerged = !game.towers[t].submerged;
+                            if !game.towers[t].submerged && game.towers[t].target == game::TargetMode::Submerge { game.towers[t].target = game::TargetMode::First; }
                         }
                     }
                     hud::Action::ShowPops(on) => save_setting(&root, "show_pops", serde_json::json!(on)),

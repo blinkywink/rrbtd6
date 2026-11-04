@@ -293,21 +293,16 @@ TOWERS.md has the longer per-tower notes.
    else it appends a new one; the time refresh is in Mutable.AddMutator (vtable +0x2a8). Find what differs
    between the two cases (charges left? which bloon the stun is added to, before or after Degrade?). Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
    upgrades_r30 groups.
-0. **Sub 28/32 (2026-11-04)**: open: 032 (rt 878, an ulp: -15.736838 vs -15.736837), 052, 250, upgrades_r30.
-   Learned (VERIFIED-DISASM): Emission.BaseEmit raises the emit point to Target z less the bloon model's height
-   (a MOAB just popped into a Ceramic: 120 - 20 = 100); CollisionChecker: a blocker hit is CollideMap +
-   RootObject.Destroy, no Expire; Weapon.Process does nothing between rounds, a throw in progress waits too;
-   CreateEffectProjectileAfterTime useTargetPosition (Ballistic Missile, 18 frames) gives the shot a new Position at
-   GetPositionOfTarget for that frame; Target.GetPosition: destroyed bloon = cached spot (never updated on a
-   projectile's copy), a REUSED factory object = the new bloon's position (recording PT lines show it), so
-   a blast can land on a new bloon. A throw whose target died: instant shot sits on the eject point after its first
-   frame, keeps the Target.
-   OPEN sub_052 rt 563: Target.IsValid also compares the bloon's +0x14 (layer id, Bloon.UpdateLayerId): a degrade
-   invalidates the Target though the object and Id live on (PT 375 valid 0 from the pop). The clone's `locked` and
-   Instant follow by id. Make them follow b.layer too (WeaponState aim_layer, Projectile target layer).
-   OPEN sub_250 rt 2461: pool order. The game's top after the flush at 2442 is the Pink's object; the clone also
-   pooled a child made and popped within one blast (id 1511 at 713.81). Check whether a child popped in the same
-   damage chain ever takes an object (Bloon.Degrade / SpawnChildren).
+0. **Sub 32/32 EXACT (2026-11-04)**. Learned (VERIFIED-DISASM unless noted): Emission.BaseEmit raises the emit point to
+   Target z less the bloon model's height (a MOAB just popped into a Ceramic: 120 - 20 = 100); CollisionChecker: a
+   blocker hit is CollideMap + RootObject.Destroy, no Expire; Weapon.Process does nothing between rounds, a throw in
+   progress waits too; CreateEffectProjectileAfterTime useTargetPosition (Ballistic Missile, 18 frames) gives the shot
+   a new Position at GetPositionOfTarget for that frame; Target.GetPosition: destroyed bloon = the cached spot (where
+   it was when the throw started; readers hold copies of the struct), a REUSED factory object = the new bloon's
+   position (PT lines show it), so a blast can land on a new bloon, the frame's spawn included; a throw whose target
+   died: an instant shot sits on the eject point after its first frame and keeps the Target; Submerge.Attatched sets
+   target type Submerge on the upgrade that adds it. P-POOLBACK (from recordings): a bloon made and fully popped in
+   the same frame frees its object at once.
 0. **Sub, older notes**: sub_005 / sub_025 (Sub Commander) first
    differ at rt 675: the main dart (TrackTargetModel, pierce 1, recorded at z 8.7, P line's emittedFrom z and
    Position z) expires one frame after it's made and CreateProjectileOnExpire.Expired (@0xca4a00) emits the
