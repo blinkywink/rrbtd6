@@ -129,7 +129,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Dart | 70/70 | done |
 | Boomerang | 99/99 | done (paragon too) |
 | Tack | 21/25 | re-recorded with seeds 2026-11-03; open: 500/502 (meteor 1 ulp at rt 522), 520, upgrades_r30 |
-| Sub | 21/32 | re-recorded with seeds 2026-11-03; see Sub notes (Tack section) |
+| Sub | 32/32 | done (2026-11-04) |
 | Wizard | 34/34 | all re-recorded with R lines; done |
 | Glue | 34/34 | done (mutator order, PostDegrade) |
 | Ice | 25/25 | done (re-recorded with seeds 2026-11-02) |
@@ -137,7 +137,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
 | Beast Handler | 9/34 | |
-| Engineer | 30/34 | re-recorded with seeds 2026-11-03; see Engineer notes (Tower parity 0.) |
+| Engineer | 32/34 | see Engineer notes (Tower parity 0.); open: 032, 052 |
 | Ninja | 34/34 | done (all R-line recordings) |
 | Alchemist | 0/34 | throws match; potion hits differ from rt 132 |
 | Ace | 0/25 | recorder doesn't log the plane yet |
@@ -286,6 +286,12 @@ TOWERS.md has the longer per-tower notes.
    (@0xc4b720) passes Target.Position's z on to RandomOffsetFromRadius (z + 0). Find what drops the z there
    SOLVED: RandomTargetSpread.Emit makes the new Target at Map.GetTerrainHeight (committed, 032/052 to rt 2116).
    Layers-0 slows now survive pops (AddMutatorForNumLayers adds no charge for 0).
+   Engineer 32/34 (2026-11-04): 205 and upgrades_r30 solved: RandomPosition's shuffle buffer starts at 200 (R m lines:
+   Next(102) x 200, then Next(239) x 239), runs when the tower gets the model and again only when the model's
+   fields change; CloseTargetTrack's draws come ahead of the Spawner's shot. Left: 032 / 052 (next line).
+   P-SLOWONPOPUNIQUE table ($TEMP corr.py idea: per stun, later pop, dur): stops 2056 (988, 1064, 1089) refresh at the
+   pop 2099 (dur 101), 2014 (1028) and 2098 (1163) don't; all pass under the foam. Tried and wrong: any other
+   mutator on the bloon, the stun first in the list. Same nail model, damage 1, layers 2, isUnique.
    OPEN P-SLOWONPOPUNIQUE: engineer_032 rt 2099 contradicts it. Green 1064 was pinned at 2057 (Pin: Stun:Weak,
    1 s, layers 2, isUnique) and popped again at 2099; the game keeps it pinned to 2158 (a full refresh), while
    engineer_002 keeps the old time. Refreshing for all drops 002/003/004 (Engineer 19). AddMutatorForNumLayers

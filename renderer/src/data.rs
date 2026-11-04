@@ -2510,7 +2510,7 @@ pub struct Bounty {
     pub range_add: f32,
 }
 
-#[derive(Deserialize, Clone, Copy)]
+#[derive(Deserialize, Clone, Copy, PartialEq)]
 pub struct RandomPos {
     pub min: f32,
     pub max: f32,

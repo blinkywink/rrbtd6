@@ -685,7 +685,7 @@ pub enum EffectKind {
 /// RandomPosition's state (VERIFIED-DISASM @0x180dd2fa0 ff.): its shuffled offsets (game
 /// frame), the shuffle's draw buffer length, the four lists CheckPositions fills, the index.
 pub struct RandPosState {
-    pub tier: [u8; 3],
+    pub model: Option<crate::data::RandomPos>,
     pub offsets: Vec<[f32; 2]>,
     pub buf: usize,
     pub lists: [Vec<[f32; 2]>; 4],
@@ -4259,36 +4259,36 @@ impl Game {
     /// map, then in / out of idealDistanceWithinTrack (a path segment's point within it) x
     /// placeable clear of towers / placeable at all. GetTargets (MoveNext @0x180dd9350): the
     /// first non-empty list, index + 1 (wrapping to 0) taken.
-    fn random_pos_target(&mut self, t: usize, key: &str, m: crate::data::RandomPos) -> Option<[f32; 2]> {
-        let tiers = self.towers[t].tiers;
+    /// RandomPosition.UpdatedModel / Initialise: its offsets, shuffled, for the tower's model now
+    /// (at the upgrade itself: recording engineer_upgrades_r30, a reshuffle at each of two upgrades).
+    fn random_pos_update(&mut self, t: usize, key: &str, m: &crate::data::RandomPos) -> usize {
         let k = match self.towers[t].randpos.iter().position(|x| x.0 == key) {
             Some(k) => k,
             None => {
-                self.towers[t].randpos.push((key.to_string(), RandPosState { tier: [255; 3], offsets: Vec::new(), buf: 0, lists: Default::default(), index: 0, dirty: true }));
+                self.towers[t].randpos.push((key.to_string(), RandPosState { model: None, offsets: Vec::new(), buf: 0, lists: Default::default(), index: 0, dirty: true }));
                 self.towers[t].randpos.len() - 1
             }
         };
-        if self.towers[t].randpos[k].1.tier != tiers {
-            let mut offs = rand_pos_offsets(&m);
+        if self.towers[t].randpos[k].1.model != Some(*m) {
+            let mut offs = rand_pos_offsets(m);
             let n = offs.len();
-            let buf = self.towers[t].randpos[k].1.buf.max(n);
+            // (The buffer starts at 200: recording engineer_upgrades_r30's Next(102) x 200, then
+            // Next(239) x 239; a model with the same fields isn't shuffled again.)
+            let buf = self.towers[t].randpos[k].1.buf.max(n).max(200);
             let rnd: Vec<usize> = (0..buf).map(|_| (self.synced_double() * n as f64) as usize).collect();
             let mut i = n;
             while i >= 2 {
                 i -= 1;
                 offs.swap(rnd[i % buf], i);
             }
-            // HYPOTHESIS P-RANDPOS98: with a x-x-5's Bloon Trap beside it, 98 more draws before the
-            // trap's (recording engineer_205: its two are the 201st and 202nd; who makes these
-            // isn't found: a shuffle of 98 somewhere, nothing else depends on it).
-            if tiers[2] >= 5 && self.towers[t].randpos[k].1.tier == [255; 3] {
-                for _ in 0..98 {
-                    self.synced_double();
-                }
-            }
             let st = &mut self.towers[t].randpos[k].1;
-            (st.tier, st.offsets, st.buf, st.index, st.dirty) = (tiers, offs, buf, 0, true);
+            (st.model, st.offsets, st.buf, st.index, st.dirty) = (Some(*m), offs, buf, 0, true);
         }
+        k
+    }
+
+    fn random_pos_target(&mut self, t: usize, key: &str, m: crate::data::RandomPos) -> Option<[f32; 2]> {
+        let k = self.random_pos_update(t, key, &m);
         if self.towers[t].randpos[k].1.dirty {
             let tp = [self.towers[t].pos[0], -self.towers[t].pos[1]];
             let trunc = |v: f32| (((v * 100.0) as f64).trunc() / 100.0f32 as f64) as f32;
@@ -6501,6 +6501,12 @@ impl Game {
         if !had_switch {
             if let Some(m) = self.tier(t).and_then(|x| x.switch_target.as_deref()).and_then(TargetMode::parse) {
                 self.towers[t].target = m;
+            }
+        }
+        if let Some(tr) = self.tier(t) {
+            let rps: Vec<_> = tr.attacks.iter().filter_map(|a| a.random_pos.map(|m| (a.model_name.clone(), m))).collect();
+            for (key, m) in rps {
+                self.random_pos_update(t, &key, &m);
             }
         }
         // Submerge.Attatched (VERIFIED-DISASM @0xd99ed0): a new Submerge sets the target type
