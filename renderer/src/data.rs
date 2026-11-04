@@ -1039,6 +1039,13 @@ pub struct Weapon {
     /// LimitProjectileModel.limit: no shot while the tower has this many unfilled traps out.
     #[serde(default)]
     pub limit: Option<u32>,
+    /// LimitProjectileModel.projectileId / delayInFrames / limitByDestroyedPriorProjectile.
+    #[serde(default)]
+    pub limit_id: String,
+    #[serde(default)]
+    pub limit_delay: i64,
+    #[serde(default)]
+    pub limit_destroyed: bool,
     /// SendToBankModel emission: the cash goes into the tower's bank instead of the map.
     #[serde(default)]
     pub to_bank: bool,
@@ -1395,6 +1402,16 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// RemoveBloonModifiersModel.cleanseRegen / cleanseFortified / cleanseLead.
+    #[serde(default)]
+    pub cleanse_regrow: bool,
+    #[serde(default)]
+    pub cleanse_fortified: bool,
+    #[serde(default)]
+    pub cleanse_lead: bool,
+    /// ProjectileModel.id ("Collidable" for a Bloon Trap).
+    #[serde(default)]
+    pub pid: String,
     /// RandomRangeTravelStraitModel (minRange, maxRange, speed): its lifespan is drawn when made.
     #[serde(default)]
     pub random_range: Option<[f32; 3]>,

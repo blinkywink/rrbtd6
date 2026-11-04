@@ -1042,6 +1042,8 @@ pub struct WeaponState {
     /// target it started with (recorded: the tower keeps turning to it as it leaves range).
     pub aim_at: [f32; 2],
     pub aim_id: u64,
+    /// LimitProjectile.limitEmissionUntilTime (Simulation.time).
+    pub limit_until: i64,
     /// Target's offset from its bloon (Targetting.CanHitMoab: the collision circle a MOAB was
     /// seen by); the throw leaves towards the bloon's position plus it.
     pub aim_off: [f32; 2],
@@ -1083,6 +1085,7 @@ impl WeaponState {
             anim: -1,
             aim_at: [0.0; 2],
             aim_id: 0,
+            limit_until: 0,
             aim_off: [0.0; 2],
             aim_circle: None,
             emits: 0,
@@ -5349,6 +5352,20 @@ impl Game {
         }
     }
 
+    /// Whether attack `a`'s first weapon (state `wi`) could throw now: off cooldown and not held
+    /// by LimitProjectile (its count of the tower's projectiles, or limitEmissionUntilTime).
+    fn can_throw(&self, t: usize, wi: usize, a: &crate::data::Attack) -> bool {
+        let (Some(w), Some(st)) = (a.weapons.first(), self.towers[t].weapons.get(wi)) else { return true };
+        let clock = if w.between_rounds { self.steps as i64 } else { self.round_clock };
+        if !st.ready(clock) {
+            return false;
+        }
+        let Some(n) = w.limit else { return true };
+        let id = self.towers[t].id;
+        let out = self.projectiles.iter().filter(|pr| pr.owner == id && (if w.limit_id.is_empty() { pr.spec.eat.is_some() } else { pr.spec.pid == w.limit_id }) && !(pr.spec.eat.is_some() && pr.spec.cash.is_some())).count();
+        out < n as usize && (self.sim_elapsed as i64) >= st.limit_until
+    }
+
     /// CreateTypedTower.CalculateTowerModel (VERIFIED-DISASM @0xcb06a0, scores @0xcb00d0 /
     /// @0xcafba0 / @0xcafde0 / @0xcb0290): from the share of each bloon baseId among all bloons
     /// (BloonManager.GetProportionOfTotalBloonCountByBaseId) and the Sentries of each type out,
@@ -8620,6 +8637,8 @@ impl Game {
                 if attack.pool_fallback && best.is_none() && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
                     best = self.track_point(pos, range, 0.0);
                 }
+                // The target's height (Target.Position z) for ArriveAtTarget's altSpeed timing.
+                let mut aim_z = 0.0f32;
                 if let Some(off) = attack.track_target.filter(|_| mode != TargetMode::Point) {
                     // STAND-IN P-SMARTTRACK: Smart aims at the leading bloon's track spot in range
                     // (Normal when none); Automatic does that, else the closest spot.
@@ -8645,7 +8664,26 @@ impl Game {
                                 None => self.closest_track_point(pos, range, off),
                             },
                             _ if attack.track_closest && attack.track_default => self.first_visible_track_point(self.towers[t].pos, pos, range, off, no_moab, attack.through_walls),
-                            _ if attack.track_closest => self.closest_track_point(pos, range, off),
+                            // CloseTargetTrack (VERIFIED-DISASM GeneratePoints @0xdb55f0, GetTargets
+                            // MoveNext @0xdbf7b0): Attack.GetVisibleInRangePathSegment's point (2 up),
+                            // moved by (d x maxOffset - maxOffset x 0.5) on x then y, two
+                            // syncedRandom draws (recording engineer_004: the Bloon Trap's point).
+                            _ if attack.track_closest => match self.start_track_point(t, &attack, range) {
+                                // (Its targets are asked for only when a weapon can throw: ready
+                                // and not held by LimitProjectile; recording engineer_205, two
+                                // draws a trap, none while it is out.)
+                                Some(q) if self.can_throw(t, wi, &attack) => {
+                                    let (d1, d2) = (self.synced_double() as f32, self.synced_double() as f32);
+                                    let h = off * 0.5;
+                                    aim_z = 2.0;
+                                    Some((0.0, [q[0] + (d1 * off - h), -((d2 * off - h) + -q[1])], 0))
+                                }
+                                Some(q) => {
+                                    aim_z = 2.0;
+                                    Some((0.0, q, 0))
+                                }
+                                None => None,
+                            },
                             TargetMode::First | TargetMode::Last | TargetMode::Close | TargetMode::Strong | TargetMode::Track if !attack.track_closest && !attack.track_default => self.supplied_track_point(t, pos, attack.range, off, no_moab, attack.through_walls),
                             _ => self.track_point(pos, range, off),
                         }
@@ -8705,8 +8743,6 @@ impl Game {
                 // Point-aiming attacks fire at their point (below) and turn towards it at
                 // RotateToPointerModel.rate (HYPOTHESIS P-POINTER: turning shots fire along the barrel).
                 let mut turning = false;
-                // The target's height (Target.Position z) for ArriveAtTarget's altSpeed timing.
-                let mut aim_z = 0.0f32;
                 if mode.aims_at_point() {
                     if attack.point_start_track && self.towers[t].point.is_none() {
                         self.towers[t].point = self.start_track_point(t, &attack, range);
@@ -8775,11 +8811,21 @@ impl Game {
                         }
                         self.towers[t].weapons[wi].last = NEVER;
                     }
-                    // LimitProjectileModel: traps of this tower that aren't full yet.
+                    // LimitProjectile.FilterEmission (VERIFIED-DISASM @0xc7c530): the tower's
+                    // projectiles of model id projectileId (a full trap has paid out: EatBloon
+                    // .EmitCash); at the limit each try holds it to now + delayInFrames
+                    // (IsEmissionLimitedByTime @0xc7ced0; recording engineer_004: no new Bloon
+                    // Trap 167 frames after the full one goes).
                     let at_limit = weapon.limit.is_some_and(|n| {
                         let id = self.towers[t].id;
-                        let out = self.projectiles.iter().filter(|pr| pr.owner == id && pr.spec.eat.is_some() && pr.spec.cash.is_none()).count();
-                        out >= n as usize
+                        let out = self.projectiles.iter().filter(|pr| pr.owner == id && (if weapon.limit_id.is_empty() { pr.spec.eat.is_some() } else { pr.spec.pid == weapon.limit_id }) && !(pr.spec.eat.is_some() && pr.spec.cash.is_some())).count();
+                        let now = self.sim_elapsed as i64;
+                        if out >= n as usize && !weapon.limit_destroyed {
+                            self.towers[t].weapons[wi].limit_until = now + weapon.limit_delay;
+                            true
+                        } else {
+                            out >= n as usize || now < self.towers[t].weapons[wi].limit_until
+                        }
                     });
                     // SubTowerFilterModel (Aircraft Carrier): at most `max` planes alive.
                     let at_limit = at_limit
@@ -12126,16 +12172,37 @@ impl Game {
                     }
                     if !immune {
                         let spec = &$s.projectiles[$p].spec;
-                        if spec.decamo && (dmg >= 0.5 || !spec.decamo_needs_damage) {
-                            $s.bloons[i].decamo = true;
+                        let cleanse = spec.decamo || spec.cleanse_regrow || spec.cleanse_fortified || spec.cleanse_lead;
+                        if cleanse && (dmg >= 0.5 || !spec.decamo_needs_damage) {
+                            if spec.decamo {
+                                $s.bloons[i].decamo = true;
+                            }
                             // RemoveBloonModifiers.Collide (@0xcd5820): Mutable.UpdateRootModel to
-                            // GetCleansed's model, the same bloon without camo (RainbowCamo ->
-                            // Rainbow; recording wizard_502).
-                            let name = &$s.names[$s.bloons[i].kind];
-                            if let Some(base) = name.strip_suffix("Camo") {
-                                if let Some(k) = $s.names.iter().position(|n| n == base) {
+                            // GetCleansed's model (@0xcd5d90): the id without "Camo" / "Regrow" /
+                            // "Fortified" as the model asks (RainbowCamo -> Rainbow; recording
+                            // wizard_502). A Reanimated bloon is left as it is.
+                            let d0 = &$s.defs[$s.bloons[i].kind];
+                            if !d0.tags.iter().any(|t| t == "Reanimated") {
+                                let mut name = $s.names[$s.bloons[i].kind].clone();
+                                if spec.decamo {
+                                    name = name.replace("Camo", "");
+                                }
+                                if spec.cleanse_regrow {
+                                    name = name.replace("Regrow", "");
+                                }
+                                if spec.cleanse_fortified {
+                                    name = name.replace("Fortified", "");
+                                }
+                                if let Some(k) = $s.names.iter().position(|n| *n == name) {
                                     $s.bloons[i].kind = k;
                                 }
+                            }
+                            // cleanseLead: a Lead takes its health (Bloon.Damage, ebp = health):
+                            // its layer goes (recording engineer_030: Cleansing Foam pops a Lead
+                            // into two Blacks).
+                            if spec.cleanse_lead && $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Lead") {
+                                let hp = $s.bloons[i].hp;
+                                $s.damage(i, hp, &mut $kids);
                             }
                         }
                         $s.pre_damage_effects(i, $p, dmg);

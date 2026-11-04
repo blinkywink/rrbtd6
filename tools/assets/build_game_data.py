@@ -702,6 +702,12 @@ def main():
             rf = pb["RemoveBloonModifiersModel"][0]["f"]
             out["decamo"] = bool(rf.get("cleanseCamo"))
             out["decamo_needs_damage"] = bool(rf.get("cleanseOnlyIfDamaged", True))
+            # RemoveBloonModifiers.GetCleansed (VERIFIED-DISASM @0xcd5d90) strips "Camo", "Regrow"
+            # and "Fortified" from the bloon id; cleanseLead then deals a Lead its health
+            # (Collide @0xcd5820).
+            out["cleanse_regrow"] = bool(rf.get("cleanseRegen"))
+            out["cleanse_fortified"] = bool(rf.get("cleanseFortified"))
+            out["cleanse_lead"] = bool(rf.get("cleanseLead"))
         # TravelAlongPathModel (Sword Charge): moves along the track at `speed` for `lifespan`,
         # from its end back when `reverse`.
         if pb.get("TravelAlongPathModel"):
@@ -1043,6 +1049,13 @@ def main():
                 # LimitProjectileModel (Bloon Trap): at most `limit` live traps that aren't full.
                 limit = next((x["f"]["limit"] for x in items(w["f"].get("behaviors")) + items(af["behaviors"])
                               if x and x["type"] == "LimitProjectileModel"), None)
+                # LimitProjectile (VERIFIED-DISASM FilterEmission @0xc7c530, IsEmissionLimitedByTime
+                # @0xc7ced0): counts the tower's projectiles of model id projectileId; at the limit
+                # each try sets limitEmissionUntilTime = now + delayInFrames.
+                lp = next((x["f"] for x in items(w["f"].get("behaviors")) + items(af["behaviors"])
+                           if x and x["type"] == "LimitProjectileModel"), {})
+                limit_id, limit_delay = lp.get("projectileId") or "", lp.get("delayInFrames", 0)
+                limit_destroyed = bool(lp.get("limitByDestroyedPriorProjectile"))
                 # Broadside guns (Buccaneer): Emission*RotationOff{Tower,Display}*Model fire at the
                 # tower's facing + offsetRotation; FireWhenAlternateWeaponIsReadyModel fires only
                 # with the main gun; FilterTargetAngleFilterModel needs a bloon in its arc.
@@ -1109,7 +1122,7 @@ def main():
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "LineEffectModel"), None),
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
-                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit,
+                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # PrinceOfDarknessEmissionModel: this weapon sends the Prince's ghost.
                                 "prince": (em or {}).get("type") == "PrinceOfDarknessEmissionModel", "with_main": with_main, "alt_id": alt_id, "fov": fov,
