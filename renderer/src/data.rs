@@ -1946,6 +1946,25 @@ pub struct DamageSpeed {
 #[derive(Deserialize, Clone)]
 pub struct Grapple {
     pub speed: f32,
+    /// The attack's filters.
+    #[serde(default)]
+    pub exclude_tags: Vec<String>,
+    #[serde(default)]
+    pub exclude_bloons: Vec<String>,
+    #[serde(default)]
+    pub camo_filter: bool,
+    #[serde(default)]
+    pub immune: u32,
+    #[serde(default)]
+    pub snap: f32,
+    #[serde(default)]
+    pub y_offset: f32,
+    #[serde(default)]
+    pub moab_scale: f32,
+    #[serde(default)]
+    pub idle_min: i32,
+    #[serde(default)]
+    pub idle_max: i32,
     pub dive_mult: f32,
     pub cooldown: f32,
     pub rate: f32,

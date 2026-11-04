@@ -1688,7 +1688,8 @@ def main():
                     continue
                 xf = x["f"]
                 dmg = lambda k: ((deref(xf.get(k)) or {}).get("f") or {})
-                grapple = {"speed": xf.get("maxSpeed", 80.0), "dive_mult": xf.get("bloonTargetSpeedMultiplier", 1.0),
+                gf = [y for z in items(b["f"].get("behaviors")) if z and z["type"] == "AttackFilterModel" for y in items(z["f"].get("filters")) if y]
+                grapple = {"speed": xf.get("maxSpeed", 80.0), "exclude_tags": [y["f"]["tag"] for y in gf if y["type"] == "FilterOutTagModel"], "exclude_bloons": [y["f"]["bloonId"] for y in gf if y["type"] == "FilterOutBloonModel"], "camo_filter": any(y["type"] == "FilterInvisibleModel" and y["f"].get("isActive") for y in gf), "immune": dmg("initialDamageModel").get("immuneBloonProperties", 0), "snap": xf.get("snapDistance", 5.0), "y_offset": xf.get("initialYOffset", 30.0), "moab_scale": xf.get("moabSpeedScale", 1.0), "idle_min": xf.get("idleMinTimeFrames", 0), "idle_max": xf.get("idleMaxTimeFrames", 0), "dive_mult": xf.get("bloonTargetSpeedMultiplier", 1.0),
                            "cooldown": xf.get("cooldown", 1.0), "rate": xf.get("grappleDamageRate", 1.0),
                            "initial": dmg("initialDamageModel").get("damage", 0.0),
                            "grapple": dmg("grapplingDamageModel").get("damage", 0.0),
