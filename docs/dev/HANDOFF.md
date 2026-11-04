@@ -136,7 +136,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Sniper | 19/34 | see Sniper notes |
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 6/34 | |
-| Beast Handler | 9/34 | |
+| Beast Handler | 17/34 | re-recorded with seeds 2026-11-04; pets spawn at their RandomPosition (BeastHandlerLeash.ProcessLeashedTower); left: GyrfalconPattern (00x, 205, 502), 025, 032, 052, 420_*, upgrades_r30 |
 | Engineer | 32/34 | see Engineer notes (Tower parity 0.); open: 032, 052 |
 | Ninja | 34/34 | done (all R-line recordings) |
 | Alchemist | 0/34 | throws match; potion hits differ from rt 132 |

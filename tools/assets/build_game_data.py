@@ -1159,8 +1159,9 @@ def main():
             # RandomPosition (VERIFIED-DISASM): rings of candidate offsets, shuffled, sorted into
             # in / out of idealDistanceWithinTrack x placeable with / without blocking towers.
             random_pos = ({"min": rpm["minDistance"], "max": rpm["maxDistance"], "point": rpm["pointDistance"],
-                           "radius": rpm.get("targetRadius", 0.0), "ideal": rpm.get("idealDistanceWithinTrack", 0.0)}
-                          if rpm and rpm.get("areaType") == "Land" else None)
+                           "radius": rpm.get("targetRadius", 0.0), "ideal": rpm.get("idealDistanceWithinTrack", 0.0),
+                           "water": rpm.get("areaType") == "Water"}
+                          if rpm and rpm.get("areaType") in ("Land", "Water") else None)
             friendly_ignore = ",".join(x["f"].get("ignoreList") or "" for x in items(af["behaviors"])
                                        if x and x["type"] == "TargetFriendlyModel")
             attack_brew = next((br for w in items(af["weapons"]) if w

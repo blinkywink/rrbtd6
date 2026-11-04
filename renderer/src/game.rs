@@ -2062,6 +2062,9 @@ pub struct Projectile {
     /// the new bloon's position though no longer valid (recording sub_050: a blast on the Pink
     /// that took the object over).
     target_obj: Option<u32>,
+    /// Its target had moved this frame when it was made (its Attack is later in the process
+    /// list: recording beast_010, a pet's Splash where the Black is after its move).
+    target_moved: bool,
     /// Where it goes back to after CreateEffectProjectileAfterTime moved it for a frame.
     effect_back: Option<[f32; 2]>,
     /// Where its last lightning jump ended (visual).
@@ -4287,6 +4290,15 @@ impl Game {
         k
     }
 
+    fn random_pos_init(&mut self, t: usize) {
+        if let Some(tr) = self.tier(t) {
+            let rps: Vec<_> = tr.attacks.iter().filter_map(|a| a.random_pos.map(|m| (a.model_name.clone(), m))).collect();
+            for (key, m) in rps {
+                self.random_pos_update(t, &key, &m);
+            }
+        }
+    }
+
     fn random_pos_target(&mut self, t: usize, key: &str, m: crate::data::RandomPos) -> Option<[f32; 2]> {
         let k = self.random_pos_update(t, key, &m);
         if self.towers[t].randpos[k].1.dirty {
@@ -4299,8 +4311,9 @@ impl Game {
                     continue;
                 }
                 let near = m.ideal <= 0.0
-                    || self.track_segs.iter().flatten().any(|q| (q[0] - pc[0]).powi(2) + (q[1] - pc[1]).powi(2) <= m.ideal * m.ideal);
-                if !self.land_clear(pc, m.radius) {
+                    || self.track_segs.iter().enumerate().any(|(pi, sg)| sg.iter().enumerate().any(|(k, q)| self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false) && (q[0] - pc[0]).powi(2) + (q[1] - pc[1]).powi(2) < m.ideal * m.ideal));
+                let placeable = if m.water { on_map(pc, -m.radius) && self.areas.iter().any(|a| a.kind == 1 && Self::in_area(pc, a)) } else { self.land_clear(pc, m.radius) };
+                if !placeable {
                     continue;
                 }
                 // (Towers whose footprint doesntBlockTowerPlacement, the Sentries, don't count.)
@@ -4657,6 +4670,8 @@ impl Game {
         }
         self.init_air(t);
         self.sync_abilities(t);
+        // RandomPosition.Initialise: every spawner attack shuffles when the tower is made.
+        self.random_pos_init(t);
         self.sync_pets(t);
         // Point-aiming towers start in their first mode (Dartling: follow the cursor). STAND-IN
         // P-POINTDEFAULT: the set point starts on the track point nearest the tower.
@@ -5178,9 +5193,12 @@ impl Game {
         // Its Attacks are in the process list from when it is made, mid-frame (recording
         // wizard_040: the Phoenix; engineer_100: a Sentry aims where its Pink is after the move).
         {
+            // (A pet: BeastHandlerLeash.Process makes it on the handler's next frame, after that
+            // frame's Spawner: recording beast_010, its Splash on a Black where it is after its move.)
+            let is_pet = self.towers[n].sub.as_ref().is_some_and(|s| s.pet);
             let stamp = self.sim_elapsed * 4 + self.phase as u64;
             let names: Vec<String> = self.towers[n].sub.as_ref().map(|s| s.spec.tier.attacks.iter().map(|a| a.model_name.clone()).collect()).unwrap_or_default();
-            for nm in names {
+            for nm in names.into_iter().filter(|_| !is_pet) {
                 self.towers[n].attack_born.insert(nm, stamp);
             }
         }
@@ -5275,7 +5293,14 @@ impl Game {
             }
         }
         for pet in pets {
-            if let Some(q) = self.pet_spot(t, &pet) {
+            // BeastHandlerLeash.ProcessLeashedTower (VERIFIED-DISASM @0xcffd80): the pet is made at
+            // its spawner attack's Target, a RandomPosition (recording beast_010: at (-61.9, -54.22)).
+            let spawner = self.tier(t).and_then(|x| x.attacks.iter().find(|a| a.model_name.contains("PetSpawnerAttack") && a.model_name.contains(pet.name.as_str())).and_then(|a| a.random_pos.map(|m| (a.model_name.clone(), m))));
+            let spot = match spawner {
+                Some((key, m)) => self.random_pos_target(t, &key, m),
+                None => self.pet_spot(t, &pet),
+            };
+            if let Some(q) = spot {
                 let circling = pet.circle.is_some();
                 self.spawn_sub(pet, q, id, true);
                 if circling {
@@ -6503,12 +6528,7 @@ impl Game {
                 self.towers[t].target = m;
             }
         }
-        if let Some(tr) = self.tier(t) {
-            let rps: Vec<_> = tr.attacks.iter().filter_map(|a| a.random_pos.map(|m| (a.model_name.clone(), m))).collect();
-            for (key, m) in rps {
-                self.random_pos_update(t, &key, &m);
-            }
-        }
+        self.random_pos_init(t);
         // Submerge.Attatched (VERIFIED-DISASM @0xd99ed0): a new Submerge sets the target type
         // "Submerge" (recording sub_upgrades_r30: the pulse from the frame after the x-x-3 upgrade).
         if !had_submerge && self.tier(t).is_some_and(|x| x.submerge.is_some()) {
@@ -8265,7 +8285,8 @@ impl Game {
                 // processed this frame (recording boomerang_paragon_r98: the Paragon's new MOAB
                 // Press aims where a BFB is after this frame's move). Made when it first runs here.
                 if ai < tier.attacks.len() {
-                    let stamp = *self.towers[t].attack_born.entry(attack.model_name.clone()).or_insert(self.sim_elapsed * 4);
+                    let pet_first = self.towers[t].sub.as_ref().is_some_and(|s| s.pet) as u64;
+                    let stamp = *self.towers[t].attack_born.entry(attack.model_name.clone()).or_insert(self.sim_elapsed * 4 + pet_first);
                     self.process_bloons_before(stamp, early, round_clock, dots, emits, zones, shoves, leak_voice);
                 }
                 let fresh_attack = self.towers[t].paragon.is_some() && self.sim_elapsed < self.towers[t].paragon_active_at
@@ -8757,7 +8778,7 @@ impl Game {
                 }
                 // HYPOTHESIS P-RANDPOS: RandomPositionBasicModel picks a uniform direction and a
                 // distance in [minRadius, maxRadius], kept inside the map bounds.
-                if let Some(rp) = attack.random_pos.filter(|_| self.sandbox || self.round_active || !self.bloons.is_empty()) {
+                if let Some(rp) = attack.random_pos.filter(|_| !attack.weapons.is_empty() && (self.sandbox || self.round_active || !self.bloons.is_empty())) {
                     let key = attack.model_name.clone();
                     best = self.random_pos_target(t, &key, rp).map(|q| (0.0, q, 0));
                     if track_draws.is_none() && only_temp.is_none() {
@@ -9416,6 +9437,7 @@ impl Game {
                                     pr.pos = target;
                                     pr.target_cache = Some(target);
                                     pr.target_obj = bobj;
+                                    pr.target_moved = early.contains(&target_id);
                                     if let Some(bp) = bpos {
                                         pr.inst_off = if locked.is_some() { aim_off } else { [target[0] - bp[0], target[1] - bp[1]] };
                                     }
@@ -11584,6 +11606,7 @@ impl Game {
                 instant_pos: None,
                 target_cache: None,
                 target_obj: None,
+                target_moved: false,
                 effect_back: None,
                 bolt_from: None,
                 moving: 0.0,
@@ -12137,7 +12160,7 @@ impl Game {
                     let d = &$s.defs[b.kind];
                     let pr = &$s.projectiles[$p];
                     // Straight-flying shots meet bloons where both were when the frame began.
-                    let (bp, pp) = if pr.spec.instant || (pr.target.is_some() && !pr.spec.only_target) { (b.pos, pr.pos) } else { (b.prev, pr.prev) };
+                    let (bp, pp) = if pr.spec.instant || pr.target_moved || (pr.target.is_some() && !pr.spec.only_target) { (b.pos, pr.pos) } else { (b.prev, pr.prev) };
                     let rr = pr.spec.radius + d.radius;
                     let bcell = if pr.spec.instant || (pr.target.is_some() && !pr.spec.only_target) { b.pos } else { b.cell_pos };
                     let direct = $only.is_some();
@@ -14067,10 +14090,15 @@ mod tests {
             // InputManager.CreateTowerAt skips the mode's tower locks (recording farm_000: a
             // Banana Farm in CHIMPS).
             let locked = std::mem::take(&mut g.locked);
+            let rng_before = g.synced.clone();
             assert!(g.place_at(def, [*x, -*y], false), "can't place {id} at {x},{}", -y);
             g.locked = locked;
             let t = g.towers.iter().rposition(|t| t.sub.is_none()).unwrap();
             g.towers[t].tiers = [tiers[0], tiers[1], tiers[2]];
+            // (Made at this tier in one go: the base tier's shuffles didn't happen.)
+            g.synced = rng_before;
+            g.towers[t].randpos.clear();
+            g.random_pos_init(t);
             // (The tier's permanent sub-towers, as an upgrade makes them: Lord Phoenix.)
             g.sync_pets(t);
             // InputManager.CreateTowerAt as SimRecorder calls it leaves Tower.worth at 0
@@ -14250,7 +14278,8 @@ mod tests {
                     v.push(*last);
                 }
             }
-            for tw in g.towers.iter() {
+            // (The recorder lists towers with weapons only.)
+            for tw in g.towers.iter().filter(|tw| !tw.weapons.is_empty()) {
                 let ti = match clone_ids.iter().position(|x| *x == tw.id) {
                     Some(i) => i,
                     None => {

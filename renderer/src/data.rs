@@ -2517,4 +2517,7 @@ pub struct RandomPos {
     pub point: f32,
     pub radius: f32,
     pub ideal: f32,
+    /// areaType Water (Piranha's spawner).
+    #[serde(default)]
+    pub water: bool,
 }
