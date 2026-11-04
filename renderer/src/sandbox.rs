@@ -492,7 +492,11 @@ impl Hud {
         self.sandbox.open
             && self.sandbox.slide > 0.0
             && self.sandbox.menu.as_ref().is_some_and(|m| {
-                ["SandboxContainer", "Mask"].iter().any(|n| m.rect(n).is_some_and(|r| r.contains(p)))
+                // (All of it: the top row with Set Round sticks out of its container.)
+                fn any_over(n: &crate::uitree::Node, p: Vec2) -> bool {
+                    n.active && (n.screen.contains(p) || n.children.iter().any(|c| any_over(c, p)))
+                }
+                ["SandboxContainer", "Mask"].iter().any(|n| m.rect(n).is_some_and(|r| r.contains(p)) || m.find(n).is_some_and(|x| any_over(x, p)))
             })
     }
 }

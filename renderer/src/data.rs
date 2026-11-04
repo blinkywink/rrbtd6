@@ -887,6 +887,9 @@ pub struct Attack {
     #[serde(default)]
     pub exclude_tags: Vec<String>,
     /// AttackModel.fireWithoutTarget: fires on its own timer, target or not (Glaive Lord's orbit hits).
+    /// CreateEffectWhileAttackingModel: [the loop effect, the effect as it stops].
+    #[serde(default)]
+    pub while_fx: Option<[String; 2]>,
     #[serde(default)]
     pub fire_without_target: bool,
     /// AttackModel.attackThroughWalls: targets aren't checked for a clear line (Map.IsTargetLineClear).
@@ -979,6 +982,9 @@ fn yes() -> bool {
 
 #[derive(Deserialize, Clone)]
 pub struct Weapon {
+    /// StandoffModel: [maxRateIncrease, rateDecreasePerBloon].
+    #[serde(default)]
+    pub standoff: Option<[f32; 2]>,
     /// CycleAnimationModel.randomize: a synced draw at each throw.
     #[serde(default)]
     pub cycle_random: bool,

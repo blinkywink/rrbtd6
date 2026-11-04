@@ -62,17 +62,21 @@ def sprite_renderer(root):
     g = root.read_typetree()
     stack = [next(c["component"]["m_PathID"] for c in g["m_Component"]
                   if af.objects[c["component"]["m_PathID"]].type.name == "Transform")]
+    found = None
     while stack:
         t = af.objects[stack.pop()].read_typetree()
         go = af.objects[t["m_GameObject"]["m_PathID"]].read_typetree()
         for c in go["m_Component"]:
             o = af.objects.get(c["component"]["m_PathID"])
-            if o is not None and o.type.name == "SpriteRenderer":
+            # A rigged model with a sprite on it (Bloon Trap's blinker light) is a mesh.
+            if o is not None and o.type.name == "SkinnedMeshRenderer":
+                return None, None, None
+            if found is None and o is not None and o.type.name == "SpriteRenderer":
                 sr = o.read_typetree()
                 if sr["m_Sprite"]["m_FileID"] == 0 and sr["m_Sprite"]["m_PathID"] in af.objects:
-                    return sr, t["m_LocalScale"], af
+                    found = sr, t["m_LocalScale"], af
         stack.extend(ch["m_PathID"] for ch in t["m_Children"])
-    return None, None, None
+    return found or (None, None, None)
 
 
 def sprite_layers(root, out):

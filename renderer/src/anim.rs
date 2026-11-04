@@ -767,6 +767,12 @@ impl AnimModel {
         self.clips.iter().position(|c| c.name.ends_with("Attack"))
     }
 
+    /// A Beast Handler pet's strike: "AttackRake", "Launch", "Snatch" (their animators have no
+    /// plain "Attack" state).
+    pub fn pet_attack_clip(&self) -> Option<usize> {
+        self.clips.iter().position(|c| (c.name.starts_with("Attack") && !c.name.contains("Idle")) || c.name == "Launch" || c.name == "Snatch")
+    }
+
     /// The idle loop: "DartIdle", "CrossbowIdle", "Spike-o-pultIdle", ... ("AttackIdle" only as a fallback).
     /// A part drawn with the game's translated shader (queued for `draw_fx` when posed).
     pub fn has_fx(&self) -> bool {

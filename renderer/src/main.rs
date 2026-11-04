@@ -952,6 +952,8 @@ async fn game_main() {
     let mut proj_fx_live: std::collections::HashSet<u64> = std::collections::HashSet::new();
     /// Tags of projectile effects, apart from tower ids.
     const PROJ_FX_TAG: u64 = 1 << 62;
+    const WHILE_FX_TAG: u64 = 1 << 61;
+    let mut while_fx_live: HashMap<u64, [f32; 2]> = HashMap::new();
     /// With PROJ_FX_TAG: an orbiting glaive's effect (tower id << 8 | glaive), apart from projectile uids.
     const ORBIT_FX_TAG: u64 = 1 << 61;
     // NecromancerTargetTrackWithinRange.StartDraw: its display (TargetGreen) on the chosen spawn
@@ -2359,7 +2361,7 @@ async fn game_main() {
                     let m = game.tier_of(t).and_then(|tr| tr.air.as_ref()).and_then(|s| s.display.as_ref());
                     match m.and_then(|m| air_models.get_mut(m)).and_then(|m| m.as_mut()) {
                         Some(m) => {
-                            let clip = match m.attack_clip() {
+                            let clip = match m.attack_clip().or_else(|| m.pet_attack_clip()) {
                                 Some(c) if t.attack_t < m.clip_duration(c) => (c, t.attack_t),
                                 _ => (m.idle_clip(), get_time() as f32),
                             };
@@ -2376,7 +2378,7 @@ async fn game_main() {
                     let aim_yaw = std::f32::consts::FRAC_PI_2 - t.aim;
                     for (m, yaw) in [(&s.spec.base, std::f32::consts::PI), (&s.spec.model, aim_yaw)] {
                         if let Some(m) = m.as_ref().and_then(|m| sub_models.get_mut(m)).and_then(|m| m.as_mut()) {
-                            let clip = match m.attack_clip() {
+                            let clip = match m.attack_clip().or_else(|| m.pet_attack_clip()) {
                                 Some(a) if t.attack_t < m.clip_duration(a) => (a, t.attack_t),
                                 _ => (m.idle_clip(), t.idle_t),
                             };
@@ -2935,6 +2937,31 @@ async fn game_main() {
             }
             for (p, fx, k) in game.place_fx.drain(..) {
                 particles.spawn(&fx, [p[0], 0.0, p[1]], k);
+            }
+            // CreateEffectWhileAttacking (Inferno Ring): its loop while the attack has a target, the
+            // exit effect as it stops.
+            {
+                let mut on = std::collections::HashSet::new();
+                for t in 0..game.towers.len() {
+                    let tw = &game.towers[t];
+                    let Some([fx, _]) = game.tier(t).and_then(|tr| tr.attacks.iter().find_map(|a| a.while_fx.as_ref())) else { continue };
+                    if !tw.attacking_fx {
+                        continue;
+                    }
+                    on.insert(tw.id);
+                    if while_fx_live.insert(tw.id, tw.pos).is_none() {
+                        particles.spawn_tagged(fx, [tw.pos[0], 0.0, tw.pos[1]], WHILE_FX_TAG | tw.id);
+                    }
+                }
+                let gone: Vec<(u64, [f32; 2])> = while_fx_live.iter().filter(|(id, _)| !on.contains(id)).map(|(id, p)| (*id, *p)).collect();
+                for (id, p) in gone {
+                    while_fx_live.remove(&id);
+                    particles.kill(WHILE_FX_TAG | id);
+                    let exit = game.towers.iter().position(|o| o.id == id).and_then(|t| game.tier(t).and_then(|tr| tr.attacks.iter().find_map(|a| a.while_fx.as_ref())).map(|f| f[1].clone()));
+                    if let Some(exit) = exit {
+                        particles.spawn(&exit, [p[0], 0.0, p[1]], 1.0);
+                    }
+                }
             }
             // A Paragon purchase (ParagonTower.StartSacrifice / MakeNewInvestmentEffect / Process
             // / Finish): an investment orb at each sacrificed tower at investmentEffectHeight

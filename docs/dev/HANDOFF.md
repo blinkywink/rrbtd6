@@ -133,9 +133,9 @@ checkpoint that changes `renderer/src/game.rs`.
 | Wizard | 34/34 | all re-recorded with R lines; done |
 | Glue | 34/34 | done (mutator order, PostDegrade) |
 | Ice | 25/25 | done (re-recorded with seeds 2026-11-02) |
-| Sniper | 19/34 | see Sniper notes |
+| Sniper | 24/34 | see Sniper notes; open: 030 032 040 050 052 250, 205 x4 (a double shot whose target its sibling popped lives 1 frame at 954, 6 at 3206: P-DOUBLELOST doesn't explain 205) |
 | Bomb | 33/34 | open: 032 (9 position frames) |
-| Desperado | 6/34 | |
+| Desperado | 9/34 | re-recorded with seeds 2026-11-04. BloonDistanceRateBonus uses Attack.GetVisibleTarget Close, StandoffModel ported, Instant shots from throw markers start on the eject point. Open: 002 rt 1614, 003, 004, 005, 020, 025, 03x, 04x, 05x, 205, 250, 300, 320, 420_x, 50x, 520, upgrades_r30 |
 | Beast Handler | 34/34 | Exact. Re-recorded with seeds 2026-11-04. GyrfalconPattern ported from the disasm (fly_birds, GyrState): targets through GetGlobalBest (bestFirst/bestLast) then segment brackets of the handler's target type, snatch/hit around the target by Close bracket order, grapple uses the initial damage, held bloons are off track (Bloon.held: not filed, taken by range + radius) with blockSpawnChildrenCount (unmake_bloon), idle moves through Map bounds. Pets start a frame after they're made and sync the handler's target. CycleAnimation randomize draws. InstantDamage shot with a dead target stays till round end. |
 | Engineer | 32/34 | see Engineer notes (Tower parity 0.); open: 032, 052 |
 | Ninja | 34/34 | done (all R-line recordings) |

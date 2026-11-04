@@ -1064,6 +1064,8 @@ pub struct WeaponState {
     /// WeaponModel.rate the rate was last calculated from (an upgrade is a model change too).
     model_rate: f32,
     dist_k: f32,
+    /// Standoff.GetRate's divisor as of the last CalcRateFrames.
+    standoff_k: f32,
     /// VagrantWeaponBehavior's towers and bloons in its zones, as of the last shot.
     vagrant_n: (u32, u32),
     danger: f32,
@@ -1100,6 +1102,7 @@ impl WeaponState {
             buff_rate: f32::NAN,
             model_rate: f32::NAN,
             dist_k: 1.0,
+            standoff_k: 1.0,
             vagrant_n: (0, 0),
             danger: 0.0,
             necro: 1.0,
@@ -1139,7 +1142,7 @@ impl WeaponState {
                 r /= (self.vagrant_n.1 as f32 * c).min(d) + 1.0;
             }
         }
-        let r = r / self.dist_k / (1.0 + self.danger * w.leak_danger) * self.necro;
+        let r = r / self.dist_k / self.standoff_k / (1.0 + self.danger * w.leak_danger) * self.necro;
         if w.rate_min > r {
             w.rate_min
         } else {
@@ -1459,6 +1462,8 @@ pub struct Tower {
     /// A one-off animation the game triggered (the temple opening: Animator state
     /// SunTempleUpgrade / SunTempleUpgradeTier5) and seconds since (display only).
     pub show: Option<(String, f32)>,
+    /// CreateEffectWhileAttacking: the attack has a target (the loop effect plays).
+    pub attacking_fx: bool,
     /// Comanche Defense: frames until it can call in again, call-ins this round.
     pub comanche: (f32, u32),
     /// VigilanteTowerBehavior.lastActivatedAt (roundTime); None before the first.
@@ -2090,6 +2095,10 @@ pub struct Projectile {
     instant_pos: Option<[f32; 2]>,
     /// Target's cached position: where its bloon was when the Target was made (Target.GetPosition
     /// gives it once the bloon is destroyed, the projectile's copy never being updated).
+    /// A missed-frame extra InstantDamage shot, its collision still to come (P-INSTANTDOUBLE).
+    pub double_hit: bool,
+    /// That shot's target was popped by the frame's first shot: see towers_phase.
+    pub double_lost: bool,
     target_cache: Option<[f32; 2]>,
     /// The factory object its Target's bloon lives in: pooled and reused, the Target follows
     /// the new bloon's position though no longer valid (recording sub_050: a blast on the Pink
@@ -3588,6 +3597,8 @@ impl Game {
     /// Sandbox bloon menu: `count` bloons of type `name` (with the camo / regrow / fortified
     /// variant if it exists, else the closest one that does), `spacing` seconds apart.
     pub fn sandbox_spawn(&mut self, name: &str, camo: bool, regrow: bool, fortified: bool, count: u32, spacing: f32) -> bool {
+        // There is no plain DDT: it's always camo, in the sandbox's menu too.
+        let camo = camo || name == "Ddt";
         // Variant names: <Base>[Regrow][Fortified][Camo] (CeramicRegrowFortifiedCamo).
         let mut tries = Vec::new();
         for (r, f, c) in [(regrow, fortified, camo), (false, fortified, camo), (regrow, false, camo), (regrow, fortified, false),
@@ -4673,6 +4684,7 @@ impl Game {
             temple: None,
             // MonkeyAnimationController.placementConfigs: the monkey drops in (anim.rs).
             show: Some((crate::anim::PLACE_CLIP.into(), 0.0)),
+            attacking_fx: false,
             grave: Vec::new(),
             necro_points: false,
             model_clock: Some((self.steps as i64, self.round_clock)),
@@ -4928,7 +4940,13 @@ impl Game {
                     st.target = GyrTarget::None;
                 } else if !self.gyr_valid(&st) {
                     st.target = match self.bird_target(home, range, mode, &g, pos, st.stamp, None, &[], &[]) {
-                        Some(b) => GyrTarget::Bloon(b.0, b.1),
+                        Some(b) => {
+                            // handlerSendAnimationState.
+                            if st.hover {
+                                self.towers[pi].show = Some(("IdleBirdGo".into(), 0.0));
+                            }
+                            GyrTarget::Bloon(b.0, b.1)
+                        }
                         None if !st.hover => GyrTarget::Tower,
                         None => GyrTarget::None,
                     };
@@ -4998,6 +5016,8 @@ impl Game {
                     GyrTarget::Tower => {
                         st.hover = true;
                         st.target = GyrTarget::None;
+                        // handlerHoverAnimationState.
+                        self.towers[pi].show = Some(("IdleBirdCome".into(), 0.0));
                     }
                     GyrTarget::Point(q) => {
                         st.hover = true;
@@ -5013,6 +5033,7 @@ impl Game {
                         st.idle = None;
                     }
                     GyrTarget::Bloon(b, _) if self.bloons.iter().any(|x| x.id == b) => {
+                        self.towers[t].attack_t = 0.0;
                         // The segment in range furthest from the exit. (UpdateMovement @0xdc8130: the
                         // target is snatched, or only hit if it has passed that segment or can't be,
                         // and so with what's around it, Targetting.GetTargets with Close around it,
@@ -5501,6 +5522,7 @@ impl Game {
             orbit: None,
             temple: None,
             show: None,
+            attacking_fx: false,
             grave: Vec::new(),
             necro_points: false,
             model_clock: Some((self.steps as i64, self.round_clock)),
@@ -5808,6 +5830,31 @@ impl Game {
         best.0
     }
 
+    /// CreateProjectileOnTowerDestroy.OnExpire / CreateProjectile (VERIFIED-DISASM @0xd15050 /
+    /// @0xd14910): its emission fires at the tower, owned by its parent; with useTowerRotation
+    /// each shot takes the tower's rotation (recording engineer_520: a Sentry Champion sentry's
+    /// BeforeExplosion at its base rotation -114.71555). `sold`: setAgeZeroOnSell, so the fuse
+    /// (BeforeExplosion's AgeModel) is already out and it blows up at once.
+    fn fire_on_destroy(&mut self, t: usize, sold: bool) {
+        let Some(sub) = self.towers[t].sub.as_ref() else { return };
+        let (spec, parent) = (sub.spec.clone(), sub.parent);
+        let (pos, rot, tiers, id) = (self.towers[t].pos, self.towers[t].base_rot, self.towers[t].tiers, self.towers[t].id);
+        for od in &spec.on_destroy {
+            let start = self.projectiles.len();
+            self.emit_rot = Some(rot);
+            self.emit(pos, (rot - 90.0) * DEG2RAD, &od.emission, &od.projectile, None, tiers, if parent != 0 { parent } else { id });
+            self.emit_rot = None;
+            for pr in &mut self.projectiles[start..] {
+                if od.use_rot {
+                    pr.grot = Some(rot);
+                }
+                if sold {
+                    pr.frames_left = 0.0;
+                }
+            }
+        }
+    }
+
     /// Removes expired sub-towers (indices go to `removed`).
     fn expire_subs(&mut self, round_end: bool) {
         let mut gone = Vec::new();
@@ -5836,24 +5883,7 @@ impl Game {
             }
         }
         for &t in &gone {
-            // CreateProjectileOnTowerDestroy.OnExpire / CreateProjectile (VERIFIED-DISASM
-            // @0xd15050 / @0xd14910): its emission fires at the tower, owned by its parent; with
-            // useTowerRotation each shot takes the tower's rotation (recording engineer_520: a
-            // Sentry Champion sentry's BeforeExplosion at its base rotation -114.71555).
-            let Some(sub) = self.towers[t].sub.as_ref() else { continue };
-            let (spec, parent) = (sub.spec.clone(), sub.parent);
-            let (pos, rot, tiers, id) = (self.towers[t].pos, self.towers[t].base_rot, self.towers[t].tiers, self.towers[t].id);
-            for od in &spec.on_destroy {
-                let start = self.projectiles.len();
-                self.emit_rot = Some(rot);
-                self.emit(pos, (rot - 90.0) * DEG2RAD, &od.emission, &od.projectile, None, tiers, if parent != 0 { parent } else { id });
-                self.emit_rot = None;
-                if od.use_rot {
-                    for pr in &mut self.projectiles[start..] {
-                        pr.grot = Some(rot);
-                    }
-                }
-            }
+            self.fire_on_destroy(t, false);
         }
         for t in gone.into_iter().rev() {
             {
@@ -6596,7 +6626,9 @@ impl Game {
         // water area / track segment touching the current range circle.
         if cur == 0 {
             if let Some(nt) = tt.tiers.get(&format!("{}{}{}", next[0], next[1], next[2])) {
-                let (c, r) = (tw.pos, self.tier(t).map_or(0.0, |x| x.range));
+                // (IsWithinRangeOfWater / IsPathSegmentInRange ask the PetSpawnerAttack, range 60, not the
+                // handler's own 20.)
+                let (c, r) = (tw.pos, self.tier(t).map_or(0.0, |x| x.attacks.iter().find(|a| a.model_name.contains("PetSpawnerAttack")).map_or(x.range, |a| a.range)));
                 let water_pet = nt.pets.iter().any(|p| p.areas.contains(&1) && !p.areas.contains(&2));
                 let land_pet = nt.pets.iter().any(|p| p.areas.contains(&2) && p.base.is_some());
                 if water_pet && !self.areas.iter().any(|a| a.kind == 1 && Self::circle_hits_poly(c, r, &a.points)) {
@@ -7079,6 +7111,7 @@ impl Game {
         }
         let Some(t) = self.towers.iter().position(|x| x.id == id) else { return };
         let frac = self.sell_fraction(t);
+        self.fire_on_destroy(t, true);
         // (Off the process list by an ordered RemoveAt, as an expired one: RootObject.Destroy.)
         let tw = self.towers.remove(t);
         self.cash += (tw.invested * frac).floor() + tw.bank.floor();
@@ -9076,6 +9109,22 @@ impl Game {
                         break;
                     }
                 }
+                // CreateEffectWhileAttacking.Process (@0xdb5e30): on while the attack has a target.
+                if attack.while_fx.is_some() {
+                    self.towers[t].attacking_fx = best.is_some();
+                }
+                // HYPOTHESIS P-DOUBLELOST: an extra shot whose target the first one popped goes when
+                // its attack finds nothing the next frame; with a target it lives out its age
+                // (recordings sniper_005 rt 456 / rt 173).
+                {
+                    let id = self.towers[t].id;
+                    if best.is_none() {
+                        self.projectiles.retain(|p| !(p.double_lost && p.owner == id));
+                    }
+                    for p in self.projectiles.iter_mut().filter(|p| p.double_lost && p.owner == id) {
+                        p.double_lost = false;
+                    }
+                }
                 if attack.pool_fallback && best.is_none() && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
                     best = self.track_point(pos, range, 0.0);
                 }
@@ -9381,7 +9430,16 @@ impl Game {
                         }
                         tw.attack_t = 0.0;
                         tw.idle_t = 0.0;
+                        // AnimateOnBeastHandler.SetUpAttack (@0xdab0f0): the pet's attack sets its
+                        // handler's animation state, cycling animationStateMinParent..MaxParent.
+                        if let Some(parent) = tw.sub.as_ref().filter(|s| s.pet).map(|s| s.parent) {
+                            if let Some(h) = self.towers.iter_mut().find(|o| o.id == parent) {
+                                h.show = Some(("AttackParent03".into(), 0.0));
+                            }
+                        }
                     }
+                    let tw = &mut self.towers[t];
+                    let st = &mut tw.weapons[w];
                     if spawns == 0 {
                         continue;
                     }
@@ -9820,7 +9878,14 @@ impl Game {
                                         pr.target = Some(aim_id);
                                         pr.frames_left = f32::INFINITY;
                                     }
-                                    pr.pos = target;
+                                    // An Instant shot from any other emission stays on its eject point the
+                                    // frame it's made: Instant.Process (not run yet) puts it on its Target
+                                    // (recording desperado_400: at the barrel at 73, on the MOAB at 74).
+                                    if !(proj.instant && !emission.markers.is_empty()) {
+                                        pr.pos = target;
+                                    } else if pr.frames_left <= 0.0 {
+                                        pr.frames_left = f32::INFINITY;
+                                    }
                                     pr.target_cache = Some(target);
                                     pr.target_obj = bobj;
                                     pr.target_moved = early.contains(&target_id);
@@ -9832,6 +9897,13 @@ impl Game {
                             // HYPOTHESIS P-INSTANTDOUBLE: a missed-frame extra shot isn't in this frame's
                             // InstantDamageEmission.Process; it hits in the next collision pass
                             // (recording sniper_005: two hits on 132 after the double shot on 131).
+                            // (Its target popped by the frame's first shot, it goes at that collision:
+                            // recording sniper_205, Bullet 2633 at rt 954.)
+                            if emission.kind == "InstantDamage" && target_id != 0 && double && proj.instant {
+                                for pr in &mut self.projectiles[start..] {
+                                    pr.double_hit = true;
+                                }
+                            }
                             if emission.kind == "InstantDamage" && target_id != 0 && !double {
                                 let uids: Vec<u64> = self.projectiles[start..].iter().map(|pr| pr.uid).collect();
                                 self.instant_hits.extend(uids);
@@ -10001,7 +10073,29 @@ impl Game {
                         // each whole missed frame is another shot now.
                         if !double {
                             let danger = self.danger;
+                            // BloonDistanceRateBonus.GetRate (VERIFIED-DISASM @0xc6b080), from CalcRateFrames
+                            // after the Emit: Attack.GetVisibleTarget with TargetType Close; none: rangeMax.
+                            let dist_k = weapon.dist_rate.map_or(dist_k, |(per, max)| {
+                                let d = self.visible_close(pos, range, camo, no_moab, attack).map_or(max, |q| (q[0] - pos[0]).hypot(q[1] - pos[1]).min(max));
+                                1.0 + max * per * (d / max.max(1.0))
+                            });
+                            // Standoff.GetRate (VERIFIED-DISASM @0xc92df0): rate / (x + 1), x = maxRateIncrease
+                            // less rateDecreasePerBloon for each of Attack.GetVisibleTargets after the
+                            // first, at least 0 (0: the rate as it is).
+                            let standoff_k = weapon.standoff.map_or(1.0, |[max, per]| {
+                                let n = self.visible_count(pos, range, camo, no_moab, attack);
+                                let mut x = max;
+                                for _ in 1..n {
+                                    x -= per;
+                                    if x <= 0.0 {
+                                        x = 0.0;
+                                        break;
+                                    }
+                                }
+                                x + 1.0
+                            });
                             let st = &mut self.towers[t].weapons[w];
+                            st.standoff_k = standoff_k;
                             st.dist_k = dist_k;
                             if let Some(n) = vagrant_n {
                                 st.vagrant_n = n;
@@ -10824,6 +10918,64 @@ impl Game {
                 let until_spawn = (total - sd) - total;
                 (b.dist + until_spawn) / (until_spawn + ld)
             });
+    }
+
+    /// Where a bloon is as a target of an attack at `pos` (Targetting.GetTargets): on a segment in
+    /// range + 2 whose line is clear, itself; a MOAB-class one otherwise by the first of its
+    /// collision circles that's in range and seen (Targetting.CanHitMoab, as towers_phase); off
+    /// the track, within range + radius. With the squared distance of its segment's point.
+    fn visible_spot(&self, b: &Bloon, pos: [f32; 2], range: f32, camo: bool, no_moab: bool, attack: &crate::data::Attack) -> Option<(f32, [f32; 2])> {
+        let d = &self.defs[b.kind];
+        if (b.camo(d) && !camo) || (no_moab && d.tags.iter().any(|t| t == "Moabs")) {
+            return None;
+        }
+        if !attack.require_tags.iter().all(|t| d.tags.contains(t)) || attack.exclude_tags.iter().any(|t| d.tags.contains(t)) {
+            return None;
+        }
+        if b.wind.is_some() || b.held {
+            let rr = range + d.radius;
+            return ((b.pos[0] - pos[0]).powi(2) + (b.pos[1] - pos[1]).powi(2) <= rr * rr).then_some((f32::MAX, b.pos));
+        }
+        let k = (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize;
+        if !self.track_seg_ok.get(b.path as usize).and_then(|v| v.get(k)).copied().unwrap_or(false) {
+            return None;
+        }
+        let q = *self.track_segs.get(b.path as usize)?.get(k)?;
+        let dd = (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2);
+        let reach = if no_moab { range } else { range + 2.0 };
+        let clear = attack.through_walls || self.line_clear(pos, 0.0, q);
+        if dd <= reach * reach && clear {
+            return Some((dd, b.pos));
+        }
+        if d.circles.is_empty() || dd > (range + 40.0) * (range + 40.0) {
+            return None;
+        }
+        d.circles.iter().find_map(|c| {
+            let (sa, ca) = crt_sin_cos(DEG2RAD * -b.rot);
+            let (ox, oy) = (ca * c[0] - sa * c[1], ca * c[1] + sa * c[0]);
+            let p = [b.pos[0] + ox, b.pos[1] - oy];
+            ((p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2) < (range + c[2]) * (range + c[2]) && (clear || self.line_clear(pos, 0.0, p))).then_some((dd, p))
+        })
+    }
+
+    /// How many Attack.GetVisibleTargets has.
+    fn visible_count(&self, pos: [f32; 2], range: f32, camo: bool, no_moab: bool, attack: &crate::data::Attack) -> usize {
+        self.bloons.iter().filter(|b| self.visible_spot(b, pos, range, camo, no_moab, attack).is_some()).count()
+    }
+
+    /// Attack.GetVisibleTarget with Close: of the segments in range the one whose point is nearest
+    /// the tower (BloonManager.CompareBracketClose), its first bloon in the path's list; those off
+    /// the track after them.
+    fn visible_close(&self, pos: [f32; 2], range: f32, camo: bool, no_moab: bool, attack: &crate::data::Attack) -> Option<[f32; 2]> {
+        let mut best: Option<((f32, u32), [f32; 2])> = None;
+        for b in &self.bloons {
+            let Some((dd, p)) = self.visible_spot(b, pos, range, camo, no_moab, attack) else { continue };
+            let key = (dd, self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1));
+            if best.is_none_or(|(o, _)| key < o) {
+                best = Some((key, p));
+            }
+        }
+        best.map(|b| b.1)
     }
 
     /// Whether the emission weapon has a rate stack mutator on (necro_rate_update).
@@ -11991,6 +12143,8 @@ impl Game {
                 instant_set: false,
                 instant_pos: None,
                 target_cache: None,
+                double_hit: false,
+                double_lost: false,
                 target_obj: None,
                 target_moved: false,
                 effect_back: None,
@@ -12411,6 +12565,7 @@ impl Game {
                     // Frames before it can hit (burst shots, bounce delays, Mega Mine's arming).
                     pr.wait = (pr.wait - 1.0).max(0.0);
                     // (CollideOnlyWithTarget shots keep their Target as it is: no homing.)
+                    let double_hit = std::mem::take(&mut pr.double_hit);
                     if let Some(id) = pr.target.filter(|_| pr.spec.instant || !pr.spec.only_target) {
                         let at = $s.bloons.iter().find(|b| b.id == id).map(|b| b.pos);
                         match (at, pr.spec.instant) {
@@ -12424,6 +12579,7 @@ impl Game {
                                 if pr.spec.instant_destroy {
                                     pr.frames_left = 0.0;
                                 }
+                                pr.double_lost = double_hit;
                                 // CreateEffectProjectileAfterTime.SpawnEffect (VERIFIED-DISASM @0xca0540),
                                 // useTargetPosition: a new Position at GetPositionOfTarget, after this
                                 // frame's Instant.Process (which puts it back next frame). With the
@@ -13030,7 +13186,7 @@ impl Game {
                         // (Projectile.EjectRotation: an instant shot's is its tower's rotation as
                         // it fired.)
                         let (tiers, owner) = (pr.tiers, pr.owner);
-                        let grot = pr.grot.or_else(|| $s.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot));
+                        let grot = pr.grot.or_else(|| $s.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).map(|r| { let d = game_dir(r); RAD2DEG * crt_atan2(d[0], -d[1]) }));
                         for (at, c, skip) in now_after {
                             let start = $s.projectiles.len();
                             $s.emit_z = hit_z;

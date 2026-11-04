@@ -1091,6 +1091,7 @@ def main():
                                 "vagrant": next(([x["f"].get("noTowersRateBonus", 0.0), x["f"].get("towerRangeBonusReduction", 0.0),
                                                   x["f"].get("bloonInRangeAttackSpeedBuff", 0.0), x["f"].get("maxBloonAttackSpeedBuff", 0.0)]
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "VagrantWeaponBehaviorModel"), None),
+                                "standoff": next(([x["f"].get("maxRateIncrease", 0.0), x["f"].get("rateDecreasePerBloon", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "StandoffModel"), None),
                                 "cycle_random": any(x and x["type"] == "CycleAnimationModel" and x["f"].get("randomize") for x in items(w["f"].get("behaviors"))),
                                 # LeakDangerAttackSpeedModel: up to maxRateIncreasePercent faster as bloons near the exit.
                                 "leak_danger": next((x["f"].get("maxRateIncreasePercent", 0.0) for x in items(w["f"].get("behaviors"))
@@ -1208,6 +1209,7 @@ def main():
                     "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
                     "glue_filter": glue_filter, "skip_frozen": skip_frozen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
+                    "while_fx": next(([prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")) or "", prefab_name((deref(x["f"].get("exitEffectModel")) or {"f": {}})["f"].get("assetId")) or ""] for x in items(af["behaviors"]) if x and x["type"] == "CreateEffectWhileAttackingModel"), None),
                     "fire_without_target": af.get("fireWithoutTarget", False),
                     # AttackModel.attackThroughWalls: no Map.IsTargetLineClear check.
                     "through_walls": bool(af.get("attackThroughWalls", False)),
