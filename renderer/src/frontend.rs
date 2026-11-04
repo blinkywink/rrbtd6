@@ -11,7 +11,7 @@ mod menu_pages;
 #[path = "coop_session.rs"]
 mod coop_session;
 #[path = "coop_menu.rs"]
-mod coop_menu;
+pub(crate) mod coop_menu;
 #[path = "loading.rs"]
 mod loading;
 #[path = "home_world.rs"]
@@ -271,7 +271,10 @@ pub struct FrontEnd {
     diff: Option<Node>,
     save_warning:save_warning::Warning,
     modes: Option<Node>,
-    mods_room:bool,mod_ui_dirty:bool,custom_modes:Vec<String>,custom_mode:usize,
+    mods_room:bool,
+    /// Create Match (Mods): the Mods page picks the room's mods before the map select.
+    mods_pick:bool,mods_pick_open:bool,
+    mod_ui_dirty:bool,custom_modes:Vec<String>,custom_mode:usize,
     settings: Option<Node>,
     /// Where the settings screen goes back to.
     settings_from: Screen,
@@ -637,7 +640,7 @@ impl FrontEnd {
             diff: None,
             save_warning:Default::default(),
             modes: None,
-            mods_room:false,mod_ui_dirty:false,custom_modes:Vec::new(),custom_mode:0,
+            mods_room:false,mods_pick:false,mods_pick_open:false,mod_ui_dirty:false,custom_modes:Vec::new(),custom_mode:0,
             settings: None,
             settings_from: Screen::Main,
             game_options_root: None,
@@ -1251,12 +1254,17 @@ impl Hud {
                 let mut back=back;
                 if let Some(menu) = fe.pages.get_mut(&page) {
                     if let Some(browser)=&mut menu.mods {
-                        let room=if fe.mods_room{fe.net.room.as_ref().map(|r|(r.mods.as_slice(),fe.net.host))}else{None};
-                        browser.bind_room(&mut menu.node,room);
-                        if fe.mods_room&&fe.net.error{browser.report_error(&mut menu.node,fe.net.status.clone());}
+                        if fe.mods_pick {
+                            if !fe.mods_pick_open{browser.begin_pick(&mut menu.node);fe.mods_pick_open=true;}
+                        } else {
+                            let room=if fe.mods_room{fe.net.room.as_ref().map(|r|(r.mods.as_slice(),fe.net.host))}else{None};
+                            browser.bind_room(&mut menu.node,room);
+                            if fe.mods_room&&fe.net.error{browser.report_error(&mut menu.node,fe.net.status.clone());}
+                        }
                     }
                     if let Some(ids)=menu.mods.as_mut().and_then(|m|m.pending.take()){
-                        if fe.mods_room{fe.net.select_mods(&fe.root,ids);}
+                        if fe.mods_pick{}
+                        else if fe.mods_room{fe.net.select_mods(&fe.root,ids);}
                         else{
                             out=Some(FrontAction::Mods(ids));
                             fe.main=None;fe.maps=None;fe.modes=None;fe.diff=None;fe.settings=None;fe.mod_ui_dirty=true;
@@ -1270,8 +1278,25 @@ impl Hud {
                         held:!support&&is_mouse_button_down(MouseButton::Left),released:!support&&is_mouse_button_released(MouseButton::Left),
                         wheel:if support {0.0} else {crate::hud::wheel_notches()},dt:get_frame_time(),scale:s });
                     if std::mem::take(&mut menu.home_requested){fe.net.leave();next=Some(Screen::Main);}
+                    if page==MenuPage::Mods&&fe.mods_pick&&menu.node.clicked(mod_browser::CONTINUE){
+                        let ids=menu.mods.as_ref().map(|b|b.picked()).unwrap_or_default();
+                        match crate::modding::room_packages(&fe.root,&ids){
+                            Ok(_)=>{
+                                fe.net.queued_mods=ids;fe.mods_pick=false;fe.mods_pick_open=false;
+                                if let Some(b)=&mut menu.mods{b.end_pick(&mut menu.node);}
+                                fe.coop_setup=true;fe.maps=None;next=Some(Screen::Maps);
+                            },
+                            Err(e)=>{if let Some(b)=&mut menu.mods{b.report_error(&mut menu.node,e);}},
+                        }
+                    }
                     if page==MenuPage::CoopLobby{
-                        if menu.node.clicked(coop_menu::ROOM_MODS){fe.mods_room=true;next=Some(Screen::Menu(MenuPage::Mods));}
+                        // A guest is asked about the room's mods first; Leave goes back to Co-op.
+                        if !fe.net.host{if let Some(room)=&fe.net.room{self.coop_mods.offer(&room.mods);}}
+                        match self.coop_mods_choice.take(){
+                            Some(crate::coop_mods_popup::Choice::Download)=>fe.net.fetch_mods(),
+                            Some(crate::coop_mods_popup::Choice::Leave)=>{fe.net.leave();self.coop_mods.reset();next=Some(Screen::Menu(MenuPage::Social));},
+                            None=>{},
+                        }
                         if menu.coop_changed(){if let Some((entry,_))=fe.list.get(fe.map){fe.net.send(rrbtd6_coop::Command::Settings(menu.coop_settings(entry.id.clone())));}}
                         menu.bind_coop(&fe.net);
                     }
@@ -1295,7 +1320,7 @@ impl Hud {
                         if !coop_modal&&(!fe.net.active()||(fe.net.host&&fe.net.room.is_some()))&&!fe.net.error&&m.clicked(base){fe.coop_setup=true;fe.maps=None;next=Some(Screen::Maps);}
                     } else if page==MenuPage::JoinMatch {
                         if join_submit||m.clicked("CoopJoinMatchCanvas/CoopJoinScreen/ButtonGroup/BgPanel/Code/GoButton"){
-                            if fe.net.join(&fe.root,join_text.as_deref().unwrap_or("")){next=Some(Screen::Menu(MenuPage::CoopLobby));}
+                            if fe.net.join(&fe.root,join_text.as_deref().unwrap_or("")){self.coop_mods.reset();next=Some(Screen::Menu(MenuPage::CoopLobby));}
                         }
                         let popup="CoopJoinMatchCanvas/CoopJoinScreen/LoadingObject";
                         m.set_active(popup,fe.net.error);
@@ -1309,7 +1334,8 @@ impl Hud {
                     } else if page == MenuPage::Social {
                         let base="PlaySocialCanvas/PlaySocialScreen/TopGroup/Social/Buttons";
                         if m.clicked(&format!("{base}/JoinMatch")){next=Some(Screen::Menu(MenuPage::JoinMatch));}
-                        if m.clicked(&format!("{base}/CreateMatch")){fe.coop_setup=true;fe.maps=None;next=Some(Screen::Maps);}
+                        if m.clicked(&format!("{base}/CreateMatch")){fe.net.queued_mods.clear();fe.coop_setup=true;fe.maps=None;next=Some(Screen::Maps);}
+                        if m.clicked(&format!("{base}/CreateMatchMods")){fe.mods_pick=true;fe.mods_pick_open=false;fe.mods_room=false;next=Some(Screen::Menu(MenuPage::Mods));}
                     } else if page == MenuPage::Knowledge {
                         for (i,name) in ["Primary", "Military", "Magic", "Support", "Heroes", "Powers"].iter().enumerate() {
                             if m.clicked(&format!("Canvas/KnowledgeMain/Buttons/{name}Btn")) {
@@ -1352,10 +1378,16 @@ impl Hud {
                         menu.sync_knowledge_category(fe.knowledge_category);
                     }
                 }
+                let picking=page==MenuPage::Mods&&fe.mods_pick;
+                if back&&picking{
+                    fe.mods_pick=false;fe.mods_pick_open=false;
+                    if let Some(menu)=fe.pages.get_mut(&page){if let Some(b)=&mut menu.mods{b.end_pick(&mut menu.node);}}
+                }
                 if back {if page==MenuPage::CoopLobby{fe.net.leave();} next = Some(match page {
                     MenuPage::KnowledgeTree=>Screen::Menu(MenuPage::Knowledge),
                     MenuPage::CoopLobby|MenuPage::QuickMatch|MenuPage::JoinMatch=>Screen::Menu(MenuPage::Social),
                     MenuPage::Jukebox=>Screen::Settings,
+                    MenuPage::Mods if picking=>Screen::Menu(MenuPage::Social),
                     MenuPage::Mods if fe.mods_room=>Screen::Menu(MenuPage::CoopLobby),
                     _=>Screen::Main,
                 }); }
@@ -2119,8 +2151,9 @@ impl Hud {
         if fe.screen == Screen::Main && fe.main.is_some() { self.welcome.maybe_open(&fe.root); }
         if self.welcome.is_welcome() && self.welcome.draw(full, &mut ctx) { crate::welcome_popup::WelcomePopup::mark_seen(&fe.root); }
         else if !self.welcome.is_welcome() { self.welcome.draw(full, &mut ctx); }
+        if let Some(choice) = self.coop_mods.draw(full, &mut ctx) { self.coop_mods_choice = Some(choice); }
         // Whether a popup is still open now: one closed this frame (Start New) unblocks.
-        crate::uitree::block_input(self.support_open()||fe.save_warning.is_open()||self.welcome.is_open());
+        crate::uitree::block_input(self.support_open()||fe.save_warning.is_open()||self.welcome.is_open()||self.coop_mods.is_open());
         if let Some(choice) = self.draw_support(full, canvas.y, s) {
             // The store itself can't be used, so either way it closes.
             if matches!(choice, crate::support_popup::SupportChoice::Webstore) {

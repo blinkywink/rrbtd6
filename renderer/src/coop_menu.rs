@@ -2,7 +2,6 @@
 use crate::uitree::Node;
 use macroquad::prelude::*;
 pub(super) const BASE:&str="Canvas/CoopLobbyScreen";
-pub(super) const ROOM_MODS:&str="Canvas/CoopLobbyScreen/BgPanel/RoomMods";
 const SETTINGS:&str="Canvas/CoopLobbyScreen/BgPanel/StandardMatchUI";
 const DROPS:[&str;2]=["DiffDropdown","GameModeDropdown"];
 const DIVISIONS:[&str;7]=["Horizontal","Vertical","DiagonalLR","DiagonalRL","FreeForAll","RadioActive","Stairs"];
@@ -12,6 +11,17 @@ const MODES:[&[&str];3]=[
     &["Standard","Military Only","Apopalypse","Reverse"],
     &["Standard","Magic Only","Double HP MOABs","Half Cash","Alternate Bloons Rounds","Impoppable","CHIMPS"],
 ];
+/// game.json's mode name for the lobby's difficulty and mode (as frontend.rs MODE_BUTTONS).
+pub(crate) fn mode_name(difficulty:u8,mode:u8)->Option<String>{
+    const NAMES:[&[&str];3]=[
+        &["Easy","Easy PrimaryOnly","Easy Deflation"],
+        &["Medium","Medium MilitaryOnly","Medium Apopalypse","Medium Reverse"],
+        &["Hard","Hard MagicOnly","Hard DoubleMoabHealth","Hard HalfCash","Hard AlternateBloonsRounds","Impoppable","CHIMPS"],
+    ];
+    NAMES.get(difficulty as usize)?.get(mode as usize).map(|s|s.to_string())
+}
+/// game/coop_areas.json's name for the lobby's division.
+pub(crate) fn division_name(division:u8)->Option<&'static str>{DIVISIONS.get(division as usize).copied()}
 pub(super) struct Lobby {custom_modes:Vec<String>,difficulty:usize,mode:usize,open:Option<usize>,closed:[bool;4],division:usize,editable:bool,changed:bool,net_revision:u64,network_room:Option<rrbtd6_coop::Room>}
 impl Lobby{
     pub fn new(node:&mut Node)->Self{
@@ -20,18 +30,6 @@ impl Lobby{
         node.set_active(&format!("{BASE}/BgPanel/StandardMatchUI"),true);
         node.set_text(&format!("{BASE}/BgPanel/CoopGameTypeBg/Text"),"Standard");
         node.set_text(&format!("{BASE}/SelectionButton/ReadyButton/ConfirmText"),"Not connected");
-        if let Some(mut button)=node.find(&format!("{BASE}/SelectionButton/ReadyButton")).cloned(){
-            button.name="RoomMods".into();button.rt.amin=vec2(1.0,1.0);button.rt.amax=button.rt.amin;
-            button.rt.pivot=vec2(1.0,0.5);button.rt.pos=vec2(-55.0,-80.0);button.rt.size=vec2(580.0,155.0);button.rt.scale=Vec2::ONE;
-            if let Some(img)=&mut button.img{img.sprite=Some("BlueBtnLong".into());img.color=WHITE;img.kind=1;}
-            if let Some(label)=button.find_mut("ConfirmText"){label.rt.size.x=400.0;label.rt.pos.x=55.0;}
-            let icon=Node::from_json(&serde_json::json!({"name":"Icon","active":true,
-                "rect":{"anchor_min":[0,0.5],"anchor_max":[0,0.5],"pivot":[0.5,0.5],"pos":[85,0],"size":[105,105],"scale":[1,1]},
-                "comps":[{"type":"Image","enabled":true,"sprite":"MainMenuUiAtlas/CreateChallengeIcon","m_PreserveAspect":1}]}));
-            button.children.push(icon);
-            button.set_text("ConfirmText","Room Mods");
-            if let Some(root)=node.find_mut(&format!("{BASE}/BgPanel")){root.children.push(button);}
-        }
         if let Some(banner)=node.find_mut(&format!("{SETTINGS}/Banner")){banner.rt.size.x=2950.0;}
         if let Some(label)=node.find_mut(&format!("{BASE}/BgPanel/CoopGameTypeBg/Text")){
             label.rt.amin=vec2(0.5,0.5);label.rt.amax=label.rt.amin;label.rt.size=vec2(1850.0,162.0);label.rt.pos=vec2(-340.0,7.0);
@@ -100,10 +98,6 @@ impl Lobby{
             if let Some(room)=&self.network_room{self.custom_modes=rrbtd6_coop::mods::mode_ids(&room.mods);self.difficulty=room.settings.difficulty as usize;self.mode=room.settings.custom_mode.as_ref().and_then(|id|self.custom_modes.iter().position(|m|m==id)).map_or(room.settings.mode as usize,|i|MODES[self.difficulty].len()+i);self.division=room.settings.division as usize;self.closed=room.settings.closed;}
             self.refresh(node);
         }
-        // Offline screenshot fixture: expose the real control without starting a network room.
-        let preview=std::env::var_os("RRBTD6_AUTOTEST").is_some()&&std::env::var_os("RRBTD6_COOP_MODS_PREVIEW").is_some();
-        node.set_active(ROOM_MODS,session.room.is_some()||preview);
-        node.set_text(&format!("{ROOM_MODS}/ConfirmText"),&format!("MODS ({})",session.room.as_ref().map_or(0,|r|r.mods.len())));
         let waiting=session.active()&&session.room.is_none();let failed=session.error;
         node.set_active(&format!("{BASE}/LoadingObject"),waiting||failed);
         node.set_text(&format!("{BASE}/LoadingObject/LoadingGame/Text"),&session.status);
@@ -164,17 +158,13 @@ mod tests{
     use super::*;
     use serde_json::json;
     #[test]
-    fn room_mods_is_inside_the_main_card_header(){
+    fn lobby_has_no_room_mods_button(){
         let mut node=Node::from_json(&json!({"name":"Scene","active":true,"children":[{"name":"Canvas","active":true,"children":[
             {"name":"CoopLobbyScreen","active":true,"children":[{"name":"BgPanel","active":true},{"name":"SelectionButton","active":true,"children":[
                 {"name":"ReadyButton","active":true,"children":[{"name":"ConfirmText","active":true}]}]}]}]}]}));
         let _lobby=Lobby::new(&mut node);
-        let button=node.find(ROOM_MODS).unwrap();
-        assert_eq!(button.rt.amin,vec2(1.0,1.0));assert_eq!(button.rt.pivot,vec2(1.0,0.5));
-        assert!(button.rt.pos.x<0.0&&button.rt.pos.y<0.0);
-        assert!(button.rt.pos.y.abs()+button.rt.size.y*0.5<200.0);
-        assert!(node.find(&format!("{BASE}/RoomMods")).is_none());
-        assert!(button.find("Icon").is_some());
+        // Mods are chosen before the room opens (Create Match (Mods)), not in the lobby.
+        assert!(node.find(&format!("{BASE}/BgPanel/RoomMods")).is_none());
     }
     #[test]
     fn dropdown_release_changes_difficulty_and_discards_incompatible_mode(){

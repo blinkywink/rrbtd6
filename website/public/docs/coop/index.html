@@ -42,11 +42,11 @@
     <h1>Co-op</h1>
     <p class="summary">Sharing a mod set in a private room.</p>
     
-<p>Host a private iroh room and open <strong>Room Mods</strong>. Only the host chooses the set; guests can inspect it.</p>
+<p>In Co-op, choose <strong>Create Match (Mods)</strong>, tick the mods for the match and press <strong>Continue</strong>, then pick the map. Players who join see the list and choose <strong>Download</strong> to play with them (a copy is kept in their mods folder, disabled) or <strong>Leave</strong>.</p>
 <ul>
   <li>The host sends hash-checked manifests over the encrypted peer-to-peer connection, even to players who don't have those mods installed.</li>
   <li>Received manifests stay isolated in the room; they don't replace installed mods, and author scripts or native code are never sent or run.</li>
-  <li>Changing the set clears everyone's Ready state. Starting the match locks it.</li>
+  <li>The set is fixed when the room opens; there's no mods menu in the lobby.</li>
   <li>The normal load barrier checks the compiled starting state.</li>
   <li>All players need the same client build and base game data.</li>
 </ul>

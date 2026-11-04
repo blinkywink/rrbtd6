@@ -74,8 +74,9 @@ command batch, returns a bad interceptor decision, or listens for a callback tha
 too. Fix it, rebuild, reload and start a new match.</p>
 
 <h2 id="coop">A co-op room rejects my mod</h2>
-<p>Rooms take data mods only: runtime scripts and custom art aren't supported in co-op yet, and the set is limited to
-16 mods and 24 KiB of manifests.</p>
+<p>A room takes up to 16 mods with 24 KiB of manifests, and up to 128 art files totalling 32 MiB. A mod with custom
+art must sit in a folder named after its ID, and every <code>mod:</code> model it uses must be in that folder's
+<code>assets/</code>.</p>
 
 <h2 id="settings">A setting won't save</h2>
 <p>Values outside the setting's bounds, or not on its step, are rejected without changing the saved value.</p>

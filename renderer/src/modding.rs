@@ -204,33 +204,67 @@ pub fn menu_edits(root:&Path,page:&str,node:&mut crate::uitree::Node){
 }
 
 pub fn room_packages(root:&Path,ids:&[String])->Result<Vec<rrbtd6_coop::ModPackage>,String>{
+    room_packages_with_assets(root,ids).map(|(packages,_)|packages)
+}
+/// A mod's art (assets/<asset>/<file>), listed by hash for the room and kept for sending.
+fn mod_art(folder:&Path)->Result<(Vec<rrbtd6_coop::AssetFile>,rrbtd6_coop::AssetStore),String>{
+    let (mut files,mut store)=(Vec::new(),rrbtd6_coop::AssetStore::new());
+    let mut assets:Vec<_>=std::fs::read_dir(folder.join("assets")).into_iter().flatten().flatten().filter(|e|e.path().is_dir()).collect();
+    assets.sort_by_key(|e|e.file_name());
+    for asset in assets{
+        let mut entries:Vec<_>=std::fs::read_dir(asset.path()).into_iter().flatten().flatten().filter(|e|e.path().is_file()).collect();
+        entries.sort_by_key(|e|e.file_name());
+        for file in entries{
+            let path=format!("assets/{}/{}",asset.file_name().to_string_lossy(),file.file_name().to_string_lossy());
+            if !rrbtd6_coop::mods::asset_path_ok(&path){return Err(format!("Mod file name can't be shared in co-op: {path}"));}
+            let bytes=std::fs::read(file.path()).map_err(|e|format!("Cannot read {path}: {}",e.kind()))?;
+            let digest=blake3::hash(&bytes).to_hex().to_string();
+            files.push(rrbtd6_coop::AssetFile{path,size:bytes.len() as u64,digest:digest.clone()});
+            store.insert(digest,std::sync::Arc::new(bytes));
+        }
+    }
+    Ok((files,store))
+}
+/// The room's packages and their art files (Command::Assets), from the host's mods folder.
+pub fn room_packages_with_assets(root:&Path,ids:&[String])->Result<(Vec<rrbtd6_coop::ModPackage>,rrbtd6_coop::AssetStore),String>{
     let catalog=Catalog::scan(&directory(root));let overrides=overrides(root);let mut packages=Vec::new();
+    let mut store=rrbtd6_coop::AssetStore::new();
     let mut sorted=ids.to_vec();sorted.sort();sorted.dedup();
     for id in sorted{
-        let mut manifest=catalog.entries.iter().filter_map(|e|e.manifest.as_ref().ok()).find(|m|m.id==id)
-            .ok_or_else(||format!("Missing or invalid room mod: {id}"))?.clone();
+        let (folder,manifest)=catalog.entries.iter().find_map(|e|e.manifest.as_ref().ok().filter(|m|m.id==id).map(|m|(e.folder.clone(),m)))
+            .ok_or_else(||format!("Missing or invalid room mod: {id}"))?;
+        let mut manifest=manifest.clone();
         manifest.on_new_sandbox=manifest.resolved(&overrides)?;
-        packages.push(rrbtd6_coop::ModPackage::new(serde_json::to_string(&manifest).map_err(|e|e.to_string())?)?);
+        let (assets,files)=mod_art(&directory(root).join(&folder))?;
+        // Art keys are mod:<folder>/<asset>; players get it in a folder named after the ID.
+        if !assets.is_empty()&&folder!=id{return Err(format!("{}: rename its folder to \"{id}\" to share its art in co-op",manifest.name));}
+        store.extend(files);
+        packages.push(rrbtd6_coop::ModPackage::with_assets(serde_json::to_string(&manifest).map_err(|e|e.to_string())?,assets)?);
     }
     rrbtd6_coop::mods::validate(&packages)?;
     if !packages.is_empty(){
         let original=std::fs::read_to_string(root.join("game/game.json")).map_err(|_|"Cannot validate room mods without base game data")?;
         room_json(&original,&packages)?;
     }
-    Ok(packages)
+    Ok((packages,store))
 }
 pub fn room_json(json:&str,packages:&[rrbtd6_coop::ModPackage])->Result<Option<String>,String>{
     rrbtd6_coop::mods::validate(packages)?;if packages.is_empty(){return Ok(None);}
     let manifests:Vec<_>=packages.iter().map(|p|Manifest::parse(p.manifest.as_bytes())).collect::<Result<_,_>>()?;
-    fn custom_art(value:&serde_json::Value)->bool{match value{
-        serde_json::Value::String(s)=>s.starts_with("mod:"),
-        serde_json::Value::Array(a)=>a.iter().any(custom_art),
-        serde_json::Value::Object(o)=>o.values().any(custom_art),_=>false,
+    // Custom art travels with the room (each package's assets): a key must name a model the
+    // room sends (mod:<mod id>/<asset> with its meta.json).
+    fn custom_art<'a>(value:&'a serde_json::Value,out:&mut Vec<&'a str>){match value{
+        serde_json::Value::String(s) if s.starts_with("mod:")=>out.push(s),
+        serde_json::Value::Array(a)=>a.iter().for_each(|v|custom_art(v,out)),
+        serde_json::Value::Object(o)=>o.values().for_each(|v|custom_art(v,out)),_=>{},
     }}
+    let sent=|key:&str|crate::mod_assets::segments(key).is_some_and(|(owner,asset)|packages.iter().any(|p|p.id==owner&&p.assets.iter().any(|f|f.path==format!("assets/{asset}/meta.json"))));
     for manifest in &manifests {for edit in &manifest.content {
-        if matches!(edit,content::Edit::Script{..}){return Err(format!("{} uses event scripts; synchronized script support is not available in co-op yet",manifest.name));}
-        if !matches!(edit,content::Edit::Menu{..}) && custom_art(&serde_json::to_value(edit).map_err(|e|e.to_string())?){
-            return Err(format!("{} uses custom models. Co-op asset transfer is not available yet; use this mod locally.",manifest.name));
+        // Event scripts run inside the simulation on every player (no wall clock: rhai no_time;
+        // widget buttons go through Action::ModEvent).
+        if !matches!(edit,content::Edit::Menu{..}){
+            let value=serde_json::to_value(edit).map_err(|e|e.to_string())?;let mut keys=Vec::new();custom_art(&value,&mut keys);
+            if let Some(key)=keys.into_iter().find(|k|!sent(k)){return Err(format!("{} uses {key}, which isn't in the room's mod files",manifest.name));}
         }
     }}
     content::compile(json,&manifests.iter().collect::<Vec<_>>()).map(Some)

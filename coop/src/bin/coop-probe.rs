@@ -61,6 +61,7 @@ fn run()->Result<(),String>{
                 if mods_test&&(setup.room.mods.len()!=1||setup.room.mods[0].id!="relay-test"){return Err("Match lost selected mods".into());}
                 client.send(Command::Loaded(if desync&&role!="host"{[8;32]}else{checksum}))?;
             },
+            Event::Asset{..}|Event::AssetProgress{..}=>{},
             Event::Running=>{
                 running=true;
                 client.send(Command::Input{sequence:1,action:if role=="host"{Action::Place{kind:"DartMonkey".into(),at:[12.0,20.0]}}else{Action::StartRound}})?;

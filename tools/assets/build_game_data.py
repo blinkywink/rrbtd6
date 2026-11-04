@@ -913,7 +913,9 @@ def main():
             return {"kind": "AtTarget", "count": 1}
         if e["type"] == "RandomEmissionModel":
             return {"kind": "Random", "count": f.get("count", 1), "angle": f.get("angle", 0.0),
-                    "offset_start": f.get("startOffset", 0.0)}
+                    "offset_start": f.get("startOffset", 0.0),
+                    "eject_random": f.get("ejectPointRandomness", 0.0), "use_speed": bool(f.get("useSpeedMultiplier", False)),
+                    "speed_min": f.get("speedMultiplierMin", 1.0), "speed_max": f.get("speedMultiplierMax", 1.0)}
         if e["type"] == "ParallelEmissionModel":
             return {"kind": "Parallel", "count": f.get("count", 1), "spread": f.get("spreadLength", 0.0),
                     "offset_start": f.get("offsetStart", 0.0),
@@ -1091,6 +1093,7 @@ def main():
                                 "vagrant": next(([x["f"].get("noTowersRateBonus", 0.0), x["f"].get("towerRangeBonusReduction", 0.0),
                                                   x["f"].get("bloonInRangeAttackSpeedBuff", 0.0), x["f"].get("maxBloonAttackSpeedBuff", 0.0)]
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "VagrantWeaponBehaviorModel"), None),
+                                "crit_roll": next(([x["f"].get("damageAdditive", 0.0), x["f"].get("damageMultiplier", 1.0), x["f"].get("chance", 0.0), x["f"].get("bonusPerDistance", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] in ("CritRollModel", "CritRollWithDistanceModel")), None),
                                 "standoff": next(([x["f"].get("maxRateIncrease", 0.0), x["f"].get("rateDecreasePerBloon", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "StandoffModel"), None),
                                 "cycle_random": any(x and x["type"] == "CycleAnimationModel" and x["f"].get("randomize") for x in items(w["f"].get("behaviors"))),
                                 # LeakDangerAttackSpeedModel: up to maxRateIncreasePercent faster as bloons near the exit.

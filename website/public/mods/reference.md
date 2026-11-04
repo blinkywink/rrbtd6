@@ -104,7 +104,8 @@ only run in new local Sandboxes; two enabled mods setting the same Sandbox value
 
 ## Private co-op
 
-Open Room Mods in an iroh lobby. Only the host selects the set; guests can inspect it. The
+Choose Create Match (Mods) in Co-op: the host picks the set before the room opens, and joining players
+are asked to download it (Download / Leave). The
 host sends hash-checked manifests over the existing encrypted P2P connection, including to
 clients without those mods installed. Room data is held in the room snapshot, isolated from
 local installed mods; author scripts/native code are never sent or executed. Initial compiled
@@ -174,8 +175,10 @@ imported. Keep topology stable. Limits: 60,000 split vertices, 600 frames per cl
 128 MiB uncompressed animation. Lower-poly models and fewer samples load faster.
 
 Reload Mods after rebuilding and start a new match; no client restart is required.
-Model assets are currently local-only. Data mods still transfer in private co-op;
-rooms reject custom-art mods with a clear message until chunked asset transfer exists.
+Models travel in private co-op: the host's `assets/` files (up to 128 files / 32 MiB per
+room) are listed by hash and joiners who choose Download fetch them in chunks, checked
+against the hash. To share a mod's art, its folder name must be its ID (art keys are
+`mod:<folder>/<asset>`).
 Models do not add arbitrary simulation behavior: the cloned tower/weapon supplies
 its targeting and projectile rules, which you can edit with the content API.
 
@@ -220,7 +223,8 @@ need engine hooks; changing data does not invent an unsupported behavior.
 
 The intended direction is a general mod platform: arbitrary upgrade graphs, complete
 per-upgrade behavior/art changes, custom maps with paths/areas/visuals and scripted
-interactions, custom UI with actions, and validated co-op dependency/asset sharing.
+interactions, custom UI with actions, and co-op dependency/asset sharing (data, scripts
+and model art already travel with a room).
 These capabilities must work through documented code APIs and reload safely, with
 no in-game authoring editor or per-frame Python/DLL injection.
 
@@ -308,9 +312,10 @@ This example is not enabled automatically.
 This is the foundation for broader mechanics, **not unlimited engine access yet**.
 Runtime UI currently targets in-match overlays; load-time `menu(...)` edits still handle
 existing frontend pages. There are no arbitrary new renderer/physics behavior types,
-unrestricted new per-entity behavior types, extra upgrade paths, or synchronized runtime script mods yet.
-Script mods are explicitly rejected in co-op until their state/input protocol is wired.
-Existing data-only co-op mods continue working.
+unrestricted new per-entity behavior types or extra upgrade paths yet.
+Script mods work in co-op: scripts run inside the simulation on every player, there is no
+wall clock (`timestamp()` isn't available), and a widget button runs its event for everyone
+on behalf of the player who pressed it.
 
 Each callback has a 30,000-operation limit and 16 call levels; persistent state is limited
 to 64 KiB. A failed/over-budget script disables itself for the match. Commands validate
@@ -465,8 +470,8 @@ base data. The example uses ordinary native UI; authors can replace its layout.
 Put an optional `icon.png` beside your mod's `mod.json`. Use a transparent or opaque
 PNG, at most 512 x 512 pixels and 1 MiB. The Mods list and details use the same icon,
 keeping its aspect ratio. Missing/invalid images fall back to the standard mod icon.
-Press Reload Mods after changing artwork. Icons are local presentation assets;
-this convention does not add artwork transfer to co-op packages.
+Press Reload Mods after changing artwork. Icons are local presentation assets and
+aren't sent to co-op rooms (only `assets/` model files are).
 
 ### Finding installed mods
 

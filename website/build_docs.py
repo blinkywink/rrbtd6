@@ -470,8 +470,9 @@ Secondary weapons keep their original sockets.</p>
 
 {note("At most 60,000 split vertices, 600 frames per clip and 128 MiB of uncompressed poses per model. Lower-poly models and fewer samples load faster.", "warn")}
 <p>Blender and Python never run during gameplay; meshes and poses go through the native renderer. Models don't add
-simulation behaviour: the cloned tower and weapon supply targeting and projectile rules. Custom models are local-only
-for now; co-op rooms reject custom-art mods with a clear message.</p>
+simulation behaviour: the cloned tower and weapon supply targeting and projectile rules. Custom models travel with
+co-op rooms: players who choose Download get the host's <code>assets/</code> files, checked against their hashes. To
+share a mod's art, name its folder after its ID.</p>
 """)
 
 # ---------------------------------------------------------------- Scripting
@@ -545,7 +546,7 @@ that script for the match.</p>
     ["Script source", "32 KiB (inside the 64 KiB manifest)"],
     ["Callback output", "256 KiB"],
 ])}
-{note("Scripts have no filesystem, network or process APIs. Runtime script mods work in local matches and are rejected in co-op until their state protocol exists.", "warn")}
+{note("Scripts have no filesystem, network, process or clock APIs. In co-op they run inside the shared simulation on every player, and a widget button runs its event for everyone on behalf of the player who pressed it.", "warn")}
 <p>A complete example is <a href="/docs/examples/#workshop">Mechanics Workshop</a>.</p>
 """)
 
@@ -676,11 +677,11 @@ after its decision. When nobody listens, the native hook skips script execution 
 page("coop", "Playing", "Co-op",
      "Sharing a mod set in a private room.",
      f"""
-<p>Host a private iroh room and open <strong>Room Mods</strong>. Only the host chooses the set; guests can inspect it.</p>
+<p>In Co-op, choose <strong>Create Match (Mods)</strong>, tick the mods for the match and press <strong>Continue</strong>, then pick the map. Players who join see the list and choose <strong>Download</strong> to play with them (a copy is kept in their mods folder, disabled) or <strong>Leave</strong>.</p>
 <ul>
   <li>The host sends hash-checked manifests over the encrypted peer-to-peer connection, even to players who don't have those mods installed.</li>
   <li>Received manifests stay isolated in the room; they don't replace installed mods, and author scripts or native code are never sent or run.</li>
-  <li>Changing the set clears everyone's Ready state. Starting the match locks it.</li>
+  <li>The set is fixed when the room opens; there's no mods menu in the lobby.</li>
   <li>The normal load barrier checks the compiled starting state.</li>
   <li>All players need the same client build and base game data.</li>
 </ul>
@@ -740,7 +741,7 @@ page("limits", "Reference", "Limits & roadmap",
     ["Entity query page", "128 items; 8 per step; 64 pending"],
     ["Model", "60,000 vertices; 600 frames per clip; 128 MiB poses"],
     ["Mod icon", "512 × 512 px, 1 MiB"],
-    ["Co-op room", "16 data mods, 24 KiB of manifests"],
+    ["Co-op room", "16 mods, 24 KiB of manifests; 128 art files, 32 MiB"],
 ])}
 
 <h2 id="not-yet">Not implemented yet</h2>
@@ -749,13 +750,12 @@ page("limits", "Reference", "Limits & roadmap",
   <li>Arbitrary new frontend screens (in-match overlays and menu edits work)</li>
   <li>Custom map registration and import</li>
   <li>Arbitrary new native behaviour types and unrestricted engine writes</li>
-  <li>Script mods and custom art in co-op</li>
   <li>New profile counters</li>
 </ul>
 
 <h2 id="direction">Direction</h2>
 <p>The goal is a general mod platform: arbitrary upgrade graphs, complete per-upgrade behaviour and art, custom maps
-with scripted interactions, custom UI with actions, and validated co-op dependency and asset sharing, all through
+with scripted interactions, custom UI with actions, and co-op sharing of everything a mod needs, all through
 documented code APIs that reload safely, with no in-game editor and no per-frame Python or DLL injection.</p>
 """)
 
@@ -827,8 +827,9 @@ command batch, returns a bad interceptor decision, or listens for a callback tha
 too. Fix it, rebuild, reload and start a new match.</p>
 
 <h2 id="coop">A co-op room rejects my mod</h2>
-<p>Rooms take data mods only: runtime scripts and custom art aren't supported in co-op yet, and the set is limited to
-16 mods and 24 KiB of manifests.</p>
+<p>A room takes up to 16 mods with 24 KiB of manifests, and up to 128 art files totalling 32 MiB. A mod with custom
+art must sit in a folder named after its ID, and every <code>mod:</code> model it uses must be in that folder's
+<code>assets/</code>.</p>
 
 <h2 id="settings">A setting won't save</h2>
 <p>Values outside the setting's bounds, or not on its step, are rejected without changing the saved value.</p>
@@ -857,7 +858,8 @@ supplies it), or ship your own original models.</p>
 <p>No. Official events bypass local content mods.</p>
 
 <h2 id="coop">Can friends use my mod?</h2>
-<p>Data mods, yes: the host's room sends them to every player. Script mods and custom art aren't supported in co-op yet.</p>
+<p>Yes. The host's room sends its mods to every player: data, event scripts and custom models. Joiners are asked
+whether to download them; a copy goes in their mods folder, left disabled.</p>
 
 <h2 id="safe">Can a script read my files or go online?</h2>
 <p>No. Scripts have no filesystem, network or process APIs, and run under strict operation and memory limits.</p>

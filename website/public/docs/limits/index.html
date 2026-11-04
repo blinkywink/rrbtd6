@@ -43,7 +43,7 @@
     <p class="summary">Every limit in one place, and what isn't implemented yet.</p>
     
 <h2 id="limits">Limits</h2>
-<div class="table"><table><thead><tr><th>What</th><th>Limit</th></tr></thead><tbody><tr><td>Manifest size</td><td>64 KiB</td></tr><tr><td>Operations per mod</td><td>256</td></tr><tr><td>Installed mod folders</td><td>256</td></tr><tr><td>Mod ID</td><td>1–64 characters</td></tr><tr><td>Script source</td><td>32 KiB</td></tr><tr><td>Operations per callback / per tick</td><td>30,000 / 100,000</td></tr><tr><td>Commands per callback</td><td>32</td></tr><tr><td>Persistent script state</td><td>64 KiB</td></tr><tr><td>UI widgets / nodes / depth / bindings</td><td>64 / 128 / 12 / 32</td></tr><tr><td>Entity query page</td><td>128 items; 8 per step; 64 pending</td></tr><tr><td>Model</td><td>60,000 vertices; 600 frames per clip; 128 MiB poses</td></tr><tr><td>Mod icon</td><td>512 × 512 px, 1 MiB</td></tr><tr><td>Co-op room</td><td>16 data mods, 24 KiB of manifests</td></tr></tbody></table></div>
+<div class="table"><table><thead><tr><th>What</th><th>Limit</th></tr></thead><tbody><tr><td>Manifest size</td><td>64 KiB</td></tr><tr><td>Operations per mod</td><td>256</td></tr><tr><td>Installed mod folders</td><td>256</td></tr><tr><td>Mod ID</td><td>1–64 characters</td></tr><tr><td>Script source</td><td>32 KiB</td></tr><tr><td>Operations per callback / per tick</td><td>30,000 / 100,000</td></tr><tr><td>Commands per callback</td><td>32</td></tr><tr><td>Persistent script state</td><td>64 KiB</td></tr><tr><td>UI widgets / nodes / depth / bindings</td><td>64 / 128 / 12 / 32</td></tr><tr><td>Entity query page</td><td>128 items; 8 per step; 64 pending</td></tr><tr><td>Model</td><td>60,000 vertices; 600 frames per clip; 128 MiB poses</td></tr><tr><td>Mod icon</td><td>512 × 512 px, 1 MiB</td></tr><tr><td>Co-op room</td><td>16 mods, 24 KiB of manifests; 128 art files, 32 MiB</td></tr></tbody></table></div>
 
 <h2 id="not-yet">Not implemented yet</h2>
 <ul>
@@ -51,13 +51,12 @@
   <li>Arbitrary new frontend screens (in-match overlays and menu edits work)</li>
   <li>Custom map registration and import</li>
   <li>Arbitrary new native behaviour types and unrestricted engine writes</li>
-  <li>Script mods and custom art in co-op</li>
   <li>New profile counters</li>
 </ul>
 
 <h2 id="direction">Direction</h2>
 <p>The goal is a general mod platform: arbitrary upgrade graphs, complete per-upgrade behaviour and art, custom maps
-with scripted interactions, custom UI with actions, and validated co-op dependency and asset sharing, all through
+with scripted interactions, custom UI with actions, and co-op sharing of everything a mod needs, all through
 documented code APIs that reload safely, with no in-game editor and no per-frame Python or DLL injection.</p>
 
     <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/examples/"><span>Previous</span>Examples & downloads</a><a class="next" href="/docs/units/"><span>Next</span>Units & coordinates</a></nav>

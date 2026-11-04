@@ -982,6 +982,9 @@ fn yes() -> bool {
 
 #[derive(Deserialize, Clone)]
 pub struct Weapon {
+    /// CritRollModel / CritRollWithDistanceModel: [damageAdditive, damageMultiplier, chance, bonusPerDistance].
+    #[serde(default)]
+    pub crit_roll: Option<[f32; 4]>,
     /// StandoffModel: [maxRateIncrease, rateDecreasePerBloon].
     #[serde(default)]
     pub standoff: Option<[f32; 2]>,
@@ -1227,6 +1230,15 @@ pub struct Alternate {
 #[derive(Deserialize, Clone)]
 pub struct Emission {
     pub kind: String,
+    /// RandomEmissionModel: ejectPointRandomness, useSpeedMultiplier, speedMultiplierMin / Max.
+    #[serde(default)]
+    pub eject_random: f32,
+    #[serde(default)]
+    pub use_speed: bool,
+    #[serde(default)]
+    pub speed_min: f32,
+    #[serde(default)]
+    pub speed_max: f32,
     #[serde(default = "one_u")]
     pub count: u32,
     #[serde(default)]

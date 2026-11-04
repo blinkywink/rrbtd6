@@ -106,12 +106,15 @@ async fn host(endpoint:&Endpoint,options:&Options,settings:Settings,mut commands
     let (incoming,mut inbox)=channel::channel(128);let mut tasks=tokio::task::JoinSet::new();
     let mut peers=Vec::<Peer>::new();let mut generation=0;
     let mut flow=match_flow::Flow::default();
+    let mut store=AssetStore::new();
     let mut watchdog=tokio::time::interval(Duration::from_secs(1));let mut waiting_since=None;
     loop{
         let before=state.room.revision;
         let progress=flow.progress;
         tokio::select!{
             command=commands.recv()=>match command{
+                Some(Command::Assets(assets))=>{store=assets;},
+                Some(Command::Fetch(_))=>{},
                 Some(Command::Mods(mods))=>{if flow.start.is_some(){emit(events,Event::Error("Match mods are locked".into()));}else if let Err(e)=state.mods(0,mods){emit(events,Event::Error(e));}},
                 Some(Command::Settings(settings))=>{if flow.start.is_some(){emit(events,Event::Error("Match settings are locked".into()));}else if let Err(e)=state.settings(0,settings){emit(events,Event::Error(e));}},
                 Some(Command::Ready(ready))=>{if flow.start.is_none(){state.ready(0,ready)?;}},
@@ -153,6 +156,16 @@ async fn host(endpoint:&Endpoint,options:&Options,settings:Settings,mut commands
                             Wire::Ready(ready)=>{if flow.start.is_none(){let _=state.ready(slot,ready);}},
                             Wire::Profile(profile)=>{if flow.start.is_none(){let _=state.profile(slot,profile);}},
                             Wire::Ping(n)=>{let _=peer.tx.try_send(Wire::Pong(n));},
+                            // Only files the room lists, a chunk at a time.
+                            Wire::AssetRequest{digest,offset}=>{
+                                let listed=state.room.mods.iter().flat_map(|m|&m.assets).any(|f|f.digest==digest);
+                                if let Some(bytes)=store.get(&digest).filter(|_|listed){
+                                    let start=(offset as usize).min(bytes.len());let end=(start+mods::ASSET_CHUNK).min(bytes.len());
+                                    use base64::Engine as _;
+                                    let data=base64::engine::general_purpose::STANDARD.encode(&bytes[start..end]);
+                                    let _=peer.tx.try_send(Wire::AssetChunk{digest,offset:start as u64,data});
+                                }else{let _=peer.tx.try_send(Wire::Reject("That mod file isn't in this room".into()));}
+                            },
                             message @ (Wire::Loaded(_)|Wire::Input{..}|Wire::Ack{..})=>{if let Some(w)=game_message(&mut flow,slot,message)?{publish_match(&peers,events,w)?;}},
                             _=>{let _=peer.tx.try_send(Wire::Reject("Only the host can change room settings".into()));},
                         }
@@ -160,7 +173,8 @@ async fn host(endpoint:&Endpoint,options:&Options,settings:Settings,mut commands
                 },
                 Some(Inbound::Left(slot,id))=>{
                     if peers.iter().any(|p|p.slot==slot&&p.generation==id){
-                        if flow.start.is_some(){return Err("A player disconnected; match stopped".into());}
+                        // A running match goes on without them (their towers and cash go to the others).
+                        if flow.start.is_some(){flow.drop_player(slot)?;peers.retain(|p|p.slot!=slot);continue;}
                         peers.retain(|p|p.slot!=slot);state.leave(slot);
                     }
                 },None=>break,
@@ -220,6 +234,42 @@ async fn serve_peer(conn:Connection,incoming:channel::Sender<Inbound>){
     let _=result;conn.close(0u32.into(),b"room connection closed");
 }
 
+/// A guest's downloads of room mod art: one file at a time, requests paced under the host's
+/// 64-messages-a-second limit, each file checked against its hash.
+#[derive(Default)]
+struct Fetch{queue:Vec<AssetFile>,active:Option<(AssetFile,Vec<u8>,u64)>,total:u64,done:u64,window:Vec<Instant>}
+impl Fetch{
+    fn received(&self)->u64{self.done+self.active.as_ref().map_or(0,|a|a.1.len() as u64)}
+    /// Asks for the next chunks (up to four outstanding, at most 24 requests per 250 ms window).
+    async fn pump(&mut self,send:&mut SendStream)->Result<(),String>{
+        // Empty files are written by the player directly; nothing to ask for.
+        self.queue.retain(|f|f.size>0);
+        if self.active.is_none(){
+            if self.queue.is_empty(){return Ok(());}
+            let f=self.queue.remove(0);self.active=Some((f,Vec::new(),0));
+        }
+        let Some((f,bytes,asked))=&mut self.active else{return Ok(())};
+        while *asked<f.size&&(*asked-bytes.len() as u64)<4*mods::ASSET_CHUNK as u64&&self.window.len()<8{
+            write(send,&Wire::AssetRequest{digest:f.digest.clone(),offset:*asked}).await?;
+            *asked+=mods::ASSET_CHUNK as u64;self.window.push(Instant::now());
+        }
+        Ok(())
+    }
+    /// A chunk; the whole file once it is complete and matches its hash.
+    fn chunk(&mut self,digest:&str,offset:u64,data:&[u8])->Result<Option<Vec<u8>>,String>{
+        let Some((f,bytes,_))=&mut self.active else{return Ok(None)};
+        if f.digest!=digest||offset!=bytes.len() as u64{return Err("Mod file chunks arrived out of order".into());}
+        bytes.extend_from_slice(data);
+        if bytes.len() as u64>f.size{return Err("A mod file is larger than listed".into());}
+        if bytes.len() as u64==f.size{
+            let (f,bytes,_)=self.active.take().unwrap();
+            if blake3::hash(&bytes).to_hex().as_str()!=f.digest{return Err("A mod file didn't match its hash".into());}
+            return Ok(Some(bytes));
+        }
+        Ok(None)
+    }
+}
+
 async fn guest(endpoint:&Endpoint,options:&Options,invite:Invite,mut commands:channel::Receiver<Command>,events:&SyncSender<Event>)->Result<(),String>{
     let conn=tokio::time::timeout(Duration::from_secs(25),endpoint.connect(invite.endpoint,ALPN)).await.map_err(|_|"Could not reach this room. The invite may have expired.".to_owned())?.map_err(|_|"Could not connect to the host".to_owned())?;
     let (mut send,mut recv)=conn.open_bi().await.map_err(error)?;
@@ -234,12 +284,17 @@ async fn guest(endpoint:&Endpoint,options:&Options,invite:Invite,mut commands:ch
     tokio::pin!(receiver);
     let start=Instant::now();let mut ping=tokio::time::interval(Duration::from_secs(2));
     let mut prepared=false;let mut running=false;let mut next_frame=1;let mut input_sequences=[0u64;MAX_PLAYERS];
+    let mut fetch=Fetch::default();let mut fetch_tick=tokio::time::interval(Duration::from_millis(250));
     loop{tokio::select!{
         result=&mut receiver=>{let _=result;emit(events,Event::Disconnected("Host disconnected".into()));break;},
         command=commands.recv()=>match command{
             Some(Command::Ready(ready))=>write(&mut send,&Wire::Ready(ready)).await?,
             Some(Command::Profile(profile))=>{if !prepared{write(&mut send,&Wire::Profile(profile)).await?;}},
-            Some(Command::Settings(_)|Command::Mods(_))=>emit(events,Event::Error("Only the host can change the room".into())),
+            Some(Command::Settings(_)|Command::Mods(_)|Command::Assets(_))=>emit(events,Event::Error("Only the host can change the room".into())),
+            Some(Command::Fetch(files))=>{
+                for f in files{if current_room.mods.iter().flat_map(|m|&m.assets).any(|g|*g==f)&&!fetch.queue.iter().any(|q:&AssetFile|q.digest==f.digest)&&!fetch.active.iter().any(|a|a.0.digest==f.digest){fetch.total+=f.size;fetch.queue.push(f);}}
+                fetch.pump(&mut send).await?;
+            },
             Some(Command::Start|Command::Advance)=>emit(events,Event::Error("Only the host can start or advance the match".into())),
             Some(Command::Loaded(digest))=>write(&mut send,&Wire::Loaded(digest)).await?,
             Some(Command::Input{sequence,action})=>write(&mut send,&Wire::Input{sequence,action}).await?,
@@ -264,8 +319,19 @@ async fn guest(endpoint:&Endpoint,options:&Options,invite:Invite,mut commands:ch
             },
             Some(Wire::Pong(n))=>emit(events,Event::Latency((start.elapsed().as_millis() as u64).saturating_sub(n).min(u32::MAX as u64) as u32)),
             Some(Wire::Reject(e))=>emit(events,Event::Error(e)),
+            Some(Wire::AssetChunk{digest,offset,data})=>{
+                use base64::Engine as _;
+                let bytes=base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(|_|"Invalid mod file data".to_owned())?;
+                if let Some(done)=fetch.chunk(&digest,offset,&bytes)?{
+                    fetch.done+=done.len() as u64;
+                    emit(events,Event::Asset{digest,bytes:done});
+                }
+                emit(events,Event::AssetProgress{done:fetch.received(),total:fetch.total});
+                fetch.pump(&mut send).await?;
+            },
             _=>{},
         },
+        _=fetch_tick.tick()=>{fetch.window.clear();fetch.pump(&mut send).await?;},
         _=ping.tick()=>write(&mut send,&Wire::Ping(start.elapsed().as_millis() as u64)).await?,
     }}
     conn.close(0u32.into(),b"left room");Ok(())

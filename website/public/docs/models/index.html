@@ -77,8 +77,9 @@ Secondary weapons keep their original sockets.</p>
 
 <div class="callout warn"><strong>Limit</strong><p>At most 60,000 split vertices, 600 frames per clip and 128 MiB of uncompressed poses per model. Lower-poly models and fewer samples load faster.</p></div>
 <p>Blender and Python never run during gameplay; meshes and poses go through the native renderer. Models don't add
-simulation behaviour: the cloned tower and weapon supply targeting and projectile rules. Custom models are local-only
-for now; co-op rooms reject custom-art mods with a clear message.</p>
+simulation behaviour: the cloned tower and weapon supply targeting and projectile rules. Custom models travel with
+co-op rooms: players who choose Download get the host's <code>assets/</code> files, checked against their hashes. To
+share a mod's art, name its folder after its ID.</p>
 
     <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/menus/"><span>Previous</span>Menus</a><a class="next" href="/docs/scripts/"><span>Next</span>Event scripts</a></nav>
     <footer class="foot">Unofficial fan project. Not affiliated with Ninja Kiwi. <a href="/">rusttd6.com</a></footer>

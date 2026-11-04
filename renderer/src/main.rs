@@ -46,6 +46,7 @@ mod sandbox;
 mod temple_popup;
 mod support_popup;
 mod welcome_popup;
+mod coop_mods_popup;
 mod geraldo_shop;
 mod powers_menu;
 mod ui;
@@ -1321,10 +1322,14 @@ async fn game_main() {
             map_key = k;
             save_setting(&root, "map", serde_json::json!(map_key));
             let worker_root=root.clone();let worker_json=json.clone();let worker_map=map_key.clone();
-            let worker_hero=if coop_config.is_some(){None}else{hero.clone()};
+            // Co-op: this player's own lobby hero in their shop.
+            let worker_hero=match &coop_config{
+                Some(c)=>c.room.players.iter().find(|p|p.slot==front.coop_slot()).map(|p|p.profile.hero.clone()).filter(|h|!h.is_empty()),
+                None=>hero.clone(),
+            };
             let worker_local=coop_config.is_none();
             let worker_mods=coop_config.as_ref().map(|c|c.room.mods.clone()).unwrap_or_default();
-            let worker_mode=coop_config.as_ref().map(|c|c.room.settings.custom_mode.clone().unwrap_or_else(||["Easy","Medium","Hard"][c.room.settings.difficulty as usize].to_owned()));
+            let worker_mode=coop_config.as_ref().map(|c|c.room.settings.custom_mode.clone().or_else(||frontend::coop_menu::mode_name(c.room.settings.difficulty,c.room.settings.mode)).unwrap_or_else(||["Easy","Medium","Hard"][c.room.settings.difficulty.min(2) as usize].to_owned()));
             game=loading_task(load_work::spawn(move||{
                 let shared=match modding::room_json(&worker_json,&worker_mods){Ok(v)=>v,Err(error)=>{eprintln!("Room mods invalid: {error}");None}};
                 let mut loaded=game_data(&worker_root,shared.as_deref().unwrap_or(&worker_json),worker_hero.as_deref(),&worker_map,worker_local);
@@ -1358,9 +1363,25 @@ async fn game_main() {
                     }}
                     coop_test_position=spots.get(front.coop_slot() as usize).copied();
                 }
-                let runtime=coop_game::Runtime::new(config.room.players.iter().map(|p|p.slot).collect(),&mut game).expect("validated room");
+                let mut runtime=coop_game::Runtime::new(config.room.players.iter().map(|p|p.slot).collect(),&mut game).expect("validated room");
+                // Each player's hero (a known one only) and the Powers' behaviours.
+                for p in &config.room.players{
+                    if game.heroes.iter().any(|h|h.id==p.profile.hero){runtime.replica.heroes[p.slot as usize]=Some(p.profile.hero.clone());}
+                }
+                if let Some(h)=hud.as_ref(){runtime.replica.powers=h.powers.all_behaviors();}
+                // The division's placement areas (game/coop_areas.json; Free For All has none).
+                let slots:Vec<u8>=config.room.players.iter().map(|p|p.slot).collect();
+                let division=frontend::coop_menu::division_name(config.room.settings.division).unwrap_or("FreeForAll");
+                let areas=std::fs::read(root.join("game").join("coop_areas.json")).map_err(|e|e.to_string())
+                    .and_then(|b|serde_json::from_slice::<serde_json::Value>(&b).map_err(|e|e.to_string()))
+                    .and_then(|j|game::coop_areas::CoopAreas::load(&j,division,&slots));
+                let mut area_error=None;
+                match areas{
+                    Ok(a)=>game.coop_areas=Some(a),
+                    Err(e)=>{eprintln!("Co-op areas: {e}");if division!="FreeForAll"{area_error=Some(format!("Co-op areas: {e}"));}}
+                }
                 front.coop_send(rrbtd6_coop::Command::Loaded(runtime.replica.digest(&game)));
-                coop_runtime=Some(runtime);coop_error=None;speed=1;auto_start=false;acc=0.0;
+                coop_runtime=Some(runtime);coop_error=area_error;speed=1;auto_start=false;acc=0.0;
             }
             // Behind the loading screen, load what the first seconds of play would otherwise load
             // on the fly (a hitch as the map appears): every tower's base model, each shop tower's
@@ -1418,6 +1439,9 @@ async fn game_main() {
             let picking_id=picking.and_then(|t|game.towers.get(t)).map(|t|t.id);
             if let Err(error)=runtime.update(&mut game,&mut front,get_frame_time()){
                 eprintln!("Co-op stopped: {error}");coop_error=Some(error);front.coop_stop();
+            }
+            for (slot,id) in std::mem::take(&mut runtime.replica.powers_used){
+                if slot==front.coop_slot(){let _=local_profile::update(&root,|p|{if let Some(n)=p.powers.get_mut(&id){*n=n.saturating_sub(1);}});}
             }
             let created=runtime.replica.placed.drain(..).filter(|(slot,_)|*slot==front.coop_slot()).map(|(_,id)|id).last();
             selected=created.or(selected_id).and_then(|id|game.towers.iter().position(|t|t.id==id));
@@ -1679,7 +1703,9 @@ async fn game_main() {
                             close = true;
                         }
                         menus::MenuAction::BuyParagon(extra) => {
-                            if coop_runtime.is_none(){game.buy_paragon(h.menus.paragon_tower, extra);}
+                            if coop_runtime.is_some(){
+                                if let Some(tw)=game.towers.get(h.menus.paragon_tower){front.coop_input(rrbtd6_coop::Action::Paragon{tower:tw.id,extra});}
+                            }else{game.buy_paragon(h.menus.paragon_tower, extra);}
                             close = true;
                         }
                         menus::MenuAction::Freeplay => {
@@ -1912,7 +1938,11 @@ async fn game_main() {
             // PowersMenu.PowerUseSuccess (@0x180ae14c0): Btd6Player.ConsumePower(id, 1). HYPOTHESIS
             // P-SANDBOXNOCONSUME: sandbox's menu has dontUsePlayerInventory, so nothing is used up.
             let behaviors = hud.as_ref().and_then(|h| h.powers.behaviors(&id)).cloned();
-            if behaviors.is_some_and(|b| game.use_power(&id, &b, mouse_world)) {
+            if coop_runtime.is_some() {
+                // Sent; the profile pays once the match has used it (replica.powers_used).
+                front.coop_input(rrbtd6_coop::Action::Power { id: id.clone(), at: mouse_world });
+                power_pick = None;
+            } else if behaviors.is_some_and(|b| game.use_power(&id, &b, mouse_world)) {
                 if !game.sandbox {
                     let _ = local_profile::update(&root, |p| {
                         if let Some(n) = p.powers.get_mut(&id) {
@@ -1924,7 +1954,10 @@ async fn game_main() {
             }
         } else if let Some(i) = item_pick.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
             // A spot it can't be used keeps it in hand.
-            if game.use_item(i, mouse_world) {
+            if coop_runtime.is_some() {
+                front.coop_input(rrbtd6_coop::Action::Item { index: i as u16, at: Some(mouse_world) });
+                item_pick = None;
+            } else if game.use_item(i, mouse_world) {
                 item_pick = None;
             }
         } else if let Some(name) = ability_pick.clone().filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
@@ -2025,7 +2058,7 @@ async fn game_main() {
             }
             let was = selected;
             if !menu_open { selected = game.tower_at(mouse_world); }
-            selected_removeable = if selected.is_none() && !menu_open && coop_runtime.is_none() { game.removeable_at(mouse_world) } else { None };
+            selected_removeable = if selected.is_none() && !menu_open { game.removeable_at(mouse_world) } else { None };
             // CreateSoundOnSelected: a hero says something when clicked.
             if let Some(t) = selected.filter(|&t| was != Some(t)) {
                 game.select_voice(t);
@@ -2042,14 +2075,14 @@ async fn game_main() {
         if let Some(t) = selected {
             for (a, path) in [("upgrade1", 0), ("upgrade2", 1), ("upgrade3", 2)] {
                 if binds.pressed(a) {
-                    if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Upgrade{tower:game.towers[t].id,path:path as u8});}
-                    else if game.towers[t].tiers[path] == 5 && game.paragon_quote(t).is_some() {
+                    if game.towers[t].tiers[path] == 5 && game.paragon_quote(t).is_some() {
                         if let Some(h) = hud.as_mut() {
                             h.menus.paragon_tower = t;
                         }
                         open_menu = Some(menus::Menu::Paragon);
                     } else if !game.temple_prompt(t, path).is_some_and(|two| hud.as_mut().is_some_and(|h| h.open_temple(t, path, two))) {
-                        game.upgrade(t, path);
+                        if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Upgrade{tower:game.towers[t].id,path:path as u8});}
+                        else{game.upgrade(t, path);}
                     }
                 }
             }
@@ -2317,7 +2350,7 @@ async fn game_main() {
             }
             // Range circles lie on the ground, under towers and bloons.
             if let (Some(def), true) = (placing, in_map || place_mode != 0) {
-                let ok = game.can_place(def, place_at) && game.cash >= game.place_cost(def, place_at);
+                let ok = game.can_place_here(def, place_at) && game.cash >= game.place_cost(def, place_at);
                 render3d::range_disc(place_at[0], place_at[1], placement_radius(&game.tower_defs[def].1), ok);
             }
             if let Some(t) = selected {
@@ -3388,7 +3421,7 @@ async fn game_main() {
             // Placement preview.
             if let Some(def) = placing {
                 if in_map || place_mode != 0 {
-                    let ok = game.can_place(def, place_at) && game.cash >= game.place_cost(def, place_at);
+                    let ok = game.can_place_here(def, place_at) && game.cash >= game.place_cost(def, place_at);
                     let c = view.to_screen(place_at);
                     // Range.png lookup colours (see render3d::range_disc).
                     let col = if ok { Color::from_rgba(0, 59, 99, 51) } else { Color::from_rgba(255, 9, 8, 89) };
@@ -3449,7 +3482,7 @@ async fn game_main() {
                     game.sfx.push(game::Sfx { name: "UIClick01".into(), group: None });
                 }
                 match a {
-                    hud::Action::ModEvent(owner,event)=>{if coop_runtime.is_none(){game.mod_event(&event,Some(&owner));}},
+                    hud::Action::ModEvent(owner,event)=>{if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::ModEvent{owner,event});}else{game.mod_event(&event,Some(&owner));}},
                     hud::Action::ModDismiss=>{game.mod_runtime.popup=None;game.mod_runtime.revision+=1;},
                     hud::Action::Coop(action)=>{if coop_runtime.is_some(){front.coop_input(action);}},
                     // A tap only selects the shop tower (its name shows); towers are dragged out
@@ -3478,24 +3511,26 @@ async fn game_main() {
                     hud::Action::Upgrade(path) => {
                         if let Some(t) = selected {
                             // A tier-5 path's next upgrade is the Paragon: confirm it first.
-                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Upgrade{tower:game.towers[t].id,path:path as u8});}
-                            else if game.towers[t].tiers[path] == 5 && game.paragon_quote(t).is_some() {
+                            if game.towers[t].tiers[path] == 5 && game.paragon_quote(t).is_some() {
                                 h.menus.paragon_tower = t;
                                 open_menu = Some(menus::Menu::Paragon);
                             } else if !game.temple_prompt(t, path).is_some_and(|two| h.open_temple(t, path, two)) {
-                                game.upgrade(t, path);
+                                if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Upgrade{tower:game.towers[t].id,path:path as u8});}
+                                else{game.upgrade(t, path);}
                             }
                         }
                     }
                     // The temple popup's OK (the tower can't have moved: the popup is modal).
                     hud::Action::TempleUpgrade(t, path) => {
-                        if coop_runtime.is_none()&&t < game.towers.len() {
+                        if coop_runtime.is_some()&&t < game.towers.len() {
+                            front.coop_input(rrbtd6_coop::Action::Upgrade{tower:game.towers[t].id,path:path as u8});
+                        } else if t < game.towers.len() {
                             game.upgrade(t, path);
                         }
                     }
                     hud::Action::SellRemoveable => {
                         if let Some(i) = selected_removeable.take() {
-                            game.sell_removeable(i);
+                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Removeable{index:i as u16});}else{game.sell_removeable(i);}
                         }
                     }
                     hud::Action::Sell => {
@@ -3510,13 +3545,15 @@ async fn game_main() {
                     }
                     hud::Action::SetPoint => picking = selected,
                     hud::Action::DefaultPoint => {
-                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
-                            game.towers[t].point = None;
+                        if let Some(t) = selected {
+                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::DefaultPoint});}else{game.towers[t].point = None;}
                         }
                     }
-                    // Not synchronised in co-op yet.
                     hud::Action::BankCollect(all) => {
-                        if coop_runtime.is_none() {
+                        if coop_runtime.is_some() {
+                            if all {front.coop_input(rrbtd6_coop::Action::CollectBanks);}
+                            else if let Some(t)=selected {front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::CollectBank});}
+                        } else {
                             let banks: Vec<usize> = if all { (0..game.towers.len()).filter(|&o| game.towers[o].bank > 0.0).collect() } else { selected.into_iter().collect() };
                             for o in banks {
                                 game.collect_bank(o);
@@ -3524,51 +3561,49 @@ async fn game_main() {
                         }
                     }
                     hud::Action::LeftTarget(m) => {
-                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
-                            game.towers[t].left_target = m;
+                        if let Some(t) = selected {
+                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::LeftTarget(coop_game::target_code(m))});}else{game.towers[t].left_target = m;}
                         }
                     }
                     hud::Action::Reverse => {
-                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
-                            game.reverse_air(t);
+                        if let Some(t) = selected {
+                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::Reverse});}else{game.reverse_air(t);}
                         }
                     }
                     hud::Action::Stance => {
-                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
-                            game.toggle_stance(t);
+                        if let Some(t) = selected {
+                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::Stance});}else{game.toggle_stance(t);}
                         }
                     }
                     hud::Action::Submerge => {
-                        if let Some(t) = selected.filter(|&t| coop_runtime.is_none() && game.can_submerge(t)) {
+                        if let Some(t) = selected.filter(|&t| coop_runtime.is_some() && game.can_submerge(t)) {
+                            front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::Submerged(!game.towers[t].submerged)});
+                        } else if let Some(t) = selected.filter(|&t| game.can_submerge(t)) {
                             game.towers[t].submerged = !game.towers[t].submerged;
                             if !game.towers[t].submerged && game.towers[t].target == game::TargetMode::Submerge { game.towers[t].target = game::TargetMode::First; }
                         }
                     }
                     hud::Action::ShowPops(on) => save_setting(&root, "show_pops", serde_json::json!(on)),
                     hud::Action::Hand(left) => {
-                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
-                            game.towers[t].flip = left;
+                        if let Some(t) = selected {
+                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::Hand{left}});}else{game.towers[t].flip = left;}
                         }
                     }
                     hud::Action::CamoPrio => {
-                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
-                            game.towers[t].camo_prio = !game.towers[t].camo_prio;
+                        if let Some(t) = selected {
+                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::CamoPriority(!game.towers[t].camo_prio)});}else{game.towers[t].camo_prio = !game.towers[t].camo_prio;}
                         }
                     }
-                    // Not synchronised in co-op yet.
-                    // Not synchronised in co-op yet.
                     hud::Action::Power(id) => {
-                        if coop_runtime.is_none() {
-                            power_pick = Some(id);
-                        }
+                        power_pick = Some(id);
                     }
                     hud::Action::GeraldoItem(i) => {
-                        if coop_runtime.is_none() {
-                            if game.item_needs_target(i) {
-                                item_pick = Some(i);
-                            } else {
-                                game.use_item(i, [0.0, 0.0]);
-                            }
+                        if game.item_needs_target(i) {
+                            item_pick = Some(i);
+                        } else if coop_runtime.is_some() {
+                            front.coop_input(rrbtd6_coop::Action::Item { index: i as u16, at: None });
+                        } else {
+                            game.use_item(i, [0.0, 0.0]);
                         }
                     }
                     hud::Action::Close => selected = None,
@@ -3642,10 +3677,11 @@ async fn game_main() {
             draw_rectangle(0.0, 0.0, screen_width(), 34.0, Color::from_rgba(150, 20, 20, 225));
             draw_text(message, 12.0, 24.0, 22.0, WHITE);
         }
-        if coop_runtime.is_some(){
-            let message=coop_error.as_deref().map(|e|format!("Co-op stopped: {e}. Esc opens Home.")).unwrap_or_else(||format!("Private co-op prototype | Player {} wallet | heroes and sacrifices unfinished",front.coop_slot()+1));
+        // The game has no co-op status bar; only a stopped match says why.
+        if let (Some(_),Some(e))=(&coop_runtime,coop_error.as_deref()){
+            let message=format!("Co-op stopped: {e}. Esc opens Home.");
             draw_rectangle(0.0,screen_height()-30.0,screen_width()-Hud::panel_px(),30.0,Color::from_rgba(0,0,0,190));
-            draw_text(&message,12.0,screen_height()-9.0,19.0,if coop_error.is_some(){RED}else{WHITE});
+            draw_text(&message,12.0,screen_height()-9.0,19.0,RED);
         }
         if autotest.is_some()&&std::env::var_os("RRBTD6_RESIZE_CHECK").is_some(){
             match frames{30=>request_new_screen_size(800.0,900.0),60=>request_new_screen_size(1920.0,720.0),90=>request_new_screen_size(1600.0,900.0),_=>{}}

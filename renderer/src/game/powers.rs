@@ -8,6 +8,17 @@
 use super::*;
 
 impl Game {
+    /// The owner id of what a Power makes: 0 (the player) in single player; in co-op a stand-in id
+    /// per player (u64::MAX - slot), registered to that player's wallet, so a Cash Drop's crate
+    /// pays the player who used it.
+    pub(crate) fn power_owner(&mut self) -> u64 {
+        let Some(w) = self.coop_wallets.as_mut() else { return 0 };
+        let Some(slot) = w.actor else { return 0 };
+        let id = u64::MAX - slot as u64;
+        w.owners.insert(id, slot);
+        id
+    }
+
     /// Whether `behaviors` (a Power's game/powers.json "behaviors") can be used by `use_power`.
     pub fn power_supported(behaviors: &serde_json::Value) -> bool {
         let kinds: Vec<&str> = behaviors.as_array().into_iter().flatten().filter_map(|b| b["type"].as_str()).collect();
@@ -75,8 +86,10 @@ impl Game {
                 // modelled: the segment's height and the projectile's power flag (+0x1a5).
                 Some("CashDropModel" | "RoadSpikesModel" | "GlueTrapModel" | "MoabMineModel" | "CamoTrapModel") => {
                     let Some(proj) = self.power_projectiles.get(id).cloned() else { return false };
-                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
-                    self.emit(at, 0.0, &single, &proj, None, [0; 3], 0);
+                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+                    // Co-op: owned by the player who used it, so its cash goes to them.
+                    let owner = self.power_owner();
+                    self.emit(at, 0.0, &single, &proj, None, [0; 3], owner);
                 }
                 _ => {}
             }

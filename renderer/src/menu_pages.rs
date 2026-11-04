@@ -923,7 +923,15 @@ impl MenuPage {
                 node.set_text(&format!("{BASE}/TopGroup/Social/SocialTitle"),"Play together");
                 if let Some(buttons)=node.find_mut(&format!("{BASE}/TopGroup/Social/Buttons")) {
                     buttons.children.retain(|n|matches!(n.name.as_str(),"CreateMatch"|"JoinMatch"));
-                    for card in &mut buttons.children {card.le_flex.x=0.0;card.le_pref.x=600.0;}
+                    // A second create card for a match with mods, chosen before the lobby opens.
+                    if let Some(i)=buttons.children.iter().position(|n|n.name=="CreateMatch") {
+                        let mut mods=buttons.children[i].clone();mods.name="CreateMatchMods".into();
+                        mods.set_text("Type","CREATE MATCH (MODS)");
+                        // The Game Editor's monkey with its tools stands for mods.
+                        if let Some(img)=&mut mods.img{img.sprite=Some("MenuChrome/GameEditorBtn".into());img.preserve=true;}
+                        buttons.children.insert(i+1,mods);
+                    }
+                    for card in &mut buttons.children {card.le_flex.x=0.0;card.le_pref.x=470.0;}
                 }
             }
             Self::Store => {

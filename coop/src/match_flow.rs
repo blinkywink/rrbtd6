@@ -16,6 +16,31 @@ pub enum Action{
     Speed{value:u8},AutoStart{value:bool},Freeplay,
     Special{tower:u64},
     Donate{to:u8,amount:f64},RequestCash,
+    /// A setting of one of the player's own towers (the selection menu's buttons).
+    Tower{tower:u64,change:TowerChange},
+    /// Collects every one of the player's own banks (Collect All).
+    CollectBanks,
+    /// Buys the map's removeable obstacle `index` (Map.SellRemoveable: the buyer pays).
+    Removeable{index:u16},
+    /// Buys the player's own tower's Paragon with `extra` cash invested (the confirmation popup).
+    Paragon{tower:u64,extra:f64},
+    /// Uses item `index` of the player's own Geraldo's shop, at `at` when it goes on the map.
+    Item{index:u16,at:Option<[f32;2]>},
+    /// Uses one of the player's own Powers at `at` (their profile pays it; the simulation only
+    /// needs the Power's id).
+    Power{id:String,at:[f32;2]},
+    /// A room mod's widget button: event `event` of mod `owner`'s script, run for everyone.
+    ModEvent{owner:String,event:String},
+    /// Sent by the host only, in the leaving player's own sequence: they left the match, their
+    /// towers and cash go to the others (Simulation.RedistributeTowers).
+    Leave,
+}
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
+pub enum TowerChange{
+    CamoPriority(bool),Submerged(bool),Reverse,Hand{left:bool},
+    /// The second target mode (TARGETS code, as in Target).
+    LeftTarget(u8),
+    DefaultPoint,Stance,CollectBank,
 }
 impl Action{
     pub fn valid(&self)->bool{
@@ -23,9 +48,14 @@ impl Action{
         match self{
             Self::Donate{to,amount}=>*to<MAX_PLAYERS as u8&&amount.is_finite()&&*amount>0.0,
             Self::Place{kind,at}=>!kind.is_empty()&&kind.len()<=96&&kind.bytes().all(|b|b.is_ascii_alphanumeric()||b"._-".contains(&b))&&point(at),
-            Self::Upgrade{path,..}=>*path<3,Self::Target{mode,..}=>*mode<32,
+            Self::Upgrade{path,..}=>*path<3,Self::Target{mode,..}|Self::Tower{change:TowerChange::LeftTarget(mode),..}=>*mode<32,
             Self::Point{at,..}|Self::Pointer{at}|Self::Collect{at}=>point(at),
-            Self::Ability{index,at,target,..}=>*index<256&&at.as_ref().is_none_or(point)&&!(at.is_some()&&target.is_some()),Self::Speed{value}=>matches!(value,1|3),_=>true,
+            Self::Ability{index,at,target,..}=>*index<256&&at.as_ref().is_none_or(point)&&!(at.is_some()&&target.is_some()),Self::Speed{value}=>matches!(value,1|3),Self::Removeable{index}=>*index<1024,
+            Self::Paragon{extra,..}=>extra.is_finite()&&*extra>=0.0&&*extra<1e9,
+            Self::Item{index,at}=>*index<256&&at.as_ref().is_none_or(point),
+            Self::Power{id,at}=>!id.is_empty()&&id.len()<=64&&id.bytes().all(|b|b.is_ascii_alphanumeric()||b"._-".contains(&b))&&point(at),
+            Self::ModEvent{owner,event}=>[owner,event].iter().all(|s|!s.is_empty()&&s.len()<=64&&s.bytes().all(|b|b.is_ascii_alphanumeric()||b"._-".contains(&b))),
+            _=>true,
         }
     }
 }
@@ -47,6 +77,8 @@ pub(crate) struct Flow{
     loaded:[Option<[u8;32]>;MAX_PLAYERS],sequences:[u64;MAX_PLAYERS],
     pending:Vec<Input>,next:u64,receipts:VecDeque<(u64,[Option<[u8;32]>;MAX_PLAYERS])>,
     pub progress:u64,
+    /// Players who left a running match.
+    left:[bool;MAX_PLAYERS],
 }
 impl Flow{
     pub fn begin(&mut self,room:&Room)->Result<MatchStart,String>{
@@ -58,7 +90,7 @@ impl Flow{
         self.start=Some(start.clone());self.next=1;Ok(start)
     }
     fn slots(&self)->Result<Vec<usize>,String>{
-        Ok(self.start.as_ref().ok_or("Match has not started")?.room.players.iter().map(|p|p.slot as usize).collect())
+        Ok(self.start.as_ref().ok_or("Match has not started")?.room.players.iter().map(|p|p.slot as usize).filter(|&s|!self.left[s]).collect())
     }
     pub fn waiting(&self)->bool{self.start.is_some()&&(!self.running||!self.receipts.is_empty())}
     pub fn loaded(&mut self,slot:u8,digest:[u8;32])->Result<bool,String>{
@@ -72,7 +104,7 @@ impl Flow{
     }
     pub fn input(&mut self,slot:u8,sequence:u64,action:Action)->Result<(),String>{
         let slots=self.slots()?;
-        if !self.running||!slots.contains(&(slot as usize))||!action.valid(){return Err("Invalid match input".into());}
+        if !self.running||!slots.contains(&(slot as usize))||!action.valid()||action==Action::Leave{return Err("Invalid match input".into());}
         if sequence!=self.sequences[slot as usize]+1{return Err("Input sequence is out of order".into());}
         if self.pending.iter().filter(|i|i.slot==slot).count()>=INPUTS_PER_PLAYER{return Err("Too many pending inputs".into());}
         self.sequences[slot as usize]=sequence;self.pending.push(Input{slot,sequence,action});Ok(())
@@ -82,6 +114,22 @@ impl Flow{
         if self.receipts.len()>=IN_FLIGHT{return Ok(None);}
         let frame=Frame{number:self.next,actions:std::mem::take(&mut self.pending)};
         self.next+=1;self.receipts.push_back((frame.number,[None;MAX_PLAYERS]));Ok(Some(frame))
+    }
+    /// Player `slot` left a running match: the next frame tells everyone (Action::Leave, in
+    /// their own sequence) and their acknowledgements are no longer awaited. The host can't leave
+    /// this way, and a match still loading stops.
+    pub fn drop_player(&mut self,slot:u8)->Result<(),String>{
+        let slots=self.slots()?;
+        if !self.running{return Err("A player disconnected while loading; match stopped".into());}
+        if slot==0||!slots.contains(&(slot as usize)){return Err("Invalid player departure".into());}
+        if slots.len()<=1{return Err("Every other player left".into());}
+        self.pending.retain(|i|i.slot!=slot);
+        let i=slot as usize;self.sequences[i]+=1;
+        self.pending.push(Input{slot,sequence:self.sequences[i],action:Action::Leave});
+        self.left[i]=true;self.progress+=1;
+        let slots=self.slots()?;
+        while self.receipts.front().is_some_and(|(_,a)|slots.iter().all(|&s|a[s].is_some())){self.receipts.pop_front();}
+        Ok(())
     }
     pub fn ack(&mut self,slot:u8,frame:u64,digest:[u8;32])->Result<(),String>{
         let slots=self.slots()?;
@@ -98,6 +146,18 @@ impl Flow{
 
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]fn a_guest_leaving_a_running_match_is_announced_and_no_longer_awaited(){
+        let mut f=running();let frame=f.advance().unwrap().unwrap();
+        f.ack(0,frame.number,[1;32]).unwrap();
+        assert!(f.input(1,1,Action::Leave).is_err(),"players can't send Leave");
+        f.input(1,1,Action::StartRound).unwrap();
+        f.drop_player(1).unwrap();
+        assert!(!f.waiting(),"the frame only it hadn't acknowledged is settled");
+        let next=f.advance().unwrap().unwrap();
+        assert_eq!(next.actions,vec![Input{slot:1,sequence:2,action:Action::Leave}]);
+        assert!(f.ack(1,next.number,[2;32]).is_err());
+        assert!(f.drop_player(0).is_err(),"the host's leaving ends the room instead");
+    }
     #[test]fn invalid_donations_are_rejected_before_sequencing(){
         let mut f=running();
         for action in [Action::Donate{to:1,amount:f64::NAN},Action::Donate{to:1,amount:f64::INFINITY},Action::Donate{to:1,amount:-1.0},Action::Donate{to:4,amount:100.0}]{assert!(f.input(0,1,action).is_err());}

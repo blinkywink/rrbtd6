@@ -149,6 +149,9 @@ pub struct Hud {
     pub(crate) temple: crate::temple_popup::TemplePopup,
     pub(crate) support: crate::support_popup::SupportPopup,
     pub(crate) welcome: crate::welcome_popup::WelcomePopup,
+    /// Joining a room with mods: "download them to play?" and the answer, read in the lobby.
+    pub(crate) coop_mods: crate::coop_mods_popup::ModsPopup,
+    pub(crate) coop_mods_choice: Option<crate::coop_mods_popup::Choice>,
     pub(crate) geraldo: crate::geraldo_shop::GeraldoShop,
     /// The in-game Powers menu (the shop's PowersButton).
     pub(crate) powers: crate::powers_menu::PowersMenu,
@@ -401,6 +404,8 @@ impl Hud {
         )).await;
         Some(Hud {
             welcome: crate::welcome_popup::WelcomePopup::load(&dir),
+            coop_mods: crate::coop_mods_popup::ModsPopup::load(&dir),
+            coop_mods_choice: None,
             powers: crate::powers_menu::PowersMenu::load(&dir, root),
             mod_ui:crate::mod_ui::ModUi::load(root),
             account_ui:Default::default(),

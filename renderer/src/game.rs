@@ -111,6 +111,7 @@
 mod coop_state;
 #[path = "game/coop_cash.rs"]
 mod coop_cash;
+pub(crate) mod coop_areas;
 
 use crate::data::{AREA_LAND, AREA_SKIPPED, Area, BloonDef, Brew, Emission, GameData, Proj, TagMod, Tier, TowerDef, TowerTiers};
 use std::collections::HashMap;
@@ -2031,6 +2032,8 @@ pub struct Projectile {
     pub pierce: f32,
     pub spec: Proj,
     pub crit: Option<f32>,
+    /// CritRoll (Projectile.AddCritRoll): [chance, damageMultiplier, damageAdditive, rolled, crit].
+    pub crit_roll: Option<[f32; 5]>,
     /// Its FollowPath is mirrored (thrown by the other hand: FlipFollowPath).
     pub mirror: bool,
     pub hit: HitSet,
@@ -2753,7 +2756,8 @@ pub struct Game {
     power_projectiles: HashMap<String, Proj>,
     /// Power id -> the tower def it places (powers.rs), for the ones the clone simulates.
     power_tower_defs: HashMap<String, usize>,
-    geraldo_stock: Vec<geraldo::ItemStock>,
+    /// Geraldo's shop stock per player (Simulation.GetGeraldoShopInventory(inputId)); one in single player.
+    geraldo_stock: Vec<Vec<geraldo::ItemStock>>,
     /// Apopalypse (GameModel.isApopalypse): every round comes from the freeplay groups
     /// (UI.ApplyExtraNotInSimModelSettings installs FreeplayRoundManager from round 1) and the
     /// next one is sent as soon as the last has emitted everything.
@@ -2912,6 +2916,10 @@ pub struct Game {
     pub pointer: Option<[f32; 2]>,
     pub(crate) coop_pointers: HashMap<u64, Option<[f32; 2]>>,
     pub(crate) coop_wallets: Option<rrbtd6_coop::economy::Wallets>,
+    /// Co-op: the local player, for what the HUD shows (their Geraldo's shop); never simulation.
+    pub(crate) coop_view: Option<u8>,
+    /// Co-op: the division's placement areas (None: Free For All).
+    pub(crate) coop_areas: Option<coop_areas::CoopAreas>,
     /// Towers removed during `step` (expired sub-towers), in removal order, so the caller can fix
     /// indices it holds: (index, where the tower now at that index came from; usize::MAX when
     /// the later ones shifted down instead).
@@ -3316,6 +3324,8 @@ impl Game {
             pointer: None,
             coop_pointers: HashMap::new(),
             coop_wallets: None,
+            coop_view: None,
+            coop_areas: None,
             removed: Vec::new(),
             typed_made: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
@@ -4587,11 +4597,15 @@ impl Game {
         if self.locked.iter().any(|x| *x == self.tower_defs[def].0) {
             return false;
         }
-        // One hero per game.
-        if self.hero_def(def).is_some() && self.towers.iter().any(|t| self.hero_def(t.def).is_some()) {
+        // One hero per game (co-op: one per player, their own, checked by coop_game).
+        if self.coop_wallets.is_none() && self.hero_def(def).is_some() && self.towers.iter().any(|t| self.hero_def(t.def).is_some()) {
             return false;
         }
         let cost = self.place_cost(def, p);
+        // Co-op: Map.CheckCoopPlacement, the acting player's areas.
+        if checked && self.coop_wallets.as_ref().and_then(|w| w.actor).is_some_and(|me| !self.coop_area_allows(me, p)) {
+            return false;
+        }
         if self.cash < cost || (checked && !self.can_place(def, p)) {
             return false;
         }
@@ -6038,7 +6052,7 @@ impl Game {
             if let Some(pa) = &a.place_at {
                 self.towers[t].ability_cd.insert(name.to_string(), a.cooldown * FPS);
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+                let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &pa.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -6362,7 +6376,7 @@ impl Game {
         // doesn't run in reverse).
         if let Some(proj) = &a.track_charge {
             let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-            let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+            let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
             for k in 0..self.tracks.len() {
                 let reverse = proj.track_travel.as_ref().is_some_and(|x| x.reverse);
                 let d0 = if reverse { self.tracks[k].length() } else { 0.0 };
@@ -6385,7 +6399,7 @@ impl Game {
             let target = self.bloons.iter().filter(|b| on_map(b.pos, 0.0)).max_by(|x, y| x.progress().total_cmp(&y.progress())).map(|b| b.pos);
             if let Some(p) = target {
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+                let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &lp.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -8282,7 +8296,7 @@ impl Game {
         if !self.bloons.iter().any(|b| b.id == target) {
             return;
         }
-        let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+        let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
         for t in 0..self.towers.len() {
             let Some(proj) = self.tier(t).and_then(|tr| tr.preempt.clone()) else { continue };
             let [ex, ey, ez] = self.tier(t).map_or([0.0; 3], |tr| tr.preempt_offset);
@@ -9775,7 +9789,7 @@ impl Game {
                                 // point (recording ice_250: Absolute Zero's pierce-999 pulse with
                                 // the blast, both at z 7).
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+                                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                                     self.emit(from, dir, &single, sec, None, tiers, owner);
                                 }
                                 self.emit_z = 0.0;
@@ -9810,7 +9824,7 @@ impl Game {
                                 self.emit_target = None;
                                 // MultiEmissionModel: its secondary projectile from the tower too.
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+                                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                                     self.emit(pos, dir, &single, sec, None, tiers, owner);
                                 }
                                 if ambient {
@@ -9897,6 +9911,15 @@ impl Game {
                             // HYPOTHESIS P-INSTANTDOUBLE: a missed-frame extra shot isn't in this frame's
                             // InstantDamageEmission.Process; it hits in the next collision pass
                             // (recording sniper_005: two hits on 132 after the double shot on 131).
+                            // CritRoll.ProjectilesCreated (VERIFIED-DISASM @0xc71dd0): each shot gets a roll
+                            // of chance + CritChanceOffset; CritRollWithDistance's (@0xc71790) is the
+                            // tower-to-Target distance, rounded half to even, x bonusPerDistance.
+                            if let Some([add, mult, chance, per]) = weapon.crit_roll {
+                                let d = ((target[0] - pos[0]).hypot(target[1] - pos[1])).round_ties_even();
+                                for pr in &mut self.projectiles[start..] {
+                                    pr.crit_roll = Some([chance + d * per, mult, add, 0.0, 0.0]);
+                                }
+                            }
                             // (Its target popped by the frame's first shot, it goes at that collision:
                             // recording sniper_205, Bullet 2633 at rt 954.)
                             if emission.kind == "InstantDamage" && target_id != 0 && double && proj.instant {
@@ -10094,6 +10117,7 @@ impl Game {
                                 }
                                 x + 1.0
                             });
+                            if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT {} w{w} k {dist_k} s {standoff_k} vag {:?} rate {} rf {}", self.round_clock, vagrant_n, weapon.rate, self.towers[t].weapons[w].rate_frames); } // DBGX
                             let st = &mut self.towers[t].weapons[w];
                             st.standoff_k = standoff_k;
                             st.dist_k = dist_k;
@@ -10122,7 +10146,7 @@ impl Game {
                             if st.burst_left < 1 {
                                 st.burst_left = bf.count;
                             } else {
-                                st.last = clock + bf.frames as i64 - st.rate_frames;
+                                st.last = clock + bf.frames as i64 - st.rate_frames;                                if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT burst w{w} clock {clock} frames {} rf {} -> {}", bf.frames, st.rate_frames, st.last); } // DBGX
                             }
                         }
                     }
@@ -11072,7 +11096,7 @@ impl Game {
         let pool = stored.floor() as i64;
         let (min, max_wave) = (nc.min_per_wave as i64, nc.max_per_wave as i64);
         let owner = self.towers[t].id;
-        let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+        let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
         // Each undead bloon in turn: its pierce share, its spot on the track (the segment's
         // centre, less Random.Next(maxPathRandomRange) + half of it unless the player chose the
         // segment), then its offset (Vector3.GetOffsetFromRadius) as it is emitted.
@@ -11575,7 +11599,7 @@ impl Game {
                 "destroy_emit" => match &e.projectile {
                     Some(p) => EffectKind::DestroyEmit {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None })),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None })),
                         dont_copy: e.dont_copy,
                     },
                     None => continue,
@@ -11583,7 +11607,7 @@ impl Game {
                 "carry" => match &e.projectile {
                     Some(p) => EffectKind::Carry {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None })),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None })),
                         uids: Vec::new(),
                     },
                     None => continue,
@@ -11597,7 +11621,7 @@ impl Game {
                         ignore: e.ignore_same_frame,
                         skip: e.ignore_same_frame,
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None })),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None })),
                     },
                     None => continue,
                 },
@@ -11985,6 +12009,7 @@ impl Game {
         let n = em.count.max(1);
         for k in 0..n {
             let (mut a, mut off) = (dir, 0.0f32);
+            let (mut rnd_off, mut rnd_rot, mut rnd_speed): (Option<[f32; 2]>, Option<f32>, Option<f32>) = (None, None, None);
             match em.kind.as_str() {
                 "Arc" if n > 1 => {
                     let total = em.angle.to_radians();
@@ -11997,9 +12022,32 @@ impl Game {
                     a = dir + start - em.offset.to_radians() - step * k as f32;
                 }
                 "Parallel" => off = em.offset_start + em.spread * k as f32,
-                // HYPOTHESIS P-EMIT-RANDOM: RandomEmissionModel spreads each shot uniformly over
-                // `angle` degrees centred on the target, starting `startOffset` ahead.
-                "Random" => a = dir + (self.rand() - 0.5) * em.angle.to_radians(),
+                // RandomEmission.Emit (VERIFIED-DISASM @0xc4a7a0), syncedRandom, per shot: (0, 1)
+                // turned NextDouble x 360 times NextDouble x startOffset off the eject point; with
+                // ejectPointRandomness another (0, 1) turned NextDouble x 360 (double) times
+                // randomness x NextDouble; rotation = NextDouble x angle + the tower's - angle x 0.5;
+                // with useSpeedMultiplier the speed x (min + NextDouble x (max - min)) (recording
+                // desperado_003: three shots, six draws each).
+                "Random" => {
+                    let (d1, d2) = (self.synced_double(), self.synced_double());
+                    let u = game_dir(d1 as f32 * 360.0);
+                    let r = d2 as f32 * em.offset_start;
+                    let mut o = [u[0] * r, u[1] * r];
+                    if em.eject_random > 0.0 {
+                        let (d3, d4) = (self.synced_double(), self.synced_double());
+                        let u = game_dir((d4 * 360.0) as f32);
+                        let r = (em.eject_random as f64 * d3) as f32;
+                        o = [o[0] + u[0] * r, o[1] + u[1] * r];
+                    }
+                    rnd_off = Some(o);
+                    let base = self.emit_rot.unwrap_or_else(|| RAD2DEG * crt_atan2(dir.cos(), -dir.sin()));
+                    let d5 = self.synced_double();
+                    rnd_rot = Some((d5 as f32 * em.angle + base) - em.angle * 0.5);
+                    if em.use_speed {
+                        let span = em.speed_max - em.speed_min;
+                        rnd_speed = Some(if span != 0.0 { em.speed_min + (self.synced_double() * span as f64) as f32 } else { em.speed_min });
+                    }
+                }
                 _ => {}
             }
             let (s, c) = a.sin_cos();
@@ -12025,10 +12073,12 @@ impl Game {
                 }
                 "Single" | "Arc" | "Parallel" => Some(r),
                 _ => None,
-            }));
+            })).or(rnd_rot);
             let gdir = grot.map(game_dir);
-            let ahead = if em.kind == "Random" { em.offset_start } else { 0.0 };
-            let mut pos = [from[0] - s * off + c * ahead, from[1] + c * off + s * ahead];
+            let mut pos = [from[0] - s * off, from[1] + c * off];
+            if let Some(o) = rnd_off {
+                pos = [from[0] + o[0], from[1] + o[1]];
+            }
             // ParallelEmission.Emit (VERIFIED-DISASM @0xc67930, game frame): side = the direction
             // turned 90 degrees (unless linear), base = side x spreadLength x 0.5 + back x yOffset,
             // shot k at base - side x (spreadLength / (count - 1)) x k + back x yOffset from the
@@ -12087,7 +12137,10 @@ impl Game {
                 grot: gdir.map(|v| RAD2DEG * crt_atan2(v[0], -v[1])),
                 vel: match gdir {
                     // TravelStrait: direction x speedFrames.
-                    Some(v) => [v[0] * (spec.speed * FRAME_TIME), v[1] * (spec.speed * FRAME_TIME)],
+                    Some(v) => {
+                        let sp = rnd_speed.map_or(spec.speed, |m| m * spec.speed);
+                        [v[0] * (sp * FRAME_TIME), v[1] * (sp * FRAME_TIME)]
+                    }
                     None => [c * spec.speed / FPS, s * spec.speed / FPS],
                 },
                 // AgeModel.set_Lifespan (VERIFIED-DISASM @0x11dd100): lifespanFrames =
@@ -12113,6 +12166,7 @@ impl Game {
                     sp
                 },
                 crit,
+                crit_roll: None,
                 mirror: self.towers.iter().find(|t| t.id == owner).is_some_and(|t| t.flip),
                 hit: HitSet::default(),
                 clear_hits_next: false,
@@ -12816,6 +12870,21 @@ impl Game {
                     if let Some(w) = &pr.spec.wrath {
                         dmg += ($s.active_rbe / w.threshold * w.damage).clamp(0.0, w.max);
                     }
+                    // Projectile.RollForCrits (VERIFIED-DISASM @0xc8df40), from Damage.Collide after the
+                    // damage is worked out: the first hit rolls syncedRandom.NextDouble <= chance; a
+                    // crit is damage x damageMultiplier + damageAdditive on every hit after.
+                    if let Some(mut cr) = $s.projectiles[$p].crit_roll {
+                        if cr[3] == 0.0 {
+                            cr[3] = 1.0;
+                            if $s.synced_double() <= cr[0] as f64 {
+                                cr[4] = 1.0;
+                            }
+                            $s.projectiles[$p].crit_roll = Some(cr);
+                        }
+                        if cr[4] != 0.0 {
+                            dmg = cr[1] * dmg + cr[2];
+                        }
+                    }
                     $kids.clear();
                     // CreateProjectileOnContact.Collide runs in the collision pass, before the hit's
                     // damage and its pops (recording glue_025: a glob's Glue Splatter splat comes
@@ -13416,7 +13485,7 @@ impl Game {
                 self.tick_bloon_effects(i, round_clock, &mut dots, &mut emits);
             }
         }
-        let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+        let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
         let mut emitted: Vec<(std::ops::Range<usize>, u64)> = Vec::new();
         for (pos, proj, owner, from, layer) in emits {
             let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
@@ -15138,7 +15207,7 @@ mod tests {
         // Four pet rabbits become a Wererabbit.
         let rabbit = idx(&g, "PetRabbit");
         for k in 0..4 {
-            if let Some(s) = g.geraldo_stock.get_mut(rabbit) {
+            if let Some(s) = g.geraldo_stock.get_mut(0).and_then(|v| v.get_mut(rabbit)) {
                 s.qty = s.qty.max(1);
             }
             let p = g.track.pos(150.0 + 60.0 * k as f32);

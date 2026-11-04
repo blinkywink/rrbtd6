@@ -8,6 +8,7 @@ const LIST:&str="Canvas/JukeboxScreen/AvailableTracks/Scroll/Container/Content";
 const DETAILS:&str="Canvas/JukeboxScreen/Playlist/Scroll/Container/Content";
 const TOOLS:&str="Canvas/JukeboxScreen/AvailableTracks/BrowserTools";
 const FOOTER:&str="Canvas/JukeboxScreen/TrackPlayer";
+pub const CONTINUE:&str="Canvas/JukeboxScreen/ContinueBtn";
 /// Height taken from the bottom of the details list for the Enable All / Disable All buttons.
 const BULK_STRIP:f32=180.0;
 const BULK:[(&str,&str,f32);2]=[("EnableAll","Enable All",-390.0),("DisableAll","Disable All",390.0)];
@@ -143,6 +144,22 @@ impl Browser {
             rows:Vec::new(),focus:None,query:String::new(),search_focus:false,search_select_all:false,filter:ModFilter::All,reset_list:false,edit:None,icons_dirty:true,template,button,body,title,notice:None,reset_details:false,pending:None,pending_settings:None,room:None};
         browser.rebuild(node);Some(browser)
     }
+    /// Create Match (Mods): choosing the mods of a room that doesn't exist yet, finished with
+    /// a Continue button (`picked`, then the map select). Nothing is enabled locally.
+    pub fn begin_pick(&mut self,node:&mut Node){
+        self.bind_room(node,Some((&[],true)));
+        node.set_text(&format!("{BASE}/TopInfo/Title"),"GAME MODS");
+        if node.find(CONTINUE).is_none(){
+            let mut b=self.button.clone();b.name="ContinueBtn".into();b.active=true;text_all(&mut b,"Continue");native_button(&mut b);
+            place(&mut b,vec2(1.0,0.0),vec2(1.0,0.0),vec2(-90.0,70.0),vec2(600.0,150.0));
+            if let Some(t)=b.find_mut("Text"){t.rt.size.x=550.0;}
+            if let Some(base)=node.find_mut(BASE){base.children.push(b);}
+        }
+        node.set_active(CONTINUE,true);
+    }
+    pub fn end_pick(&mut self,node:&mut Node){node.set_active(CONTINUE,false);}
+    /// The mods ticked while picking, sorted.
+    pub fn picked(&self)->Vec<String>{let mut ids:Vec<_>=self.selected.iter().cloned().collect();ids.sort();ids}
     pub fn reopen(&mut self,node:&mut Node){
         node.set_text(&format!("{BASE}/TopInfo/Title"),"MODS");
         node.set_text(&format!("{BASE}/AvailableTracks/Title"),"INSTALLED");

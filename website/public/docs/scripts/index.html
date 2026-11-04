@@ -82,7 +82,7 @@ that script for the match.</p>
 
 <h2 id="limits">Limits</h2>
 <div class="table"><table><thead><tr><th>Limit</th><th>Value</th></tr></thead><tbody><tr><td>Operations per callback</td><td>30,000</td></tr><tr><td>Operations per simulation tick (all scripts)</td><td>100,000</td></tr><tr><td>Call depth</td><td>16</td></tr><tr><td>Commands per callback</td><td>32</td></tr><tr><td>Persistent <code>this</code> state</td><td>64 KiB</td></tr><tr><td>Script source</td><td>32 KiB (inside the 64 KiB manifest)</td></tr><tr><td>Callback output</td><td>256 KiB</td></tr></tbody></table></div>
-<div class="callout warn"><strong>Limit</strong><p>Scripts have no filesystem, network or process APIs. Runtime script mods work in local matches and are rejected in co-op until their state protocol exists.</p></div>
+<div class="callout warn"><strong>Limit</strong><p>Scripts have no filesystem, network, process or clock APIs. In co-op they run inside the shared simulation on every player, and a widget button runs its event for everyone on behalf of the player who pressed it.</p></div>
 <p>A complete example is <a href="/docs/examples/#workshop">Mechanics Workshop</a>.</p>
 
     <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/models/"><span>Previous</span>Custom models</a><a class="next" href="/docs/ui/"><span>Next</span>Custom UI</a></nav>

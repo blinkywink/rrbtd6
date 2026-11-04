@@ -15,9 +15,35 @@ pub struct ItemStock {
 }
 
 impl Game {
-    /// Index of the placed Geraldo, if any.
+    /// Co-op: the acting player (GeraldoPurchaseManager's inputId), or between actions the local
+    /// player the HUD shows; None in single player.
+    fn item_player(&self) -> Option<u8> {
+        self.coop_wallets.as_ref().and_then(|w| w.actor.or(self.coop_view))
+    }
+
+    /// Co-op: the player who owns tower id `id`.
+    fn item_owner(&self, id: u64) -> Option<u8> {
+        self.coop_wallets.as_ref().and_then(|w| w.owners.get(&id).copied())
+    }
+
+    /// Index of `player`'s placed Geraldo (GeraldoPurchaseManager.GetGeraldoTower(inputId)); in
+    /// single player (None) the placed Geraldo.
+    fn geraldo_of(&self, player: Option<u8>) -> Option<usize> {
+        (0..self.towers.len()).find(|&t| {
+            self.towers[t].sub.is_none()
+                && self.tower_defs[self.towers[t].def].0 == "Geraldo"
+                && (player.is_none() || self.item_owner(self.towers[t].id) == player)
+        })
+    }
+
+    /// Index of the placed Geraldo, if any (co-op: the acting player's own).
     pub fn geraldo(&self) -> Option<usize> {
-        (0..self.towers.len()).find(|&t| self.towers[t].sub.is_none() && self.tower_defs[self.towers[t].def].0 == "Geraldo")
+        self.geraldo_of(self.item_player())
+    }
+
+    /// The shop stock in use: the acting player's (Simulation.GetGeraldoShopInventory(inputId)).
+    fn stock_slot(&self) -> usize {
+        self.item_player().unwrap_or(0) as usize
     }
 
     /// Geraldo's hero level (0 without him).
@@ -31,13 +57,22 @@ impl Game {
 
     /// Stock of item `i` (the items start stocked when Geraldo is first placed).
     pub fn item_stock(&self, i: usize) -> u32 {
-        self.geraldo_stock.get(i).map_or(self.geraldo_items[i].start, |s| s.qty)
+        self.geraldo_stock.get(self.stock_slot()).and_then(|v| v.get(i)).map_or(self.geraldo_items[i].start, |s| s.qty)
+    }
+
+    /// The items start stocked when the player's Geraldo is first placed.
+    fn ensure_stock_for(&mut self, slot: usize, placed: bool) {
+        if self.geraldo_stock.len() <= slot {
+            self.geraldo_stock.resize(slot + 1, Vec::new());
+        }
+        if self.geraldo_stock[slot].is_empty() && placed {
+            self.geraldo_stock[slot] = self.geraldo_items.iter().map(|it| ItemStock { qty: it.start, rounds: 0 }).collect();
+        }
     }
 
     fn ensure_stock(&mut self) {
-        if self.geraldo_stock.is_empty() && self.geraldo().is_some() {
-            self.geraldo_stock = self.geraldo_items.iter().map(|it| ItemStock { qty: it.start, rounds: 0 }).collect();
-        }
+        let placed = self.geraldo().is_some();
+        self.ensure_stock_for(self.stock_slot(), placed);
     }
 
     /// levelUnlockedAt reached and not banned in this mode (bannedForModes, by mode name).
@@ -92,6 +127,15 @@ impl Game {
         let it = self.geraldo_items[i].clone();
         let Some(g) = self.geraldo() else { return false };
         let gid = self.towers[g].id;
+        // HYPOTHESIS P-COOPITEMTARGET: in co-op a tower item (sauce, cape, pickles, stone, potion,
+        // fertilizer) goes on the player's own towers only.
+        if let Some(me) = self.item_player() {
+            if matches!(it.kind.as_str(), "sauce" | "cape" | "pickles" | "stone" | "potion" | "fertilizer")
+                && self.tower_at(p).is_some_and(|t| self.item_owner(self.towers[t].id) != Some(me))
+            {
+                return false;
+            }
+        }
         let ok = match it.kind.as_str() {
             "tower" => match self.for_level(&it.towers) {
                 // HYPOTHESIS P-ITEMTOWER: placed like a land tower of its footprint, owned by
@@ -113,7 +157,7 @@ impl Game {
                     } else {
                         0.0
                     };
-                    let single = Emission { kind: "Single".into(), count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
+                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None };
                     let tiers = self.towers[g].tiers;
                     self.emit(p, dir, &single, &proj, None, tiers, gid);
                     true
@@ -200,7 +244,8 @@ impl Game {
         };
         if ok {
             self.cash -= self.item_cost(i);
-            if let Some(s) = self.geraldo_stock.get_mut(i) {
+            let slot = self.stock_slot();
+            if let Some(s) = self.geraldo_stock.get_mut(slot).and_then(|v| v.get_mut(i)) {
                 s.qty = s.qty.saturating_sub(1);
             }
         }
@@ -209,7 +254,13 @@ impl Game {
 
     /// The boosts of Geraldo items on tower `t`, into its buffs.
     pub(super) fn item_buffs(&self, t: usize, b: &mut Buff) {
-        let lv = self.geraldo_level() as f32;
+        // Co-op: the level of the tower owner's Geraldo.
+        let owner = if self.coop_wallets.is_some() { self.item_owner(self.towers[t].id) } else { None };
+        let lv = if self.coop_wallets.is_some() && owner.is_none() {
+            0.0
+        } else {
+            self.geraldo_of(owner).map_or(0, |g| self.towers[g].tiers[0] as u32) as f32
+        };
         for &(i, _) in &self.towers[t].items {
             let Some(it) = self.geraldo_items.get(i) else { continue };
             match it.kind.as_str() {
@@ -249,21 +300,29 @@ impl Game {
                 *r > 0
             });
         }
-        self.ensure_stock();
-        if self.geraldo().is_none() {
-            return;
-        }
-        for i in 0..self.geraldo_stock.len() {
-            let it = &self.geraldo_items[i];
-            let placed = it.only_if_none
-                && self.towers.iter().any(|t| t.sub.as_ref().is_some_and(|s| it.towers.iter().any(|(_, sp)| sp.name == s.spec.name)));
-            let (every, amount, max) = (it.every.max(1), it.amount, it.max);
-            let s = &mut self.geraldo_stock[i];
-            s.rounds += 1;
-            if s.rounds >= every {
-                s.rounds = 0;
-                if !placed {
-                    s.qty = (s.qty + amount).min(max);
+        // Each player's own shop (co-op: every player with a Geraldo placed).
+        let players: Vec<Option<u8>> = match &self.coop_wallets {
+            Some(w) => w.players.iter().map(|&p| Some(p)).collect(),
+            None => vec![None],
+        };
+        for player in players {
+            let Some(g) = self.geraldo_of(player) else { continue };
+            let slot = player.unwrap_or(0) as usize;
+            self.ensure_stock_for(slot, true);
+            let gid = self.towers[g].id;
+            for i in 0..self.geraldo_stock[slot].len() {
+                let it = &self.geraldo_items[i];
+                // Co-op: only that player's own item towers count.
+                let placed = it.only_if_none
+                    && self.towers.iter().any(|t| t.sub.as_ref().is_some_and(|s| (player.is_none() || s.parent == gid) && it.towers.iter().any(|(_, sp)| sp.name == s.spec.name)));
+                let (every, amount, max) = (it.every.max(1), it.amount, it.max);
+                let s = &mut self.geraldo_stock[slot][i];
+                s.rounds += 1;
+                if s.rounds >= every {
+                    s.rounds = 0;
+                    if !placed {
+                        s.qty = (s.qty + amount).min(max);
+                    }
                 }
             }
         }

@@ -81,7 +81,7 @@ places the clone is meant to differ, by the owner's request.
   on the website. Existing Practice Start is only an optional Sandbox example.
 - Reload applies to new/restarted games without restarting the client. Already running
   entities retain their definitions. Unsupported arbitrary behavior hooks, new scripted
-  widgets/profile counters, custom art imports and large co-op asset transfers are future work.
+  widgets/profile counters and custom art imports are future work.
 - Private iroh rooms have a room-specific host-selected mod list. Data manifests transfer
   P2P, are hash/size checked, stay in the room snapshot rather than installed folders, and
   are compiled on every client. Guests inspect but cannot change the list. Changes reset
@@ -112,8 +112,8 @@ These are requested behavior, not a claim that everything below is implemented.
   Do not pretend data definitions implement arbitrary new simulation behavior.
 - Add a website mod documentation page explaining installation, manifest/API, examples,
   reload lifecycle, game integration, supported hooks and limitations.
-- Private iroh co-op: the host chooses a room-specific mod list in a dedicated menu.
-  Show/toggle room mods; clients missing a selected version receive its data over P2P.
+- Private iroh co-op: the host chooses the room's mods before the room opens (see 14).
+  Clients missing a selected version receive its data over P2P.
   Validate bounded content and hashes, isolate it from local installed mods, never auto-run
   native code, and require identical client/assets/mod/settings identities before starting.
   Changing room mods invalidates readiness. Official-server rooms must not use this path.
@@ -186,7 +186,8 @@ This direction supersedes earlier login, cloud-sync and progression-unlock plans
 - Custom maps need registration plus path routing, placement areas, visuals, interactions
   and mode compatibility. Custom UI needs new widgets/screens plus functional actions.
 - New behavior hooks must preserve fast native execution and deterministic co-op.
-- Co-op eventually transfers validated dependency bundles including custom art/maps.
+- Co-op rooms send mods' data, event scripts and model art (assets/, by hash, fetched in
+  chunks on Download); custom maps are future work.
 - Current implementation: upgrade_patch edits cost/tier stats/primary weapon/projectile
   and per-tier model/muzzle across later and crosspath states. Three paths remain the
   current limit. Arbitrary custom UI and custom maps are still pending.
@@ -194,9 +195,13 @@ This direction supersedes earlier login, cloud-sync and progression-unlock plans
 ## 14. Simplified co-op entry (2026-10-29)
 
 - Hide the retired Social Seasons progress badge and Social notification pip on Home.
-- Social contains only Create Game and Join Game, using the native co-op cards and
-  opening/button animations. Remove Quick Match, team/event, creator and accolade
+- Social contains Create Game, Create Match (Mods) and Join Game, using the native co-op
+  cards and opening/button animations. Remove Quick Match, team/event, creator and accolade
   sections from this entry screen. Create opens map setup; Join opens room-code entry.
+- Create Match (Mods) first opens the Mods page to pick the room's mods (Continue goes on to
+  map setup). The match lobby has no mods menu.
+- A player joining a room that uses mods gets a popup listing them: Download keeps a copy of
+  each one they don't have in their mods folder (left disabled) and joins; Leave leaves.
 
 ## 15. Extensible mod runtime (2026-10-29)
 
@@ -205,8 +210,8 @@ This direction supersedes earlier login, cloud-sync and progression-unlock plans
 - Allow new/existing towers to choose shop position/category/visibility and manipulate
   native attack/weapon/ability arrays at load time. No in-game mod authoring editor.
 - Unmodified matches allocate no script engine. Event subscriptions and bounded execution
-  keep ordinary simulation native. Script mods are local-only until deterministic co-op
-  state/input sync is implemented; never silently run unsynchronized callbacks in co-op.
+  keep ordinary simulation native. In co-op scripts run in the lockstep simulation on every
+  player (no wall clock); widget buttons are co-op inputs, never unsynchronized callbacks.
 - Fourth paths, arbitrary renderer/physics behaviors and per-entity script access remain
   future work. Do not advertise unlimited capability until those interfaces exist.
 
@@ -243,7 +248,7 @@ with the same mod icon as the home screen. No per-frame file scanning or image d
   validation errors retain a dedicated notification. Both content panes have more room.
 - Optional local icon.png artwork beside mod.json is bounded to 512px and 1 MiB, confined
   to the mod folder, decoded lazily and cached, with native fallback for invalid images.
-  Reload Mods refreshes artwork; this does not change co-op asset transfer capabilities.
+  Reload Mods refreshes artwork. Icons stay local; co-op sends only assets/ model files.
 - A faint header signal moves along a thin rail using two existing native panel sprites;
   no full-screen shader pass, particle system, or per-frame asset I/O is introduced.
 

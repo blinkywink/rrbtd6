@@ -2,14 +2,14 @@
 //! Network work starts explicitly, off the renderer thread. No official account credentials.
 mod transport;
 pub mod mods;
-pub use mods::ModPackage;
+pub use mods::{ModPackage,AssetFile,AssetStore};
 mod match_flow;
 pub mod economy;
-pub use match_flow::{Action,Input,Frame,MatchStart,STEPS_PER_FRAME,IN_FLIGHT};
+pub use match_flow::{Action,TowerChange,Input,Frame,MatchStart,STEPS_PER_FRAME,IN_FLIGHT};
 pub use transport::{Client, Options};
 use serde::{Deserialize,Serialize};
 
-pub const VERSION:u32=9;
+pub const VERSION:u32=12;
 pub const MAX_PLAYERS:usize=4;
 pub const MAX_FRAME:usize=64*1024;
 pub const ALPN:&[u8]=b"rrbtd6/private-coop/1";
@@ -55,12 +55,17 @@ impl Room{
 }
 
 #[derive(Clone,Debug)]
-pub enum Command{Profile(PlayerProfile),Settings(Settings),Mods(Vec<ModPackage>),Ready(bool),Leave,Start,Loaded([u8;32]),Input{sequence:u64,action:Action},Advance,Ack{frame:u64,digest:[u8;32]}}
+pub enum Command{Profile(PlayerProfile),Settings(Settings),Mods(Vec<ModPackage>),
+    /// Host: the room mods' art files, served on request. Guest: fetch these files from the host.
+    Assets(AssetStore),Fetch(Vec<AssetFile>),
+    Ready(bool),Leave,Start,Loaded([u8;32]),Input{sequence:u64,action:Action},Advance,Ack{frame:u64,digest:[u8;32]}}
 #[derive(Clone,Debug)]
 pub enum Event{
     Hosting{invite:String},Joined{slot:u8},Room(Room),Error(String),Disconnected(String),
     Latency(u32),
     Prepare(MatchStart),Running,Frame(Frame),
+    /// A room mod art file arrived complete and matching its hash; then the bytes so far.
+    Asset{digest:String,bytes:Vec<u8>},AssetProgress{done:u64,total:u64},
 }
 
 #[derive(Clone,Debug,Serialize,Deserialize)]
@@ -69,6 +74,7 @@ enum Wire{
     Welcome{version:u32,slot:u8,room:Room},Room(Room),Settings(Settings),Ready(bool),Profile(PlayerProfile),
     Ping(u64),Pong(u64),Reject(String),
     Prepare(MatchStart),Loaded([u8;32]),Running,Input{sequence:u64,action:Action},Frame(Frame),Ack{frame:u64,digest:[u8;32]},
+    AssetRequest{digest:String,offset:u64},AssetChunk{digest:String,offset:u64,data:String},
 }
 #[derive(Clone,Debug)]
 pub struct Invite{pub endpoint:iroh::EndpointId,token:String}

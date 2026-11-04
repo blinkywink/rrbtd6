@@ -31,6 +31,18 @@ impl Wallets{
     pub fn borrow(&mut self,slot:u8,amount:f64,repayment:f64){
         let i=slot as usize;self.balances[i]+=amount;self.debts[i]+=amount;self.repayment[i]=repayment;
     }
+    /// A player left the match: their cash and debt are shared evenly by the others
+    /// (HYPOTHESIS P-COOPLEAVECASH: Simulation.RedistributePlayerInventory not yet read).
+    pub fn remove(&mut self,slot:u8)->bool{
+        if !self.players.contains(&slot)||self.players.len()<2{return false;}
+        let i=slot as usize;let (cash,debt)=(self.balances[i],self.debts[i]);
+        self.balances[i]=0.0;self.debts[i]=0.0;self.repayment[i]=0.0;
+        self.players.retain(|&p|p!=slot);
+        let n=self.players.len() as f64;
+        for &p in &self.players{self.balances[p as usize]+=cash/n;self.debts[p as usize]+=debt/n;}
+        if self.actor==Some(slot){self.actor=None;}
+        true
+    }
     pub fn transfer(&mut self,from:u8,to:u8,amount:f64)->bool{
         if from==to||!self.players.contains(&from)||!self.players.contains(&to)||!amount.is_finite()||amount<=0.0||self.balances[from as usize]<amount{return false;}
         self.balances[from as usize]-=amount;self.balances[to as usize]+=amount;true

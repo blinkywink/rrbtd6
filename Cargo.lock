@@ -2729,6 +2729,7 @@ dependencies = [
 name = "rrbtd6-coop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "getrandom 0.3.4",
  "iroh",

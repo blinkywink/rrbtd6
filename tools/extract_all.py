@@ -218,6 +218,8 @@ def map_mechanics(c):
     keys = [k for k in keys if (c.out / f"maps/{k}/map.json").exists()]
     c.py("tools/assets/export_map_mechanics.py", c.game, c.out / "maps", *keys)
     c.py("tools/assets/export_map_clips.py", c.game, c.out / "maps", *keys)
+    # The co-op divisions' placement areas, the same for every map (Game.coopLayouts).
+    c.py("tools/assets/export_coop_areas.py", c.game, c.out / "game/coop_areas.json")
 
 
 def catalogs(c):

@@ -19,4 +19,4 @@ zstd = { version = "0.13.3", default-features = false }
 symphonia = { version = "0.5", default-features = false, features = ["mp3"] }
 
 
-rhai = { version = "1.23", features = ["sync", "serde"] }
+rhai = { version = "1.23", features = ["sync", "serde", "no_time"] }

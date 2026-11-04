@@ -8,11 +8,15 @@ pub(super) struct Session{
     pub status:String,pub error:bool,pub host:bool,pub revision:u64,pub latency:Option<u32>,
     pub prepared:Option<MatchStart>,pub running:bool,pub frames:std::collections::VecDeque<Frame>,sequence:u64,
     start_requested:bool,test_readied:bool,
-    mod_job:Option<std::sync::mpsc::Receiver<Result<Vec<rrbtd6_coop::ModPackage>,String>>>,
+    mod_job:Option<std::sync::mpsc::Receiver<Result<(Vec<rrbtd6_coop::ModPackage>,rrbtd6_coop::AssetStore),String>>>,
+    /// A guest's room mod art still downloading (bytes done, total).
+    pub fetching:Option<(u64,u64)>,
     mod_next:Option<(std::path::PathBuf,Vec<String>)>,
     /// The data folder (where the hero and the local profile live) and what was last sent of
     /// this player's profile (PlayerProfile), checked once a second.
     root:Option<std::path::PathBuf>,profile_sent:Option<PlayerProfile>,profile_checked:f64,
+    /// Mods picked before creating the room (Create Match (Mods)), sent when it opens.
+    pub queued_mods:Vec<String>,
 }
 impl Session{
     fn options(root:&Path)->Options{
@@ -28,8 +32,10 @@ impl Session{
     pub fn active(&self)->bool{self.client.is_some()}
     pub fn host_or_update(&mut self,root:&Path,settings:Settings){
         if self.active()&&self.host{self.send(Command::Settings(settings));return;}
+        let queued=std::mem::take(&mut self.queued_mods);
         self.leave();self.root=Some(root.to_owned());self.host=true;self.status="Opening private room...".into();self.error=false;
         self.client=Some(Client::host(Self::options(root),settings));self.revision+=1;
+        if !queued.is_empty(){self.select_mods(root,queued);}
         if std::env::var_os("RRBTD6_AUTOTEST").is_some()&&std::env::var_os("RRBTD6_COOP_PLAYTEST").is_some(){
             if let Some(path)=std::env::var_os("RRBTD6_COOP_TEST_MANIFEST"){
                 let (tx,rx)=std::sync::mpsc::sync_channel(1);self.mod_job=Some(rx);let root=root.to_owned();
@@ -38,7 +44,7 @@ impl Session{
                     let manifest=crate::modding::Manifest::parse(&bytes)?;
                     let package=rrbtd6_coop::ModPackage::new(serde_json::to_string(&manifest).map_err(|e|e.to_string())?)?;
                     let source=std::fs::read_to_string(root.join("game/game.json")).map_err(|e|e.to_string())?;
-                    crate::modding::room_json(&source,std::slice::from_ref(&package))?;Ok(vec![package])
+                    crate::modding::room_json(&source,std::slice::from_ref(&package))?;Ok((vec![package],rrbtd6_coop::AssetStore::new()))
                 })();let _=tx.send(result);});
             }
         }
@@ -54,7 +60,7 @@ impl Session{
         self.error=false;self.status.clear();self.latency=None;self.revision+=1;
         self.prepared=None;self.running=false;self.frames.clear();self.sequence=0;
         self.start_requested=false;self.test_readied=false;self.mod_job=None;self.mod_next=None;
-        self.profile_sent=None;
+        self.profile_sent=None;self.fetching=None;
     }
     pub fn send(&mut self,command:Command){
         if let Some(client)=&self.client{if let Err(e)=client.send(command){self.status=e;self.error=true;self.revision+=1;}}
@@ -68,14 +74,29 @@ impl Session{
         if self.mod_job.is_some(){return;}
         if let Some((root,ids))=self.mod_next.take(){
             let (tx,rx)=std::sync::mpsc::sync_channel(1);self.mod_job=Some(rx);
-            std::thread::spawn(move||{let _=tx.send(crate::modding::room_packages(&root,&ids));});
+            std::thread::spawn(move||{let _=tx.send(crate::modding::room_packages_with_assets(&root,&ids));});
+        }
+    }
+    /// Guest: download the room mods' art this player doesn't have yet.
+    pub fn fetch_mods(&mut self){
+        let (Some(root),Some(room))=(self.root.clone(),self.room.clone()) else{return};
+        match crate::coop_mods_popup::ModsPopup::download(&root,&room.mods){
+            Ok(files) if !files.is_empty()=>{self.fetching=Some((0,files.iter().map(|f|f.size).sum()));self.send(Command::Fetch(files));},
+            Ok(_)=>{},
+            Err(e)=>{self.status=e;self.error=true;self.revision+=1;},
         }
     }
     pub fn ready(&mut self){
         if self.mod_job.is_some(){return;}
+        // A guest plays only with every room mod file in place.
+        if !self.host{
+            if let (Some(root),Some(room))=(&self.root,&self.room){
+                if !crate::coop_mods_popup::ModsPopup::missing(root,&room.mods).is_empty(){
+                    self.status="Download the room's mods first".into();self.error=true;self.revision+=1;return;
+                }
+            }
+        }
         if self.host&&self.room.as_ref().is_some_and(|r|r.players.len()>1&&r.players.iter().all(|p|p.ready)){
-            // Keep unsupported rule variants out of this initial playable prototype.
-            if self.room.as_ref().is_some_and(|r|r.settings.division!=4||r.settings.mode!=0){self.status="This prototype requires Standard mode and Free For All areas".into();self.error=true;self.revision+=1;return;}
             if !self.start_requested{self.send(Command::Start);self.start_requested=true;}return;
         }
         if let (Some(slot),Some(room))=(self.slot,&self.room){
@@ -94,7 +115,7 @@ impl Session{
         if let Some(result)=self.mod_job.as_ref().and_then(|rx|match rx.try_recv(){Ok(v)=>Some(v),Err(std::sync::mpsc::TryRecvError::Disconnected)=>Some(Err("Mod validation worker stopped".into())),Err(_)=>None}) {
             self.mod_job=None;
             if self.mod_next.is_some(){self.start_mod_job();}
-            else{match result{Ok(packages)=>self.send(Command::Mods(packages)),Err(error)=>{self.status=error;self.error=true;self.revision+=1;}}}
+            else{match result{Ok((packages,store))=>{self.send(Command::Assets(store));self.send(Command::Mods(packages));},Err(error)=>{self.status=error;self.error=true;self.revision+=1;}}}
         }
         let events:Vec<_>=self.client.as_ref().map(|c|c.poll().collect()).unwrap_or_default();
         for event in events{
@@ -111,6 +132,15 @@ impl Session{
                 Event::Prepare(setup)=>{self.prepared=Some(setup);self.status="Loading private co-op...".into();},
                 Event::Running=>{self.running=true;self.status="Private co-op: individual wallets".into();},
                 Event::Frame(frame)=>{self.frames.push_back(frame);},
+                Event::Asset{digest,bytes}=>{
+                    if let (Some(root),Some(room))=(&self.root,&self.room){
+                        if let Err(e)=crate::coop_mods_popup::ModsPopup::save(root,&room.mods,&digest,&bytes){self.status=e;self.error=true;}
+                    }
+                },
+                Event::AssetProgress{done,total}=>{
+                    self.fetching=(done<total).then_some((done,total));
+                    self.status=if done<total{format!("Downloading mod files... {}%",done*100/total.max(1))}else{"Connected".into()};
+                },
             }
             self.revision+=1;
         }

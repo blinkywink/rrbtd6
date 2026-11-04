@@ -14,7 +14,7 @@ impl Game{
             else{self.cash=w.total();self.debt=w.debt();self.debt_rate=0.0;}
         }
     }
-    pub(crate) fn coop_project_cash(&mut self,slot:u8){if let Some(w)=&self.coop_wallets{self.cash=w.balances[slot as usize];}}
+    pub(crate) fn coop_project_cash(&mut self,slot:u8){self.coop_view=Some(slot);if let Some(w)=&self.coop_wallets{self.cash=w.balances[slot as usize];}}
     pub(crate) fn coop_actor(&mut self,slot:u8){
         if let Some(w)=&mut self.coop_wallets{w.actor=Some(slot);}self.coop_restore_cash();
     }

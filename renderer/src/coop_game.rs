@@ -1,7 +1,7 @@
 //! Simulation adapter for private co-op. Uses stable tower IDs, never UI indices.
 //! Income and costs use per-player wallets; the HUD receives a local projection.
 use crate::game::{Game,TargetMode};
-use rrbtd6_coop::{Action,Frame,MAX_PLAYERS,STEPS_PER_FRAME};
+use rrbtd6_coop::{Action,Frame,TowerChange,MAX_PLAYERS,STEPS_PER_FRAME};
 use std::collections::BTreeMap;
 
 const TARGETS:[TargetMode;17]=[
@@ -20,11 +20,19 @@ pub struct Replica{
     remaining:u8,
     pub placed:Vec<(u8,u64)>,
     pub requests:[Option<u64>;MAX_PLAYERS],
+    /// Each player's lobby hero (Simulation.StockStandardTowerInventory(inventory, playerHero):
+    /// their own inventory holds only their hero, one of it; two players may pick the same one).
+    pub heroes:[Option<String>;MAX_PLAYERS],
+    /// The Powers' behaviours (game/powers.json), by id, for Action::Power.
+    pub powers:BTreeMap<String,serde_json::Value>,
+    /// Powers used (player, id), for each player's own profile to pay.
+    pub powers_used:Vec<(u8,String)>,
 }
 impl Replica{
     pub fn new(slots:Vec<u8>)->Result<Self,String>{
         if slots.len()<2||slots.len()>MAX_PLAYERS||!slots.contains(&0)||slots.iter().enumerate().any(|(i,s)|*s as usize>=MAX_PLAYERS||slots[..i].contains(s)){return Err("Invalid co-op players".into());}
-        Ok(Self{slots,owners:BTreeMap::new(),pointers:[None;MAX_PLAYERS],sequences:[0;MAX_PLAYERS],frame:0,speed:1,auto_start:false,remaining:0,placed:Vec::new(),requests:[None;MAX_PLAYERS]})
+        Ok(Self{slots,owners:BTreeMap::new(),pointers:[None;MAX_PLAYERS],sequences:[0;MAX_PLAYERS],frame:0,speed:1,auto_start:false,remaining:0,placed:Vec::new(),requests:[None;MAX_PLAYERS],
+            heroes:Default::default(),powers:BTreeMap::new(),powers_used:Vec::new()})
     }
     pub fn owns(&self,slot:u8,id:u64)->bool{self.owners.get(&id)==Some(&slot)}
     pub fn prepare(&mut self,g:&mut Game)->Result<(),String>{
@@ -56,6 +64,46 @@ impl Replica{
         g.coop_pointers.clear();
         for (&id,&slot) in &self.owners{g.coop_pointers.insert(id,self.pointers[slot as usize]);}
     }
+    /// Player `slot` left (Simulation.RedistributeTowers @0x180b4a5a0). HYPOTHESIS
+    /// P-COOPLEAVE: each of their towers goes to the remaining player whose own area it stands
+    /// in, the rest round-robin by tower id over the remaining players in slot order; sub towers
+    /// follow their parent; their cash and debt are shared evenly (Wallets::remove). Not yet
+    /// read in full: the game's worth balancing and its destroyTowerOnRedistribution towers.
+    fn leave(&mut self,g:&mut Game,slot:u8)->bool{
+        if !self.slots.contains(&slot)||self.slots.len()<2{return false;}
+        self.slots.retain(|&s|s!=slot);
+        let remaining=self.slots.clone();
+        let mut turn=0usize;
+        let mut given:BTreeMap<u64,u8>=BTreeMap::new();
+        let theirs:Vec<u64>=self.owners.iter().filter(|(_,s)|**s==slot).map(|(id,_)|*id).collect();
+        for &id in &theirs{
+            let Some(t)=g.towers.iter().find(|t|t.id==id&&t.sub.is_none())else{continue};
+            let pos=t.pos;
+            let area=g.coop_areas.as_ref().and_then(|a|a.areas.iter().find(|ar|ar.owner.is_some_and(|o|remaining.contains(&o))&&ar.polygons.first().is_some_and(|_|a.allows(ar.owner.unwrap(),pos))).and_then(|ar|ar.owner));
+            let to=area.unwrap_or_else(||{let o=remaining[turn%remaining.len()];turn+=1;o});
+            given.insert(id,to);
+        }
+        for &id in &theirs{
+            if given.contains_key(&id){continue;}
+            let parent=g.towers.iter().find(|t|t.id==id).and_then(|t|t.sub.as_ref()).map(|s|s.parent);
+            let to=parent.and_then(|p|given.get(&p).copied()).unwrap_or(remaining[0]);
+            given.insert(id,to);
+        }
+        for (&id,&to) in &given{self.owners.insert(id,to);}
+        if let Some(w)=&mut g.coop_wallets{
+            for (id,owner) in w.owners.iter_mut(){if *owner==slot{*owner=given.get(id).copied().unwrap_or(remaining[0]);}}
+            w.remove(slot);
+        }
+        self.pointers[slot as usize]=None;self.requests[slot as usize]=None;
+        true
+    }
+    /// Towers made by the player's action (from index `before` on) are theirs.
+    fn claim(&mut self,g:&mut Game,before:usize,slot:u8){
+        for tower in &g.towers[before.min(g.towers.len())..]{
+            self.owners.insert(tower.id,slot);
+            if tower.sub.is_none(){if let Some(w)=&mut g.coop_wallets{w.owners.insert(tower.id,slot);}}
+        }
+    }
     fn action(&mut self,g:&mut Game,slot:u8,action:&Action)->bool{
         g.coop_actor(slot);let accepted=self.apply_action(g,slot,action);g.coop_end_actor();accepted
     }
@@ -74,17 +122,47 @@ impl Replica{
             },
             Action::Place{kind,at}=>{
                 let Some(def)=g.tower_defs.iter().position(|(id,_)|id==kind)else{return false;};
-                if !g.shop.iter().any(|s|s.id==*kind){return false;}
+                if g.hero_def(def).is_some(){
+                    // Only the player's own hero, once.
+                    if self.heroes[slot as usize].as_deref()!=Some(kind.as_str()){return false;}
+                    if g.towers.iter().any(|t|t.sub.is_none()&&g.hero_def(t.def).is_some()&&self.owns(slot,t.id)){return false;}
+                }else if !g.shop.iter().any(|s|s.id==*kind){return false;}
                 let before=g.towers.len();
                 if !g.place(def,*at){return false;}
-                for tower in &g.towers[before..]{self.owners.insert(tower.id,slot);if tower.sub.is_none(){if let Some(w)=&mut g.coop_wallets{w.owners.insert(tower.id,slot);}}}
+                self.claim(g,before,slot);
                 true
             },
+            // Sun Temple and Paragon sacrifices take the matching towers whoever owns them
+            // (MonkeyTemple.StartSacrifice @0x180d43510: GetTowersInRange, no owner check, each
+            // destroyed for its own owner; ParagonTower.StartSacrifice @0x180d54a50: every tower
+            // of the base id). The buyer pays from their own cash (CanUpgradeTowerParagon
+            // @0x180c26fb0: the tower's owner only, Simulation.GetCash(inputId)).
             Action::Upgrade{tower,path}=>{
                 let Some(t)=self.tower(g,slot,*tower)else{return false;};
-                // Sacrifices and paragons need explicit cross-player ownership rules.
-                if g.temple_prompt(t,*path as usize).is_some()||g.towers[t].tiers[*path as usize]>=5{return false;}
                 g.upgrade(t,*path as usize)
+            },
+            Action::Paragon{tower,extra}=>{
+                let Some(t)=self.tower(g,slot,*tower)else{return false;};
+                g.buy_paragon(t,*extra)
+            },
+            Action::Item{index,at}=>{
+                let i=*index as usize;
+                if i>=g.geraldo_items().len(){return false;}
+                if g.item_needs_target(i)!=at.is_some(){return false;}
+                let before=g.towers.len();
+                if !g.use_item(i,at.unwrap_or([0.0,0.0])){return false;}
+                self.claim(g,before,slot);true
+            },
+            Action::Leave=>self.leave(g,slot),
+            // The script's operations act for the player who pressed it (their wallet).
+            Action::ModEvent{owner,event}=>{g.mod_event(event,Some(owner));true},
+            Action::Power{id,at}=>{
+                let Some(behaviors)=self.powers.get(id).cloned()else{return false;};
+                if !g.power_usable(id,&behaviors){return false;}
+                let before=g.towers.len();
+                if !g.use_power(id,&behaviors,*at){return false;}
+                self.claim(g,before,slot);
+                self.powers_used.push((slot,id.clone()));true
             },
             Action::Sell{tower}=>{
                 let Some(t)=self.tower(g,slot,*tower)else{return false;};
@@ -112,6 +190,32 @@ impl Replica{
             Action::Freeplay=>{g.start_freeplay();true},
             Action::Special{tower}=>{
                 let Some(t)=self.tower(g,slot,*tower)else{return false;};g.toggle_stance(t);g.collect_bank(t);true
+            },
+            // The selection menu's settings, as the single-player handlers apply them.
+            Action::Tower{tower,change}=>{
+                let Some(t)=self.tower(g,slot,*tower)else{return false;};
+                match change{
+                    TowerChange::CamoPriority(on)=>{g.towers[t].camo_prio=*on;true},
+                    TowerChange::Submerged(on)=>{
+                        if !g.can_submerge(t){return false;}
+                        g.towers[t].submerged=*on;
+                        if !*on&&g.towers[t].target==TargetMode::Submerge{g.towers[t].target=TargetMode::First;}
+                        true
+                    },
+                    TowerChange::Reverse=>{g.reverse_air(t);true},
+                    TowerChange::Hand{left}=>{g.towers[t].flip=*left;true},
+                    TowerChange::LeftTarget(code)=>{let Some(&mode)=TARGETS.get(*code as usize)else{return false;};g.towers[t].left_target=mode;true},
+                    TowerChange::DefaultPoint=>{g.towers[t].point=None;true},
+                    TowerChange::Stance=>g.toggle_stance(t),
+                    TowerChange::CollectBank=>{g.collect_bank(t);true},
+                }
+            },
+            // Map.SellRemoveable takes the cash of the player who bought it; anyone may.
+            Action::Removeable{index}=>g.sell_removeable(*index as usize),
+            Action::CollectBanks=>{
+                let banks:Vec<usize>=(0..g.towers.len()).filter(|&o|g.towers[o].bank>0.0&&self.owns(slot,g.towers[o].id)).collect();
+                for o in banks{g.collect_bank(o);}
+                true
             },
             Action::Ability{tower,index,at,target}=>{
                 let Some(t)=self.tower(g,slot,*tower)else{return false;};
@@ -215,6 +319,80 @@ impl Runtime{
         assert_eq!(r.apply(&mut g,&Frame{number:2,actions:vec![input(1,2,Action::Sell{tower:host}),input(1,3,Action::Upgrade{tower:host,path:0}),input(0,2,Action::Sell{tower:host})]}).unwrap(),vec![false,false,true]);
         assert_eq!(g.towers[0].id,guest);assert!(r.owns(1,guest));
         assert_eq!(r.apply(&mut g,&Frame{number:3,actions:vec![input(1,4,Action::Upgrade{tower:guest,path:0})]}).unwrap(),vec![true]);
+    }
+    #[test]fn tower_settings_apply_only_to_the_owners_towers(){
+        let mut g=tests_support::game();let mut r=Replica::new(vec![0,1]).unwrap();let p=spots();
+        assert_eq!(r.apply(&mut g,&Frame{number:1,actions:(0..2).map(|s|input(s,1,Action::Place{kind:"DartMonkey".into(),at:p[s as usize]})).collect()}).unwrap(),vec![true,true]);
+        let host=g.towers[0].id;
+        let set=|tower,change|Action::Tower{tower,change};
+        assert_eq!(r.apply(&mut g,&Frame{number:2,actions:vec![
+            input(1,2,set(host,TowerChange::CamoPriority(true))),
+            input(0,2,set(host,TowerChange::CamoPriority(true))),
+            input(0,3,set(host,TowerChange::Hand{left:true})),
+            input(0,4,set(host,TowerChange::LeftTarget(20))),
+        ]}).unwrap(),vec![false,true,true,false]);
+        assert!(g.towers[0].camo_prio&&g.towers[0].flip);
+    }
+    fn free_spot(g:&Game,kind:&str,d:f32)->[f32;2]{
+        let def=g.tower_defs.iter().position(|(n,_)|n==kind).unwrap();
+        (0..40).map(|k|g.track.pos((d+25.0*k as f32)%g.track.length())).flat_map(|c|[24.0f32,34.0,44.0,60.0].into_iter().flat_map(move|r|(0..24).map(move|k|{let a=k as f32/24.0*std::f32::consts::TAU;[c[0]+r*a.cos(),c[1]+r*a.sin()]}))).find(|&p|g.can_place(def,p)).unwrap()
+    }
+    #[test]fn each_player_places_only_their_own_hero_once(){
+        let mut g=tests_support::game();let mut r=Replica::new(vec![0,1]).unwrap();
+        r.heroes[0]=Some("Quincy".into());r.heroes[1]=Some("Quincy".into());
+        let place=|k:&str,at|Action::Place{kind:k.into(),at};
+        let a=free_spot(&g,"Quincy",120.0);
+        assert_eq!(r.apply(&mut g,&Frame{number:1,actions:vec![input(1,1,place("Gwendolin",a)),input(0,1,place("Quincy",a))]}).unwrap(),vec![false,true]);
+        let b=free_spot(&g,"Quincy",260.0);
+        assert_eq!(r.apply(&mut g,&Frame{number:2,actions:vec![input(0,2,place("Quincy",b)),input(1,2,place("Quincy",b))]}).unwrap(),vec![false,true]);
+        let c=free_spot(&g,"Quincy",380.0);
+        assert_eq!(r.apply(&mut g,&Frame{number:3,actions:vec![input(1,3,place("Quincy",c))]}).unwrap(),vec![false]);
+        assert_eq!(g.towers.iter().filter(|t|g.hero_def(t.def).is_some()).count(),2);
+    }
+    #[test]fn a_paragon_takes_every_players_towers_of_its_kind_and_its_buyer_pays(){
+        let mut g=tests_support::game();let mut r=Replica::new(vec![0,1]).unwrap();
+        let mut frame=0;let mut seq=[0u64;2];
+        let mut act=|g:&mut Game,r:&mut Replica,slot:u8,a:Action|{frame+=1;seq[slot as usize]+=1;r.apply(g,&Frame{number:frame,actions:vec![input(slot,seq[slot as usize],a)]}).unwrap()[0]};
+        let mut ids=Vec::new();
+        for (k,slot) in [(0,0u8),(1,0),(2,1)]{
+            let at=free_spot(&g,"DartMonkey",150.0+110.0*k as f32);
+            assert!(act(&mut g,&mut r,slot,Action::Place{kind:"DartMonkey".into(),at}));
+            let t=g.towers.len()-1;let mut tiers=[0u8;3];tiers[k]=5;g.towers[t].tiers=tiers;ids.push(g.towers[t].id);
+        }
+        // Not the owner: refused. The owner: every Dart Monkey is sacrificed, whoever's it was.
+        assert!(!act(&mut g,&mut r,0,Action::Paragon{tower:ids[2],extra:0.0}));
+        let before=g.coop_wallets.as_ref().unwrap().balances;
+        assert!(act(&mut g,&mut r,1,Action::Paragon{tower:ids[2],extra:0.0}));
+        let after=g.coop_wallets.as_ref().unwrap().balances;
+        assert_eq!(after[0],before[0]);assert!(after[1]<before[1]);
+        assert_eq!(g.towers.iter().filter(|t|t.sub.is_none()).map(|t|t.id).collect::<Vec<_>>(),vec![ids[2]]);
+        assert!(g.towers[0].paragon.is_some());assert!(r.owns(1,ids[2]));assert!(!r.owns(0,ids[0]));
+    }
+    #[test]fn powers_are_used_by_id_and_recorded_for_the_users_profile(){
+        let mut g=tests_support::game();let mut r=Replica::new(vec![0,1]).unwrap();
+        r.powers.insert("Thrive".into(),serde_json::json!([{"type":"ThriveModel","cashScale":1.25}]));
+        let at=g.track.pos(100.0);
+        assert_eq!(r.apply(&mut g,&Frame{number:1,actions:vec![input(1,1,Action::Power{id:"Thrive".into(),at}),input(0,1,Action::Power{id:"Nope".into(),at})]}).unwrap(),vec![true,false]);
+        assert_eq!(r.powers_used,vec![(1,"Thrive".to_string())]);
+    }
+    #[test]fn a_leaving_players_towers_and_cash_go_to_the_others(){
+        let mut g=tests_support::game();g.cash=3000.0;let mut r=Replica::new(vec![0,1,2]).unwrap();
+        let p=[free_spot(&g,"DartMonkey",150.0),free_spot(&g,"DartMonkey",300.0)];
+        assert_eq!(r.apply(&mut g,&Frame{number:1,actions:vec![
+            input(2,1,Action::Place{kind:"DartMonkey".into(),at:p[0]}),
+        ]}).unwrap(),vec![true]);
+        let q=free_spot(&g,"DartMonkey",300.0);
+        assert_eq!(r.apply(&mut g,&Frame{number:2,actions:vec![input(2,2,Action::Place{kind:"DartMonkey".into(),at:q})]}).unwrap(),vec![true]);
+        let ids:Vec<u64>=g.towers.iter().map(|t|t.id).collect();
+        let before=g.coop_wallets.as_ref().unwrap().balances;
+        assert_eq!(r.apply(&mut g,&Frame{number:3,actions:vec![input(2,3,Action::Leave)]}).unwrap(),vec![true]);
+        // Round-robin over the players left (no areas: Free For All), and the cash split evenly.
+        assert!(r.owns(0,ids[0])&&r.owns(1,ids[1]));
+        let w=g.coop_wallets.as_ref().unwrap();
+        assert_eq!(w.players,vec![0,1]);assert_eq!(w.balances[2],0.0);
+        assert_eq!(w.balances[0],before[0]+before[2]/2.0);
+        // Nothing more from them.
+        assert!(r.begin(&mut g,&Frame{number:4,actions:vec![input(2,4,Action::StartRound)]}).is_err());
     }
     #[test]fn invalid_batch_does_not_partially_apply(){
         let mut g=tests_support::game();let mut r=Replica::new(vec![0,1]).unwrap();let before=r.digest(&g);

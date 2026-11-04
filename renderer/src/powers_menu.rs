@@ -108,6 +108,11 @@ impl PowersMenu {
         menu
     }
 
+    /// Every Power's behaviours by id (co-op: the replica uses them for every player's Powers).
+    pub fn all_behaviors(&self) -> std::collections::BTreeMap<String, Value> {
+        self.items.iter().map(|i| (i.id.clone(), i.behaviors.clone())).collect()
+    }
+
     /// A Power's behaviours (game/powers.json), for Game::use_power.
     pub fn behaviors(&self, id: &str) -> Option<&Value> {
         self.items.iter().find(|i| i.id == id).map(|i| &i.behaviors)
