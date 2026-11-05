@@ -42,6 +42,9 @@ heroes, Paragons, Sun Temple upgrades, Geraldo's items, Powers and mod widget bu
   `JarOfPicklesBehavior.IsTowerValid` @0x180fa4da0, `GeraldoChangeTowerBehavior.IsPositionValid`
   @0x180fa30c0, `BottleHotSauceBehavior.CheckLocation` @0x180f92d00); their level is the buyer's
   Geraldo's (`Game::item_buyers`).
+  Item towers don't use co-op areas: `PetRabbitBehavior.CheckLocation` (@0x180fa5330) uses
+  `Map.CanPlace`, which takes no player, plus "within the buyer's Geraldo's range" (also in
+  single player).
 - **Powers.** `Action::Power{id, at}`; the power's behaviours come from game/powers.json on every
   client; the user's own profile pays once the match used it (`Replica::powers_used`). A Cash Drop
   crate pays the player who used it (`Game::power_owner`).
@@ -80,7 +83,6 @@ folder marked `ROOM`, Leave leaves; a joiner can't ready up until every file is 
 ## Not yet
 
 - Rejoining a running match (needs a full state transfer).
-- Co-op areas for Geraldo's item towers (placed with `spawn_sub`, not `place_at`).
 - Custom maps in rooms.
 - The player's area overlay while placing (`ShowOverlays(inputId, highlightPlayerArea)`); the
   placement ring already turns red outside the player's areas.

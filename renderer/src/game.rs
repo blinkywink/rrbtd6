@@ -15213,7 +15213,8 @@ mod tests {
             if let Some(s) = g.geraldo_stock.get_mut(0).and_then(|v| v.get_mut(rabbit)) {
                 s.qty = s.qty.max(1);
             }
-            let p = g.track.pos(150.0 + 60.0 * k as f32);
+            // On the track within Geraldo's range (PetRabbitBehavior.CheckLocation).
+            let p = g.track.pos(285.0 + 10.0 * k as f32);
             assert!(g.use_item(rabbit, p), "rabbit {k}");
         }
         let named = |g: &Game, n: &str| g.towers.iter().filter(|t| t.sub.as_ref().is_some_and(|s| s.spec.name == n)).count();

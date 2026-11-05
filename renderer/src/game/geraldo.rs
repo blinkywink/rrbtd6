@@ -176,8 +176,13 @@ impl Game {
             // PetRabbitBehavior: a pet rabbit on land or track (its footprint blocks nothing);
             // PetRabbitMergeModel: once there are enough they become a Wererabbit.
             // HYPOTHESIS P-RABBITMERGE: the Wererabbit appears where the last rabbit went.
+            // PetRabbitBehavior.CheckLocation (@0x180fa5330): within Geraldo's range (his
+            // towerModel.range, squared distance) as well as Map.CanPlace.
             "rabbit" => match self.for_level(&it.towers) {
-                Some(spec) if self.land_clear(p, 0.0) || self.track_within(p, 10.0) => {
+                Some(spec) if (self.land_clear(p, 0.0) || self.track_within(p, 10.0)) && {
+                    let (gp, r) = (self.towers[g].pos, self.tier(g).map_or(0.0, |t| t.range));
+                    (gp[0] - p[0]).powi(2) + (gp[1] - p[1]).powi(2) <= r * r
+                } => {
                     let name = spec.name.clone();
                     self.spawn_sub(spec, p, gid, false);
                     if let Some((n, were)) = it.merge.clone() {
