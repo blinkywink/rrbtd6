@@ -128,7 +128,7 @@ checkpoint that changes `renderer/src/game.rs`.
 |---|---|---|
 | Dart | 70/70 | done |
 | Boomerang | 99/99 | done (paragon too) |
-| Tack | 24/25 | (2026-11-05) a seeking shot from a non-turning tower launches along (target - eject) / length in f32 (SimRecorder D lines); open: 520 |
+| Tack | 25/25 | EXACT (2026-11-05): seeking launch along the normalized line; a TravelStrait lifespan and an AgeModel each end a shot, the shorter wins (tack_520's meteors, 20 s). |
 | Sub | 32/32 | done (2026-11-04) |
 | Wizard | 34/34 | all re-recorded with R lines; done |
 | Glue | 34/34 | done (mutator order, PostDegrade) |
@@ -501,7 +501,8 @@ TOWERS.md has the longer per-tower notes.
    SOLVED 500 / 502 / upgrades_r30 (2026-11-05) with SimRecorder's new D lines (each projectile's
    Direction every frame): the meteor's LAUNCH direction was already 1 ulp off, it is the line to
    the target divided by its f32 length, not rebuilt from the atan2 angle (game.rs `seek_launch`).
-   Open: tack_520.
+   tack_520 SOLVED too: the meteor has TravelStrait 99999 s and AgeModel 20 s; the export kept only
+   the first as `lifespan`; each ends the shot on its own, so the shorter wins. Tack 25/25.
 0. **Ice 25/25 (done 2026-11-03)**, all re-recorded with seeds. What it took, all VERIFIED-DISASM:
    AddBehaviorToBloon.Collide draws syncedRandom for chance > 0 (Icicles 25%) after its filters, also on a
    hit immune to the damage (Projectile.CollideBloon's passes before the DamageModel run regardless:

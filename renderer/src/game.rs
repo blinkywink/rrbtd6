@@ -12274,7 +12274,11 @@ impl Game {
                 frames_left: match random_frames {
                     Some(f) => f,
                     None => {
-                        let f = spec.lifespan * FPS;
+                        // A TravelStrait lifespan and an AgeModel each end the shot on their own: the
+                        // shorter wins (recording tack_520: Inferno Ring's meteors, TravelStrait 99999 s,
+                        // Age 20 s, gone after 1200 frames).
+                        let life = match spec.age_lifespan.filter(|a| *a > 0.0) { Some(a) => spec.lifespan.min(a), None => spec.lifespan };
+                        let f = life * FPS;
                         if f.is_finite() { (f as f64).round_ties_even() as f32 } else { f }
                     }
                 },
