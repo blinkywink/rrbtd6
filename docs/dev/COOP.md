@@ -37,8 +37,11 @@ heroes, Paragons, Sun Temple upgrades, Geraldo's items, Powers and mod widget bu
 - **Geraldo.** `GeraldoPurchaseManager.GetGeraldoTower(inputId)` and
   `Simulation.GetGeraldoShopInventory(index)`: each player has their own Geraldo and stock.
   Clone: `game/geraldo.rs` (`geraldo_of`, `geraldo_stock` per slot; the HUD shows the local
-  player's via `coop_view`). HYPOTHESIS P-COOPITEMTARGET: tower items go on the player's own
-  towers only (`CheckGeraldoPurchaseLocation` not read yet).
+  player's via `coop_view`). `GeraldoItem.CheckLocation` (@0x180fa4030): "blocked while placed"
+  counts only the buyer's own towers. Tower items may go on anyone's tower (no owner check in
+  `JarOfPicklesBehavior.IsTowerValid` @0x180fa4da0, `GeraldoChangeTowerBehavior.IsPositionValid`
+  @0x180fa30c0, `BottleHotSauceBehavior.CheckLocation` @0x180f92d00); their level is the buyer's
+  Geraldo's (`Game::item_buyers`).
 - **Powers.** `Action::Power{id, at}`; the power's behaviours come from game/powers.json on every
   client; the user's own profile pays once the match used it (`Replica::powers_used`). A Cash Drop
   crate pays the player who used it (`Game::power_owner`).
@@ -51,11 +54,15 @@ heroes, Paragons, Sun Temple upgrades, Geraldo's items, Powers and mod widget bu
   - `Map.CheckCoopPlacement` (@0x180f52930): a tower must stand in one of the player's areas
     (towers with `ignoreCoopAreas`: only AmbushBot, SheRa, Skeletor and some sub towers).
 - **A player leaving.** The match goes on: the host sends `Action::Leave` in their sequence and
-  stops waiting for their acknowledgements (`Flow::drop_player`). HYPOTHESIS P-COOPLEAVE: each of
-  their towers goes to the remaining player whose area it stands in, else round-robin by tower
-  id; their cash and debt are shared evenly. `Simulation.RedistributeTowers` (@0x180b4a5a0)
-  also destroys `destroyTowerOnRedistribution` towers and balances by worth; not read in full.
-  The host leaving ends the room; nobody can rejoin a running match (no state transfer).
+  stops waiting for their acknowledgements (`Flow::drop_player`). `Simulation.RemovePlayer`
+  (@0x180b4c1e0): their cash is split evenly over the players left, their debt goes.
+  `RedistributeTowers` (@0x180b4a5a0): their towers, most `worth` first (OrderByDescending),
+  are dealt snake-fashion to the remaining players in input order; sub towers and projectiles
+  follow; `destroyTowerOnRedistribution` towers (only RareQuincyActionFigure) are destroyed.
+  `RedistributePlayerInventory`: whoever gets their Geraldo combines his stock
+  (`GeraldoShopInventory.CombineStock`, capped at each item's max). `RedistributePlacementAreaInventory`:
+  their areas open to everyone. The host leaving ends the room; nobody can rejoin a running
+  match (no state transfer).
 
 ## Mods in co-op
 
@@ -73,8 +80,7 @@ folder marked `ROOM`, Leave leaves; a joiner can't ready up until every file is 
 ## Not yet
 
 - Rejoining a running match (needs a full state transfer).
-- `Simulation.RedistributeTowers` / `RedistributePlayerInventory` in full (see above).
-- Geraldo item placement checks (`CheckGeraldoPurchaseLocation`) and co-op areas for item towers.
+- Co-op areas for Geraldo's item towers (placed with `spawn_sub`, not `place_at`).
 - Custom maps in rooms.
 - The player's area overlay while placing (`ShowOverlays(inputId, highlightPlayerArea)`); the
   placement ring already turns red outside the player's areas.

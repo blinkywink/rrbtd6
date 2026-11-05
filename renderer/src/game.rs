@@ -2920,6 +2920,8 @@ pub struct Game {
     pub(crate) coop_view: Option<u8>,
     /// Co-op: the division's placement areas (None: Free For All).
     pub(crate) coop_areas: Option<coop_areas::CoopAreas>,
+    /// Co-op: who bought each Geraldo item on a tower ((tower id, item) -> player), for its level.
+    pub(crate) item_buyers: std::collections::BTreeMap<(u64, usize), u8>,
     /// Towers removed during `step` (expired sub-towers), in removal order, so the caller can fix
     /// indices it holds: (index, where the tower now at that index came from; usize::MAX when
     /// the later ones shifted down instead).
@@ -3326,6 +3328,7 @@ impl Game {
             coop_wallets: None,
             coop_view: None,
             coop_areas: None,
+            item_buyers: std::collections::BTreeMap::new(),
             removed: Vec::new(),
             typed_made: 0,
             rng: 0x9E37_79B9_7F4A_7C15,

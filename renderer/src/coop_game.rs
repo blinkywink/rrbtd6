@@ -64,34 +64,44 @@ impl Replica{
         g.coop_pointers.clear();
         for (&id,&slot) in &self.owners{g.coop_pointers.insert(id,self.pointers[slot as usize]);}
     }
-    /// Player `slot` left (Simulation.RedistributeTowers @0x180b4a5a0). HYPOTHESIS
-    /// P-COOPLEAVE: each of their towers goes to the remaining player whose own area it stands
-    /// in, the rest round-robin by tower id over the remaining players in slot order; sub towers
-    /// follow their parent; their cash and debt are shared evenly (Wallets::remove). Not yet
-    /// read in full: the game's worth balancing and its destroyTowerOnRedistribution towers.
+    /// Player `slot` left: Simulation.RedistributeTowers (@0x180b4a5a0). Their towers (not sub
+    /// towers) are ordered by worth, most first (OrderByDescending(t => t.worth): the
+    /// OrderedEnumerable is built with descending = 1; stable, so ties keep placement order), and
+    /// dealt to the remaining players in input order, snake fashion (0, 1, .., n-1, n-1, .., 0,
+    /// 0, ..); each tower's sub towers and its projectiles go with it, and the rest of their
+    /// projectiles (cash left lying, here their wallet's sold-tower entries) carry on the same
+    /// deal. Towers with destroyTowerOnRedistribution are destroyed (only RareQuincyActionFigure,
+    /// not in the clone). Their cash and debt: Wallets::remove (HYPOTHESIS P-COOPLEAVECASH).
     fn leave(&mut self,g:&mut Game,slot:u8)->bool{
         if !self.slots.contains(&slot)||self.slots.len()<2{return false;}
         self.slots.retain(|&s|s!=slot);
-        let remaining=self.slots.clone();
-        let mut turn=0usize;
+        let mut remaining=self.slots.clone();remaining.sort_unstable();
+        let (mut at,mut up)=(0usize,true);
+        let mut deal=||{let to=remaining[at];
+            if up{at+=1;if at>=remaining.len(){up=false;at=remaining.len()-1;}}
+            else if at==0{up=true;}else{at-=1;}
+            to};
+        let mut theirs:Vec<(u64,f64)>=g.towers.iter().filter(|t|t.sub.is_none()&&self.owners.get(&t.id)==Some(&slot)).map(|t|(t.id,t.invested)).collect();
+        theirs.sort_by(|a,b|b.1.total_cmp(&a.1));
         let mut given:BTreeMap<u64,u8>=BTreeMap::new();
-        let theirs:Vec<u64>=self.owners.iter().filter(|(_,s)|**s==slot).map(|(id,_)|*id).collect();
-        for &id in &theirs{
-            let Some(t)=g.towers.iter().find(|t|t.id==id&&t.sub.is_none())else{continue};
-            let pos=t.pos;
-            let area=g.coop_areas.as_ref().and_then(|a|a.areas.iter().find(|ar|ar.owner.is_some_and(|o|remaining.contains(&o))&&ar.polygons.first().is_some_and(|_|a.allows(ar.owner.unwrap(),pos))).and_then(|ar|ar.owner));
-            let to=area.unwrap_or_else(||{let o=remaining[turn%remaining.len()];turn+=1;o});
-            given.insert(id,to);
-        }
-        for &id in &theirs{
-            if given.contains_key(&id){continue;}
-            let parent=g.towers.iter().find(|t|t.id==id).and_then(|t|t.sub.as_ref()).map(|s|s.parent);
-            let to=parent.and_then(|p|given.get(&p).copied()).unwrap_or(remaining[0]);
+        for (id,_) in theirs{given.insert(id,deal());}
+        // Sub towers follow their parent, whoever it went to.
+        let subs:Vec<(u64,u64)>=g.towers.iter().filter_map(|t|t.sub.as_ref().map(|s|(t.id,s.parent))).collect();
+        for (id,parent) in subs{
+            if self.owners.get(&id)!=Some(&slot){continue;}
+            let to=given.get(&parent).copied().or_else(||self.owners.get(&parent).copied().filter(|o|*o!=slot)).unwrap_or_else(&mut deal);
             given.insert(id,to);
         }
         for (&id,&to) in &given{self.owners.insert(id,to);}
+        // Whoever got their Geraldo gets his shop stock too.
+        if let Some(to)=g.towers.iter().find(|t|t.sub.is_none()&&g.tower_defs[t.def].0=="Geraldo"&&given.contains_key(&t.id)).map(|t|given[&t.id]){
+            g.combine_item_stock(slot,to);
+        }
+        // Simulation.RedistributePlacementAreaInventory (@0x180b49d70): their areas open to everyone.
+        if let Some(a)=&mut g.coop_areas{for area in &mut a.areas{if area.owner==Some(slot){area.owner=None;}}}
         if let Some(w)=&mut g.coop_wallets{
-            for (id,owner) in w.owners.iter_mut(){if *owner==slot{*owner=given.get(id).copied().unwrap_or(remaining[0]);}}
+            let ids:Vec<u64>=w.owners.iter().filter(|(_,o)|**o==slot).map(|(id,_)|*id).collect();
+            for id in ids{let to=given.get(&id).copied().unwrap_or_else(&mut deal);w.owners.insert(id,to);}
             w.remove(slot);
         }
         self.pointers[slot as usize]=None;self.requests[slot as usize]=None;
@@ -384,10 +394,11 @@ impl Runtime{
         let q=free_spot(&g,"DartMonkey",300.0);
         assert_eq!(r.apply(&mut g,&Frame{number:2,actions:vec![input(2,2,Action::Place{kind:"DartMonkey".into(),at:q})]}).unwrap(),vec![true]);
         let ids:Vec<u64>=g.towers.iter().map(|t|t.id).collect();
+        g.towers[1].invested+=500.0;
         let before=g.coop_wallets.as_ref().unwrap().balances;
         assert_eq!(r.apply(&mut g,&Frame{number:3,actions:vec![input(2,3,Action::Leave)]}).unwrap(),vec![true]);
-        // Round-robin over the players left (no areas: Free For All), and the cash split evenly.
-        assert!(r.owns(0,ids[0])&&r.owns(1,ids[1]));
+        // By worth, most first, to the players left in order; the cash split evenly.
+        assert!(r.owns(0,ids[1])&&r.owns(1,ids[0]));
         let w=g.coop_wallets.as_ref().unwrap();
         assert_eq!(w.players,vec![0,1]);assert_eq!(w.balances[2],0.0);
         assert_eq!(w.balances[0],before[0]+before[2]/2.0);

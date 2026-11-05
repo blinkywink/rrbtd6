@@ -99,7 +99,9 @@ impl Game {
             && self.item_unlocked(i)
             && self.item_stock(i) > 0
             && self.cash >= self.item_cost(i)
-            && (it.block_if_placed.is_empty() || !self.towers.iter().any(|t| t.sub.as_ref().is_some_and(|s| s.spec.name == it.block_if_placed)))
+            // GeraldoItem.CheckLocation (@0x180fa4030): only the buyer's own towers of that name block it.
+            && (it.block_if_placed.is_empty()
+                || !self.towers.iter().any(|t| t.sub.as_ref().is_some_and(|s| s.spec.name == it.block_if_placed && (self.item_player().is_none() || self.item_owner(s.parent) == self.item_player()))))
     }
 
     /// The item is used on the map (a point or a tower) rather than at once.
@@ -127,15 +129,9 @@ impl Game {
         let it = self.geraldo_items[i].clone();
         let Some(g) = self.geraldo() else { return false };
         let gid = self.towers[g].id;
-        // HYPOTHESIS P-COOPITEMTARGET: in co-op a tower item (sauce, cape, pickles, stone, potion,
-        // fertilizer) goes on the player's own towers only.
-        if let Some(me) = self.item_player() {
-            if matches!(it.kind.as_str(), "sauce" | "cape" | "pickles" | "stone" | "potion" | "fertilizer")
-                && self.tower_at(p).is_some_and(|t| self.item_owner(self.towers[t].id) != Some(me))
-            {
-                return false;
-            }
-        }
+        // Tower items may go on any player's tower: JarOfPicklesBehavior.IsTowerValid
+        // (@0x180fa4da0), GeraldoChangeTowerBehavior.IsPositionValid (@0x180fa30c0) and
+        // BottleHotSauceBehavior.CheckLocation (@0x180f92d00) check no owner.
         let ok = match it.kind.as_str() {
             "tower" => match self.for_level(&it.towers) {
                 // HYPOTHESIS P-ITEMTOWER: placed like a land tower of its footprint, owned by
@@ -236,6 +232,10 @@ impl Game {
                     let tw = &mut self.towers[t];
                     tw.items.retain(|(k, _)| *k != i);
                     tw.items.push((i, rounds as u32));
+                    let id = tw.id;
+                    if let Some(me) = self.item_player() {
+                        self.item_buyers.insert((id, i), me);
+                    }
                     true
                 }
                 _ => false,
@@ -254,12 +254,12 @@ impl Game {
 
     /// The boosts of Geraldo items on tower `t`, into its buffs.
     pub(super) fn item_buffs(&self, t: usize, b: &mut Buff) {
-        // Co-op: the level of the tower owner's Geraldo.
-        let owner = if self.coop_wallets.is_some() { self.item_owner(self.towers[t].id) } else { None };
-        let lv = if self.coop_wallets.is_some() && owner.is_none() {
-            0.0
-        } else {
-            self.geraldo_of(owner).map_or(0, |g| self.towers[g].tiers[0] as u32) as f32
+        // Co-op: the level of the buyer's Geraldo (GeraldoItemBehavior.GetGeraldo(inputId)).
+        let coop = self.coop_wallets.is_some();
+        let level = |i: usize| -> f32 {
+            let buyer = if coop { self.item_buyers.get(&(self.towers[t].id, i)).copied() } else { None };
+            if coop && buyer.is_none() { return 0.0; }
+            self.geraldo_of(buyer).map_or(0, |g| self.towers[g].tiers[0] as u32) as f32
         };
         for &(i, _) in &self.towers[t].items {
             let Some(it) = self.geraldo_items.get(i) else { continue };
@@ -272,7 +272,7 @@ impl Game {
                 // SharpeningStoneBehaviorModel: +pierceIncrease (+bonusPierce from bonusPierceAtLevel).
                 "stone" => {
                     b.pierce_add += self.param(i, "pierceIncrease");
-                    if lv >= self.param(i, "bonusPierceAtLevel") && self.param(i, "bonusPierceAtLevel") > 0.0 {
+                    if level(i) >= self.param(i, "bonusPierceAtLevel") && self.param(i, "bonusPierceAtLevel") > 0.0 {
                         b.pierce_add += self.param(i, "bonusPierce");
                     }
                 }
@@ -280,7 +280,7 @@ impl Game {
                 // from upgradeV2At).
                 "potion" => {
                     b.camo = true;
-                    if lv >= self.param(i, "upgradeV2At") && self.param(i, "upgradeV2At") > 0.0 {
+                    if level(i) >= self.param(i, "upgradeV2At") && self.param(i, "upgradeV2At") > 0.0 {
                         b.range_mult += self.param(i, "upgradedRangeScale") - 1.0;
                     }
                 }
@@ -289,6 +289,23 @@ impl Game {
                 _ => {}
             }
         }
+    }
+
+    /// A player left and `to` got their Geraldo (Simulation.RedistributePlayerInventory ->
+    /// GeraldoShopInventory.CombineStock @0x180f7e500): each item's stock is added, capped at the
+    /// item's maximum. HYPOTHESIS P-COMBINEROUNDS: the refill countdown keeps whichever is
+    /// nearer (CombineStock's min of the two non -1 counters; ours count rounds up, so the max).
+    pub(crate) fn combine_item_stock(&mut self, from: u8, to: u8) {
+        let (f, t) = (from as usize, to as usize);
+        let Some(theirs) = self.geraldo_stock.get(f).cloned().filter(|v| !v.is_empty()) else { return };
+        self.ensure_stock_for(t, true);
+        for (i, s) in theirs.iter().enumerate() {
+            let max = self.geraldo_items[i].max;
+            let mine = &mut self.geraldo_stock[t][i];
+            mine.qty = (mine.qty + s.qty).min(max);
+            mine.rounds = mine.rounds.max(s.rounds);
+        }
+        self.geraldo_stock[f].clear();
     }
 
     /// Round end: boosts count down; with Geraldo placed, stock refills `amount` every `every`
