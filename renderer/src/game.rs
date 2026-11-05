@@ -13012,7 +13012,16 @@ impl Game {
                             // CreateProjectileOnContact.Collide (@0xcc1570) emits from the projectile's
                             // own rotation (game frame), turned by Vector2.Rotate (recording bomb_003:
                             // a frag a float step off with the radians heading).
-                            $s.emit_rot = grot;
+                            // ArcEmission.GetDirection (VERIFIED-DISASM @0x180c37590): the rotation is
+                            // the owner tower's at that moment (its emission behaviours may change it),
+                            // not the projectile's (recording bomb_032: a blast's frags from 34.864883,
+                            // the tower turned on since the bomb's 34.864876). Other emissions keep the
+                            // projectile's (Sniper's EmitOnDamage fans).
+                            $s.emit_rot = if c.emission.kind == "Arc" && c.emission.dir_off.is_none() && !c.on_damage {
+                                $s.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).or(grot)
+                            } else {
+                                grot
+                            };
                             $s.emit(at, heading, &c.emission, &c.projectile, None, tiers, owner);
                             $s.emit_rot = None;
                             $s.emit_z = 0.0;
@@ -13366,7 +13375,16 @@ impl Game {
                         for (at, c, skip) in now_after {
                             let start = $s.projectiles.len();
                             $s.emit_z = hit_z;
-                            $s.emit_rot = grot;
+                            // ArcEmission.GetDirection (VERIFIED-DISASM @0x180c37590): the rotation is
+                            // the owner tower's at that moment (its emission behaviours may change it),
+                            // not the projectile's (recording bomb_032: a blast's frags from 34.864883,
+                            // the tower turned on since the bomb's 34.864876). Other emissions keep the
+                            // projectile's (Sniper's EmitOnDamage fans).
+                            $s.emit_rot = if c.emission.kind == "Arc" && c.emission.dir_off.is_none() && !c.on_damage {
+                                $s.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).or(grot)
+                            } else {
+                                grot
+                            };
                             $s.emit(at, heading, &c.emission, &c.projectile, None, tiers, owner);
                             $s.emit_rot = None;
                             $s.emit_z = 0.0;

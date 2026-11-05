@@ -134,7 +134,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Glue | 34/34 | done (mutator order, PostDegrade) |
 | Ice | 25/25 | done (re-recorded with seeds 2026-11-02) |
 | Sniper | 24/34 | see Sniper notes; open: 030 032 040 050 052 250, 205 x4 (a double shot whose target its sibling popped lives 1 frame at 954, 6 at 3206: P-DOUBLELOST doesn't explain 205) |
-| Bomb | 33/34 | open: 032 (9 position frames) |
+| Bomb | 34/34 | EXACT (2026-11-05): ArcEmission.GetDirection takes the owner tower's current rotation (bomb_032's frags). |
 | Desperado | 19/34 | (2026-11-04: TheBlazingSun found through SimRecorder Q lines, 13 -> 19) re-recorded with seeds 2026-11-04. BloonDistanceRateBonus uses Attack.GetVisibleTarget Close, StandoffModel ported, Instant shots from throw markers start on the eject point. Open: 002 rt 1614, 003, 004, 005, 020, 025, 03x, 04x, 05x, 205, 250, 300, 320, 420_x, 50x, 520, upgrades_r30 |
 | Beast Handler | 34/34 | Exact. Re-recorded with seeds 2026-11-04. GyrfalconPattern ported from the disasm (fly_birds, GyrState): targets through GetGlobalBest (bestFirst/bestLast) then segment brackets of the handler's target type, snatch/hit around the target by Close bracket order, grapple uses the initial damage, held bloons are off track (Bloon.held: not filed, taken by range + radius) with blockSpawnChildrenCount (unmake_bloon), idle moves through Map bounds. Pets start a frame after they're made and sync the handler's target. CycleAnimation randomize draws. InstantDamage shot with a dead target stays till round end. |
 | Engineer | 34/34 | EXACT (2026-11-05): Pin re-stun slot rule and duplicate non-cascading slows (SimRecorder S / M lines). |
@@ -554,6 +554,20 @@ TOWERS.md has the longer per-tower notes.
    game's angles are slightly larger (towards +90 / -90 from 79.86 / -100.14), as the recorded
    34.864883 for k = 4 suggests: the emission's base rotation may be 1-2 ulp above the bomb's own
    34.864876 (Weapon / emit rotation computed separately, e.g. from the eject direction).
+   (2026-11-05) The P line's rotation field IS EjectRotation, so the frags' 79.86488 etc. are their
+   emission angles: ArcEmission ran from a base of 34.864883, while the explosion projectile 2564
+   made the same frame carries EjectRotation 34.864876 (the bomb's). Not the base: atan2 or
+   Vector2.Angle of the bomb's rotation-made direction (both give back 34.864876), nor the hit
+   bloon 2409's direction. CreateProjectileOnContact.Collide (@0x180ca2a60) passes Emission.Emit
+   (vtable +0x298) the projectile MODEL, spawnPosition, a Target(bloon), sim time, EmittedBy and
+   the projectile's +0x1e0: no rotation, so the arc's rotation comes from inside Emit (ArcEmission's
+   own field, or +0x1e0). Next: decompile ArcEmission.Emit for where `rotation` comes from, or log
+   it with SimRecorder (a postfix on ArcEmission.Emit / GetDirection).
+   SOLVED (2026-11-05): ArcEmission.GetDirection (@0x180c37590) takes the rotation from the OWNER
+   TOWER (FUN_1824b5050 on param_7), then its emission behaviours (vtable 0x818), then (rot -
+   angle/2 + offset) + k x slice. The tower had turned on to 34.864883 since throwing the bomb.
+   Built for CreateProjectileOnContact Arc emissions without a direction-offset behaviour (not
+   EmitOnDamage, which Sniper's fans use). Bomb 34/34.
 2. **NOW: Sniper 19/34** (see Sniper notes): all 34 re-recorded with seeds (2026-11-02, still 19). sniper_040
    (Supply Drop): toggled-off abilities can't activate (ToggleableAbilityBehavior via CanUseAbility; AmmoSwap
    starts off: `toggled_off`, P-TOGGLE); RandomPositionBasic.GetTargets exact (MoveNext @0x180dd9e70: r =
