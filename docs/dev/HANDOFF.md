@@ -135,7 +135,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Ice | 25/25 | done (re-recorded with seeds 2026-11-02) |
 | Sniper | 24/34 | see Sniper notes; open: 030 032 040 050 052 250, 205 x4 (a double shot whose target its sibling popped lives 1 frame at 954, 6 at 3206: P-DOUBLELOST doesn't explain 205) |
 | Bomb | 33/34 | open: 032 (9 position frames) |
-| Desperado | 9/34 | re-recorded with seeds 2026-11-04. BloonDistanceRateBonus uses Attack.GetVisibleTarget Close, StandoffModel ported, Instant shots from throw markers start on the eject point. Open: 002 rt 1614, 003, 004, 005, 020, 025, 03x, 04x, 05x, 205, 250, 300, 320, 420_x, 50x, 520, upgrades_r30 |
+| Desperado | 19/34 | (2026-11-04: TheBlazingSun found through SimRecorder Q lines, 13 -> 19) re-recorded with seeds 2026-11-04. BloonDistanceRateBonus uses Attack.GetVisibleTarget Close, StandoffModel ported, Instant shots from throw markers start on the eject point. Open: 002 rt 1614, 003, 004, 005, 020, 025, 03x, 04x, 05x, 205, 250, 300, 320, 420_x, 50x, 520, upgrades_r30 |
 | Beast Handler | 34/34 | Exact. Re-recorded with seeds 2026-11-04. GyrfalconPattern ported from the disasm (fly_birds, GyrState): targets through GetGlobalBest (bestFirst/bestLast) then segment brackets of the handler's target type, snatch/hit around the target by Close bracket order, grapple uses the initial damage, held bloons are off track (Bloon.held: not filed, taken by range + radius) with blockSpawnChildrenCount (unmake_bloon), idle moves through Map bounds. Pets start a frame after they're made and sync the handler's target. CycleAnimation randomize draws. InstantDamage shot with a dead target stays till round end. |
 | Engineer | 32/34 | see Engineer notes (Tower parity 0.); open: 032, 052 |
 | Ninja | 34/34 | done (all R-line recordings) |
@@ -244,6 +244,87 @@ TOWERS.md has the longer per-tower notes.
    paragons, Dan D Monke, Druid's tree and others.
 
 ### Tower parity (the main goal)
+0. **Desperado 19/34 (2026-11-04): SOLVED the rate mystery below with SimRecorder's new Q lines**
+   (`Q <behaviour> <rate in> <rate out>`, every weapon GetRate in call order; tools/mod/SimRecorder,
+   recordings with them in `pending/_desperado_q/`). Desperado 5-x-x has **TheBlazingSun** (a weapon
+   behaviour the export didn't carry): GetRate (@0x180c95dd0) = rate / (currentStacks x
+   attackSpeedPerStack + 1) (attackSpeedPerStack -0.01, maxStacks 75, so it SLOWS); EmissionStarted
+   (@0x180c95d90) +1 per regular shot (not the missed-frame extras), lastEmissionAt = roundTime;
+   Process (@0x180c96150) resets to 0 after debuffExpiresAfterFrames (53) without one;
+   OnBloonDestroy (@0x180c96080) -1 when the tower's hit destroys its bloon's own object (a degrade
+   keeps the object: a MOAB popping into Ceramics is no destroy). Also: a burst's ProjectilesCreated
+   runs once per SpawnDart, so missed-frame extra shots don't count as burst shots. NOT built yet:
+   from stacksToBurn (50) the shots set bloons on fire (ProjectilesCreated, burnBehaviorModel /
+   burnBehaviorArea / the overheat eject effect). The notes below were the hunt; their
+   "distance" theories were wrong (the distance is the clone's).
+0. **Desperado 13/34 (2026-11-04, superseded above).** desperado_502 (5-0-2, burst 12 x 3 frames) first differs at
+   throw 3: game lastEmission 77, clone 78. The clone's rateFrames after the throw at 79 is 4 (game
+   5). From the recording's missedRate deltas (x = rateFrames / (1 + delta)), the product
+   vagrant x standoff x distance factor the game used per throw is 4.386, 4.293, 4.396, 4.302,
+   4.210, 4.120, 4.030, 3.941, 3.854 (rt 73, 76, .., 97); only one bloon is in range (closest 42.3
+   at rt 72 falling ~0.51 a frame). With Vagrant 1.45 x 1.02 and Standoff 2.2 the implied distance
+   is 34.8, 31.9, 35.1, 32.2, 29.4, ..: it falls ~2.9 per throw and resets after two, so
+   BloonDistanceRateBonus (@0xc6b080) or VagrantWeaponBehavior.GetRate (@0xcb69e0) reads something
+   other than the closest bloon's distance at the clone's moment (a projectile? the eject point?
+   the burst?). BloonDistanceRateBonus.GetRate (@0x180c6b080) re-read: rate / (max x per x
+   (min(d, max) / max) + 1), d = Vector2.Distance(Target.Position of Attack.GetVisibleTarget(<static
+   TargetType>), the attack entity's position): as the clone. The game is slower than the clone by
+   a factor growing ~1% a throw (1.010, 1.020, 1.031, 1.042, 1.052 at rt 73..85), so look for
+   something per shot (502 also has `vigilante`).
+   desperado_500 (no Vagrant, rate > 0.1 so no missedRate): throws at 70, 73, 76, 79, 82, 85, **87**,
+   90, 93, 96, 98, 106 while the recorded rateFrames is 6 until rt 88 and 7 from rt 91. The 85 -> 87
+   gap is 2 with a 3-frame burst: the clone's `last = now + intervalFrames - rateFrames` (with the
+   rateFrames just calculated) gives 88. Read BurstWeaponBehavior.ProjectilesCreated (@0xc75760)
+   and Weapon.SpawnDart / CalcRateFrames order again: lastEmission may use the rateFrames from
+   before this throw's recalculation, or Weapon.Process may compare against a rateFrames that
+   changed in between.
+   Ruled out (2026-11-04): lastEmission from the rateFrames before the recalculation (13 -> 7/34).
+   Read (2026-11-04): Weapon.SpawnDart (@0x180c51420) = Emit, CalcRateFrames, UpdateMissedFrames
+   (+ missed shots), then each weapon behaviour's ProjectilesCreated (vtable 0x908), so
+   BurstWeaponBehavior.ProjectilesCreated (@0x180c6c5d0) sets lastEmission = clock + intervalFrames
+   - the NEW rateFrames, clock = sim +0x38 if weaponModel +0x59 is 0 else +0x30. Weapon.Process
+   (@0x180c50670) fires when rateFrames + lastEmission <= its clock (same choice). With one
+   rateFrames between the two, the next burst shot is always 3 later; the game's 85 -> 87 means the
+   two clocks differ at that moment (+0x30 vs +0x38: which is round time, which elapsed?) or 87
+   is another weapon's / an extra shot. Checked: +0x59 is WeaponModel.fireBetweenRounds and the
+   clocks are Simulation.time (+0x30) / roundTime (+0x38), as the clone's `clock`; so not the clocks.
+   CORRECTION: the W line's lastEmission isn't the throw time; a burst throw at rt t writes
+   t + 3 - rateFrames (desperado_500: throws every 3 frames, 73..106). The real difference is the
+   rate: at rt 91 the game's rateFrames is 7, the clone's 6 (same in 502: the game is slower).
+   desperado_500 is clean (one MOAB alone on the map until rt ~101, no Vagrant): with Standoff 2.2
+   (one target) the game's rateFrames 6 / 7 / 8 at rt 73-88 / 91-100 / 103 need
+   BloonDistanceRateBonus's distance to be the tower -> MOAB centre distance minus c, c in
+   [7.33, 8.05) (MOAB radius is 21, so not the radius). Ruled out: a second Standoff target (no
+   other bloon exists), y-flipped Vector2.ToUnity (gives rateFrames 5), an AttackModel offset
+   (Desperado's is 0). Candidates: Target.Position isn't the bloon centre (a lead / predicted
+   point ~15 frames ahead at MOAB speed?), or the measuring entity isn't the tower. Next: read
+   Target.get_Position and what Attack.GetVisibleTarget(Close) stores in it.
+   Read: Target.GetPosition (@0x180c08bd0) = bloon position + the Target's stored offset;
+   BloonManager.GetClosestTarget (@0x180fc9bf0) builds Target(bloon, offset) for bloons whose model
+   +0x88 flag is set (MOAB class) with Targetting.CanHitMoab's (@0x180fdb200) offset: the first
+   collision circle within range + its radius, its precalculatedOffset (MOAB circle 0: 6.3
+   forward, r 14.7). Ceramics get no offset (fits rt 103). Tried in visible_close (MOAB: always
+   the first in-range circle, env EXP_MOABOFF, reverted): desperado_502's first difference moves
+   from throw 2 to throw 9, desperado_500 unchanged (with same-frame positions it needs an offset
+   of 6.79..8.31 towards the tower, circle 0 gives ~6.3: one frame of MOAB travel short), and the
+   set drops 13 -> 9. So the offset is real but something else (which frame's bloon position, or
+   which circle / range CanHitMoab gets from GetClosestTarget) is still off; check the callers'
+   range argument (param_4) and when Attack.GetVisibleTarget's brackets were built.
+   Then (2026-11-04): Attack.GetVisibleTarget (@0x180dae830) -> Targetting.GetTarget
+   (@0x180fdbba0) -> GetTargets (@0x180fdbe70), which first asks GetGlobalBest (@0x180fdb5f0):
+   it returns a plain Target (centre) only when the bracket entry's struct (+8) has byte 0 AND
+   byte 2 set (uVar6 there; the entry's high int is a segment index); otherwise a MOAB-class bloon
+   (model +0x88) gets CanHitMoab's offset with range = the attack range (param_6). GetTargets'
+   per-segment loop does the same for MOABs. The clone's visible_spot returns the centre whenever
+   the segment point is within range + 2, so those two flags are the thing to identify (likely
+   "segment fully in range" / "...") to know when a MOAB near the tower still gets its offset.
+   Those flags are the ones the clone already has (GetPathSegmentsInRangeFast: point within range
+   + 2, and line clear; game.rs towers_phase notes), and for desperado_500's MOAB both hold, so
+   GetGlobalBest should give its centre: that contradicts the ~7 shortfall. BLOCKED on a
+   recording: next needs SimRecorder to log BloonDistanceRateBonus.GetRate's Target (bloon,
+   offset, position) and the measuring position per call (tools/mod), then a re-record of
+   desperado_500 / 502 in the real game (needs the owner's go-ahead: no launching the game
+   unasked).
 0. **Engineer 30/34 (re-recorded with seeds 2026-11-03)**, next to work on. Done: RandomTargetSpread exact
    (Vector3.RandomOffsetFromRadius on syncedRandom), ArriveAtTarget with timeToTake 0 (3D distance from the eject
    point to the ground target / altSpeed, then its curve), SlowOnPopModel (Pin: a Slow only when
@@ -297,7 +378,57 @@ TOWERS.md has the longer per-tower notes.
    engineer_002 keeps the old time. Refreshing for all drops 002/003/004 (Engineer 19). AddMutatorForNumLayers
    (@0xfb01f0): with the model's +0x4e flag it resets the existing charge entry (ResetMutatorChargeCountForId),
    else it appends a new one; the time refresh is in Mutable.AddMutator (vtable +0x2a8). Find what differs
-   between the two cases (charges left? which bloon the stun is added to, before or after Degrade?). Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
+   between the two cases (charges left? which bloon the stun is added to, before or after Degrade?).
+   (2026-11-04) Mutable.AddMutator (@0x180f34f20, live build) read in full: an isUnique mutator
+   (+0x30) whose id the bloon already has makes it RETURN at once (no time refresh, no new entry);
+   otherwise with updateDuration it finds the entry by id and, if its time left < the new time,
+   sets it to that entry's own original time (+0x28); else appends. So engineer_032's re-pin at
+   2099 can only be a NEW stun after the old one was removed: Green 1064's old stun must have run
+   out of layer charges (2 layers) before the nail's SlowOnPop at 2099, e.g. the pin's own pop at
+   2057 or another hit used one, while in engineer_002 a charge was left. Next: per hit at
+   2057 / 2099 on 1064 and its children, which projectile (P lines) popped it and in what order
+   (H lines: projectile bloon ...), and whether the stun was added to the parent before Degrade
+   (its child then starts with layers - 1, game.rs 7564).
+   Recording facts (engineer_032): 1064 Pink -> Yellow at 2057 by nail 1192 (pinned), only foam
+   (1020 / 946, no pops) touches it until nail 1232 hits at 2098; Green at 2099, pinned to 2158.
+   Ruled out: a unique re-add leaving the layer charges alone (game.rs "Some(x) if unique": no
+   reset) drops Engineer 32 -> 25 and moves 032's first difference to rt 1862.
+   Bloon.AddMutatorForNumLayers (@0x180fb01f0, live) read: it calls AddMutator (vtable +0x2a8),
+   then, unless its updateDuration-like flag (param_7) is set, APPENDS a charge entry (count,
+   count, the mutator INSTANCE) even when AddMutator returned for a unique duplicate; with the
+   flag it resets the existing entry. Ruled out: "an old stun with 1 charge left is replaced by a
+   fresh one" (EXP, reverted): 032's first difference moves to 1911 and engineer_002 breaks at rt
+   74 (a 1-charge case there keeps its time). Next: Bloon.Degrade (@0x180fb1ad0), how the charge
+   entries decrement and which mutator instances the child gets (and with what time).
+   Read (2026-11-04): Bloon.DepleteMutatorsForNumLayers (@0x180fb2420): every chargedMutators entry
+   count -= the layers popped; at <= 0 Mutable.RemoveMutator(that entry's INSTANCE) (a never-added
+   duplicate's instance removes nothing). Bloon.CopyMutatorsFromBloon (@0x180fb0f40): the child
+   copies all charge entries, then Mutable.CopyMutatorsFrom (the mutators actually on it).
+   Ruled out as an emulation (EXP, reverted): "unique re-add: if the old has <= 1 charge, a fresh
+   stun with layers + 1, else unchanged" -> Engineer 22/34. The clone's `layers` (one number per
+   effect, filtered `layers > 1` at each degrade) can't hold two entries per id; model
+   chargedMutators as a list of (count, effect instance) per bloon, deplete by layers popped and
+   copy to children, before trying the order again.
+   BETTER LEAD (2026-11-04): SlowOnPop.Collide (@0x180cde190) = Bloon.WillPopBloon then
+   Slow.Collide (@0x180cde360), which calls AddMutatorForNumLayers(bloon, mutator, time, layers
+   (+ damage if SlowModel.matchLayersWithDamage), updateDuration 1, applyMutation 1,
+   SlowModel.cascadeMutators, ...): the append-vs-reset choice is cascadeMutators, and AddMutator
+   runs with updateDuration: an existing id whose time left < the new time is set back to its own
+   original time. engineer_032 fits that alone (the 2057 pin had 19 frames left at 2098 < 60 -> 60
+   again, pinned to 2158). So engineer_002's kept time must come from the NEW time: AddMutator
+   scales it by the smallest multiplier from the list the bloon's vtable +0x298 call fills
+   (entries (float, enabled); "Stun:Weak"?). Also check that the BehaviorMutator's own isUnique
+   (+0x30, the early return) is really set for Pin's stun. Next: name vtable +0x298 on Bloon and
+   find which multiplier 002's bloon has. Bloon.FilterMutation (vtable slot 22, @0x180fb2fa0) only asks
+   each bloon behaviour (IBloonBehavior.FilterMutation); plain Pinks / Yellows have none, so no
+   multiplier there. Tried the plain refresh (EXP, reverted): Engineer 25/34, 002 off at rt 74.
+   The two cases side by side: engineer_002 bloon 414 Black -> Pink pinned at rt 15, Pink ->
+   Yellow by a nail at 57 (17 frames of stun left), moves again at 74 = the ORIGINAL end (no
+   refresh, and not removed by charges); engineer_032 bloon 1064 Pink -> Yellow pinned at 2057,
+   Yellow -> Green by a nail at 2098 (19 left), pinned to 2158 (refreshed). Same gap, opposite
+   result: look for what differs (032 is 0-3-2 with Cleansing Foam hitting the bloon every
+   frame; which tower / nail model made each hit; whether 032's 2098 hit came with a second hit
+   that frame). Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
    upgrades_r30 groups.
 0. **Sub 32/32 EXACT (2026-11-04)**. Learned (VERIFIED-DISASM unless noted): Emission.BaseEmit raises the emit point to
    Target z less the bloon model's height (a MOAB just popped into a Ceramic: 120 - 20 = 100); CollisionChecker: a
@@ -389,6 +520,17 @@ TOWERS.md has the longer per-tower notes.
    0-3-2 blast's 8 frags (rotations -100.13512, -55.135117, 79.86488, 124.86489) are 1 ulp off in position
    because one direction component is (velocity 5 x dir, so sin/cos of the angle): the same open 1-ulp
    Vector2.Rotate question as the Lord Phoenix drift (Wizard notes). Left for the sin/cos investigation.
+   (2026-11-04) Frags move start + 5 x (sin r, cos r) in the recording's frame. The P line's
+   rotation isn't the emission angle: ArcEmission's (r - 180) + k x 45 from the bomb's 34.864876
+   gives 79.864876 for k = 5, the recording says 79.86488 (and 34.864883 for k = 4), so the
+   recorded rotation is derived back from the direction; fitting sin/cos against it is misleading
+   (with it, correctly rounded double sin/cos match 14 of 16 coordinates, a cumulative 45-degree
+   Vector2 rotation 8). Next: compare the clone's direction vector per frag (game_dir of the
+   emission angle) to the recorded displacement / 5 directly. Done: with exact sin of the clone's angles
+   ((34.864876 - 180) + k x 45), frags 1 and 5 (|sin| ~ 0.984) need |dx| 1-2 ulp larger, i.e. the
+   game's angles are slightly larger (towards +90 / -90 from 79.86 / -100.14), as the recorded
+   34.864883 for k = 4 suggests: the emission's base rotation may be 1-2 ulp above the bomb's own
+   34.864876 (Weapon / emit rotation computed separately, e.g. from the eject direction).
 2. **NOW: Sniper 19/34** (see Sniper notes): all 34 re-recorded with seeds (2026-11-02, still 19). sniper_040
    (Supply Drop): toggled-off abilities can't activate (ToggleableAbilityBehavior via CanUseAbility; AmmoSwap
    starts off: `toggled_off`, P-TOGGLE); RandomPositionBasic.GetTargets exact (MoveNext @0x180dd9e70: r =

@@ -988,6 +988,9 @@ pub struct Weapon {
     /// StandoffModel: [maxRateIncrease, rateDecreasePerBloon].
     #[serde(default)]
     pub standoff: Option<[f32; 2]>,
+    /// TheBlazingSunModel: [maxStacks, stacksToBurn, attackSpeedPerStack, debuffExpiresAfterFrames].
+    #[serde(default)]
+    pub blazing_sun: Option<[f32; 4]>,
     /// CycleAnimationModel.randomize: a synced draw at each throw.
     #[serde(default)]
     pub cycle_random: bool,

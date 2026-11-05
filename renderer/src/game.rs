@@ -1069,6 +1069,9 @@ pub struct WeaponState {
     standoff_k: f32,
     /// VagrantWeaponBehavior's towers and bloons in its zones, as of the last shot.
     vagrant_n: (u32, u32),
+    /// TheBlazingSun: currentStacks and lastEmissionAt (roundTime).
+    sun_stacks: i32,
+    sun_last: i64,
     danger: f32,
     necro: f32,
     /// EmissionsPerRoundFilterModel: throws this round.
@@ -1105,6 +1108,8 @@ impl WeaponState {
             dist_k: 1.0,
             standoff_k: 1.0,
             vagrant_n: (0, 0),
+            sun_stacks: 0,
+            sun_last: 0,
             danger: 0.0,
             necro: 1.0,
             round_shots: 0,
@@ -1143,7 +1148,11 @@ impl WeaponState {
                 r /= (self.vagrant_n.1 as f32 * c).min(d) + 1.0;
             }
         }
-        let r = r / self.dist_k / self.standoff_k / (1.0 + self.danger * w.leak_danger) * self.necro;
+        // TheBlazingSun.GetRate (VERIFIED-DISASM @0x180c95dd0), after Standoff in the behaviour
+        // list (recording desperado_500 with SimRecorder's Q lines): rate / (currentStacks x
+        // attackSpeedPerStack + 1), attackSpeedPerStack -0.01 (slower as it heats up).
+        let sun = w.blazing_sun.map_or(1.0, |[_, _, per, _]| if self.sun_stacks != 0 { self.sun_stacks as f32 * per + 1.0 } else { 1.0 });
+        let r = r / self.dist_k / self.standoff_k / sun / (1.0 + self.danger * w.leak_danger) * self.necro;
         if w.rate_min > r {
             w.rate_min
         } else {
@@ -1658,6 +1667,21 @@ pub struct ActiveBrew {
 }
 
 impl Tower {
+    /// TheBlazingSun.OnBloonDestroy (VERIFIED-DISASM @0x180c96080): each bloon this tower destroys
+    /// (removed for good: a degrade keeps the game's bloon object) takes a stack off, not below 0
+    /// (recording desperado_500's Q lines: stacks rise to 11 on the MOAB and stay there once every
+    /// throw kills). Only Blazing Sun weapons ever have stacks.
+    pub(crate) fn sun_destroyed(&mut self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        for st in &mut self.weapons {
+            if st.sun_stacks > 0 {
+                st.sun_stacks = (st.sun_stacks - n as i32).max(0);
+            }
+        }
+    }
+
     /// Records attack `ai`'s aim at `target` and turns the body: to the middle of every
     /// attack's last target (`middle`, RotateToMiddleOfTargetsModel), else with this aim when
     /// the attack turns the body.
@@ -2611,6 +2635,10 @@ pub struct Game {
     max_bloon_radius: f32,
     /// Health removed from bloons so far (towers are credited with the change around a hit).
     damage_tally: u64,
+    /// Bloons removed for good (popped with no children) so far, and by the last `damage` call:
+    /// TheBlazingSun.OnBloonDestroy counts these.
+    destroyed_tally: u64,
+    last_destroyed: u64,
     /// Rank of each cell offset (dx + 64, dy + 64 in a 129 x 129 table) in the collision
     /// grid's query order; u16::MAX where unknown.
     grid_rank: Vec<u16>,
@@ -3098,6 +3126,8 @@ impl Game {
             names,
             max_bloon_radius,
             damage_tally: 0,
+            destroyed_tally: 0,
+            last_destroyed: 0,
             has_grid_rank: !d.grid_offsets.is_empty(),
             grid_offsets: d.grid_offsets.clone(),
             mutator_data: d.bloon_mutator_data.clone(),
@@ -5390,6 +5420,7 @@ impl Game {
             let self_tally_dealt = self.damage_tally - tally0;
             if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
                 tw.pops += n;
+                tw.sun_destroyed(self.last_destroyed);
                 tw.damage += self_tally_dealt;
                 self.stats.pops += n;
                 self.stats.damage += self_tally_dealt;
@@ -6282,6 +6313,7 @@ impl Game {
                 let dealt = self.damage_tally - tally0;
                 if let Some(tw) = self.towers.iter_mut().find(|x| x.id == owner) {
                     tw.pops += n;
+                tw.sun_destroyed(self.last_destroyed);
                     tw.damage += dealt;
                     self.stats.pops += n;
                     self.stats.damage += dealt;
@@ -7382,6 +7414,12 @@ impl Game {
         let held = self.pop_depth == 0 && self.bloons[i].held;
         let (id, start) = (self.bloons[i].id, out_children.len());
         let n = self.damage_inner(i, dmg, out_children);
+        // TheBlazingSun.OnBloonDestroy(projectile, bloon, poppedBy, damageResult): the hit bloon's
+        // own object gone for good. A degrade keeps the game's bloon object (its first child), so
+        // a MOAB popping into Ceramics destroys nothing (recording desperado_502: bloon 426 hit at
+        // rt 98 lives on as a Ceramic, stacks unchanged); one hit destroys at most its own bloon
+        // (desperado_500: one a throw once every throw kills).
+        self.last_destroyed = (n > 0 && !self.bloons.iter().any(|b| b.id == id)) as u64;
         if held {
             for k in out_children[start..].iter().rev().copied().filter(|k| *k != id).collect::<Vec<_>>() {
                 if let Some(j) = self.bloons.iter().position(|b| b.id == k) {
@@ -7596,6 +7634,7 @@ impl Game {
         self.pops.push(pp);
         let n_kids = if strip { 0 } else { self.child_kinds[kind].len() };
         if n_kids == 0 {
+            self.destroyed_tally += 1;
             self.bloon_destroyed(parent_id, pp0);
             // EmitOnDestroy (recording glue_400: a Liquefied Red the DoT pops leaves a linger).
             // (At the bloon's Position, its height included: recording glue_400, a linger
@@ -7891,6 +7930,7 @@ impl Game {
             let dealt = self.damage_tally - tally0;
             if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
                 tw.pops += n;
+                tw.sun_destroyed(self.last_destroyed);
                 tw.damage += dealt;
                 self.stats.pops += n;
                 self.stats.damage += dealt;
@@ -7937,6 +7977,7 @@ impl Game {
                 let self_tally_dealt = self.damage_tally - tally0;
                 if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
                     tw.pops += n;
+                tw.sun_destroyed(self.last_destroyed);
                     tw.damage += self_tally_dealt;
                     self.stats.pops += n;
                     self.stats.damage += self_tally_dealt;
@@ -8279,6 +8320,7 @@ impl Game {
             self.earn(cash * td.mult + td.add);
             if let Some(tw) = self.towers.iter_mut().find(|x| x.id == owner) {
                 tw.pops += n;
+                tw.sun_destroyed(self.last_destroyed);
                 tw.damage += self_tally_dealt;
                 self.stats.pops += n;
                 self.stats.damage += self_tally_dealt;
@@ -9385,6 +9427,15 @@ impl Game {
                     // then (SpawnDart). A throw still pending when the next starts leaves first.
                     let off = (weapon.animation_offset * 60.0) as i32 as i64;
                     let mut spawns = 0;
+                    // TheBlazingSun.Process (VERIFIED-DISASM @0x180c96150): with
+                    // debuffExpiresAfterFrames > 0, stacks go back to 0 once lastEmissionAt + that
+                    // <= roundTime.
+                    if let Some([_, _, _, exp]) = weapon.blazing_sun {
+                        let st = &mut tw.weapons[w];
+                        if exp > 0.0 && st.sun_last + exp as i64 <= self.round_clock {
+                            st.sun_stacks = 0;
+                        }
+                    }
                     let st = &mut tw.weapons[w];
                     let started_id = decide.filter(|_| st.ready(clock)).map(|(_, _, id)| id);
                     let started = decide.filter(|_| st.ready(clock)).map(|(_, p, _)| p);
@@ -9468,6 +9519,14 @@ impl Game {
                     while qi < queue.len() {
                         let double = queue[qi];
                         qi += 1;
+                        // TheBlazingSun.EmissionStarted (VERIFIED-DISASM @0x180c95d90): stacks + 1 up to
+                        // maxStacks, lastEmissionAt = roundTime; not for the missed-frame extra shots
+                        // (recording desperado_502's Q lines: 7 stacks at rt 91 after a doubled throw).
+                        if let (Some([max, ..]), false) = (weapon.blazing_sun, double) {
+                            let st = &mut self.towers[t].weapons[w];
+                            st.sun_stacks = (st.sun_stacks + 1).min(max as i32);
+                            st.sun_last = self.round_clock;
+                        }
                         // A burst's ProjectilesCreated, applied after the shot's CalcRateFrames.
                         let mut burst_after: Option<crate::data::BurstFire> = None;
                         // With no target any more the throw still leaves: Target.IsValid (VERIFIED-DISASM
@@ -9957,7 +10016,10 @@ impl Game {
                                     }
                                 }
                             }
-                            burst_after = weapon.burst.clone().filter(|b| !b.over_time);
+                            // (Once per SpawnDart: Weapon.SpawnDart @0x180c51420 runs the behaviours'
+                            // ProjectilesCreated after its missed-frame extra Emits, so those don't count
+                            // as burst shots; recording desperado_502, a burst through rt 106.)
+                            burst_after = weapon.burst.clone().filter(|b| !b.over_time && !double);
                             // HYPOTHESIS P-LINE: LineProjectileEmissionModel sweeps the shot along the
                             // range over its lifespan, wide enough that no bloon on the line is skipped.
                             if emission.kind == "Line" {
@@ -10120,7 +10182,7 @@ impl Game {
                                 }
                                 x + 1.0
                             });
-                            if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT {} w{w} k {dist_k} s {standoff_k} vag {:?} rate {} rf {}", self.round_clock, vagrant_n, weapon.rate, self.towers[t].weapons[w].rate_frames); } // DBGX
+                            if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT {} w{w} k {dist_k} s {standoff_k} vag {:?} rate {} rf {} sun {}", self.round_clock, vagrant_n, weapon.rate, self.towers[t].weapons[w].rate_frames, self.towers[t].weapons[w].sun_stacks); } // DBGX
                             let st = &mut self.towers[t].weapons[w];
                             st.standoff_k = standoff_k;
                             st.dist_k = dist_k;
@@ -13050,6 +13112,7 @@ impl Game {
                         let owner = $s.projectiles[$p].owner;
                         if let Some(ti) = $s.towers.iter().position(|t| t.id == owner) {
                             $s.towers[ti].pops += n;
+                            $s.towers[ti].sun_destroyed($s.last_destroyed);
                             $s.towers[ti].damage += self_tally_dealt;
                             $s.stats.pops += n;
                             $s.stats.damage += self_tally_dealt;
@@ -13634,6 +13697,7 @@ impl Game {
             let self_tally_dealt = self.damage_tally - tally0;
             if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
                 tw.pops += n;
+                tw.sun_destroyed(self.last_destroyed);
                 tw.damage += self_tally_dealt;
                 self.stats.pops += n;
                 self.stats.damage += self_tally_dealt;

@@ -1221,3 +1221,58 @@ static class CollideBloonPatch
         catch (Exception) { }
     }
 }
+
+// Weapon rate behaviours' GetRate, input and output ("Q kind in out"), written in call order before
+// the frame's F line: BloonDistanceRateBonus (distance d = (in / out - 1) / (max x per / max)),
+// Standoff and VagrantWeaponBehavior.
+static class RateLog
+{
+    public static void Write(string kind, float rate, float result)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try { w.WriteLine($"Q {kind} {Recorder.F(rate)} {Recorder.F(result)}"); } catch (Exception) { }
+    }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Weapons.Behaviors.BloonDistanceRateBonus), "GetRate")]
+static class DistanceRatePatch
+{
+    static void Postfix(float __0, float __result) => RateLog.Write("dist", __0, __result);
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Weapons.Behaviors.Standoff), "GetRate")]
+static class StandoffRatePatch
+{
+    static void Postfix(float __0, float __result) => RateLog.Write("standoff", __0, __result);
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Weapons.Behaviors.VagrantWeaponBehavior), "GetRate")]
+static class VagrantRatePatch
+{
+    static void Postfix(float __0, float __result) => RateLog.Write("vagrant", __0, __result);
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Weapons.Behaviors.BloonsInRangeAttackSpeed), "GetRate")]
+static class BloonsInRangeRatePatch
+{
+    static void Postfix(float __0, float __result) => RateLog.Write("inrange", __0, __result);
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Weapons.Behaviors.LeakDangerAttackSpeed), "GetRate")]
+static class LeakDangerRatePatch
+{
+    static void Postfix(float __0, float __result) => RateLog.Write("leak", __0, __result);
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Weapons.Behaviors.LifeBasedAttackSpeed), "GetRate")]
+static class LifeBasedRatePatch
+{
+    static void Postfix(float __0, float __result) => RateLog.Write("life", __0, __result);
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Weapons.Behaviors.TheBlazingSun), "GetRate")]
+static class BlazingSunRatePatch
+{
+    static void Postfix(float __0, float __result) => RateLog.Write("sun", __0, __result);
+}
