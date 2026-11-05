@@ -1076,6 +1076,29 @@ static class SimulatePatch
                 w.WriteLine($"B {b.Id.Id} {b.bloonModel.id} {Recorder.F(b.distanceTraveled)} {Recorder.F(p.X)} {Recorder.F(p.Y)} {b.health}");
             }
         });
+        // Every stun-like mutator instance on each bloon that has one: "S bloon id:removeAt ..."
+        // (TimedMutator order as in Mutable.mutators).
+        Part("stuns", () =>
+        {
+            var bs = sim.factory.GetFactory<Bloon>().up.list;
+            for (int k = 0; k < bs.Count; k++)
+            {
+                var b = bs[k];
+                if (b == null || b.IsDestroyed || b.mutators == null) continue;
+                var m = b.mutators;
+                string line = $"S {b.Id.Id}";
+                bool stun = false;
+                for (int j = 0; j < m.Count; j++)
+                {
+                    var tm = m._items[j];
+                    if (tm == null || tm.mutator == null) continue;
+                    var id = tm.mutator.id ?? "?";
+                    stun |= id.Contains("Stun");
+                    line += $" {id}:{tm.removeAt}";
+                }
+                if (stun) w.WriteLine(line);
+            }
+        });
         // Each path's bloonsList (Path.Process adds them to its segments in this order).
         Part("paths", () =>
         {
@@ -1275,4 +1298,52 @@ static class LifeBasedRatePatch
 static class BlazingSunRatePatch
 {
     static void Postfix(float __0, float __result) => RateLog.Write("sun", __0, __result);
+}
+
+// Bloon mutator bookkeeping ("M ..."), written before the frame's F line: each
+// AddMutatorForNumLayers with the mutator's removeAt before and after, each charge depletion and
+// each child copying its parent's mutators.
+static class MutatorLog
+{
+    public static bool On => Recorder.Out != null && Recorder.Sc != null && Recorder.Recorded < Recorder.Sc.frames;
+    public static int RemoveAt(Il2CppAssets.Scripts.Simulation.Bloons.Bloon b, string id)
+    {
+        try { var t = b.GetMutatorById(id); return t == null ? -1 : t.removeAt; } catch (Exception) { return -2; }
+    }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Bloon), "AddMutatorForNumLayers")]
+static class AddMutatorLayersPatch
+{
+    static void Prefix(Il2CppAssets.Scripts.Simulation.Bloons.Bloon __instance, Il2CppAssets.Scripts.Simulation.Objects.BehaviorMutator __0, out int __state)
+    {
+        __state = -3;
+        if (!MutatorLog.On || __0 == null) return;
+        __state = MutatorLog.RemoveAt(__instance, __0.id);
+    }
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Bloons.Bloon __instance, Il2CppAssets.Scripts.Simulation.Objects.BehaviorMutator __0, int __1, int __2, int __state)
+    {
+        if (!MutatorLog.On || __0 == null) return;
+        try { Recorder.Out.WriteLine($"M add {__instance.Id.Id} {__0.id} time {__1} layers {__2} before {__state} after {MutatorLog.RemoveAt(__instance, __0.id)}"); } catch (Exception) { }
+    }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Bloon), "DepleteMutatorsForNumLayers")]
+static class DepleteMutatorsPatch
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Bloons.Bloon __instance, int __0)
+    {
+        if (!MutatorLog.On) return;
+        try { Recorder.Out.WriteLine($"M deplete {__instance.Id.Id} {__0}"); } catch (Exception) { }
+    }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Bloon), "CopyMutatorsFromBloon")]
+static class CopyMutatorsPatch
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Bloons.Bloon __instance, Il2CppAssets.Scripts.Simulation.Bloons.Bloon __0)
+    {
+        if (!MutatorLog.On) return;
+        try { Recorder.Out.WriteLine($"M copy {__instance.Id.Id} from {(__0 == null ? -1 : __0.Id.Id)}"); } catch (Exception) { }
+    }
 }

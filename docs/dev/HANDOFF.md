@@ -428,7 +428,28 @@ TOWERS.md has the longer per-tower notes.
    Yellow -> Green by a nail at 2098 (19 left), pinned to 2158 (refreshed). Same gap, opposite
    result: look for what differs (032 is 0-3-2 with Cleansing Foam hitting the bloon every
    frame; which tower / nail model made each hit; whether 032's 2098 hit came with a second hit
-   that frame). Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
+   that frame).
+   RECORDED (2026-11-04, SimRecorder "M" lines: AddMutatorForNumLayers with the mutator's removeAt
+   before/after via GetMutatorById, DepleteMutatorsForNumLayers, CopyMutatorsFromBloon; new
+   recordings in pending/_engineer_m/, the clone MATCHES their 002 and diverges in 032 at 2116 as
+   before). engineer_002 bloon 414: stun at 14 (60), deplete 1; at 56 re-add "before 18 after 60"
+   (GetMutatorById's removeAt refreshed), deplete 1; yet it moves at 74 = the ORIGINAL end.
+   engineer_032 bloon 1064: stun at 2056 (60); at 2098 re-add "before 18 after 18" (not
+   refreshed), deplete 1; yet it stays pinned to ~2158 = the NEW end. So the TimedMutator that
+   GetMutatorById returns isn't what holds the bloon in one of the two (two instances with the id,
+   the first one returned). Next: log Mutable.RemoveMutator and every TimedMutator on the bloon
+   (id, removeAt) each frame for those bloons, and the Bloon speed / stun state.
+   SOLVED the re-pin rule (2026-11-05, SimRecorder per-frame "S bloon id:removeAt ..." lines = the
+   bloon's whole Mutable.mutators list in order): a repeat Pin adds a SECOND Stun:Weak TimedMutator
+   at the binary-search slot (`mutator_slot`, len / 2); this pop's depletion empties the old
+   charge entry and RemoveMutator takes the FIRST TimedMutator with that shared mutator: new one in
+   front -> the old time stays (002), behind -> a fresh 60 (032). Built (game.rs, the `unique`
+   SlowOnPop branch). Left for 032 / 052: the clone's effect list must hold the game's DUPLICATE
+   instances too: Cleansing Foam's Slow (unique, refresh in the export) is added as a second
+   TimedMutator by each puddle (032 bloon 967 at 1958: [Slow, Stun, Slow]), which moves the stun's
+   slot; the clone merges them ([Stun, Slow]) and keeps a stun the game drops (032 now first
+   differs at 2032). Model duplicate instances (only the first per id applied: ApplyMutation) in
+   `Bloon::effects` before going on. Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
    upgrades_r30 groups.
 0. **Sub 32/32 EXACT (2026-11-04)**. Learned (VERIFIED-DISASM unless noted): Emission.BaseEmit raises the emit point to
    Target z less the bloon model's height (a MOAB just popped into a Ceramic: 120 - 20 = 100); CollisionChecker: a

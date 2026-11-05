@@ -11721,6 +11721,28 @@ impl Game {
                     }
                 }
             }
+            // A SlowOnPop stun (Pin) on a bloon that has one (recordings engineer_002 / 032 with
+            // SimRecorder's per-frame S lines): Mutable.AddMutator puts a second TimedMutator on, at
+            // the binary-search place of its priority (`mutator_slot`), and AddMutatorForNumLayers
+            // a charge entry for it; this pop's DepleteMutatorsForNumLayers empties the old entry and
+            // Mutable.RemoveMutator takes the FIRST TimedMutator with that (shared) mutator. New one
+            // in front: it goes, the old time stays (002: re-pinned at 56, moves at 74); behind: the
+            // old one goes, a fresh lifespan (032: re-pinned at 2098, held to 2158).
+            if unique {
+                if let Some(first) = b.effects.iter().position(|x| x.id == eff.id) {
+                    let at = mutator_slot(&b.effects);
+                    if at > first {
+                        let mut e = eff;
+                        e.seq = next_seq;
+                        next_seq += 1;
+                        b.effects.insert(at, e);
+                        b.effects.remove(first);
+                    } else {
+                        b.effects[first].layers = eff.layers;
+                    }
+                    continue;
+                }
+            }
             match b.effects.iter_mut().find(|x| x.id == eff.id) {
                 // Bloon.AddMutator on a mutator it has: a new lifespan, its behaviours kept (a
                 // DamageOverTime keeps its lastTick: recording boomerang_500, re-dotted at 98 and
