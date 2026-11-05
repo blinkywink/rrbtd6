@@ -9868,11 +9868,12 @@ impl Game {
                                 let bloon_from = match weapon.bloon_dir.as_deref() { Some("tower") => Some(pos), Some("eject") => Some(from), _ => None };
                                 // (Target.bloon's own position: no collision-circle offset.)
                                 let bloon_at = self.bloons.iter().find(|b| b.id == target_id).map(|b| b.pos);
+                                let seek_launch = bloon_from.is_none() && proj.seek.is_some() && !attack.rotate && target_id != 0;
                                 let grot = if let (Some(f), Some(b)) = (bloon_from, bloon_at) {
                                     let r = RAD2DEG * crt_atan2(b[0] - f[0], -(b[1] - f[1]));
                                     dir = (r - 90.0) * DEG2RAD;
                                     Some(r)
-                                } else if proj.seek.is_some() && !attack.rotate && target_id != 0 {
+                                } else if seek_launch {
                                     Some(RAD2DEG * crt_atan2(target[0] - from[0], -(target[1] - from[1])))
                                 } else {
                                     grot
@@ -9880,7 +9881,25 @@ impl Game {
                                 self.emit_rot = grot;
                                 self.emit_z = ez + self.tower_height(t);
                                 self.emit_target = (target_id != 0).then_some(target_id);
+                                let s0 = self.projectiles.len();
                                 self.emit(from, dir, emission, proj, crit, tiers, owner);
+                                // (Its direction is the normalized line itself, each component / its
+                                // length in f32, not one rebuilt from the angle: recording tack_500 with
+                                // SimRecorder's D lines, the meteor's launch x -0.9462439.)
+                                if seek_launch {
+                                    let v = [target[0] - from[0], -(target[1] - from[1])];
+                                    let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
+                                    if n > 0.0 {
+                                        let nd = [v[0] / n, v[1] / n];
+                                        for pr in &mut self.projectiles[s0..] {
+                                            if pr.dir.is_some() {
+                                                let sf = pr.spec.speed * FRAME_TIME;
+                                                pr.dir = Some(nd);
+                                                pr.vel = [nd[0] * sf, -nd[1] * sf];
+                                            }
+                                        }
+                                    }
+                                }
                                 self.emit_rot = None;
                                 self.emit_z = 0.0;
                                 self.emit_target = None;

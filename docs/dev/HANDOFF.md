@@ -128,7 +128,7 @@ checkpoint that changes `renderer/src/game.rs`.
 |---|---|---|
 | Dart | 70/70 | done |
 | Boomerang | 99/99 | done (paragon too) |
-| Tack | 21/25 | re-recorded with seeds 2026-11-03; open: 500/502 (meteor 1 ulp at rt 522), 520, upgrades_r30 |
+| Tack | 24/25 | (2026-11-05) a seeking shot from a non-turning tower launches along (target - eject) / length in f32 (SimRecorder D lines); open: 520 |
 | Sub | 32/32 | done (2026-11-04) |
 | Wizard | 34/34 | all re-recorded with R lines; done |
 | Glue | 34/34 | done (mutator order, PostDegrade) |
@@ -498,6 +498,10 @@ TOWERS.md has the longer per-tower notes.
    frames doesn't count the others again. Open: tack_500/502, the Inferno Ring meteor's y is 1 ulp off at
    rt 522 (TrackTarget / TravelStrait / Vector3Boxed.Rotate all match the decompile: look at AngleBetween's
    atan2f and the target point); tack_520; tack_upgrades_r30.
+   SOLVED 500 / 502 / upgrades_r30 (2026-11-05) with SimRecorder's new D lines (each projectile's
+   Direction every frame): the meteor's LAUNCH direction was already 1 ulp off, it is the line to
+   the target divided by its f32 length, not rebuilt from the atan2 angle (game.rs `seek_launch`).
+   Open: tack_520.
 0. **Ice 25/25 (done 2026-11-03)**, all re-recorded with seeds. What it took, all VERIFIED-DISASM:
    AddBehaviorToBloon.Collide draws syncedRandom for chance > 0 (Icicles 25%) after its filters, also on a
    hit immune to the damage (Projectile.CollideBloon's passes before the DamageModel run regardless:

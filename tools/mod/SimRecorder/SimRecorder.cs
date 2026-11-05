@@ -1162,6 +1162,8 @@ static class SimulatePatch
                 var p = pr.Position;
                 var ef = pr.emittedFrom;
                 w.WriteLine($"P {pr.Id.Id} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(pr.pierce)} {Recorder.F(pr.EjectRotation)} {Recorder.F(ef.x)} {Recorder.F(ef.y)} {Recorder.F(ef.z)} {Recorder.F(p.Z)} {Recorder.F(pr.VsBlockerRadius)}");
+                // Its Direction: "D projectile x y z".
+                try { var dv = pr.Direction; if (dv != null) w.WriteLine($"D {pr.Id.Id} {Recorder.F(dv.X)} {Recorder.F(dv.Y)} {Recorder.F(dv.Z)}"); } catch (Exception) { }
                 // Its Target: "PT projectile bloon(-1 none) valid".
                 try
                 {
