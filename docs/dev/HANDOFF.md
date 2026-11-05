@@ -137,7 +137,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Bomb | 33/34 | open: 032 (9 position frames) |
 | Desperado | 19/34 | (2026-11-04: TheBlazingSun found through SimRecorder Q lines, 13 -> 19) re-recorded with seeds 2026-11-04. BloonDistanceRateBonus uses Attack.GetVisibleTarget Close, StandoffModel ported, Instant shots from throw markers start on the eject point. Open: 002 rt 1614, 003, 004, 005, 020, 025, 03x, 04x, 05x, 205, 250, 300, 320, 420_x, 50x, 520, upgrades_r30 |
 | Beast Handler | 34/34 | Exact. Re-recorded with seeds 2026-11-04. GyrfalconPattern ported from the disasm (fly_birds, GyrState): targets through GetGlobalBest (bestFirst/bestLast) then segment brackets of the handler's target type, snatch/hit around the target by Close bracket order, grapple uses the initial damage, held bloons are off track (Bloon.held: not filed, taken by range + radius) with blockSpawnChildrenCount (unmake_bloon), idle moves through Map bounds. Pets start a frame after they're made and sync the handler's target. CycleAnimation randomize draws. InstantDamage shot with a dead target stays till round end. |
-| Engineer | 32/34 | see Engineer notes (Tower parity 0.); open: 032, 052 |
+| Engineer | 34/34 | EXACT (2026-11-05): Pin re-stun slot rule and duplicate non-cascading slows (SimRecorder S / M lines). |
 | Ninja | 34/34 | done (all R-line recordings) |
 | Alchemist | 0/34 | throws match; potion hits differ from rt 132 |
 | Ace | 0/25 | recorder doesn't log the plane yet |
@@ -449,7 +449,9 @@ TOWERS.md has the longer per-tower notes.
    TimedMutator by each puddle (032 bloon 967 at 1958: [Slow, Stun, Slow]), which moves the stun's
    slot; the clone merges them ([Stun, Slow]) and keeps a stun the game drops (032 now first
    differs at 2032). Model duplicate instances (only the first per id applied: ApplyMutation) in
-   `Bloon::effects` before going on. Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
+   `Bloon::effects` before going on. DONE (2026-11-05): a slow put on again without cascadeMutators
+   (AddMutator @0x180f34f20 refreshes the one it has only with cascade) is a second instance at
+   `mutator_slot`; the glue level still rises on the first (highestGlueLevel). Engineer 34/34. Then the 003 / 032 / 052 / 250 / 300 / 320 / 400 / 420_* / 500 / 502_* / 520 /
    upgrades_r30 groups.
 0. **Sub 32/32 EXACT (2026-11-04)**. Learned (VERIFIED-DISASM unless noted): Emission.BaseEmit raises the emit point to
    Target z less the bloon model's height (a MOAB just popped into a Ceramic: 120 - 20 = 100); CollisionChecker: a

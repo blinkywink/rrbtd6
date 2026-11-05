@@ -11644,7 +11644,7 @@ impl Game {
                     add.push((
                         Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Cooldown, id: format!("{}Cooldown", e.id), frames_left: (lifespan + e.cooldown) * FPS, total: (lifespan + e.cooldown) * FPS, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false },
                         false,
-                        (false, false),
+                        (false, false, false),
                     ));
                     EffectKind::Trance {
                         centre: c,
@@ -11699,7 +11699,7 @@ impl Game {
             // Bloon.AddMutatorForNumLayers (VERIFIED-DISASM @0xfb01f0) gives layer charges only
             // for layers > 0: one with 0 is never depleted and goes to the children
             // (CopyMutatorsFrom; recording engineer_032, a foamed Black's pinned Pink half speed).
-            add.push((Effect { kind, id: e.id.clone(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: if e.layers == 0 { u32::MAX } else { e.layers }, owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into(), seq: 0 }, e.refresh, (e.replace, e.kind == "slow" && e.unique && !e.cascade && e.only_if_pop)));
+            add.push((Effect { kind, id: e.id.clone(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: if e.layers == 0 { u32::MAX } else { e.layers }, owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into(), seq: 0 }, e.refresh, (e.replace, e.kind == "slow" && e.unique && !e.cascade && e.only_if_pop, e.kind == "slow" && !e.cascade && !e.only_if_pop)));
         }
         let kind = self.bloons[i].kind;
         add.retain(|(e, _, _)| !self.bad_immune_to(kind, &e.id));
@@ -11710,7 +11710,7 @@ impl Game {
             (EffectKind::Slow { mult: a, glue: g }, EffectKind::Slow { mult: m, glue: h }) => a == m && g == h && x.total == e.total,
             _ => true,
         };
-        for (eff, refresh, (replace, unique)) in add {
+        for (eff, refresh, (replace, unique, dup_slow)) in add {
             // removeMutatorIfNotMatching: one another model put on goes (INFERRED: a model told
             // by its slow, glue level and lifespan; recording glue_upgrades_r30, Corrosive Glue's
             // level 2 over the level 1 it was upgraded from, so the glob skips it).
@@ -11728,6 +11728,25 @@ impl Game {
             // Mutable.RemoveMutator takes the FIRST TimedMutator with that (shared) mutator. New one
             // in front: it goes, the old time stays (002: re-pinned at 56, moves at 74); behind: the
             // old one goes, a fresh lifespan (032: re-pinned at 2098, held to 2158).
+            // Mutable.AddMutator (VERIFIED-DISASM @0x180f34f20) refreshes the mutator it has only with
+            // cascadeMutators; without, a slow put on again is a second TimedMutator at the
+            // binary-search slot (recording engineer_032's S lines: Cleansing Foam's two puddles
+            // leave [Slow, Stun, Slow]). Only the first with an id applies (speed_mult).
+            if dup_slow && b.effects.iter().any(|x| x.id == eff.id) {
+                // (Mutable.highestGlueLevel still rises: the glue level stays on the first one, as
+                // the refresh did; recording glue_upgrades_r30.)
+                if let EffectKind::Slow { glue: g, .. } = eff.kind {
+                    if let Some(EffectKind::Slow { glue, .. }) = b.effects.iter_mut().find(|x| x.id == eff.id).map(|x| &mut x.kind) {
+                        *glue = (*glue).max(g);
+                    }
+                }
+                let mut e = eff;
+                e.seq = next_seq;
+                next_seq += 1;
+                let at = mutator_slot(&b.effects);
+                b.effects.insert(at, e);
+                continue;
+            }
             if unique {
                 if let Some(first) = b.effects.iter().position(|x| x.id == eff.id) {
                     let at = mutator_slot(&b.effects);
