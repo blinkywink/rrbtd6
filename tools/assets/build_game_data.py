@@ -1233,7 +1233,7 @@ def main():
                     "range": af["range"], "camo": camo, "rotate": rotate, "turn_rate": turn_rate,
                     "targets": targets, "weapons": weapons,
                     "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
-                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
+                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "fixed_range": bool(af.get("fixedRange")), "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
                     "glue_filter": glue_filter, "skip_frozen": skip_frozen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
                     "while_fx": next(([prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")) or "", prefab_name((deref(x["f"].get("exitEffectModel")) or {"f": {}})["f"].get("assetId")) or ""] for x in items(af["behaviors"]) if x and x["type"] == "CreateEffectWhileAttackingModel"), None),

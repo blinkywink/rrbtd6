@@ -1084,6 +1084,11 @@ pub struct WeaponState {
     pub round_shots: u32,
     /// BurstWeaponBehavior.currentCount: shots left in this burst (Initialise: the model's count).
     pub burst_left: u32,
+    /// BurstWeaponBehavior.Process's overrideTarget (Weapon+0xdc) with alwaysEmptyClip: the point
+    /// its attack range ahead along the tower's rotation as this weapon's frame ended.
+    pub empty_pt: Option<[f32; 2]>,
+    /// The range its Vagrant bloon zone was last processed with.
+    pub zone_r: f32,
     /// Its throws (EmissionWithOffsets takes its markers in turn per weapon: recording sub_052,
     /// a Sub's twin guns keep their order through its Ballistic Missile's launches).
     pub emits: u32,
@@ -1122,6 +1127,8 @@ impl WeaponState {
             necro: 1.0,
             round_shots: 0,
             burst_left: w.burst.as_ref().map_or(0, |b| b.count),
+            empty_pt: None,
+            zone_r: 0.0,
             crit: (0, 0),
             frac_pierce: 0.0,
         };
@@ -2377,6 +2384,9 @@ pub struct Buff {
     pub radius_mult: f32,
     pub range_mult: f32,
     pub range_add: f32,
+    /// VigilanteMutator's loseLifeRangeBuff: added to the tower's range and to its attacks'
+    /// ranges, except attacks with fixedRange (VERIFIED-DISASM @0x126e830, AttackModel+0x66).
+    pub vig_range: f32,
     pub rate_mult: f32,
     pub pierce_add: f32,
     /// Shinobi Tactics: (multiplier, stacks); each stack adds (1 - multiplier) x the original
@@ -2411,6 +2421,7 @@ impl Default for Buff {
             radius_mult: 1.0,
             range_mult: 0.0,
             range_add: 0.0,
+            vig_range: 0.0,
             rate_mult: 1.0,
             pierce_add: 0.0,
             pierce_pct: None,
@@ -2473,10 +2484,21 @@ pub fn tag_match(tags: &[String], m: &TagMod) -> bool {
 
 impl Buff {
     pub fn range(&self, r: f32) -> f32 {
+        self.range_with(r, self.vig_range)
+    }
+
+    /// An attack's range: fixedRange attacks don't take the Vigilante buff (recording
+    /// desperado_032 rt 1402: the 0-3-x Vagrant attack, fixed at 40, doesn't count a Black 40.48
+    /// away during the buff; desperado_002 rt 533: the 0-0-2 one, 60, does count out to 76).
+    pub fn attack_range(&self, a: &crate::data::Attack) -> f32 {
+        self.range_with(a.range, if a.fixed_range { 0.0 } else { self.vig_range })
+    }
+
+    fn range_with(&self, r: f32, vig: f32) -> f32 {
         if r >= 1e5 {
             return r;
         }
-        let r = r * (1.0 + self.range_mult) + self.range_add;
+        let r = r * (1.0 + self.range_mult) + self.range_add + vig;
         match &self.fan {
             Some(fc) => r.max(fc.range),
             None => r,
@@ -3589,6 +3611,28 @@ macro_rules! collide_pass {
                 let gold = $s.projectiles[$p].spec.cash_on_pop.as_ref().filter(|c| $s.defs[$s.bloons[i].kind].tags.contains(&c.tag)).map(|c| c.amount as f64);
                 let tally0 = $s.damage_tally;
                 $s.distribute = ($s.projectiles[$p].spec.distribute, $s.projectiles[$p].spec.distribute_override);
+                // EmitOnDamage.Collide (VERIFIED-DISASM @0xcbb8c0) asks Bloon.WillDamageBloon rather
+                // than looking at a damage done: its fragments are made before the hit's pops
+                // (recording desperado_005h rt 1338: a pellet's three Shrapnel get ids before the
+                // Desert Phantom explosion of the Yellow it popped, and hit first).
+                if $s.projectiles[$p].spec.on_contact.iter().any(|c| c.on_damage && !c.on_pop) {
+                    let pr = &$s.projectiles[$p];
+                    let heading = if pr.spec.instant && pr.target.is_some() { (bp[1] - pr.origin[1]).atan2(bp[0] - pr.origin[0]) } else { pr.vel[1].atan2(pr.vel[0]) };
+                    let (tiers, owner) = (pr.tiers, pr.owner);
+                    let grot = pr.grot.or_else(|| $s.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).map(|r| { let d = game_dir(r); RAD2DEG * crt_atan2(d[0], -d[1]) }));
+                    let early: Vec<_> = pr.spec.on_contact.iter().filter(|c| c.on_damage && !c.on_pop).cloned().collect();
+                    for c in early {
+                        let start = $s.projectiles.len();
+                        $s.emit_z = hit_z;
+                        $s.emit_rot = grot;
+                        $s.emit(bp, heading, &c.emission, &c.projectile, None, tiers, owner);
+                        $s.emit_rot = None;
+                        $s.emit_z = 0.0;
+                        for pr in &mut $s.projectiles[start..] {
+                            pr.hit.push(layer);
+                        }
+                    }
+                }
                 let n = $s.damage(i, dmg.round() as i32, &mut $kids);
                 $s.distribute = (true, false);
                 // FreezeModel.applyAfterDamage: Projectile.CollideBloon runs the behaviours by
@@ -3837,6 +3881,10 @@ macro_rules! collide_pass {
                 // bloon, along the shot's own rotation, and puts the bloon in each new
                 // projectile's collidedWith (recording sniper_025: Shrapnel fragments fan
                 // round the shot's -68.67 and fly through their MOAB at pierce 2).
+                if c.on_damage && !c.on_pop {
+                    // (Made before the damage, above.)
+                    continue;
+                }
                 if c.on_damage {
                     now_after.push((bp, c.clone(), Some(layer)));
                     continue;
@@ -8314,7 +8362,7 @@ impl Game {
                     // on at 533, the rate back at 1433.)
                     if self.round_clock - at < duration as i64 {
                         b.rate_mult *= rate;
-                        b.range_add += range;
+                        b.vig_range += range;
                     }
                 }
                 // MonkeyBoost (a Power, powers.rs): the rate x rateScale while it lasts.
@@ -9186,7 +9234,7 @@ impl Game {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             if let Some(b) = self.buffs.get(t) {
-                (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits()).hash(&mut h);
+                (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.vig_range.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits()).hash(&mut h);
             }
             h.finish()
         };
@@ -9799,10 +9847,26 @@ impl Game {
             // whose BloonDistanceRateBonus and Standoff look at the bloons now (Attack.GetVisibleTarget
             // Close / GetVisibleTargets; recording desperado_upgrades_r30: x-0-0 to 1-0-0 at 201 turns
             // 72 frames into 66).
+            let buff_changed = self.towers[t].weapons.iter().any(|st| st.buff_rate != buff.rate_mult * start_mult);
+            // A mutator ending (the Vigilante buff) comes after this frame's Zoned<Bloon>.Process, which
+            // still had the old range: the rate is worked out from the zone refreshed with this frame's
+            // bloons at that range (recording desperado_052 rt 2598: 6 Zebras within 96, one new this
+            // frame, 117 frames; desperado_002 rt 1433).
+            if buff_changed && !model_changed {
+                let p = self.attack_pos(t);
+                let ids_in = |r: f32, bl: &[Bloon]| bl.iter().filter(|b| { let q = b.pos; (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= r * r }).map(|b| b.id).collect::<Vec<u64>>();
+                let bl = std::mem::take(&mut self.bloons);
+                for st in &mut self.towers[t].weapons {
+                    if st.zone_in.is_some() {
+                        st.zone_in = Some(ids_in(st.zone_r, &bl));
+                    }
+                }
+                self.bloons = bl;
+            }
             if model_changed {
                 let mut i = 0;
                 for attack in tier.attacks.iter().chain(extra.iter()) {
-                    let (camo, range) = (attack.camo || buff.camo, buff.range(attack.range));
+                    let (camo, range) = (attack.camo || buff.camo, buff.attack_range(attack));
                     let no_moab = attack.exclude_tags.iter().any(|x| x == "Moabs");
                     let ap = self.attack_pos(t);
                     for w in &attack.weapons {
@@ -9845,6 +9909,7 @@ impl Game {
                         st.vagrant_n = (n.0, st.zone_in.as_ref().map_or(n.1, |z| z.len() as u32));
                     }
                     st.rate_frames = rate_frames(st.rate(w));
+                    if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT chg {} {} dk {} sk {} vag {:?} br {} rf {}", self.round_clock, w.name, st.dist_k, st.standoff_k, st.vagrant_n, st.buff_rate, st.rate_frames); } // DBGX
                 }
             }
             if has_vagrant {
@@ -9904,7 +9969,7 @@ impl Game {
                         if !self.towers[t].weapons[i].ready(clock) || !(self.sandbox || self.round_active || !self.bloons.is_empty()) {
                             continue;
                         }
-                        match self.brew_target(t, brew, buff.range(attack.range)) {
+                        match self.brew_target(t, brew, buff.attack_range(attack)) {
                             Some(o) => {
                                 self.towers[t].weapons[i].last = clock;
                                 let to = self.towers[o].pos;
@@ -9965,7 +10030,7 @@ impl Game {
                 let mut best_off = [0.0f32; 2];
                 let mut best_circle: Option<u8> = None;
                 let mut any_target = false;
-                let (camo, range) = (attack.camo || buff.camo, buff.range(attack.range));
+                let (camo, range) = (attack.camo || buff.camo, buff.attack_range(attack));
                 // STAND-IN P-SHARED: Advanced Intel shares the ranges of all other placed towers
                 // (not sub-towers), each at its own buffed range.
                 let shared: Vec<([f32; 2], f32)> = if attack.shared_range {
@@ -10610,8 +10675,14 @@ impl Game {
                         // (BurstWeaponBehavior.Process sets it after the weapon's own Process: it is aimed
                         // with from the frame after the weapon became ready; rt 139, lastEmission 156.)
                         (st.burst_left != b.count && st.ready(clock - 1)).then(|| {
+                            // (Set as last frame's weapon processing ended, with the tower's rotation
+                            // then: recording desperado_003 rt 952, the pistol turning the tower to a
+                            // Lead first leaves the shotgun's point, and the tower, at 67.03.)
+                            if let Some(q) = st.empty_pt {
+                                return (0.0, q, 0u64);
+                            }
                             let d = game_dir(tw.game_rot.unwrap_or(0.0));
-                            let r = buff.range(attack.range);
+                            let r = buff.attack_range(attack);
                             // (From the tower's position raised 10 in display space, RotateToTarget's
                             // useThrowMarkerHeight off: the point the tower already faces, so it doesn't
                             // turn; recording desperado_005 rt 171, the shell from -16.44.)
@@ -10689,6 +10760,7 @@ impl Game {
                             let aim_from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
                             tw.game_rot = Some(RAD2DEG * crt_atan2(target[0] - aim_from[0], -(target[1] - aim_from[1])));
                             tw.turret_rel = tw.game_rot.unwrap() - tw.base_rot;
+                            if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM turn rt {} w {} aim {} rot {:?}", self.round_clock, w, aim_id, tw.game_rot); } // DBGX
                         }
                     }
                     if let (Some(p), false) = (started, ambient) {
@@ -10705,6 +10777,13 @@ impl Game {
                                 h.show = Some(("AttackParent03".into(), 0.0));
                             }
                         }
+                    }
+                    if spawns == 0 && weapon.burst.as_ref().is_some_and(|b| b.always_empty && !b.over_time) {
+                        let tw = &mut self.towers[t];
+                        let d = game_dir(tw.game_rot.unwrap_or(0.0));
+                        let r = buff.attack_range(attack);
+                        let from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
+                        tw.weapons[w].empty_pt = Some([from[0] + d[0] * r, from[1] + d[1] * r]);
                     }
                     let tw = &mut self.towers[t];
                     let st = &mut tw.weapons[w];
@@ -10822,6 +10901,7 @@ impl Game {
                             let body_rot = (!body_turns && (target_id == 0 || tw.sub.is_none())).then(|| tw.game_rot.unwrap_or(0.0));
                             if grot.is_some() && body_turns {
                                 tw.game_rot = grot;
+                                if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM emitrot rt {} w {} target {} rot {:?}", self.round_clock, w, target_id, grot); } // DBGX
                                 tw.turret_rel = grot.unwrap() - tw.base_rot;
                                 // On a turning base the turret's angle is its base's plus its own
                                 // (TransformBehavior), as the shot reads it (recording
@@ -11508,6 +11588,13 @@ impl Game {
                                 st.last = clock + bf.frames as i64 - st.rate_frames;                                if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT burst w{w} clock {clock} frames {} rf {} -> {}", bf.frames, st.rate_frames, st.last); } // DBGX
                             }
                         }
+                    if weapon.burst.as_ref().is_some_and(|b| b.always_empty && !b.over_time) {
+                        let tw = &mut self.towers[t];
+                        let d = game_dir(tw.game_rot.unwrap_or(0.0));
+                        let r = buff.attack_range(attack);
+                        let from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
+                        tw.weapons[w].empty_pt = Some([from[0] + d[0] * r, from[1] + d[1] * r]);
+                    }
                     }
                 }
             }
@@ -11519,13 +11606,14 @@ impl Game {
             {
                 let mut wi = 0;
                 for attack in tier.attacks.iter().chain(extra.iter()) {
-                    let r = buff.range(attack.range);
+                    let r = buff.attack_range(attack);
                     for w in &attack.weapons {
                         if w.vagrant.is_some() {
                             let p = self.attack_pos(t);
-                            let ids: Vec<u64> = self.bloons.iter().filter(|b| (b.pos[0] - p[0]).powi(2) + (b.pos[1] - p[1]).powi(2) <= r * r).map(|b| b.id).collect();
+                            let ids: Vec<u64> = self.bloons.iter().filter(|b| { let q = b.pos; (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= r * r }).map(|b| b.id).collect();
                             if let Some(st) = self.towers[t].weapons.get_mut(wi) {
                                 st.zone_in = Some(ids);
+                                st.zone_r = r;
                             }
                         }
                         wi += 1;
@@ -11926,6 +12014,7 @@ impl Game {
             let Some([_, _, duration, cooldown]) = self.tier(t).and_then(|tr| tr.vigilante) else { continue };
             let since = self.towers[t].vigilante_at.map(|a| now - a);
             let (duration, cool) = (duration as i64, ((1.0f32 / (0.0 + 1.0)) * cooldown * (1.0 / 60.0) * 60.0) as i64);
+            if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM vig now {now} since {since:?} dur {duration} cool {cool}"); } // DBGX
             if since.is_some_and(|s| s <= duration + cool) {
                 continue;
             }
@@ -11937,7 +12026,7 @@ impl Game {
             let p = self.towers[t].pos;
             let n = self.towers[t].vagrant_zone.unwrap_or_else(|| self.vagrant_counts(t, p));
             for st in &mut self.towers[t].weapons {
-                if let Some(w) = ws.iter().find(|w| w.name == st.key.0) {
+                if let Some(w) = ws.iter().filter(|w| w.name == st.key.0).nth(st.key.1.max(1) as usize - 1) {
                     st.buff_rate *= rate;
                     if w.vagrant.is_some() {
                         st.vagrant_n = (n.0, st.zone_in.as_ref().map_or(n.1, |z| z.len() as u32));
@@ -15443,7 +15532,7 @@ mod tests {
                     eprintln!("  rt {rt} clone effects {:?}", g.bloons.iter().map(|b| (b.id, b.effects.iter().map(|e| (e.id.clone(), e.frames_left, if let EffectKind::Dot { tick, .. } = e.kind { tick } else { f32::NAN })).collect::<Vec<_>>())).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone darts {:?}", g.projectiles.iter().map(|p| (p.pos, p.vel, p.pierce, p.frames_left, p.grot, p.z, g.blocker_hit(p.prev, p.spec.vs_blocker_radius, p.z), p.target.is_some(), p.aim, p.seek, p.seek_t)).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone towerpos {:?}", g.towers.iter().map(|t| (t.pos[0], -t.pos[1])).collect::<Vec<_>>());
-                    eprintln!("  rt {rt} clone towers {:?}", g.towers.iter().enumerate().map(|(i, t)| (t.game_rot, t.base_rot, g.range(i), t.weapons.iter().map(|w| (w.last, w.anim)).collect::<Vec<_>>(), t.orbit.as_ref().map(|o| (o.speed, o.angle, o.seen)))).collect::<Vec<_>>());
+                    eprintln!("  rt {rt} clone towers {:?}", g.towers.iter().enumerate().map(|(i, t)| (t.game_rot, t.base_rot, g.range(i), t.weapons.iter().map(|w| (w.last, w.anim, w.rate_frames)).collect::<Vec<_>>(), t.orbit.as_ref().map(|o| (o.speed, o.angle, o.seen)))).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone hits {:?} layers {:?}", g.projectiles.iter().map(|p| (p.hit.small.clone(), p.clear_t, p.clear_hits_next)).collect::<Vec<_>>(), g.bloons.iter().map(|b| (b.id, b.layer, b.lineage.clone())).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone subpos {:?}", g.towers.iter().filter(|t| t.sub.is_some()).map(|t| (t.pos, t.game_rot, t.sub.as_ref().and_then(|s| s.path_index))).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone plist {:?} live {:?}", g.proj_list, g.projectiles.iter().map(|p| p.uid).collect::<Vec<_>>());

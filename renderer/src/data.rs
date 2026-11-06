@@ -930,6 +930,9 @@ pub struct Attack {
     /// FilterIfAttackHasTargetModel.attackName: no target while that attack's hadValidTarget is set.
     #[serde(default)]
     pub if_target_attack: Option<String>,
+    /// AttackModel.fixedRange: VigilanteMutator leaves its range alone.
+    #[serde(default)]
+    pub fixed_range: bool,
     /// TargetTrackModel.maxOffset: aims at a random spot on the track in range (caltrops).
     #[serde(default)]
     pub track_target: Option<f32>,
