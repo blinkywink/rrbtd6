@@ -70,6 +70,8 @@ public class Scenario
     /// After this many recorded frames every ability is activated (Ability.Activate(true): cooldown
     /// ignored); -1 never.
     public int ability { get; set; } = -1;
+    /// Recorded frames [first, last] to log the bloon grid's buckets for (GB lines).
+    public int[] gridlog { get; set; }
     /// Effect capture (<name>.fx): every rendered frame while fx_from <= recorded frames <= fx_to,
     /// the camera and each active particle system (with its particles), sprite and TextMeshPro
     /// text whose hierarchy path contains one of fx_filter (all when empty). Use with fast false.
@@ -1278,7 +1280,7 @@ static class CollideBloonPatch
         {
             w.WriteLine($"H {__instance.Id.Id} {(__0 == null ? -1 : __0.Id.Id)} {(__0 == null ? 0 : __0.health)} {Recorder.F(__instance.pierce)}");
             // The bloon's state: "HB bloon model destroyed".
-            if (__0 != null) w.WriteLine($"HB {__0.Id.Id} {__0.bloonModel?.id} {__0.IsDestroyed}");
+            if (__0 != null) w.WriteLine($"HB {__0.Id.Id} {__0.bloonModel?.id} {__0.IsDestroyed} {Recorder.F(__0.Radius)}");
             // A projectile's first collisions (age 0-1): native callers ("HS projectile rva ...").
             if (__instance.Age <= 1 && HitStack.Count++ < 400) w.WriteLine("HS " + __instance.Id.Id + HitStack.Callers());
         }
@@ -1398,6 +1400,33 @@ static class EliteSortPatch
     {
         if (Recorder.Out == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
         try { Recorder.Out.WriteLine($"ES {(__0 == null ? -1 : __0.Id.Id)} {Recorder.F(__result)}"); } catch (Exception) { }
+    }
+}
+
+// The bloon grid as CollisionChecker.Process finds it (before it runs), for frames listed in the
+// scenario's gridlog: "GB bucket bloon ..." (written before the frame's F line).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Physics.CollisionChecker), "Process")]
+static class GridLogPatch
+{
+    static void Prefix(Il2CppAssets.Scripts.Simulation.Physics.CollisionChecker __instance)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Sc.gridlog == null) return;
+        int f = Recorder.Recorded;
+        if (f < Recorder.Sc.gridlog[0] || f > Recorder.Sc.gridlog[1]) return;
+        try
+        {
+            var bb = __instance.BloonGrid.buckets;
+            for (int k = 0; k < bb.Length; k++)
+            {
+                var bk = bb[k];
+                if (bk == null || bk.collidables == null || bk.collidables.Count == 0) continue;
+                var sb = new StringBuilder($"GB {k}");
+                for (int j = 0; j < bk.collidables.Count; j++) sb.Append(' ').Append(bk.collidables[j].Id.Id);
+                w.WriteLine(sb.ToString());
+            }
+        }
+        catch (Exception) { }
     }
 }
 

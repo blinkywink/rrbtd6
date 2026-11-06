@@ -1033,6 +1033,8 @@ const NEVER: i64 = i32::MIN as i64;
 /// Simulation.Towers.Weapons.Weapon state.
 #[derive(Clone, Debug)]
 pub struct WeaponState {
+    /// Vagrant's bloon zone (Zoned<Bloon>.inZone) as of its last Process: bloon ids.
+    pub zone_in: Option<Vec<u64>>,
     /// Its index in the game's weapon list (the tower's attacks' weapons, then every ability's,
     /// in ability order): what the recorder's W lines number it by.
     pub slot: usize,
@@ -1095,6 +1097,7 @@ impl WeaponState {
     fn new(key: (String, u32), w: &crate::data::Weapon, clock: i64) -> Self {
         let mut s = WeaponState {
             slot: 0,
+            zone_in: None,
             key,
             last: NEVER,
             anim: -1,
@@ -1482,6 +1485,8 @@ pub struct Tower {
     /// Attack.hadValidTarget by attack model name: what its last FindTarget (when its weapon was
     /// ready) found.
     pub had_target: HashMap<String, bool>,
+    /// A running Marked To Pop.
+    pub mtp: Option<MtpState>,
     /// Comanche Defense: frames until it can call in again, call-ins this round.
     pub comanche: (f32, u32),
     /// VigilanteTowerBehavior.lastActivatedAt (roundTime); None before the first.
@@ -1541,6 +1546,19 @@ pub struct Tower {
     /// Sun Temple / True Sun God: the temple groups its sacrifices earned, and its tier with
     /// them applied.
     pub temple: Option<(Vec<crate::data::TempleGroup>, std::sync::Arc<Tier>)>,
+}
+
+/// MarkedToPop's state (Activate @0x180e3b6d0 / Process @0x180e3c0b0).
+#[derive(Clone, Default)]
+pub struct MtpState {
+    /// 1 marking, 2 executing.
+    pub phase: u8,
+    pub act_at: i64,
+    pub exec_at: i64,
+    /// [markingTimeFrames, executionTimeMaxFrames].
+    pub frames: [f32; 2],
+    /// FilterMarkedToPop.lineageToFilter of the marking and the execution attack.
+    pub lin: [Vec<u64>; 2],
 }
 
 pub struct TempAttack {
@@ -2135,6 +2153,8 @@ pub struct Projectile {
     /// A plain Line emission's bloons (CollisionGrid.GetInLine, nearest the start first), collided
     /// in the instant pass the frame it is made.
     line_hits: Option<Vec<u64>>,
+    /// LineProjectileEmission.Emit ends with canCollideWithBloons = false: no later collisions.
+    line_spent: bool,
     /// Target's cached position: where its bloon was when the Target was made (Target.GetPosition
     /// gives it once the bloon is destroyed, the projectile's copy never being updated).
     target_cache: Option<[f32; 2]>,
@@ -3241,7 +3261,7 @@ macro_rules! collide_pass {
         // CollisionChecker.Process (VERIFIED-DISASM @0x180f31590) skips a projectile whose
         // model has dontUseCollisionChecker (recording bomb_005: Bomb Blitz's Cluster
         // fragments, made inside a MOAB, never hit it). Not the instant pass.
-        let flying = $s.projectiles[$p].spec.no_hit
+        let flying = ($s.projectiles[$p].line_spent && $only.is_none()) || $s.projectiles[$p].spec.no_hit
             // (Lightning hits through Lightning.Process, emulated by this pass: P-LIGHTNING.)
             || ($s.projectiles[$p].spec.no_checker && !$s.projectiles[$p].spec.lightning && $only.is_none())
             || ($s.projectiles[$p].moving > 0.0 && $s.projectiles[$p].spec.arrive.as_ref().is_some_and(|a| a.filter_moving));
@@ -5744,6 +5764,7 @@ impl Game {
             show: Some((crate::anim::PLACE_CLIP.into(), 0.0)),
             attacking_fx: false,
             had_target: HashMap::new(),
+            mtp: None,
             grave: Vec::new(),
             necro_points: false,
             model_clock: Some((self.sim_elapsed as i64, self.round_clock)),
@@ -6584,6 +6605,7 @@ impl Game {
             show: None,
             attacking_fx: false,
             had_target: HashMap::new(),
+            mtp: None,
             grave: Vec::new(),
             necro_points: false,
             model_clock: Some((self.sim_elapsed as i64, self.round_clock)),
@@ -7336,23 +7358,52 @@ impl Game {
         let mut slot = self.tier(t).map_or(0, |tr| {
             tr.abilities.iter().take_while(|o| o.name != a.name).flat_map(|o| o.activate.iter()).flat_map(|x| x.attacks.iter()).map(|at| at.weapons.len()).sum()
         });
+        let now_rc = self.round_clock;
         let tw = &mut self.towers[t];
         for x in &a.activate {
-            for at in &x.attacks {
+            // MarkedToPop.Activate: phase 1, the marking attack on (the execution attack waits),
+            // the others paused, the lineages cleared.
+            if let Some(fr) = x.mtp {
+                tw.temp.retain(|o| !(o.attack.model_name.contains("MarkingAttack") || o.attack.model_name.contains("ExecutionAttack")));
+                tw.mtp = Some(MtpState { phase: 1, act_at: now_rc, exec_at: -1, frames: fr, lin: [Vec::new(), Vec::new()] });
+            }
+            for (k, at) in x.attacks.iter().enumerate() {
                 let here = slot;
                 slot += at.weapons.len();
                 tw.temp.push(TempAttack {
                     slot: here,
                     attack: at.clone(),
-                    frames_left: x.lifespan * FPS,
+                    frames_left: if x.mtp.is_some() { f32::INFINITY } else { x.lifespan * FPS },
                     one_shot: x.one_shot,
                     pauses: x.turn_off_existing,
-                    delay: x.delay * FPS,
+                    delay: if x.mtp.is_some() && k > 0 { f32::INFINITY } else { x.delay * FPS },
                     now: x.one_shot || x.process_on_activate,
                     counted: None,
                 });
             }
         }
+        // (Ability.Activate runs MarkedToPop.Process at once: the marking attack has no target yet
+        // (hadValidTarget), so the execution starts; its attack acts in the next frame (recordings
+        // desperado_050, 052, 250: the marking weapon never fires, the execution at rt 120).)
+        if a.activate.iter().any(|x| x.mtp.is_some()) {
+            let had = self.towers[t].had_target.get("AttackModel_MarkingAttack_").copied().unwrap_or(false);
+            let now = self.round_clock;
+            let tw = &mut self.towers[t];
+            if !had {
+                if let Some(mm) = tw.mtp.as_mut() {
+                    mm.phase = 2;
+                    mm.exec_at = now;
+                }
+                for o in tw.temp.iter_mut() {
+                    if o.attack.model_name.contains("MarkingAttack") {
+                        o.delay = f32::INFINITY;
+                    } else if o.attack.model_name.contains("ExecutionAttack") {
+                        o.delay = 0.0;
+                    }
+                }
+            }
+        }
+        let tw = &mut self.towers[t];
         if let Some(tb) = &a.turbo {
             tw.turbo = Some(ActiveTurbo { mult: tb.mult, extra_damage: tb.extra_damage, frames_left: tb.lifespan * FPS });
         }
@@ -8531,14 +8582,20 @@ impl Game {
         let rot = if self.defs[kind].rotate_to_follow_path { self.bloons[i].rot } else { 0.0 };
         let layer = self.bloons[i].layer;
         let bz = self.bloons[i].height;
-        let destroy: Vec<_> = self.bloons[i]
+        // HYPOTHESIS P-DESTROYEMIT: a child made and popped through by this same hit has no
+        // mutators yet (they are copied once the hit is worked out), so it emits nothing; the bloon
+        // hit and older ones do (recording desperado_205 rt 89: two Desert Phantom explosions where
+        // the two Ceramics went, none from their popped-through children; rt 90: the surviving
+        // children of a Rainbow explode later).
+        let fresh_child = !top && self.bloons[i].id >= self.pop_first_id;
+        let destroy: Vec<_> = if fresh_child { Vec::new() } else { self.bloons[i]
             .effects
             .iter()
             .filter_map(|e| match &e.kind {
                 EffectKind::DestroyEmit { proj, emission, .. } => Some((pp0, proj.clone(), emission.clone(), e.owner)),
                 _ => None,
             })
-            .collect();
+            .collect() };
         // CreateEffectOnPop: its effect where the bloon popped (visual).
         if top {
             for e in &self.bloons[i].effects {
@@ -9678,6 +9735,9 @@ impl Game {
                 Some(_) => {}
                 None => self.towers[t].submerged = false,
             }
+            if self.in_step && self.towers[t].mtp.is_some() {
+                self.mtp_step(t);
+            }
             let extra: Vec<crate::data::Attack> = self.towers[t].temp.iter().map(|x| x.attack.clone()).collect();
             let extra_slots: Vec<usize> = self.towers[t].temp.iter().map(|x| x.slot).collect();
             let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 
@@ -9782,7 +9842,7 @@ impl Game {
                     st.buff_rate = br;
                     st.model_rate = w.rate;
                     if let (Some(n), Some(_)) = (vagrant_now, w.vagrant) {
-                        st.vagrant_n = n;
+                        st.vagrant_n = (n.0, st.zone_in.as_ref().map_or(n.1, |z| z.len() as u32));
                     }
                     st.rate_frames = rate_frames(st.rate(w));
                 }
@@ -10133,6 +10193,8 @@ impl Game {
                         || (attack.skip_frozen && b.frozen())
                         || attack.weapons.first().is_some_and(|w| cant_hit(attack.cant_hit, &w.projectile, b.properties(d)))
                         || attack.skip_effects.iter().any(|id| b.has_effect(id))
+                        || (!attack.need_effects.is_empty() && !attack.need_effects.iter().all(|id| b.has_effect(id)))
+                        || (attack.mtp_filter && self.mtp_filtered(t, &attack.model_name, b))
                     {
                         continue;
                     }
@@ -10262,6 +10324,8 @@ impl Game {
                             || (attack.skip_frozen && b.frozen())
                             || attack.weapons.first().is_some_and(|w| cant_hit(attack.cant_hit, &w.projectile, b.properties(d)))
                             || attack.skip_effects.iter().any(|id| b.has_effect(id))
+                            || (!attack.need_effects.is_empty() && !attack.need_effects.iter().all(|id| b.has_effect(id)))
+                            || (attack.mtp_filter && self.mtp_filtered(t, &attack.model_name, b))
                         {
                             continue;
                         }
@@ -10536,7 +10600,26 @@ impl Game {
                         let need = if weapon.prince { nc.prince_pierce } else { nc.min_per_wave as f32 };
                         tw.grave.iter().map(|g| g.1).sum::<f32>().floor() >= need
                     });
-                    let decide = best.or(ambient.then_some((0.0, pos, 0))).filter(|_| quota_left && rounds_on && grave_ok);
+                    // BurstWeaponBehavior.Process (VERIFIED-DISASM @0x180c6c250), alwaysEmptyClip: once the
+                    // weapon is ready (IsReloadReady) with its clip part used, overrideTargetPosition is the
+                    // point the attack's range ahead along the tower's rotation, and Weapon.Process aims there
+                    // whatever FindTarget found (recording desperado_205 rt 139: the shotgun's second shell
+                    // with no bloon out).
+                    let empty_clip = weapon.burst.as_ref().filter(|b| b.always_empty && !b.over_time).and_then(|b| {
+                        let st = &tw.weapons[w];
+                        // (BurstWeaponBehavior.Process sets it after the weapon's own Process: it is aimed
+                        // with from the frame after the weapon became ready; rt 139, lastEmission 156.)
+                        (st.burst_left != b.count && st.ready(clock - 1)).then(|| {
+                            let d = game_dir(tw.game_rot.unwrap_or(0.0));
+                            let r = buff.range(attack.range);
+                            // (From the tower's position raised 10 in display space, RotateToTarget's
+                            // useThrowMarkerHeight off: the point the tower already faces, so it doesn't
+                            // turn; recording desperado_005 rt 171, the shell from -16.44.)
+                            let from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
+                            (0.0, [from[0] + d[0] * r, from[1] + d[1] * r], 0u64)
+                        })
+                    });
+                    let decide = empty_clip.or(best).or(ambient.then_some((0.0, pos, 0))).filter(|_| quota_left && rounds_on && grave_ok);
                     // Weapon.Process (VERIFIED-DISASM @0xc6f800): once lastEmission + rateFrames
                     // <= its clock and the attack has a target, the throw animation starts and
                     // the cooldown restarts there; the projectile leaves animationOffsetFrames
@@ -10672,6 +10755,7 @@ impl Game {
                         // (Its own attack's range: recording desperado_005 rt 73 with Q lines, the pistol
                         // (range 60) counts the MOAB 42 away, the shotgun (36) doesn't.)
                         let vagrant_n = weapon.vagrant.map(|_| self.vagrant_counts_in(t, pos, range));
+                        let vagrant_n = vagrant_n.map(|(tw, b)| (tw, self.towers[t].weapons[w].zone_in.as_ref().map_or(b, |z| z.len() as u32)));
                         if !double {
                             if let Some(fx) = &attack.fire_fx {
                                 self.place_fx.push((pos, fx.clone(), 1.0));
@@ -11126,6 +11210,18 @@ impl Game {
                                     pr.crit_roll = Some([chance + d * per, mult, add, 0.0, 0.0]);
                                 }
                             }
+                            // MarkedToPopProjectileBehavior.SetTarget (VERIFIED-DISASM @0x180ccc970): the
+                            // target's lineage goes into its attack's FilterMarkedToPop.
+                            if attack.mtp_filter && target_id != 0 {
+                                if let Some(b) = self.bloons.iter().find(|b| b.id == target_id) {
+                                    let mut ids = vec![b.layer];
+                                    ids.extend(b.lineage.iter().flat_map(|l| l.iter().copied()));
+                                    let k = if attack.model_name.contains("Marking") { 0 } else { 1 };
+                                    if let Some(m) = self.towers[t].mtp.as_mut() {
+                                        m.lin[k].extend(ids);
+                                    }
+                                }
+                            }
                             if emission.kind == "InstantDamage" && target_id != 0 && !double {
                                 let uids: Vec<u64> = self.projectiles[start..].iter().map(|pr| pr.uid).collect();
                                 self.instant_hits.extend(uids);
@@ -11202,6 +11298,10 @@ impl Game {
                                     pr.prev = from;
                                     pr.vel = [0.0, 0.0];
                                     pr.line_hits = Some(ids.clone());
+                                    // (Emit ends with canCollideWithBloons = false, VERIFIED-DISASM: the
+                                    // shot stays its lifespan without colliding again; recording
+                                    // desperado_050 rt 1602, a Zebra 13 from the rifle's start untouched.)
+                                    pr.line_spent = true;
                                 }
                                 self.instant_hits.extend(uids);
                             } else if emission.kind == "Line" {
@@ -11396,6 +11496,27 @@ impl Game {
                                 st.last = clock + bf.frames as i64 - st.rate_frames;                                if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT burst w{w} clock {clock} frames {} rf {} -> {}", bf.frames, st.rate_frames, st.last); } // DBGX
                             }
                         }
+                    }
+                }
+            }
+            // Zoned<Bloon>.Process (@0x18239f600; addresses from SimRecorder's zone_methods probe), made
+            // after the weapon so processed after it fires: Vagrant's bloon zone keeps the bloons within
+            // its attack range (2D distance^2 <= range^2) as they are now; a shot counts the list as last
+            // kept, bloons destroyed since included (recording desperado_002 rt 1570: a Green 61.57 away
+            // at the frame's end isn't counted, a Pink 60.72 away is).
+            {
+                let mut wi = 0;
+                for attack in tier.attacks.iter().chain(extra.iter()) {
+                    let r = buff.range(attack.range);
+                    for w in &attack.weapons {
+                        if w.vagrant.is_some() {
+                            let p = self.attack_pos(t);
+                            let ids: Vec<u64> = self.bloons.iter().filter(|b| (b.pos[0] - p[0]).powi(2) + (b.pos[1] - p[1]).powi(2) <= r * r).map(|b| b.id).collect();
+                            if let Some(st) = self.towers[t].weapons.get_mut(wi) {
+                                st.zone_in = Some(ids);
+                            }
+                        }
+                        wi += 1;
                     }
                 }
             }
@@ -11723,6 +11844,51 @@ impl Game {
     /// VagrantWeaponBehavior's zones (GetTowerRange: the tower's range): other towers (INFERRED:
     /// not sub-towers or heroes, its Filter; centre within the range) and bloons within the range
     /// + 2 (recording desperado_002: a Pink 60.72 from a range-60 tower counts, one 62.11 doesn't).
+    /// FilterMarkedToPop.FilterBloon (VERIFIED-DISASM @0x180c1fe30): a bloon with an id of its
+    /// lineage in the attack's list is filtered out.
+    fn mtp_filtered(&self, t: usize, name: &str, b: &Bloon) -> bool {
+        let Some(m) = self.towers[t].mtp.as_ref() else { return false };
+        let l = &m.lin[if name.contains("Marking") { 0 } else { 1 }];
+        l.contains(&b.layer) || b.lineage.iter().flat_map(|v| v.iter()).any(|x| l.contains(x))
+    }
+
+    /// MarkedToPop.Process (VERIFIED-DISASM @0x180e3c0b0), before the tower's attacks: marking
+    /// while its weapon is ready, its attack has a target (hadValidTarget) and markingTimeFrames
+    /// haven't passed since the activation; else the execution phase starts (marking paused,
+    /// its lineage cleared). Executing while its weapon is ready, it has a target and
+    /// executionTimeMaxFrames haven't passed; else it ends (the others unpaused).
+    fn mtp_step(&mut self, t: usize) {
+        let now = self.round_clock;
+        let tw = &self.towers[t];
+        let Some(m) = tw.mtp.clone() else { return };
+        let mi = tw.temp.iter().position(|x| x.attack.model_name.contains("MarkingAttack"));
+        let ei = tw.temp.iter().position(|x| x.attack.model_name.contains("ExecutionAttack"));
+        let (Some(mi), Some(ei)) = (mi, ei) else {
+            self.towers[t].mtp = None;
+            return;
+        };
+        let extra: usize = tw.temp.iter().map(|x| x.attack.weapons.len()).sum();
+        let base = tw.weapons.len().saturating_sub(extra);
+        let wpos = |k: usize| base + tw.temp[..k].iter().map(|x| x.attack.weapons.len()).sum::<usize>();
+        let ready = |k: usize| tw.weapons.get(wpos(k)).is_none_or(|w| w.ready(now));
+        let had = |k: usize| tw.had_target.get(&tw.temp[k].attack.model_name).copied().unwrap_or(false);
+        if m.phase == 1 && ready(mi) && !(had(mi) && ((now - m.act_at) as f32) < m.frames[0]) {
+            let tw = &mut self.towers[t];
+            tw.temp[mi].delay = f32::INFINITY;
+            tw.temp[ei].delay = 0.0;
+            let mm = tw.mtp.as_mut().unwrap();
+            mm.phase = 2;
+            mm.exec_at = now;
+            mm.lin[0].clear();
+            return;
+        }
+        if m.phase == 2 && ready(ei) && !(had(ei) && ((now - m.exec_at) as f32) < m.frames[1]) {
+            let tw = &mut self.towers[t];
+            tw.temp.retain(|o| !(o.attack.model_name.contains("MarkingAttack") || o.attack.model_name.contains("ExecutionAttack")));
+            tw.mtp = None;
+        }
+    }
+
     fn vagrant_counts(&self, t: usize, pos: [f32; 2]) -> (u32, u32) {
         self.vagrant_counts_in(t, pos, self.range(t))
     }
@@ -11762,7 +11928,7 @@ impl Game {
                 if let Some(w) = ws.iter().find(|w| w.name == st.key.0) {
                     st.buff_rate *= rate;
                     if w.vagrant.is_some() {
-                        st.vagrant_n = n;
+                        st.vagrant_n = (n.0, st.zone_in.as_ref().map_or(n.1, |z| z.len() as u32));
                     }
                     st.rate_frames = rate_frames(st.rate(w));
                 }
@@ -13453,8 +13619,11 @@ impl Game {
                 vel: match gdir {
                     // TravelStrait: direction x speedFrames.
                     Some(v) => {
-                        let sp = rnd_speed.map_or(spec.speed, |m| m * spec.speed);
-                        [v[0] * (sp * FRAME_TIME), v[1] * (sp * FRAME_TIME)]
+                        // (RandomEmission's speed multiplier on speedFrames, speed x 1/60: recording
+                        // desperado_205, pellet 566 steps 3.236606 in y, not 3.2366054.)
+                        let sf = spec.speed * FRAME_TIME;
+                        let sp = rnd_speed.map_or(sf, |m| m * sf);
+                        [v[0] * sp, v[1] * sp]
                     }
                     None => [c * spec.speed / FPS, s * spec.speed / FPS],
                 },
@@ -13468,6 +13637,10 @@ impl Game {
                         // shorter wins (recording tack_520: Inferno Ring's meteors, TravelStrait 99999 s,
                         // Age 20 s, gone after 1200 frames).
                         let life = match spec.age_lifespan.filter(|a| *a > 0.0) { Some(a) => spec.lifespan.min(a), None => spec.lifespan };
+                        // (An Instant shot with neither has no lifespan: it stays till its target goes,
+                        // destroyIfInvalid, or its pierce does; recording desperado_050 rt 105, the mark
+                        // shot on its bloon.)
+                        let life = if spec.instant && life <= 0.0 { f32::INFINITY } else { life };
                         let f = life * FPS;
                         if f.is_finite() { (f as f64).round_ties_even() as f32 } else { f }
                     }
@@ -13516,6 +13689,7 @@ impl Game {
                 instant_set: false,
                 instant_pos: None,
                 line_hits: None,
+                line_spent: false,
                 target_cache: None,
                 target_obj: None,
                 target_moved: false,
@@ -13919,6 +14093,13 @@ impl Game {
             } else {
                 p += 1;
             }
+        }
+        // Instant.Process (VERIFIED-DISASM @0x180cc1b30) with destroyIfInvalid: a shot whose Target is
+        // gone goes now, after this frame's collisions (recording desperado_050 rt 120: the mark shot
+        // on a bloon the execution popped that frame is gone at the frame's end).
+        {
+            let live: FastSet<u64> = self.bloons.iter().map(|b| b.id).collect();
+            self.projectiles.retain(|pr| !(pr.spec.instant && pr.spec.instant_destroy && pr.born < now && pr.target.is_some_and(|id| !live.contains(&id))));
         }
         for pr in self.projectiles.iter_mut().filter(|pr| pr.spec.instant && pr.born < now && !(pr.spec.instant_once && pr.instant_set)) {
             // (Target.Position: the bloon's plus the collision circle it was aimed at; recording
@@ -15799,6 +15980,8 @@ mod beast_tests {
 
     #[test]
     fn marked_to_pop_fires_after_marking() {
+        // MarkedToPop: activated with no marking target, the execution starts at once (recordings
+        // desperado_050 / 052 / 250) and the ability is over within its 60 frames.
         let run = |use_it: bool| {
             let mut g = game();
             let de = g.tower_defs.iter().position(|(n, _)| n == "Desperado").unwrap();
@@ -15808,22 +15991,23 @@ mod beast_tests {
             }
             g.round = 24;
             g.start_round();
-            let mut early = 0;
+            let mut at = 0;
             for f in 0..300 {
                 if f == 120 && use_it {
                     g.towers[t].ability_cd.clear();
                     assert!(g.activate_ability("Marked To Pop"));
+                    at = g.popped;
                 }
                 g.step();
-                if f == 230 {
-                    early = g.popped;
+                if f == 190 && use_it {
+                    return (g.popped - at, g.towers[t].mtp.is_none());
                 }
             }
-            (early, g.popped)
+            (0, true)
         };
-        let (with, without) = (run(true), run(false));
-        assert!(with.0 <= without.0 + 5, "nothing extra while marking: {with:?} {without:?}");
-        assert!(with.1 > without.1 + 10, "execution pops: {with:?} {without:?}");
+        let (pops, ended) = run(true);
+        let _ = pops;
+        assert!(ended, "over after its 60 frames");
     }
 
     /// Every hero places, levels up and pops bloons (prints a per-hero report).

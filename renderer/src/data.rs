@@ -921,6 +921,12 @@ pub struct Attack {
     /// FilterMutatedTargetModel: skips bloons carrying an effect with one of these ids.
     #[serde(default)]
     pub skip_effects: Vec<String>,
+    /// FilterMutatedTargetModel inverse: only bloons carrying an effect with one of these ids.
+    #[serde(default)]
+    pub need_effects: Vec<String>,
+    /// FilterMarkedToPopModel: skips bloons whose lineage this activation's shots targeted.
+    #[serde(default)]
+    pub mtp_filter: bool,
     /// FilterIfAttackHasTargetModel.attackName: no target while that attack's hadValidTarget is set.
     #[serde(default)]
     pub if_target_attack: Option<String>,
@@ -1224,6 +1230,9 @@ pub struct BurstFire {
     /// EmissionOverTimeModel (`count` shots per throw), not BurstWeaponBehaviorModel.
     #[serde(default)]
     pub over_time: bool,
+    /// BurstWeaponBehaviorModel.alwaysEmptyClip: a partly used clip fires on ahead when ready.
+    #[serde(default)]
+    pub always_empty: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1933,9 +1942,12 @@ pub struct ActivateAttack {
     /// turnOffExisting: the tower's own attacks pause meanwhile.
     pub turn_off_existing: bool,
     pub attacks: Vec<Attack>,
-    /// Seconds before the attacks start (MarkedToPopModel's marking time).
+    /// Seconds before the attacks start.
     #[serde(default)]
     pub delay: f32,
+    /// MarkedToPopModel: [markingTimeFrames, executionTimeMaxFrames]; attacks [marking, execution].
+    #[serde(default)]
+    pub mtp: Option<[f32; 2]>,
 }
 
 /// One AbilityDamageAllModel (see Ability::damage_all).

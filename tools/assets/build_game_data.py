@@ -990,6 +990,7 @@ def main():
                 targets = tm
             require_tags, exclude_tags, skip_effects = [], [], []
             if_target_attack = None
+            need_effects, mtp_filter = [], False
             # TargetMoabModel (Bomb Shooter's "Boom" attack): MOAB-class bloons first.
             prio_moab = any(x and x["type"] == "TargetMoabModel" for x in items(af["behaviors"]))
             glue_filter, skip_frozen, cant_hit, only_camo = 0, False, 0, False
@@ -1022,6 +1023,13 @@ def main():
                             if_target_attack = flt["f"].get("attackName")
                         if flt and flt["type"] == "FilterMutatedTargetModel" and not flt["f"].get("inverse"):
                             skip_effects.append(flt["f"]["mutationId"])
+                        # (inverse: only bloons carrying it; Marked To Pop's execution.)
+                        if flt and flt["type"] == "FilterMutatedTargetModel" and flt["f"].get("inverse"):
+                            need_effects.append(flt["f"]["mutationId"])
+                        # FilterMarkedToPop.FilterBloon (VERIFIED-DISASM @0x180c1fe30): no bloon whose
+                        # lineage its attack's shots have targeted this activation.
+                        if flt and flt["type"] == "FilterMarkedToPopModel":
+                            mtp_filter = True
             track_target = next((x["f"].get("maxOffset", 0.0) for x in items(af["behaviors"])
                                  if x and x["type"] == "TargetTrackModel"), None)
             track_closest = False
@@ -1049,7 +1057,7 @@ def main():
                     burst = {"count": eot["f"].get("count", 1), "frames": eot["f"].get("timeBetween", 0.0) * 60.0, "over_time": True}
                 for x in items(w["f"].get("behaviors")):
                     if x and x["type"] == "BurstWeaponBehaviorModel":
-                        burst = {"count": x["f"]["count"], "frames": x["f"].get("intervalFrames", 0)}
+                        burst = {"count": x["f"]["count"], "frames": x["f"].get("intervalFrames", 0), "always_empty": bool(x["f"].get("alwaysEmptyClip"))}
                     if x and x["type"] == "EmissionsPerRoundFilterModel":
                         per_round = x["f"]["count"]
                     if x and x["type"] == "CritMultiplierModel":
@@ -1223,7 +1231,7 @@ def main():
                     "range": af["range"], "camo": camo, "rotate": rotate, "turn_rate": turn_rate,
                     "targets": targets, "weapons": weapons,
                     "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
-                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "if_target_attack": if_target_attack, "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
+                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
                     "glue_filter": glue_filter, "skip_frozen": skip_frozen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
                     "while_fx": next(([prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")) or "", prefab_name((deref(x["f"].get("exitEffectModel")) or {"f": {}})["f"].get("assetId")) or ""] for x in items(af["behaviors"]) if x and x["type"] == "CreateEffectWhileAttackingModel"), None),
@@ -1281,13 +1289,13 @@ def main():
                                             "process_on_activate": bool(xf.get("processOnActivate")),
                                             "turn_off_existing": bool(xf.get("turnOffExisting")),
                                             "attacks": [parse_attack(a) for a in items(xf.get("attacks")) if a]})
-                # MarkedToPopModel (Desperado): after markingTimeFrames the execution attack fires
-                # for executionTimeMaxFrames. STAND-IN P-MARK: the marking itself (x2 damage and
-                # cash on marked bloons) isn't modelled; the execution hits any bloon in range.
-                if x["type"] == "MarkedToPopModel" and deref(xf.get("executionAttackModel")):
-                    out["activate"].append({"lifespan": xf.get("executionTimeMaxFrames", 60) / 60.0, "one_shot": False,
-                                            "turn_off_existing": False, "delay": xf.get("markingTimeFrames", 0) / 60.0,
-                                            "attacks": [parse_attack(deref(xf["executionAttackModel"]))]})
+                # MarkedToPopModel (Desperado; MarkedToPop.Activate @0x180e3b6d0 / Process @0x180e3c0b0):
+                # the marking attack, then the execution attack, the tower's others paused; see
+                # Game::mtp_step. [markingTimeFrames, executionTimeMaxFrames].
+                if x["type"] == "MarkedToPopModel" and deref(xf.get("executionAttackModel")) and deref(xf.get("markingAttackModel")):
+                    out["activate"].append({"lifespan": 0.0, "one_shot": False, "turn_off_existing": True,
+                                            "mtp": [xf.get("markingTimeFrames", 0), xf.get("executionTimeMaxFrames", 0)],
+                                            "attacks": [parse_attack(deref(xf["markingAttackModel"])), parse_attack(deref(xf["executionAttackModel"]))]})
                 if x["type"] == "TurboModel":
                     out["turbo"] = {"lifespan": xf.get("lifespan", 0.0), "mult": xf.get("multiplier", 1.0),
                                     "extra_damage": xf.get("extraDamage", 0)}
