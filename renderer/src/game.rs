@@ -1033,6 +1033,9 @@ const NEVER: i64 = i32::MIN as i64;
 /// Simulation.Towers.Weapons.Weapon state.
 #[derive(Clone, Debug)]
 pub struct WeaponState {
+    /// Its index in the game's weapon list (the tower's attacks' weapons, then every ability's,
+    /// in ability order): what the recorder's W lines number it by.
+    pub slot: usize,
     /// Weapon name and occurrence (the k-th of that name): how a model change finds the same
     /// weapon.
     pub key: (String, u32),
@@ -1090,6 +1093,7 @@ pub struct WeaponState {
 impl WeaponState {
     fn new(key: (String, u32), w: &crate::data::Weapon, clock: i64) -> Self {
         let mut s = WeaponState {
+            slot: 0,
             key,
             last: NEVER,
             anim: -1,
@@ -1548,6 +1552,10 @@ pub struct TempAttack {
     pub now: bool,
     /// The round clock its lifespan was last counted at.
     pub counted: Option<i64>,
+    /// Its first weapon's place among the ability weapons as the game lists them: every ability's
+    /// ActivateAttack weapons are dependants from the start, in the abilities' order (recording
+    /// sniper_050: Tier5AmmoSwap's never-firing one before the Supply Drop's).
+    pub slot: usize,
 }
 
 /// One ability button: every tower's copy of the ability `name`.
@@ -2122,10 +2130,6 @@ pub struct Projectile {
     instant_pos: Option<[f32; 2]>,
     /// Target's cached position: where its bloon was when the Target was made (Target.GetPosition
     /// gives it once the bloon is destroyed, the projectile's copy never being updated).
-    /// A missed-frame extra InstantDamage shot, its collision still to come (P-INSTANTDOUBLE).
-    pub double_hit: bool,
-    /// That shot's target was popped by the frame's first shot: see towers_phase.
-    pub double_lost: bool,
     target_cache: Option<[f32; 2]>,
     /// The factory object its Target's bloon lives in: pooled and reused, the Target follows
     /// the new bloon's position though no longer valid (recording sub_050: a blast on the Pink
@@ -6320,10 +6324,16 @@ impl Game {
                 }
             }
         }
+        let mut slot = self.tier(t).map_or(0, |tr| {
+            tr.abilities.iter().take_while(|o| o.name != a.name).flat_map(|o| o.activate.iter()).flat_map(|x| x.attacks.iter()).map(|at| at.weapons.len()).sum()
+        });
         let tw = &mut self.towers[t];
         for x in &a.activate {
             for at in &x.attacks {
+                let here = slot;
+                slot += at.weapons.len();
                 tw.temp.push(TempAttack {
+                    slot: here,
                     attack: at.clone(),
                     frames_left: x.lifespan * FPS,
                     one_shot: x.one_shot,
@@ -8656,6 +8666,7 @@ impl Game {
                 None => self.towers[t].submerged = false,
             }
             let extra: Vec<crate::data::Attack> = self.towers[t].temp.iter().map(|x| x.attack.clone()).collect();
+            let extra_slots: Vec<usize> = self.towers[t].temp.iter().map(|x| x.slot).collect();
             let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 
                 // ParagonTower's pause starts after its first frame: an attack with a target in range
                 // then throws once (recordings boomerang_paragon_r63 / r90: at the purchase, then
@@ -8685,6 +8696,13 @@ impl Game {
                         }
                     })
                     .collect();
+            }
+            {
+                let tw = &mut self.towers[t];
+                let slots: Vec<usize> = (0..base_weapons).chain(extra.iter().zip(&extra_slots).flat_map(|(x, &sl)| (0..x.weapons.len()).map(move |k| base_weapons + sl + k))).collect();
+                for (i, st) in tw.weapons.iter_mut().enumerate() {
+                    st.slot = slots.get(i).copied().unwrap_or(i);
+                }
             }
             self.towers[t].model_clock = None;
             let pos = self.attack_pos(t);
@@ -8907,6 +8925,7 @@ impl Game {
                     };
                 }
                 let mut best_key = f64::NEG_INFINITY;
+                let mut best_tie = (false, i64::MIN, i64::MIN);
                 if use_segment_cache && shared.is_empty() {
                     self.target_index_mut();
                 }
@@ -9029,6 +9048,15 @@ impl Game {
                             })
                             .is_some()
                     });
+                    // Targetting.GetTargets (VERIFIED-DISASM @0x180fdbe70), which Elite sorts: a MOAB
+                    // reached by a collision circle (CanHitMoab) becomes Target(bloon), its centre; only
+                    // GetTarget (First / Last / Close / Strong) keeps the circle (recording sniper_250: an Elite shot on
+                    // a MOAB at its centre, sniper_032's First 6.3 ahead).
+                    if mode == TargetMode::Elite {
+                        aim_at = b.pos;
+                        aim_off = [0.0; 2];
+                        aim_circle = None;
+                    }
                     if !seg_in && shared.is_empty() {
                         continue;
                     }
@@ -9066,12 +9094,26 @@ impl Game {
                         TargetMode::Last => -b.progress(),
                         TargetMode::Close => -dd,
                         TargetMode::Strong => self.rbe[b.kind] * 1e4 + b.progress(),
-                        // TargetEliteTargetting.Sort (VERIFIED-DISASM @0xe005c0, simplified
-                        // HYPOTHESIS P-ELITE): past 75% of the track first, then BloonModel
-                        // danger (RBE here), then how far along.
+                        // TargetEliteTargetting.Sort (VERIFIED-DISASM @0x180de19d0; buffers from its .ctor
+                        // @0x180de1c50, percentageThroughMap 0.75 from the model): camo priority on and a camo
+                        // bloon: danger + 1e9; past 75%: perc x 0.12 + 1e6; a MOAB: perc x 0.12 + danger + 10;
+                        // with SpawnChildren and more than one child: children x 1e4 + perc x 0.12 + danger;
+                        // else danger. (The f32 sum, as the game adds it.) Equal keys: see below.
                         TargetMode::Elite => {
-                            let perc = b.dist / self.tracks[b.path as usize].length().max(1.0);
-                            (if perc > 0.75 { 1e12 } else { 0.0 }) + self.rbe[b.kind] * 1e4 + b.progress()
+                            let perc = self.perc_through_map(b);
+                            let pt = perc * 1.2f32 * 0.1f32;
+                            let key: f32 = if self.towers[t].camo_prio && b.camo(d) {
+                                d.danger + 1e9
+                            } else if perc > 0.75 {
+                                pt + 1e6
+                            } else if d.tags.iter().any(|t| t == "Moabs") {
+                                pt + d.danger + 10.0
+                            } else if d.children.len() > 1 {
+                                d.children.len() as f32 * 1e4 + (pt + d.danger)
+                            } else {
+                                d.danger
+                            };
+                            key
                         }
                         _ => 0.0,
                     };
@@ -9115,10 +9157,22 @@ impl Game {
                         let len = self.tracks[b.path as usize].length() as f64;
                         let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e9 } else { until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
+                    } else if mode == TargetMode::Elite {
+                        prio * 1e12 + base as f64
                     } else {
                         prio * 1e12 + base as f64
                     };
-                    if best.is_none() || key > best_key {
+                    // (Equal Elite keys: the first in Targetting.GetTargets' list, which LINQ's stable
+                    // sort keeps: GetGlobalBest's (TargetType First) leader, then the visible segments
+                    // front to back, each in its own list order. Recorded with SimRecorder's ES lines,
+                    // sniper_052 rt 3295: 15108, Yellow 15249 on segment 28, Pinks 15369, 15361, 15353 on 27.)
+                    let tie = if mode == TargetMode::Elite {
+                        (lead[b.path as usize].is_some_and(|(l, _, _)| l == bi), seg_idx as i64, -self.path_rank.get(&b.id).map_or(i64::MAX / 2, |r| r.1 as i64))
+                    } else {
+                        (false, 0, 0)
+                    };
+                    if best.is_none() || key > best_key || (key == best_key && tie > best_tie) {
+                        best_tie = tie;
                         best_key = key;
                         best = Some((score, aim_at, b.id));
                         best_off = aim_off;
@@ -9171,18 +9225,6 @@ impl Game {
                 // CreateEffectWhileAttacking.Process (@0xdb5e30): on while the attack has a target.
                 if attack.while_fx.is_some() {
                     self.towers[t].attacking_fx = best.is_some();
-                }
-                // HYPOTHESIS P-DOUBLELOST: an extra shot whose target the first one popped goes when
-                // its attack finds nothing the next frame; with a target it lives out its age
-                // (recordings sniper_005 rt 456 / rt 173).
-                {
-                    let id = self.towers[t].id;
-                    if best.is_none() {
-                        self.projectiles.retain(|p| !(p.double_lost && p.owner == id));
-                    }
-                    for p in self.projectiles.iter_mut().filter(|p| p.double_lost && p.owner == id) {
-                        p.double_lost = false;
-                    }
                 }
                 if attack.pool_fallback && best.is_none() && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
                     best = self.track_point(pos, range, 0.0);
@@ -9281,7 +9323,7 @@ impl Game {
                         if let Some(border) = attack.random_basic {
                             for _ in 0..1000 {
                                 let r = (self.synced_double() * (hi - lo) as f64 + lo as f64) as f32;
-                                let a = (self.synced_double() * std::f64::consts::TAU) as f32;
+                                let a = (self.synced_double() * (std::f32::consts::TAU as f64)) as f32; // (2 pi as a float, widened: VERIFIED-DISASM const @0x183e50188; recording sniper_052)
                                 let (sa, ca) = crt_sin_cos(a);
                                 let q = [pos[0] + ca * r, pos[1] - sa * r];
                                 if on_map(q, -border) {
@@ -9955,6 +9997,7 @@ impl Game {
                                 }
                             } else if proj.instant || emission.kind == "AtTarget" || emission.kind == "InstantDamage" {
                                 let bfound = self.bloons.iter().find(|b| b.id == target_id).map(|b| (b.pos, b.obj));
+                                let bz = self.bloons.iter().find(|b| b.id == target_id).map(|b| b.height);
                                 let (bpos, bobj) = (bfound.map(|f| f.0), bfound.map(|f| f.1).or(lost_obj));
                                 for pr in &mut self.projectiles[start..] {
                                     pr.target = (target_id != 0).then_some(target_id);
@@ -9978,6 +10021,11 @@ impl Game {
                                     // (recording desperado_400: at the barrel at 73, on the MOAB at 74).
                                     if !(proj.instant && !emission.markers.is_empty()) {
                                         pr.pos = target;
+                                        // (Its Position is the Target's, z too: the bloon's height; recording sniper_250, a
+                                        // shot on a MOAB at z 120.)
+                                        if let (Some(z), true) = (bz, proj.instant) {
+                                            pr.z = z;
+                                        }
                                     } else if pr.frames_left <= 0.0 {
                                         pr.frames_left = f32::INFINITY;
                                     }
@@ -9999,13 +10047,6 @@ impl Game {
                                 let d = ((target[0] - pos[0]).hypot(target[1] - pos[1])).round_ties_even();
                                 for pr in &mut self.projectiles[start..] {
                                     pr.crit_roll = Some([chance + d * per, mult, add, 0.0, 0.0]);
-                                }
-                            }
-                            // (Its target popped by the frame's first shot, it goes at that collision:
-                            // recording sniper_205, Bullet 2633 at rt 954.)
-                            if emission.kind == "InstantDamage" && target_id != 0 && double && proj.instant {
-                                for pr in &mut self.projectiles[start..] {
-                                    pr.double_hit = true;
                                 }
                             }
                             if emission.kind == "InstantDamage" && target_id != 0 && !double {
@@ -10743,7 +10784,17 @@ impl Game {
     fn retarget(&mut self, p: usize, rt: &crate::data::Retarget) {
         self.projectiles[p].bounces += 1;
         let pr = &self.projectiles[p];
-        let q = pr.prev;
+        // An instant shot is where its Target is this frame (recording sniper_250 rt 1181: the bounce
+        // off a Ceramic turns -7.87 from its new spot, not -9.02 from the last).
+        // (Its Instant ran in process-list order: a bloon newer than the shot hadn't moved yet;
+        // recording sniper_040 rt 2286, off a Blue made after it.)
+        let q = match pr.target.filter(|_| pr.spec.instant).and_then(|id| self.bloons.iter().find(|b| b.id == id)) {
+            Some(b) => {
+                let at = if b.born > pr.born { b.prev } else { b.pos };
+                [at[0] + pr.inst_off[0], at[1] + pr.inst_off[1]]
+            }
+            None => pr.prev,
+        };
         let at = |b: &Bloon| if b.born < pr.born { b.pos } else { b.prev };
         let best = self.closest_target(q, rt.distance, |b| !b.hit_by(&pr.hit) && (!b.camo(&self.defs[b.kind]) || pr.camo), at);
         let tpos = best.map(|i| at(&self.bloons[i]));
@@ -10757,6 +10808,10 @@ impl Game {
             if pr.spec.instant {
                 pr.target = tid;
                 pr.inst_off = [0.0; 2];
+                // Instant.SetTarget (VERIFIED-DISASM @0x180cc21c0): lastBloonPosition = the new
+                // Target's position (recording sniper_250 rt 1190: a bounce onto a Ceramic popped
+                // that frame goes to where it was).
+                pr.instant_pos = tpos;
             }
         }
         match tpos {
@@ -11005,6 +11060,16 @@ impl Game {
     /// entrance trees). HYPOTHESIS P-PHOENIXZ: it is at 250 from the start.
     fn tower_height(&self, t: usize) -> f32 {
         if self.towers[t].sub.as_ref().is_some_and(|s| s.spec.circle.is_some()) { 250.0 } else { 0.0 }
+    }
+
+    /// Bloon.PercThroughMap (VERIFIED-DISASM @0x180fb54f0): (distanceTraveled + MaxDistUntilSpawn) /
+    /// (MaxDistUntilSpawn + MaxDistUntilLeak).
+    fn perc_through_map(&self, b: &Bloon) -> f32 {
+        let total = self.tracks[b.path as usize].length();
+        let (sd, ld) = self.track_ends.get(b.path as usize).map_or((None, None), |e| *e);
+        let (sd, ld) = (sd.unwrap_or(0.0), ld.unwrap_or(total));
+        let until_spawn = (total - sd) - total;
+        (b.dist + until_spawn) / (until_spawn + ld)
     }
 
     /// LeakDangerAttackSpeed's danger as the towers see it (after this frame's collisions).
@@ -12326,8 +12391,6 @@ impl Game {
                 instant_set: false,
                 instant_pos: None,
                 target_cache: None,
-                double_hit: false,
-                double_lost: false,
                 target_obj: None,
                 target_moved: false,
                 effect_back: None,
@@ -12748,7 +12811,6 @@ impl Game {
                     // Frames before it can hit (burst shots, bounce delays, Mega Mine's arming).
                     pr.wait = (pr.wait - 1.0).max(0.0);
                     // (CollideOnlyWithTarget shots keep their Target as it is: no homing.)
-                    let double_hit = std::mem::take(&mut pr.double_hit);
                     if let Some(id) = pr.target.filter(|_| pr.spec.instant || !pr.spec.only_target) {
                         let at = $s.bloons.iter().find(|b| b.id == id).map(|b| b.pos);
                         match (at, pr.spec.instant) {
@@ -12762,7 +12824,6 @@ impl Game {
                                 if pr.spec.instant_destroy {
                                     pr.frames_left = 0.0;
                                 }
-                                pr.double_lost = double_hit;
                                 // CreateEffectProjectileAfterTime.SpawnEffect (VERIFIED-DISASM @0xca0540),
                                 // useTargetPosition: a new Position at GetPositionOfTarget, after this
                                 // frame's Instant.Process (which puts it back next frame). With the
@@ -12886,8 +12947,14 @@ impl Game {
                     let pr = &$s.projectiles[$p];
                     // Straight-flying shots meet bloons where both were when the frame began.
                     let (bp, pp) = if pr.spec.instant || pr.target_moved || (pr.target.is_some() && !pr.spec.only_target) { (b.pos, pr.pos) } else { (b.prev, pr.prev) };
+                    // (Where an instant shot is when it meets its own Target: on it; see below.)
+                    let inst_pp = if pr.spec.instant && pr.target == Some(b.id) { [bp[0] + pr.inst_off[0], bp[1] + pr.inst_off[1]] } else { pp };
                     let rr = pr.spec.radius + d.radius;
-                    let bcell = if pr.spec.instant || (pr.target.is_some() && !pr.spec.only_target) { b.pos } else { b.cell_pos };
+                    // (An instant shot on a bloon meets the bloons where the BloonGrid has them, as the others do:
+                    // the CollisionChecker goes before the bloons move. Recording sniper_030 rt 2876: a bullet
+                    // bounced onto a Blue in the next cell doesn't hit it till the grid has the Blue in its own.
+                    // Wall of Fire, on a track spot, keeps the bloon's spot: recording wizard_025.)
+                    let bcell = if (pr.spec.instant && pr.target.is_none()) || (pr.target.is_some() && !pr.spec.only_target && !pr.spec.instant) { b.pos } else { b.cell_pos };
                     let direct = $only.is_some();
                     if (!direct && !grid_hit(pp, pr.spec.radius, bp, bcell, d.radius))
                         || (!direct && $s.has_grid_rank && !$s.ggrid.visits(pp, pr.spec.radius, i, bcell))
@@ -13382,7 +13449,10 @@ impl Game {
                             // damage: on the bloon, or where the shot is with dontCreateAtBloon or
                             // once the hit destroyed it (isDestroyed; recording wizard_020: a
                             // Fireball popping a Red explodes where the fireball was).
-                            let at = if c.at_shot || !$s.bloons.iter().any(|b| b.id == id) { pp } else { bp };
+                            // (An instant shot is on its Target: Instant.Process put it there this frame, before the
+                            // collision; recording sniper_030 rt 2876, Shrapnel from a bounced bullet whose Blue
+                            // it popped starts on the Blue's spot this frame, not the last.)
+                            let at = if c.at_shot || !$s.bloons.iter().any(|b| b.id == id) { inst_pp } else { bp };
                             now_after.push((at, c.clone(), skip));
                             continue;
                         }
@@ -13447,10 +13517,15 @@ impl Game {
                 // trees), when taller than it. A target-only shot is checked too
                 // (recordings boomerang_500 / 510 / 520: Glaive Lord's MoabDot dropped by a tree's
                 // edge lives 1 frame instead of 3).
+                // An instant shot with pierce left too (recording sniper_205 rt 955, SimRecorder XS: a double
+                // shot whose target its sibling popped sits on a blocker and goes; at a clear spot it lives
+                // out its 6 frames).
+                // Not the frame it is made: the next (sniper_205's 2633 at age 1; sniper_250 rt 2509, a
+                // shot on a blocker after its emission's collision is still there that frame).
                 let pr = &$s.projectiles[$p];
                 // (A dontUseCollisionChecker projectile skips this too: recording bomb_005, a Bomb
                 // Blitz Cluster fragment flies on past a tree.)
-                if !pr.spec.ignore_blockers && !(pr.spec.no_checker && $only.is_none()) && pr.spec.blocker_rebound.is_none() && !pr.spec.instant && (pr.target.is_none() || pr.spec.only_target) && pr.pierce > 0.0 && pr.frames_left > 0.0 && $s.blocker_hit(pr.prev, pr.spec.vs_blocker_radius, pr.z) {
+                if !pr.spec.ignore_blockers && !(pr.spec.no_checker && $only.is_none()) && pr.spec.blocker_rebound.is_none() && !(pr.spec.instant && pr.born >= $s.sim_elapsed * 4) && (pr.target.is_none() || pr.spec.only_target) && pr.pierce > 0.0 && pr.frames_left > 0.0 && $s.blocker_hit(pr.prev, pr.spec.vs_blocker_radius, pr.z) {
                     // Projectile.CollideMap first: CreateProjectileOnContact.CollideMap (VERIFIED-DISASM
                     // @0xcc1150) makes its projectile where the shot is (recording glue_500: a Bloon
                     // Solver glob into the map's edge leaves its splat there).
@@ -13693,12 +13768,24 @@ impl Game {
             // Instant follows it, its previous spot; recording sniper_040 rt 1901, a bounced bullet
             // on Black 1718 at its rt 1900 place.)
             let born = pr.born;
+            // (Instant.Process sets the whole Position, so z too: the bloon's height, 120 on a MOAB
+            // (recording sniper_250: an Elite shot on a MOAB at z 120 is above the blocker that ends
+            // one at 20).)
+            let tz = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.height);
+            if let Some(z) = tz {
+                pr.z = z;
+            }
             if let Some(q) = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| {
                 let at = if b.born > born { b.prev } else { b.pos };
                 [at[0] + off[0], at[1] + off[1]]
             }).or(pr.instant_pos) {
                 pr.pos = q;
                 pr.instant_set = true;
+                // (Instant.Process, target valid: lastBloonPosition = Target.Position. Only a bouncing shot's
+                // is kept here: the others stay put when their target goes, which is the same spot.)
+                if pr.target.is_some() && pr.spec.retarget.is_some() {
+                    pr.instant_pos = Some(q);
+                }
             }
         }
         self.track_targets();
@@ -14863,6 +14950,11 @@ mod tests {
             g.random_pos_init(t);
             // (The tier's permanent sub-towers, as an upgrade makes them: Lord Phoenix.)
             g.sync_pets(t);
+            // SwitchTargetSupplierOnUpgrade.Attatched (VERIFIED-DISASM @0x180d9e5b0) runs when the behaviour
+            // is attached, so made at the tier it sets the target too (recording sniper_250: Elite).
+            if let Some(m) = g.tier(t).and_then(|x| x.switch_target.as_deref()).and_then(TargetMode::parse) {
+                g.towers[t].target = m;
+            }
             // InputManager.CreateTowerAt as SimRecorder calls it leaves Tower.worth at 0
             // (logged); bought upgrades add to it.
             g.towers[t].invested = 0.0;
@@ -14967,7 +15059,12 @@ mod tests {
                             clone_ids.len() - 1
                         }
                     };
+                    // (At the game's slots: the tier's weapons, then each ability's by ability order.)
+                    let extra: usize = tw.temp.iter().map(|x| x.attack.weapons.len()).sum();
+                    let base = tw.weapons.len().saturating_sub(extra);
+                    let slots: Vec<usize> = (0..base).chain(tw.temp.iter().flat_map(|x| (0..x.attack.weapons.len()).map(move |k| base + x.slot + k))).collect();
                     for (wi, st) in tw.weapons.iter().enumerate() {
+                        let wi = slots.get(wi).copied().unwrap_or(st.slot);
                         let v = throws_clone.entry((ti, wi)).or_default();
                         if v.last() != Some(&st.last) && st.last > NEVER {
                             v.push(st.last);
@@ -15049,7 +15146,8 @@ mod tests {
                         clone_ids.len() - 1
                     }
                 };
-                for (wi, st) in tw.weapons.iter().enumerate() {
+                for st in &tw.weapons {
+                    let wi = st.slot;
                     let v = throws_clone.entry((ti, wi)).or_default();
                     if v.last() != Some(&st.last) && st.last > NEVER {
                         v.push(st.last);

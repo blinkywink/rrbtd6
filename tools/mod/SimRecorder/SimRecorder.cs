@@ -1242,6 +1242,8 @@ static class CollideBloonPatch
         try
         {
             w.WriteLine($"H {__instance.Id.Id} {(__0 == null ? -1 : __0.Id.Id)} {(__0 == null ? 0 : __0.health)} {Recorder.F(__instance.pierce)}");
+            // The bloon's state: "HB bloon model destroyed".
+            if (__0 != null) w.WriteLine($"HB {__0.Id.Id} {__0.bloonModel?.id} {__0.IsDestroyed}");
         }
         catch (Exception) { }
     }
@@ -1347,5 +1349,71 @@ static class CopyMutatorsPatch
     {
         if (!MutatorLog.On) return;
         try { Recorder.Out.WriteLine($"M copy {__instance.Id.Id} from {(__0 == null ? -1 : __0.Id.Id)}"); } catch (Exception) { }
+    }
+}
+
+// Elite targeting's sort keys in the order LINQ asks for them (GetTargets' list order):
+// "ES bloon key" (written before the frame's F line).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.TargetEliteTargetting), "Sort")]
+static class EliteSortPatch
+{
+    static void Postfix(Bloon __0, float __result)
+    {
+        if (Recorder.Out == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try { Recorder.Out.WriteLine($"ES {(__0 == null ? -1 : __0.Id.Id)} {Recorder.F(__result)}"); } catch (Exception) { }
+    }
+}
+
+// How projectiles end ("X how projectile age pierce"), written before the frame's
+// F line: Expire (lifespan or an explicit expire), Exhausted (out of pierce), OnDestroy.
+static class EndLog
+{
+    public static void Write(string how, Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Projectile p)
+    {
+        if (p == null || Recorder.Out == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try { Recorder.Out.WriteLine($"X {how} {p.Id.Id} {p.Age} {Recorder.F(p.pierce)}"); } catch (Exception) { }
+    }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Projectile), "Expire")]
+static class ExpirePatch { static void Prefix(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Projectile __instance) => EndLog.Write("expire", __instance); }
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Projectile), "Exhausted")]
+static class ExhaustedPatch { static void Prefix(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Projectile __instance) => EndLog.Write("exhausted", __instance); }
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Projectile), "OnDestroy")]
+static class ProjDestroyPatch
+{
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    static extern ushort RtlCaptureStackBackTrace(uint skip, uint count, IntPtr[] trace, IntPtr hash);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern IntPtr GetModuleHandleW(string name);
+    static void Prefix(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Projectile __instance)
+    {
+        EndLog.Write("destroy", __instance);
+        // A projectile destroyed with pierce left before its lifespan: its native callers as
+        // GameAssembly RVAs ("XS projectile rva ...").
+        try
+        {
+            if (__instance == null || Recorder.Out == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+            if (__instance.pierce <= 0 || __instance.Age > 3) return;
+            long gbase = GetModuleHandleW("GameAssembly.dll").ToInt64();
+            var sb = new StringBuilder($"XS {__instance.Id.Id}");
+            // Return addresses on the stack (words pointing just after a call into GameAssembly code).
+            unsafe
+            {
+                long* sp = stackalloc long[1];
+                for (int i = 0; i < 4096; i++)
+                {
+                    long v = sp[i], a = v - gbase;
+                    if (a < 0x1000 || a >= 0x3800000) continue;
+                    byte* c = (byte*)v;
+                    if (c[-5] == 0xE8 || c[-2] == 0xFF || c[-3] == 0xFF || c[-6] == 0xFF)
+                        sb.Append(" 0x").Append((a + 0x180000000).ToString("x"));
+                }
+            }
+            Recorder.Out.WriteLine(sb.ToString());
+        }
+        catch (Exception) { }
     }
 }
