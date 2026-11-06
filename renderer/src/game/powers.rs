@@ -86,7 +86,7 @@ impl Game {
                 // modelled: the segment's height and the projectile's power flag (+0x1a5).
                 Some("CashDropModel" | "RoadSpikesModel" | "GlueTrapModel" | "MoabMineModel" | "CamoTrapModel") => {
                     let Some(proj) = self.power_projectiles.get(id).cloned() else { return false };
-                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false};
+                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None};
                     // Co-op: owned by the player who used it, so its cash goes to them.
                     let owner = self.power_owner();
                     self.emit(at, 0.0, &single, &proj, None, [0; 3], owner);

@@ -1291,6 +1291,9 @@ pub struct Emission {
     /// LineProjectileEmissionModel.ignoreBlockers.
     #[serde(default)]
     pub line_ignore_blockers: bool,
+    /// emitFromTarget: the line starts on the Target and is emitFromTargetLength long.
+    #[serde(default)]
+    pub line_from_target: Option<f32>,
 }
 
 fn one_u() -> u32 {

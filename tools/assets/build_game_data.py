@@ -908,11 +908,13 @@ def main():
             # A plain line (LineProjectileEmission.Emit, VERIFIED-DISASM @0x180c42910): 400 long from
             # the emit point towards the target (or along the tower with useTowerRotation), its
             # bloons found by CollisionGrid.GetInLine and collided at once, nearest first.
-            plain = not (f.get("useLengthSpeed") or f.get("useTargetAsEndPoint") or f.get("emitFromTarget")
+            plain = not (f.get("useLengthSpeed") or f.get("useTargetAsEndPoint")
                          or deref(f.get("projectileInitialHitModel")) or deref(f.get("projectileAtEndModel"))
                          or deref(f.get("emissionAtEndModel")))
             return {"kind": "Line", "count": 1, "line_plain": bool(plain), "line_tower_rot": bool(f.get("useTowerRotation")),
-                    "line_ignore_blockers": bool(f.get("ignoreBlockers"))}
+                    "line_ignore_blockers": bool(f.get("ignoreBlockers")),
+                    # emitFromTarget: the line starts on the Target, emitFromTargetLength long.
+                    "line_from_target": f.get("emitFromTargetLength", 0.0) if f.get("emitFromTarget") else None}
         # STAND-IN P-WERERABBIT: the Wererabbit leaps onto its target; its blast lands there.
         if e["type"] == "InstantDamageEmissionModel":
             return {"kind": "InstantDamage", "count": 1}
