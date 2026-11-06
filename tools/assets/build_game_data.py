@@ -905,7 +905,14 @@ def main():
         if e["type"] == "ArcEmissionModel":
             return {"kind": "Arc", "count": f.get("SliceSize", 1), "angle": f.get("angle", 0.0), "offset": f.get("offset", 0.0)}
         if e["type"] == "LineProjectileEmissionModel":
-            return {"kind": "Line", "count": 1}
+            # A plain line (LineProjectileEmission.Emit, VERIFIED-DISASM @0x180c42910): 400 long from
+            # the emit point towards the target (or along the tower with useTowerRotation), its
+            # bloons found by CollisionGrid.GetInLine and collided at once, nearest first.
+            plain = not (f.get("useLengthSpeed") or f.get("useTargetAsEndPoint") or f.get("emitFromTarget")
+                         or deref(f.get("projectileInitialHitModel")) or deref(f.get("projectileAtEndModel"))
+                         or deref(f.get("emissionAtEndModel")))
+            return {"kind": "Line", "count": 1, "line_plain": bool(plain), "line_tower_rot": bool(f.get("useTowerRotation")),
+                    "line_ignore_blockers": bool(f.get("ignoreBlockers"))}
         # STAND-IN P-WERERABBIT: the Wererabbit leaps onto its target; its blast lands there.
         if e["type"] == "InstantDamageEmissionModel":
             return {"kind": "InstantDamage", "count": 1}
@@ -982,6 +989,7 @@ def main():
             if "Track" in tm and len(tm) > 1:
                 targets = tm
             require_tags, exclude_tags, skip_effects = [], [], []
+            if_target_attack = None
             # TargetMoabModel (Bomb Shooter's "Boom" attack): MOAB-class bloons first.
             prio_moab = any(x and x["type"] == "TargetMoabModel" for x in items(af["behaviors"]))
             glue_filter, skip_frozen, cant_hit, only_camo = 0, False, 0, False
@@ -1008,6 +1016,10 @@ def main():
                             only_camo = True
                         if flt and flt["type"] == "FilterMoabModel":
                             (exclude_tags if flt["f"].get("flip") else require_tags).append("Moabs")
+                        # FilterIfAttackHasTarget.FilterBloon (VERIFIED-DISASM @0x180c1ec30): passes only while
+                        # the named attack's hadValidTarget is false (Desperado's pistol beside its rifle).
+                        if flt and flt["type"] == "FilterIfAttackHasTargetModel":
+                            if_target_attack = flt["f"].get("attackName")
                         if flt and flt["type"] == "FilterMutatedTargetModel" and not flt["f"].get("inverse"):
                             skip_effects.append(flt["f"]["mutationId"])
             track_target = next((x["f"].get("maxOffset", 0.0) for x in items(af["behaviors"])
@@ -1211,7 +1223,7 @@ def main():
                     "range": af["range"], "camo": camo, "rotate": rotate, "turn_rate": turn_rate,
                     "targets": targets, "weapons": weapons,
                     "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
-                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
+                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "if_target_attack": if_target_attack, "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
                     "glue_filter": glue_filter, "skip_frozen": skip_frozen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
                     "while_fx": next(([prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")) or "", prefab_name((deref(x["f"].get("exitEffectModel")) or {"f": {}})["f"].get("assetId")) or ""] for x in items(af["behaviors"]) if x and x["type"] == "CreateEffectWhileAttackingModel"), None),

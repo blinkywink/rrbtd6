@@ -921,6 +921,9 @@ pub struct Attack {
     /// FilterMutatedTargetModel: skips bloons carrying an effect with one of these ids.
     #[serde(default)]
     pub skip_effects: Vec<String>,
+    /// FilterIfAttackHasTargetModel.attackName: no target while that attack's hadValidTarget is set.
+    #[serde(default)]
+    pub if_target_attack: Option<String>,
     /// TargetTrackModel.maxOffset: aims at a random spot on the track in range (caltrops).
     #[serde(default)]
     pub track_target: Option<f32>,
@@ -1270,6 +1273,15 @@ pub struct Emission {
     /// alwaysCentre as 0 / 1).
     #[serde(default)]
     pub dir_off: Option<[f32; 3]>,
+    /// LineProjectileEmissionModel with none of its extras: collided at once along GetInLine.
+    #[serde(default)]
+    pub line_plain: bool,
+    /// LineProjectileEmissionModel.useTowerRotation.
+    #[serde(default)]
+    pub line_tower_rot: bool,
+    /// LineProjectileEmissionModel.ignoreBlockers.
+    #[serde(default)]
+    pub line_ignore_blockers: bool,
 }
 
 fn one_u() -> u32 {

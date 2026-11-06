@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using HarmonyLib;
@@ -781,6 +782,19 @@ public class Recorder : MelonMod
         var sb = new StringBuilder("offsets");
         for (int k = 0; k < grid.orderedNeighborOffsetsLength * 2 && k < offs.Length; k++) sb.Append(' ').Append(offs[k]);
         m.WriteLine(sb.ToString());
+        // GetInLine's iterator MoveNext (a shared generic, no static address): its GameAssembly
+        // address, from the class of the object GetInLine returns.
+        try
+        {
+            var it = grid.GetInLine(new Il2CppAssets.Scripts.Simulation.SMath.Vector3(0, 0, 0), new Il2CppAssets.Scripts.Simulation.SMath.Vector3(1, 0, 0), 1f);
+            var obj = (Il2CppSystem.Object)it.Cast<Il2CppSystem.Object>();
+            IntPtr klass = Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(obj.Pointer);
+            IntPtr mi = Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_method_from_name(klass, "MoveNext", 0);
+            long fp = System.Runtime.InteropServices.Marshal.ReadIntPtr(mi).ToInt64();
+            long gbase = System.Diagnostics.Process.GetCurrentProcess().Modules.Cast<System.Diagnostics.ProcessModule>().First(x => x.ModuleName == "GameAssembly.dll").BaseAddress.ToInt64();
+            m.WriteLine($"getinline_movenext 0x{fp - gbase + 0x180000000:x} {System.Runtime.InteropServices.Marshal.PtrToStringAnsi(Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_name(klass))}");
+        }
+        catch (Exception e) { m.WriteLine("getinline_movenext error " + e.Message); }
         LoggerInstance.Msg("map dumped: " + paths.Count + " paths");
     }
 
@@ -1125,6 +1139,27 @@ static class SimulatePatch
                     var wp = l[k]?.TryCast<Weapon>();
                     if (wp == null) continue;
                     w.WriteLine($"W {t.Id.Id} {i++} {wp.lastEmission} {wp.animationStartedAt} {wp.rateFrames} {Recorder.F(wp.missedRate)} {Recorder.F(t.Rotation)} {Recorder.F(t.Position.X)} {Recorder.F(t.Position.Y)}");
+                    // Zoned<Bloon> (Vagrant's bloon zone) methods' addresses, once: "zone_methods IsInZone Process".
+                    if (!ZoneProbe.Done && wp.weaponBehaviors != null)
+                    {
+                        var wbl = wp.weaponBehaviors.list;
+                        for (int q = 0; q < wbl.Count; q++)
+                        {
+                            var vb = wbl[q]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Weapons.Behaviors.VagrantWeaponBehavior>();
+                            if (vb == null || vb.bloonZone == null) continue;
+                            ZoneProbe.Done = true;
+                            IntPtr klass = Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(vb.bloonZone.Pointer);
+                            long gbase = System.Diagnostics.Process.GetCurrentProcess().Modules.Cast<System.Diagnostics.ProcessModule>().First(x => x.ModuleName == "GameAssembly.dll").BaseAddress.ToInt64();
+                            var sb2 = new StringBuilder("zone_methods");
+                            foreach (var (mn, ac) in new[] { ("IsInZone", 2), ("IsInZone", 1), ("Process", 1), ("Filter", 1), ("GetRange", 0) })
+                            {
+                                IntPtr mi = Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_method_from_name(klass, mn, ac);
+                                long fp = mi == IntPtr.Zero ? 0 : System.Runtime.InteropServices.Marshal.ReadIntPtr(mi).ToInt64();
+                                sb2.Append($" {mn}/{ac}=0x{(fp == 0 ? 0 : fp - gbase + 0x180000000):x}");
+                            }
+                            w.WriteLine(sb2.ToString());
+                        }
+                    }
                 }
                 // Orbit state (Glaive Lord / Dominus): "O tower currentSpeed angle bloonInRange active".
                 var tb = t.towerBehaviors?.list;
@@ -1244,6 +1279,8 @@ static class CollideBloonPatch
             w.WriteLine($"H {__instance.Id.Id} {(__0 == null ? -1 : __0.Id.Id)} {(__0 == null ? 0 : __0.health)} {Recorder.F(__instance.pierce)}");
             // The bloon's state: "HB bloon model destroyed".
             if (__0 != null) w.WriteLine($"HB {__0.Id.Id} {__0.bloonModel?.id} {__0.IsDestroyed}");
+            // A projectile's first collisions (age 0-1): native callers ("HS projectile rva ...").
+            if (__instance.Age <= 1 && HitStack.Count++ < 400) w.WriteLine("HS " + __instance.Id.Id + HitStack.Callers());
         }
         catch (Exception) { }
     }
@@ -1361,6 +1398,30 @@ static class EliteSortPatch
     {
         if (Recorder.Out == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
         try { Recorder.Out.WriteLine($"ES {(__0 == null ? -1 : __0.Id.Id)} {Recorder.F(__result)}"); } catch (Exception) { }
+    }
+}
+
+static class ZoneProbe { public static bool Done; }
+
+static class HitStack
+{
+    public static int Count;
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern IntPtr GetModuleHandleW(string name);
+    public static unsafe string Callers()
+    {
+        long gbase = GetModuleHandleW("GameAssembly.dll").ToInt64();
+        var sb = new StringBuilder();
+        long* sp = stackalloc long[1];
+        int n = 0;
+        for (int i = 0; i < 4096 && n < 8; i++)
+        {
+            long v = sp[i], a = v - gbase;
+            if (a < 0x1000 || a >= 0x3800000) continue;
+            byte* c = (byte*)v;
+            if (c[-5] == 0xE8 || c[-2] == 0xFF || c[-3] == 0xFF || c[-6] == 0xFF) { sb.Append(" 0x").Append((a + 0x180000000).ToString("x")); n++; }
+        }
+        return sb.ToString();
     }
 }
 
