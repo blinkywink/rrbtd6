@@ -1,43 +1,173 @@
 {
   "_how": "Edit the numbers, then run: python website/build_progress.py. Towers: recorded scenarios that match the real game frame by frame / all recorded. Areas: rough estimates out of 10.",
-  "updated": "2026-11-03",
+  "updated": "2026-11-07",
   "towers": [
-    ["Dart Monkey", 70, 70],
-    ["Boomerang Monkey", 99, 99],
-    ["Bomb Shooter", 33, 34],
-    ["Tack Shooter", 21, 25],
-    ["Ice Monkey", 25, 25],
-    ["Glue Gunner", 34, 34],
-    ["Desperado", 9, 34],
-    ["Sniper Monkey", 24, 34],
-    ["Monkey Sub", 32, 32],
-    ["Monkey Buccaneer", 0, 33],
-    ["Monkey Ace", 0, 25],
-    ["Heli Pilot", 0, 0],
-    ["Mortar Monkey", 0, 24],
-    ["Dartling Gunner", 0, 23],
-    ["Wizard Monkey", 35, 35],
-    ["Super Monkey", 0, 0],
-    ["Ninja Monkey", 34, 34],
-    ["Alchemist", 28, 34],
-    ["Druid", 0, 34],
-    ["Mermonkey", 0, 34],
-    ["Banana Farm", 0, 25],
-    ["Spike Factory", 0, 0],
-    ["Monkey Village", 0, 0],
-    ["Engineer Monkey", 32, 34],
-    ["Beast Handler", 34, 34]
+    [
+      "Dart Monkey",
+      70,
+      70
+    ],
+    [
+      "Boomerang Monkey",
+      99,
+      99
+    ],
+    [
+      "Bomb Shooter",
+      34,
+      34
+    ],
+    [
+      "Tack Shooter",
+      25,
+      25
+    ],
+    [
+      "Ice Monkey",
+      25,
+      25
+    ],
+    [
+      "Glue Gunner",
+      34,
+      34
+    ],
+    [
+      "Desperado",
+      34,
+      34
+    ],
+    [
+      "Sniper Monkey",
+      34,
+      34
+    ],
+    [
+      "Monkey Sub",
+      32,
+      32
+    ],
+    [
+      "Monkey Buccaneer",
+      0,
+      33
+    ],
+    [
+      "Monkey Ace",
+      0,
+      25
+    ],
+    [
+      "Heli Pilot",
+      0,
+      0
+    ],
+    [
+      "Mortar Monkey",
+      0,
+      24
+    ],
+    [
+      "Dartling Gunner",
+      0,
+      23
+    ],
+    [
+      "Wizard Monkey",
+      35,
+      35
+    ],
+    [
+      "Super Monkey",
+      0,
+      0
+    ],
+    [
+      "Ninja Monkey",
+      34,
+      34
+    ],
+    [
+      "Alchemist",
+      34,
+      34
+    ],
+    [
+      "Druid",
+      0,
+      34
+    ],
+    [
+      "Mermonkey",
+      0,
+      34
+    ],
+    [
+      "Banana Farm",
+      0,
+      25
+    ],
+    [
+      "Spike Factory",
+      0,
+      0
+    ],
+    [
+      "Monkey Village",
+      0,
+      0
+    ],
+    [
+      "Engineer Monkey",
+      34,
+      34
+    ],
+    [
+      "Beast Handler",
+      34,
+      34
+    ]
   ],
   "areas": [
-    ["Bloons & MOABs", 8],
-    ["Rounds & spawning", 9],
-    ["Targeting & projectiles", 8],
-    ["Heroes", 2],
-    ["Bosses", 1],
-    ["Maps", 3],
-    ["Game modes", 4],
-    ["Menus & UI", 6],
-    ["Co-op", 4],
-    ["Visuals & effects", 5]
+    [
+      "Bloons & MOABs",
+      8
+    ],
+    [
+      "Rounds & spawning",
+      9
+    ],
+    [
+      "Targeting & projectiles",
+      8
+    ],
+    [
+      "Heroes",
+      2
+    ],
+    [
+      "Bosses",
+      1
+    ],
+    [
+      "Maps",
+      3
+    ],
+    [
+      "Game modes",
+      4
+    ],
+    [
+      "Menus & UI",
+      6
+    ],
+    [
+      "Co-op",
+      4
+    ],
+    [
+      "Visuals & effects",
+      5
+    ]
   ]
 }
