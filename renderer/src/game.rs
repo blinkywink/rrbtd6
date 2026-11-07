@@ -3383,6 +3383,9 @@ macro_rules! collide_pass {
             let direct = $only.is_some();
             if (!direct && !grid_hit(pp, pr.spec.radius, bp, bcell, d.radius))
                 || (!direct && $s.has_grid_rank && !$s.ggrid.visits(pp, pr.spec.radius, i, bcell))
+                // (An `unplaced` bloon isn't in the grid at all: recording desperado_040 rt 678, a MOAB's
+                // new Ceramic popped out by a line shot isn't met by the mark shot until it has moved.)
+                || (!direct && $s.has_grid_rank && b.unplaced)
                 || (!direct && !circles_hit(pp, pr.spec.radius, bp, b.rot, &d.circles))
                 || (pr.spec.instant && pr.spec.only_target && pr.target.is_some_and(|t| t != b.id))
                 // CollideOnlyWithTarget.FilterCollision (VERIFIED-DISASM @0xcbb6e0): only its
@@ -5023,7 +5026,23 @@ impl Game {
 
     fn spawn_on(&mut self, kind: usize, dist: f32, path: u8) -> u64 {
         let dist = self.held_at_spawn(kind, path, dist);
-        self.spawn_at(kind, dist, path)
+        let id = self.spawn_at(kind, dist, path);
+        let pos = self.bloons.last().map_or([0.0; 2], |b| b.pos);
+        // Zoned<Bloon>.BehaviorCreated: a bloon the round spawns goes into each Vagrant bloon zone it is in at once
+        // (recording desperado_032 rt 1001: a Black spawned that frame 47.9 away counts for the
+        // rifle's shot; desperado_052 rt 2598: a Zebra spawned that frame counts as the buff ends).
+        // INFERRED: not popped bloons' children (recording desperado_003 rt 2634).
+        for t in 0..self.towers.len() {
+            let ap = self.attack_pos(t);
+            for st in &mut self.towers[t].weapons {
+                if let Some(z) = st.zone_in.as_mut() {
+                    if (pos[0] - ap[0]).powi(2) + (pos[1] - ap[1]).powi(2) <= st.zone_r * st.zone_r {
+                        z.push(id);
+                    }
+                }
+            }
+        }
+        id
     }
 
     /// Path.DistanceToPointInfoBloon's rotation: the quick point at (int)(dist / 0.01); None
@@ -9861,22 +9880,6 @@ impl Game {
             // whose BloonDistanceRateBonus and Standoff look at the bloons now (Attack.GetVisibleTarget
             // Close / GetVisibleTargets; recording desperado_upgrades_r30: x-0-0 to 1-0-0 at 201 turns
             // 72 frames into 66).
-            let buff_changed = self.towers[t].weapons.iter().any(|st| st.buff_rate != buff.rate_mult * start_mult);
-            // A mutator ending (the Vigilante buff) comes after this frame's Zoned<Bloon>.Process, which
-            // still had the old range: the rate is worked out from the zone refreshed with this frame's
-            // bloons at that range (recording desperado_052 rt 2598: 6 Zebras within 96, one new this
-            // frame, 117 frames; desperado_002 rt 1433).
-            if buff_changed && !model_changed {
-                let p = self.attack_pos(t);
-                let ids_in = |r: f32, bl: &[Bloon]| bl.iter().filter(|b| { let q = b.pos; (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= r * r }).map(|b| b.id).collect::<Vec<u64>>();
-                let bl = std::mem::take(&mut self.bloons);
-                for st in &mut self.towers[t].weapons {
-                    if st.zone_in.is_some() {
-                        st.zone_in = Some(ids_in(st.zone_r, &bl));
-                    }
-                }
-                self.bloons = bl;
-            }
             if model_changed {
                 let mut i = 0;
                 for attack in tier.attacks.iter().chain(extra.iter()) {
@@ -11013,6 +11016,19 @@ impl Game {
                             let emission = fan_emission.as_ref().unwrap_or(emission);
                             let weapon_eject = buff.fan.as_ref().map_or(weapon.eject, |fc| fc.eject);
                             let mut buffed = buff.projectile(proj);
+                            // VigilanteMutator.Mutate (VERIFIED-DISASM @0x18124f180): on an attack without
+                            // fixedRange, its first TravelStrait's lifespan + loseLifeRangeBuff /
+                            // speedFrames x 1/60, so the shot reaches the buffed range (recording
+                            // desperado_005h rt 3038: shotgun pellets 15 frames, not 12).
+                            if buff.vig_range > 0.0 && !attack.fixed_range && std::ptr::eq(weapon, &attack.weapons[0]) && std::ptr::eq(proj, &weapon.projectile) && proj.speed > 0.0 && proj.lifespan > 0.0 {
+                                let mut q = buffed.take().unwrap_or_else(|| proj.clone());
+                                let sf = q.speed * (1.0f32 / 60.0);
+                                let add = buff.vig_range / sf * (1.0f32 / 60.0);
+                                if add > 0.0 {
+                                    q.lifespan += add;
+                                }
+                                buffed = Some(q);
+                            }
                             // A crit shot looks like the crit's displayModel (Crossbow Master's crit arrow).
                             if crit.is_some() {
                                 if let Some(d) = weapon.crit.as_ref().and_then(|c| c.display.clone()) {
