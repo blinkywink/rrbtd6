@@ -3491,6 +3491,38 @@ macro_rules! collide_pass {
             if let Some(w) = &pr.spec.wrath {
                 dmg += ($s.active_rbe / w.threshold * w.damage).clamp(0.0, w.max);
             }
+            // EmitOnDamage.Collide (VERIFIED-DISASM @0xcbb8c0) asks Bloon.WillDamageBloon rather
+            // than looking at a damage done: its fragments are made before the hit's pops
+            // (recording desperado_005h rt 1338: a pellet's three Shrapnel get ids before the
+            // Desert Phantom explosion of the Yellow it popped, and hit first).
+            // (Damage.Collide's crit roll comes after: recording desperado_025g rt 75, a pellet's
+            // three Shrapnel draw 18 synced randoms, then its crit roll.)
+            if !immune && $s.projectiles[$p].spec.on_contact.iter().any(|c| c.on_damage && !c.on_pop) {
+                let pr = &$s.projectiles[$p];
+                let heading = if pr.spec.instant && pr.target.is_some() { (bp[1] - pr.origin[1]).atan2(bp[0] - pr.origin[0]) } else { pr.vel[1].atan2(pr.vel[0]) };
+                let (tiers, owner) = (pr.tiers, pr.owner);
+                let grot = pr.grot.or_else(|| $s.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).map(|r| { let d = game_dir(r); RAD2DEG * crt_atan2(d[0], -d[1]) }));
+                let early: Vec<_> = pr.spec.on_contact.iter().filter(|c| c.on_damage && !c.on_pop).cloned().collect();
+                // (They carry the shot's crit roll as it is then, rolled or not: recording
+                // desperado_025g, Shrapnel from a pellet's first damaging hit (made before its roll)
+                // each roll at their own first damaging hits (rt 80: the second crits); those from
+                // its later hits never roll (rt 81).)
+                let parent_crit = pr.crit_roll;
+                for c in early {
+                    let start = $s.projectiles.len();
+                    $s.emit_z = hit_z;
+                    $s.emit_rot = grot;
+                    $s.emit(bp, heading, &c.emission, &c.projectile, None, tiers, owner);
+                    $s.emit_rot = None;
+                    $s.emit_z = 0.0;
+                    for pr in &mut $s.projectiles[start..] {
+                        pr.hit.push(layer);
+                        if parent_crit.is_some() {
+                            pr.crit_roll = parent_crit;
+                        }
+                    }
+                }
+            }
             // Projectile.RollForCrits (VERIFIED-DISASM @0xc8df40), from Damage.Collide after the
             // damage is worked out: the first hit rolls syncedRandom.NextDouble <= chance; a
             // crit is damage x damageMultiplier + damageAdditive on every hit after.
@@ -3611,28 +3643,6 @@ macro_rules! collide_pass {
                 let gold = $s.projectiles[$p].spec.cash_on_pop.as_ref().filter(|c| $s.defs[$s.bloons[i].kind].tags.contains(&c.tag)).map(|c| c.amount as f64);
                 let tally0 = $s.damage_tally;
                 $s.distribute = ($s.projectiles[$p].spec.distribute, $s.projectiles[$p].spec.distribute_override);
-                // EmitOnDamage.Collide (VERIFIED-DISASM @0xcbb8c0) asks Bloon.WillDamageBloon rather
-                // than looking at a damage done: its fragments are made before the hit's pops
-                // (recording desperado_005h rt 1338: a pellet's three Shrapnel get ids before the
-                // Desert Phantom explosion of the Yellow it popped, and hit first).
-                if $s.projectiles[$p].spec.on_contact.iter().any(|c| c.on_damage && !c.on_pop) {
-                    let pr = &$s.projectiles[$p];
-                    let heading = if pr.spec.instant && pr.target.is_some() { (bp[1] - pr.origin[1]).atan2(bp[0] - pr.origin[0]) } else { pr.vel[1].atan2(pr.vel[0]) };
-                    let (tiers, owner) = (pr.tiers, pr.owner);
-                    let grot = pr.grot.or_else(|| $s.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).map(|r| { let d = game_dir(r); RAD2DEG * crt_atan2(d[0], -d[1]) }));
-                    let early: Vec<_> = pr.spec.on_contact.iter().filter(|c| c.on_damage && !c.on_pop).cloned().collect();
-                    for c in early {
-                        let start = $s.projectiles.len();
-                        $s.emit_z = hit_z;
-                        $s.emit_rot = grot;
-                        $s.emit(bp, heading, &c.emission, &c.projectile, None, tiers, owner);
-                        $s.emit_rot = None;
-                        $s.emit_z = 0.0;
-                        for pr in &mut $s.projectiles[start..] {
-                            pr.hit.push(layer);
-                        }
-                    }
-                }
                 let n = $s.damage(i, dmg.round() as i32, &mut $kids);
                 $s.distribute = (true, false);
                 // FreezeModel.applyAfterDamage: Projectile.CollideBloon runs the behaviours by
@@ -3652,7 +3662,7 @@ macro_rules! collide_pass {
                 // Knockback.Collide (VERIFIED-DISASM @0xce56e0), after the damage: on what the
                 // hit bloon is now and what it split into (their timer starts with them: they
                 // don't move this frame; recording dart_500), unless it
-                // already has it or isn't valid for pushback (IsBloonValidForPushback: on the
+                // isn't valid for pushback (IsBloonValidForPushback: on the
                 // map; its near-the-exit checks aren't done). It turns at once: a first child
                 // that already moved this frame moves at the new speed.
                 if let Some(kb) = $s.projectiles[$p].spec.knockback.clone() {
@@ -3674,13 +3684,17 @@ macro_rules! collide_pass {
                         // The hit bloon decides for its children (they carry its mutator on;
                         // recording dart_520: a Black's second Red, made behind the first
                         // on-map segment, goes back with it).
-                        let ok = *valid.get_or_insert(!b.effects.iter().any(|e| matches!(e.kind, EffectKind::Knock { .. })) && on_map(b.pos, 0.0) && spawn_ok && past_entry);
+                        // (A bloon already knocked back takes it again: Knockback.Collide's
+                        // IsMutatedBy check isn't for its own mutator; another Knockback mutator goes on
+                        // with a full lifespan. INFERRED from recording desperado_004 rt 261: a third
+                        // pellet a frame after the first two keeps the MOAB going back 12 frames, not 11.)
+                        let ok = *valid.get_or_insert(on_map(b.pos, 0.0) && spawn_ok && past_entry);
                         let immune = $s.defs[b.kind].bad_immunity
                             && ($s.mutator_data.bad_immunity_ids.iter().any(|$p| "Knockback".starts_with($p.as_str())) || $s.mutator_data.bad_immunity_tags.iter().any(|t| "Knockback".contains(t.as_str())));
                         if immune {
                             continue;
                         }
-                        if !ok || b.effects.iter().any(|e| matches!(e.kind, EffectKind::Knock { .. })) {
+                        if !ok {
                             continue;
                         }
                         b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Knock { m }, id: "Knockback".into(), frames_left: (kb.lifespan * FPS).round(), total: (kb.lifespan * FPS).round(), added: $s.sim_elapsed, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
