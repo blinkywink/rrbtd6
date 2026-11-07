@@ -1466,6 +1466,10 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// DamageModifierUnstableConcoction (set as an Unstable Concoction explosion is made): extra
+    /// damage on (non-MOAB, MOAB-class) bloons.
+    #[serde(skip)]
+    pub unstable_add: Option<(f32, f32)>,
     /// RemoveBloonModifiersModel.cleanseRegen / cleanseFortified / cleanseLead.
     #[serde(default)]
     pub cleanse_regrow: bool,
@@ -1542,6 +1546,12 @@ pub struct Proj {
     /// CollideExtraPierceReductionModel: pierce each hit uses (1 + extraAmount).
     #[serde(default = "one")]
     pub pierce_cost: f32,
+    /// MorphBloonModel.bloonId: what a hit bloon becomes.
+    #[serde(default)]
+    pub morph_to: Option<String>,
+    /// CollideExtraPierceReductionModel with a bloonTag: (tag, extra) on hits on such bloons.
+    #[serde(default)]
+    pub pierce_tags: Vec<(String, f32)>,
     /// ProjectileModel.ignorePierceExhaustion: stays at 0 pierce instead of being exhausted.
     #[serde(default)]
     pub keep_spent: bool,
@@ -2419,6 +2429,9 @@ pub struct EffectSpec {
     /// EmitOnPopModel.ignoreSameFrameDegrade: no emission for a pop on the frame it went on.
     #[serde(default)]
     pub ignore_same_frame: bool,
+    /// UnstableConcoctionSplashModel's damages (kind "unstable").
+    #[serde(default)]
+    pub unstable: Option<UnstableDmg>,
     #[serde(default)]
     pub glue: u32,
     #[serde(default = "yes")]
@@ -2602,4 +2615,19 @@ pub struct RandomPos {
     /// areaType Water (Piranha's spawner).
     #[serde(default)]
     pub water: bool,
+}
+
+/// UnstableConcoctionSplashModel: the explosion's damage by the exploding bloon's baseId.
+#[derive(Deserialize, Clone, Debug)]
+pub struct UnstableDmg {
+    #[serde(default)]
+    pub bloon_map: Vec<(String, f32)>,
+    #[serde(default)]
+    pub bloon: f32,
+    #[serde(default)]
+    pub moab_map: Vec<(String, f32)>,
+    #[serde(default)]
+    pub boss_moab: f32,
+    #[serde(default)]
+    pub moab: f32,
 }

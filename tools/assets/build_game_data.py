@@ -463,6 +463,23 @@ def main():
                                     "projectile": projectile(deref(df["projectile"]), depth + 1),
                                     "emission": emission(deref(df.get("emission"))),
                                     "ignore_same_frame": bool(df.get("ignoreSameFrameDegrade", False))})
+                # UnstableConcoctionSplashModel (Unstable Concoction): on each degrade its projectile
+                # (MoabExplode) where the bloon is, its DamageModifierUnstableConcoction set from the
+                # bloon's baseId (baseIdToBloonDmg / baseIdToMoabDmg, else the defaults; a boss's
+                # moab damage bossToMoabDmg).
+                if d and d["type"] == "UnstableConcoctionSplashModel" and depth < 3 and deref(d["f"].get("projectile")):
+                    df = d["f"]
+                    def dmap(v):
+                        m = deref(v)
+                        return [[k, float(x)] for k, x in m] if isinstance(m, list) else []
+                    effects.append({"kind": "unstable", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
+                                    "layers": sf.get("layers", 1),
+                                    "projectile": projectile(deref(df["projectile"]), depth + 1),
+                                    "emission": emission(deref(df.get("emission"))),
+                                    "ignore_same_frame": bool(df.get("ignoreSameFrameDegrade", False)),
+                                    "unstable": {"bloon_map": dmap(df.get("baseIdToBloonDmg")), "bloon": df.get("defaultBloonDmg", 0.0),
+                                                 "moab_map": dmap(df.get("baseIdToMoabDmg")), "boss_moab": df.get("bossToMoabDmg", 0.0),
+                                                 "moab": df.get("defaultMoabDmg", 0.0)}})
                 # EmitOnDestroyModel on a bloon (Glue Liquefier's linger): when the bloon is
                 # destroyed its projectile comes out there. dontCopy: degrading, only the bloon
                 # itself (the first child) keeps it.
@@ -498,10 +515,16 @@ def main():
             if sf.get("chance", 0.0) > 0.0:
                 for e in effects[n0:]:
                     e["chance"] = sf["chance"]
+            # A mutator with no behaviour this exports (Rubber to Gold's GiveCashOnPop x1): still on
+            # the bloon for its lifespan, which FilterMutatedTarget looks for.
+            if len(effects) == n0 and sf.get("mutationId"):
+                effects.append({"kind": "mark", "id": sf["mutationId"], "lifespan": sf.get("lifespan", 0.0),
+                                "layers": sf.get("layers", 1), "mult": 1.0, "damage": 1.0,
+                                "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
         # RemoveDamageTypeModifierModel (Embrittlement, Relentless Glue): the hit bloon (and
         # `layers` of its children) loses these bloonProperties (Lead 1, Frozen 16) for
         # `lifespan`: sharp shots can pop it.
-        for s in pb.get("RemoveDamageTypeModifierModel", []):
+        for s in pb.get("RemoveDamageTypeModifierModel", []) + pb.get("RemoveBloonTypeModifierModel", []):
             sf = s["f"]
             if sf.get("bloonPropertiesToRemove"):
                 effects.append({"kind": "unarmor", "id": sf.get("mutationId") or "RemoveDamageType", "lifespan": sf.get("lifespan", 0.0),
@@ -873,7 +896,11 @@ def main():
         eat = (pb.get("EatBloonModel") or [None])[0]
         out["eat"] = {"capacity": eat["f"]["rbeCapacity"], "cash_mult": eat["f"]["rbeCashMultiplier"]} if eat else None
         # CollideExtraPierceReductionModel: each hit uses this much more pierce.
-        out["pierce_cost"] = 1.0 + sum(c["f"].get("extraAmount", 0) for c in pb.get("CollideExtraPierceReductionModel", []))
+        # (By tag when one is given: each hit on a bloon with that tag uses extraAmount more.)
+        tagged = [c["f"] for c in pb.get("CollideExtraPierceReductionModel", []) if c["f"].get("bloonTag")]
+        out["pierce_cost"] = 1.0 + sum(c["f"].get("extraAmount", 0) for c in pb.get("CollideExtraPierceReductionModel", []) if not c["f"].get("bloonTag"))
+        out["pierce_tags"] = [[c["bloonTag"], float(c.get("extraAmount", 0))] for c in tagged]
+        out["morph_to"] = next((m["f"].get("bloonId") for m in pb.get("MorphBloonModel", [])), None)
         # ProjectileModel.ignorePierceExhaustion: Projectile.CollideBloon (@0xc8b970) doesn't
         # exhaust it at 0 pierce (a Wall of Fire waits for its RefreshPierce).
         out["keep_spent"] = bool(f.get("ignorePierceExhaustion"))

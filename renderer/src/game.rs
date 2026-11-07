@@ -658,7 +658,7 @@ pub enum EffectKind {
     /// EmitOnPopModel: fired where the bloon pops.
     /// EmitOnPop: `ignore` its model's ignoreSameFrameDegrade, `skip` the behaviour's
     /// ignoringSameFrameDegrade (set by Initialise, cleared by Process and the first PreDegrade).
-    PopEmit { proj: Box<Proj>, emission: Box<Emission>, ignore: bool, skip: bool },
+    PopEmit { proj: Box<Proj>, emission: Box<Emission>, ignore: bool, skip: bool, unstable: Option<Box<crate::data::UnstableDmg>> },
     /// CarryProjectile: the projectiles it made (uids; empty until Attatched emits them), which
     /// sit where the bloon is and go with the mutator.
     Carry { proj: Box<Proj>, emission: Box<Emission>, uids: Vec<u64> },
@@ -1433,7 +1433,7 @@ pub struct Tower {
     pub brews: Vec<ActiveBrew>,
     /// TargetTrackOrDefaultAcidPool's points (shuffled track segments) and its index, with the
     /// tiers they were made for.
-    pub acid_pts: Option<(Vec<[f32; 2]>, usize, [u8; 3])>,
+    pub acid_pts: Option<(Vec<[f32; 2]>, usize, ([u8; 3], u32))>,
     /// AcidPoolEmission.currentIndex: splashes emitted.
     pub acid_splashes: u32,
     /// Set for sub-towers (Engineer sentries): not selectable, upgradable or sellable.
@@ -2413,6 +2413,9 @@ pub struct Buff {
     pub speed_mult: f32,
     pub camo: bool,
     pub immune: Option<u32>,
+    /// AddAcidicMixtureToProjectileMutator.Mutate (VERIFIED-DISASM @0x1811b8a00): the tower's
+    /// DamageModels lose the Lead immunity bit (immuneBloonProperties & ~1).
+    pub acid: bool,
     pub cash_mult: f32,
     /// MonkeyCityIncomeSupportModel: the tower's cash generation x this.
     pub income_mult: f32,
@@ -2446,6 +2449,7 @@ impl Default for Buff {
             speed_mult: 0.0,
             camo: false,
             immune: None,
+            acid: false,
             cash_mult: 1.0,
             income_mult: 1.0,
             ability_cd_mult: 1.0,
@@ -2526,7 +2530,7 @@ impl Buff {
     /// The projectile as fired under these buffs (None if unchanged). Damage-type support reaches
     /// sub-projectiles too (explosions); pierce and speed only the shot itself.
     fn projectile(&self, p: &Proj) -> Option<Proj> {
-        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.immune.is_none() && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
+        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
             return None;
         }
         let mut q = p.clone();
@@ -2584,6 +2588,20 @@ impl Buff {
             fan(&mut q, fc.immune);
         }
         q.speed *= 1.0 + self.speed_mult;
+        if self.acid {
+            fn unlead(p: &mut Proj) {
+                if p.damage_model {
+                    p.immune &= !1;
+                }
+                for c in &mut p.on_contact {
+                    unlead(&mut c.projectile);
+                }
+                for e in &mut p.on_exhaust {
+                    unlead(&mut e.projectile);
+                }
+            }
+            unlead(&mut q);
+        }
         // HYPOTHESIS P-BREW: brew damage reaches every damaging (sub-)projectile the tower fires.
         if self.damage_add != 0.0 || self.damage_mult != 1.0 || !self.tag_mods.is_empty() {
             // SubCommanderSupport.MutatorTower.Mutate (VERIFIED-DISASM @0x180d910d0): a
@@ -2767,6 +2785,8 @@ pub struct Game {
     /// A pop in progress: how deep its layers go, whether a child popped too, and the first id
     /// it made (the game works out a hit's whole result first, so in-between layers never exist).
     pop_depth: u32,
+    /// Bloon.Damage with blockSpawnChildren for this hit (MorphBloon).
+    block_children: bool,
     pop_nested: bool,
     pop_first_id: u64,
     /// next_id when this step began: bloons from here on were made this frame.
@@ -3468,6 +3488,7 @@ macro_rules! collide_pass {
             }
             let id = b.id;
             let layer = b.layer;
+            let tag_extra: f32 = pr.spec.pierce_tags.iter().filter(|(t, _)| d.tags.iter().any(|g| g == t)).map(|x| x.1).sum();
             let immune = pr.spec.immune & b.properties(d) != 0;
             // HYPOTHESIS P-CRITTEXT: ShowTextOnHit's "Crit!" shows on crit shots only.
             let crit_text = (pr.crit.is_some() && pr.spec.hit_text).then_some(b.pos);
@@ -3502,6 +3523,11 @@ macro_rules! collide_pass {
                 if tag_match(&d.tags, m) {
                     dmg = dmg * m.mult + m.add;
                 }
+            }
+            // DamageModifierUnstableConcoction.GetDamageAdditive (VERIFIED-DISASM @0x180cb5870):
+            // moabDamage on a MOAB-class bloon, else bloonDamage.
+            if let Some((bd, md)) = pr.spec.unstable_add {
+                dmg += if d.is_moab { md } else { bd };
             }
             for m in &pr.spec.type_mods {
                 let name = &$s.names[b.kind];
@@ -3656,6 +3682,31 @@ macro_rules! collide_pass {
                     if spec.cleanse_lead && $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Lead") {
                         let hp = $s.bloons[i].hp;
                         $s.damage(i, hp, &mut $kids);
+                    }
+                }
+                // MorphBloon.Collide (VERIFIED-DISASM @0xccec80): not a BAD, a boss or a single-layer
+                // bloon: Bloon.Damage for its total health less 1 with children blocked, then (still
+                // alive) its model becomes bloonId (Bloon Master Alchemist's Red).
+                if let Some(to) = $s.projectiles[$p].spec.morph_to.clone() {
+                    let d0 = &$s.defs[$s.bloons[i].kind];
+                    if !d0.tags.iter().any(|t| t == "Bad" || t == "Boss") && d0.layer_number >= 2 {
+                        let mut k = $s.bloons[i].kind;
+                        let mut total = $s.bloons[i].hp;
+                        while let Some(&c) = $s.child_kinds[k].first() {
+                            total += $s.defs[c].max_health;
+                            k = c;
+                        }
+                        let id0 = $s.bloons[i].id;
+                        $s.block_children = true;
+                        $s.damage(i, total - 1, &mut $kids);
+                        $s.block_children = false;
+                        if let (Some(j), Some(r)) = ($s.bloons.iter().position(|b| b.id == id0), $s.names.iter().position(|n| *n == to)) {
+                            $s.bloons[j].kind = r;
+                            $s.bloons[j].hp = $s.defs[r].max_health;
+                        }
+                    }
+                    if !$s.bloons.get(i).is_some_and(|b| b.id == id) {
+                        continue;
                     }
                 }
                 $s.pre_damage_effects(i, $p, dmg);
@@ -3892,6 +3943,8 @@ macro_rules! collide_pass {
                 pr.seek_t = 0;
             }
             pr.pierce -= pr.spec.pierce_cost;
+            // (CollideExtraPierceReduction with a bloonTag: more on such bloons.)
+            pr.pierce -= tag_extra;
             // Projectile.CollideBloon (VERIFIED-DISASM @0xc8b970): Exhausted once pierce is
             // under 1 (not ignorePierceExhaustion): a fractional rest is spent (recording
             // ninja_040: a Shinobi-buffed shuriken goes with 0.16 left).
@@ -4289,6 +4342,7 @@ impl Game {
             grid_rank_pre: None,
             proj_list: Vec::new(),
             pop_depth: 0,
+            block_children: false,
             pop_nested: false,
             pop_first_id: 0,
             step_first_id: 0,
@@ -5040,9 +5094,13 @@ impl Game {
     /// A round / sandbox emission onto a spawn path.
     pub(crate) fn spawn_emitted(&mut self, kind: usize, path: u8) -> u64 {
         let id = self.spawn_on(kind, 0.0, path);
+        let moab = self.defs[kind].is_moab;
         if let Some(b) = self.bloons.last_mut() {
             b.fresh = true;
             b.prev = [f32::INFINITY; 2];
+            // (Its Bloon.Move runs in the frame it's emitted, held at the spawn point: Position.z
+            // is set; recording alch_005 rt 31, a potion at a MOAB spawned at 30 arcs up to 120.)
+            b.height = if moab { 120.0 } else { 20.0 };
         }
         id
     }
@@ -7692,7 +7750,9 @@ impl Game {
                 .collect();
             near.sort_by(|a, b| a.0.total_cmp(&b.0));
             for (_, o) in near.into_iter().take(m.max as usize) {
-                self.towers[o].morph = Some((m.tier.clone(), m.display.clone(), m.lifespan * FPS));
+                // (Counted down from the next frame: recording alch_052, a Dart Monkey transformed at
+                // 120 is itself again at 1320.)
+                self.towers[o].morph = Some((m.tier.clone(), m.display.clone(), m.lifespan * FPS + 1.0));
             }
         }
         if let Some(l) = &a.loan {
@@ -8471,7 +8531,9 @@ impl Game {
                 // the interval by 1.1; +10% range).
                 // (A brew landed this frame acts from the next: the potion's Process comes after the
                 // towers'; recording alch_400 rt 2974, the Dart Monkey's next throw at 2976.)
-                for ab in self.towers[t].brews.iter().filter(|a| a.added != self.sim_elapsed) {
+                // (Its last frame the mutator is already gone for the tower's shots: recording alch_300 rt 799, a
+                // dart spawned as the berserker brew runs out has no extra pierce.)
+                for ab in self.towers[t].brews.iter().filter(|a| a.added != self.sim_elapsed && a.frames_left > 1.0) {
                     let br = &ab.brew;
                     b.damage_add += br.damage;
                     b.pierce_add += br.pierce;
@@ -8482,6 +8544,9 @@ impl Game {
                         b.rate_mult *= 1.0 - br.rate;
                     }
                     b.tag_mods.extend(br.tag_mods.iter().cloned());
+                    if br.kind == "acid" {
+                        b.acid = true;
+                    }
                 }
                 // TurboModel (Turbo Charge): interval x multiplier, +extraDamage.
                 if let Some(tb) = &self.towers[t].turbo {
@@ -8593,7 +8658,7 @@ impl Game {
     /// Bloon.Damage. (A bloon in a Gyrfalcon's claws has blockSpawnChildrenCount: of what it pops
     /// into only the one carrying on is made, whatever hit it; recordings beast_001, beast_032.)
     fn damage(&mut self, i: usize, dmg: i32, out_children: &mut Vec<u64>) -> u64 {
-        let held = self.pop_depth == 0 && self.bloons[i].held;
+        let held = self.pop_depth == 0 && (self.bloons[i].held || self.block_children);
         let (id, start) = (self.bloons[i].id, out_children.len());
         let n = self.damage_inner(i, dmg, out_children);
         // TheBlazingSun.OnBloonDestroy(projectile, bloon, poppedBy, damageResult): the hit bloon's
@@ -8719,9 +8784,26 @@ impl Game {
         let b = &mut self.bloons[i];
         let mut pop_emits = Vec::new();
         for e in b.effects.iter_mut().filter(|_| top) {
-            if let EffectKind::PopEmit { proj, emission, skip, .. } = &mut e.kind {
+            if let EffectKind::PopEmit { proj, emission, skip, unstable, .. } = &mut e.kind {
                 if !std::mem::take(skip) {
-                    pop_emits.push((pp0, proj.clone(), emission.clone(), e.owner, rot, layer, bz));
+                    // UnstableConcoctionSplash.PreDegrade (VERIFIED-DISASM @0x18103b4e0): the
+                    // explosion's DamageModifierUnstableConcoction: bloonDamage from baseIdToBloonDmg
+                    // by this bloon's baseId (else defaultBloonDmg), moabDamage from baseIdToMoabDmg
+                    // (else bossToMoabDmg for a boss, defaultMoabDmg).
+                    let proj = match unstable {
+                        Some(u) => {
+                            let df = &self.defs[kind];
+                            let base = df.base_id.as_str();
+                            let bd = u.bloon_map.iter().find(|(k, _)| k == base).map_or(u.bloon, |x| x.1);
+                            let boss = df.tags.iter().any(|t| t == "Boss");
+                            let md = u.moab_map.iter().find(|(k, _)| k == base).map_or(if boss { u.boss_moab } else { u.moab }, |x| x.1);
+                            let mut q = (**proj).clone();
+                            q.unstable_add = Some((bd, md));
+                            Box::new(q)
+                        }
+                        None => proj.clone(),
+                    };
+                    pop_emits.push((pp0, proj, emission.clone(), e.owner, rot, layer, bz));
                 }
             }
         }
@@ -9854,6 +9936,9 @@ impl Game {
                     *f -= 1.0;
                     if *f <= 0.0 {
                         tw.morph = None;
+                        // (Its own weapons come back new, ready: recording alch_052, the Dart
+                        // Monkey's lastEmission is int.MinValue at 1320.)
+                        tw.weapons.clear();
                                 }
                 }
             }
@@ -9919,6 +10004,29 @@ impl Game {
             let model_changed = self.towers[t].model_clock.is_some();
             self.towers[t].model_clock = None;
             let pos = self.attack_pos(t);
+            // TargetTrackOrDefaultAcidPool: its points (in-range track segments, nearest the tower
+            // first, shuffled with syncedRandom.Next(i, n)) are made again when the model changes,
+            // a range change included, throwing or not (recording alch_052: the transformation at 121
+            // and its end at 1320 each shuffle anew, 36 and 12 points).
+            for attack in tier.attacks.iter().filter(|a| a.pool_fallback) {
+                let range = buff.attack_range(attack);
+                let key = (self.towers[t].tiers, range.to_bits());
+                if self.towers[t].acid_pts.as_ref().is_none_or(|a| a.2 != key) {
+                    let no_moab = attack.exclude_tags.iter().any(|x| x == "Moabs");
+                    let tp = self.towers[t].pos;
+                    let mut segs: Vec<[f32; 2]> = self.visible_segments(pos, range, no_moab, attack.through_walls).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
+                    let d2 = |q: &[f32; 2]| (q[0] - tp[0]) * (q[0] - tp[0]) + (q[1] - tp[1]) * (q[1] - tp[1]);
+                    segs.sort_by(|a, b| d2(a).total_cmp(&d2(b)));
+                    let n = segs.len() as i32;
+                    for i in 0..n {
+                        let j = self.synced_range(i, n);
+                        segs.swap(i as usize, j as usize);
+                    }
+                    // (Its enumeration goes on where it was: recording alch_052 rt 1321.)
+                    let idx = self.towers[t].acid_pts.as_ref().map_or(0, |a| a.1);
+                    self.towers[t].acid_pts = Some((segs, idx, key));
+                }
+            }
             // HYPOTHESIS P-ROUNDRATE: StartOfRoundRateBuffModel.modifier multiplies the weapon
             // interval for the first `duration` seconds of each round (0.25 = 4x as fast).
             let start_mult = match &tier.round_start_rate {
@@ -9984,7 +10092,6 @@ impl Game {
                         st.vagrant_n = (n.0, st.zone_in.as_ref().map_or(n.1, |z| z.len() as u32));
                     }
                     st.rate_frames = rate_frames(st.rate(w));
-                    if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT chg {} {} dk {} sk {} vag {:?} br {} rf {}", self.round_clock, w.name, st.dist_k, st.standoff_k, st.vagrant_n, st.buff_rate, st.rate_frames); } // DBGX
                 }
             }
             if has_vagrant {
@@ -10499,19 +10606,6 @@ impl Game {
                 // (Only as a throw starts: Weapon.Process's FindTarget; recording alch_502, one point per
                 // throw that had no bloon, in turn.)
                 if attack.pool_fallback && best.is_none() && self.can_throw(t, wi, &attack) && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
-                    let tiers = self.towers[t].tiers;
-                    if self.towers[t].acid_pts.as_ref().is_none_or(|a| a.2 != tiers) {
-                        let tp = self.towers[t].pos;
-                        let mut segs: Vec<[f32; 2]> = self.visible_segments(pos, range, no_moab, attack.through_walls).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
-                        let d2 = |q: &[f32; 2]| (q[0] - tp[0]) * (q[0] - tp[0]) + (q[1] - tp[1]) * (q[1] - tp[1]);
-                        segs.sort_by(|a, b| d2(a).total_cmp(&d2(b)));
-                        let n = segs.len() as i32;
-                        for i in 0..n {
-                            let j = self.synced_range(i, n);
-                            segs.swap(i as usize, j as usize);
-                        }
-                        self.towers[t].acid_pts = Some((segs, 0, tiers));
-                    }
                     if let Some((pts, idx, _)) = self.towers[t].acid_pts.as_mut() {
                         if *idx >= pts.len() {
                             *idx = 0;
@@ -10866,8 +10960,13 @@ impl Game {
                             let aim_from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
                             tw.game_rot = Some(RAD2DEG * crt_atan2(target[0] - aim_from[0], -(target[1] - aim_from[1])));
                             tw.turret_rel = tw.game_rot.unwrap() - tw.base_rot;
-                            if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM turn rt {} w {} aim {} rot {:?}", self.round_clock, w, aim_id, tw.game_rot); } // DBGX
                         }
+                    } else if st.anim >= 0 && aim_id == 0 && !ambient && attack.rotate && !turning && weapon.aim_offset.is_none() && extra_rot == 0.0 {
+                        // (A point Target too: recording alch_052 rt 1321, the acid-pool throw at a
+                        // track point turns the Alchemist as it starts, not at the release.)
+                        let aim_from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
+                        tw.game_rot = Some(RAD2DEG * crt_atan2(aimed[0] - aim_from[0], -(aimed[1] - aim_from[1])));
+                        tw.turret_rel = tw.game_rot.unwrap() - tw.base_rot;
                     }
                     if let (Some(p), false) = (started, ambient) {
                         if attack.rotate && !turning {
@@ -11014,7 +11113,6 @@ impl Game {
                             let body_rot = (!body_turns && (target_id == 0 || tw.sub.is_none())).then(|| tw.game_rot.unwrap_or(0.0));
                             if grot.is_some() && body_turns {
                                 tw.game_rot = grot;
-                                if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM emitrot rt {} w {} target {} rot {:?}", self.round_clock, w, target_id, grot); } // DBGX
                                 tw.turret_rel = grot.unwrap() - tw.base_rot;
                                 // On a turning base the turret's angle is its base's plus its own
                                 // (TransformBehavior), as the shot reads it (recording
@@ -11048,7 +11146,9 @@ impl Game {
                                 tw.shots += 1;
                                 tw.weapons[w].emits += 1;
                             }
-                            for ab in &mut tw.brews {
+                            // (A missed-frame extra shot isn't counted: recording alch_250 rt 141,
+                            // the Dart Monkey's double at 137 leaves its acid a throw longer.)
+                            for ab in tw.brews.iter_mut().filter(|_| !double) {
                                 ab.shots_left = ab.shots_left.saturating_sub(1);
                             }
                             // Ammo crate: boosts the tower's own shots once its drop delay has passed.
@@ -11503,7 +11603,6 @@ impl Game {
                                     }
                                 }
                                 found.sort_by(|x, y| x.0.total_cmp(&y.0));
-                                if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM line rt {} from {:?} a {} r {} found {:?} bloons {:?}", self.round_clock, from, a, r, found, self.bloons.iter().map(|b| (b.id, b.pos, b.cell_pos)).collect::<Vec<_>>()); } // DBGX
                                 let ids: Vec<u64> = found.into_iter().map(|f| f.1).collect();
                                 let uids: Vec<u64> = self.projectiles[start..].iter().map(|pr| pr.uid).collect();
                                 for pr in &mut self.projectiles[start..] {
@@ -11690,7 +11789,6 @@ impl Game {
                                 }
                                 x + 1.0
                             });
-                            if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT {} w{w} k {dist_k} s {standoff_k} vag {:?} rate {} rf {} sun {}", self.round_clock, vagrant_n, weapon.rate, self.towers[t].weapons[w].rate_frames, self.towers[t].weapons[w].sun_stacks); } // DBGX
                             let st = &mut self.towers[t].weapons[w];
                             st.standoff_k = standoff_k;
                             st.dist_k = dist_k;
@@ -11719,7 +11817,7 @@ impl Game {
                             if st.burst_left < 1 {
                                 st.burst_left = bf.count;
                             } else {
-                                st.last = clock + bf.frames as i64 - st.rate_frames;                                if std::env::var_os("DBGB").is_some() { eprintln!("DBGBT burst w{w} clock {clock} frames {} rf {} -> {}", bf.frames, st.rate_frames, st.last); } // DBGX
+                                st.last = clock + bf.frames as i64 - st.rate_frames;
                             }
                         }
                     if weapon.burst.as_ref().is_some_and(|b| b.always_empty && !b.over_time) {
@@ -12148,7 +12246,6 @@ impl Game {
             let Some([_, _, duration, cooldown]) = self.tier(t).and_then(|tr| tr.vigilante) else { continue };
             let since = self.towers[t].vigilante_at.map(|a| now - a);
             let (duration, cool) = (duration as i64, ((1.0f32 / (0.0 + 1.0)) * cooldown * (1.0 / 60.0) * 60.0) as i64);
-            if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM vig now {now} since {since:?} dur {duration} cool {cool}"); } // DBGX
             if since.is_some_and(|s| s <= duration + cool) {
                 continue;
             }
@@ -13305,8 +13402,9 @@ impl Game {
                     Some((fx, scale)) => EffectKind::PopFx { fx: fx.as_str().into(), scale: *scale },
                     None => continue,
                 },
-                "pop_emit" => match &e.projectile {
+                "pop_emit" | "unstable" => match &e.projectile {
                     Some(p) => EffectKind::PopEmit {
+                        unstable: e.unstable.clone().map(Box::new),
                         ignore: e.ignore_same_frame,
                         skip: e.ignore_same_frame,
                         proj: p.clone(),
@@ -13319,7 +13417,8 @@ impl Game {
             // HYPOTHESIS P-LIFEFRAMES: the mutator's lifespanFrames is (int)(lifespan x 60) in f32
             // (recording ninja_005 rt 204: a 0.325 s stun on a MOAB, 19.5 in f32, lasts 19
             // frames; no other recording changes).
-            let lf = { let f = lifespan * FPS; if f.is_finite() && f < 1e9 { f.trunc() } else { f } };
+            // (A lifespan of -1 is a mutator that stays: Unstable Concoction's UnstableExplosion; recording alch_032, its one throw a game.)
+            let lf = if lifespan < 0.0 { f32::INFINITY } else { let f = lifespan * FPS; if f.is_finite() && f < 1e9 { f.trunc() } else { f } };
             // Bloon.AddMutatorForNumLayers (VERIFIED-DISASM @0xfb01f0) gives layer charges only
             // for layers > 0: one with 0 is never depleted and goes to the children
             // (CopyMutatorsFrom; recording engineer_032, a foamed Black's pinned Pink half speed).
