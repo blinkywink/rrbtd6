@@ -35,8 +35,11 @@ trap 'rm -f "$UD/scenario.json"; rm -rf "$LOCK"' EXIT INT TERM HUP
 # (Process checks through PowerShell: tasklist can hang on this machine.)
 running() { powershell -NoProfile -Command "if (Get-Process BloonsTD6 -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"; }
 kill_game() { powershell -NoProfile -Command "Get-Process BloonsTD6 -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true; }
-for sc in "$@"; do
-  name=$(basename "$sc" .json)
+# One attempt: 0 when the recording came back. A game that stops writing its recording for
+# STALL seconds (a frozen launch or menu) is killed and counts as a failed attempt.
+STALL="${STALL:-90}"
+record_one() {
+  sc=$1; name=$(basename "$sc" .json)
   cp "$sc" "$UD/scenario.json"
   # The previous run's game must be gone before its log can be removed.
   kill_game
@@ -56,14 +59,17 @@ for sc in "$@"; do
     if grep -q "scenario $name:" "$GAME/MelonLoader/Latest.log" 2>/dev/null; then started=1; break; fi
     sleep 3
   done
-  ok=""
+  ok=""; last=-1; still=0
   for i in $(seq 1 400); do
     [ -n "$started" ] || break
     if grep -q "SimRecorder done" "$GAME/MelonLoader/Latest.log" 2>/dev/null; then ok=1; break; fi
     running || break
+    size=$(stat -c %s "$UD/$name.rec" 2>/dev/null || echo 0)
+    if [ "$size" = "$last" ]; then still=$((still + 3)); else still=0; last=$size; fi
+    if [ "$still" -ge "$STALL" ]; then echo "$name: stalled ${STALL}s, killing the game"; kill_game; break; fi
     sleep 3
   done
-  result=$(grep "SimRecorder done" "$GAME/MelonLoader/Latest.log" | tail -1)
+  result=$(grep "SimRecorder done" "$GAME/MelonLoader/Latest.log" 2>/dev/null | tail -1)
   if [ -n "$ok" ] && [ -f "$UD/$name.rec" ]; then
     cp "$UD/$name.rec" "$OUT/"
     cp "$UD"/*.map "$OUT/" 2>/dev/null || true
@@ -71,9 +77,14 @@ for sc in "$@"; do
     cp "$UD/$name.fx" "$OUT/" 2>/dev/null || true
     cp "$UD/${name}_"*.png "$OUT/" 2>/dev/null || true
     echo "$name: $result"
-  else
-    echo "$name: FAILED ($result)"
-    grep "SimRecorder" "$GAME/MelonLoader/Latest.log" | tail -5
+    return 0
   fi
+  echo "$name: FAILED ($result)"
+  grep "SimRecorder" "$GAME/MelonLoader/Latest.log" 2>/dev/null | tail -5
+  return 1
+}
+for sc in "$@"; do
+  # A failed or frozen launch gets one more try.
+  record_one "$sc" || { echo "$(basename "$sc" .json): retrying"; record_one "$sc" || true; }
 done
 kill_game

@@ -1050,6 +1050,8 @@ pub struct WeaponState {
     /// Where that throw was aimed, and at which bloon (0: a point): the throw stays on the
     /// target it started with (recorded: the tower keeps turning to it as it leaves range).
     pub aim_at: [f32; 2],
+    /// The Target's height as the throw started (a track point's 2).
+    pub aim_z0: f32,
     pub aim_id: u64,
     /// LimitProjectile.limitEmissionUntilTime (Simulation.time).
     pub limit_until: i64,
@@ -1087,6 +1089,8 @@ pub struct WeaponState {
     /// BurstWeaponBehavior.Process's overrideTarget (Weapon+0xdc) with alwaysEmptyClip: the point
     /// its attack range ahead along the tower's rotation as this weapon's frame ended.
     pub empty_pt: Option<[f32; 2]>,
+    /// The tower a brew throw in progress is aimed at.
+    pub brew_to: Option<u64>,
     /// The range its Vagrant bloon zone was last processed with.
     pub zone_r: f32,
     /// Its throws (EmissionWithOffsets takes its markers in turn per weapon: recording sub_052,
@@ -1107,6 +1111,7 @@ impl WeaponState {
             last: NEVER,
             anim: -1,
             aim_at: [0.0; 2],
+            aim_z0: 0.0,
             aim_id: 0,
             limit_until: 0,
             aim_off: [0.0; 2],
@@ -1128,6 +1133,7 @@ impl WeaponState {
             round_shots: 0,
             burst_left: w.burst.as_ref().map_or(0, |b| b.count),
             empty_pt: None,
+            brew_to: None,
             zone_r: 0.0,
             crit: (0, 0),
             frac_pierce: 0.0,
@@ -1425,6 +1431,9 @@ pub struct Tower {
     pub bank: f64,
     /// Alchemist brews on this tower.
     pub brews: Vec<ActiveBrew>,
+    /// TargetTrackOrDefaultAcidPool's points (shuffled track segments) and its index, with the
+    /// tiers they were made for.
+    pub acid_pts: Option<(Vec<[f32; 2]>, usize, [u8; 3])>,
     /// Set for sub-towers (Engineer sentries): not selectable, upgradable or sellable.
     pub sub: Option<SubTower>,
     /// The Heli's air unit; its attacks aim and fire from here.
@@ -1701,6 +1710,9 @@ pub struct ActiveBrew {
     pub shots_left: u32,
     /// Frames left (infinite without a time limit).
     pub frames_left: f32,
+    /// When it went on (Simulation.time): a brew landed this frame isn't counted down until the
+    /// next (the potion's Process comes after the towers').
+    pub added: u64,
 }
 
 impl Tower {
@@ -2095,6 +2107,8 @@ pub struct Projectile {
     pub crit: Option<f32>,
     /// CritRoll (Projectile.AddCritRoll): [chance, damageMultiplier, damageAdditive, rolled, crit].
     pub crit_roll: Option<[f32; 5]>,
+    /// A brew potion: the tower it was thrown at, and the brew it gives on arrival.
+    pub brew_to: Option<(u64, Box<crate::data::Brew>)>,
     /// Its FollowPath is mirrored (thrown by the other hand: FlipFollowPath).
     pub mirror: bool,
     pub hit: HitSet,
@@ -5811,6 +5825,7 @@ impl Game {
             idle_t: 0.0,
             bank: 0.0,
             brews: Vec::new(),
+            acid_pts: None,
             sub: None,
             air: None,
             ability_cd: HashMap::new(),
@@ -6653,6 +6668,7 @@ impl Game {
             idle_t: 0.0,
             bank: 0.0,
             brews: Vec::new(),
+            acid_pts: None,
             sub: Some(SubTower { frames_left: if spec.lifespan > 0.0 { spec.lifespan * FPS } else { f32::INFINITY }, age: 0.0, rounds_left: spec.rounds, pet, spec, parent, path_index: None, z: 250.0, born: self.round_clock }),
             air: None,
             ability_cd: HashMap::new(),
@@ -8442,13 +8458,17 @@ impl Game {
                 self.item_buffs(t, &mut b);
                 // HYPOTHESIS P-BREW: rateUp / rangeUp are fractions (+10% attack speed divides
                 // the interval by 1.1; +10% range).
-                for ab in &self.towers[t].brews {
+                // (A brew landed this frame acts from the next: the potion's Process comes after the
+                // towers'; recording alch_400 rt 2974, the Dart Monkey's next throw at 2976.)
+                for ab in self.towers[t].brews.iter().filter(|a| a.added != self.sim_elapsed) {
                     let br = &ab.brew;
                     b.damage_add += br.damage;
                     b.pierce_add += br.pierce;
                     b.range_mult += br.range;
+                    // (rateUp takes that fraction off the interval: recording alch_400, a Dart
+                    // Monkey's 57 frames turn to 48 under a 0.15 brew.)
                     if br.rate > 0.0 {
-                        b.rate_mult /= 1.0 + br.rate;
+                        b.rate_mult *= 1.0 - br.rate;
                     }
                     b.tag_mods.extend(br.tag_mods.iter().cloned());
                 }
@@ -9213,20 +9233,40 @@ impl Game {
     /// HYPOTHESIS P-BREWTARGET: a brew goes to the closest attacking tower in range that isn't
     /// on the ignore list and doesn't already have it (or a brew that replaces it).
     fn brew_target(&self, t: usize, brew: &Brew, range: f32) -> Option<usize> {
-        let pos = self.towers[t].pos;
-        (0..self.towers.len())
-            .filter(|&o| o != t)
-            .filter_map(|o| {
-                let ot = &self.towers[o];
-                let (name, def) = &self.tower_defs[ot.def];
-                let dd = (ot.pos[0] - pos[0]).powi(2) + (ot.pos[1] - pos[1]).powi(2);
-                let r = range + def.radius;
-                let has = ot.brews.iter().any(|a| a.brew.id == brew.id || a.brew.replaces.contains(&brew.id));
-                let attacks = self.tier(o).is_some_and(|ti| ti.attacks.iter().any(|a| a.brew.is_none() && !a.weapons.is_empty()));
-                (dd <= r * r && !has && attacks && !brew.ignore.contains(name)).then_some((dd, o))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, o)| o)
+        // BrewTargetting.GetTarget (VERIFIED-DISASM @0x180db27f0): TowerManager.GetClosestTowerInRange
+        // (@0x180c28d00): the towers in order, each that FilterTower (@0x180db25c0) passes and is
+        // within the attack's range (2D, squared, <=) closer than or as close as the last kept.
+        // FilterTower: not itself, not a sub-tower / paragon, not on towerIgnoreList (a MonkeyVillage
+        // with bottom path 4 or less is let through), not under any of ignoreMutationsByOrder (the
+        // berserker brews), with a weapon.
+        let p = self.towers[t].pos;
+        let mut best_d = range * range;
+        let mut best = None;
+        for o in 0..self.towers.len() {
+            if o == t {
+                continue;
+            }
+            let ot = &self.towers[o];
+            let name = self.tower_defs[ot.def].0.as_str();
+            if ot.sub.is_some() || ot.paragon.is_some() {
+                continue;
+            }
+            if brew.target_ignore.iter().any(|x| x == name) && !(name == "MonkeyVillage" && ot.tiers[2] <= 4) {
+                continue;
+            }
+            if ot.brews.iter().any(|a| a.brew.kind == "berserk") {
+                continue;
+            }
+            if !self.tier(o).is_some_and(|ti| ti.attacks.iter().any(|a| a.brew.is_none() && !a.weapons.is_empty())) {
+                continue;
+            }
+            let dd = (ot.pos[0] - p[0]) * (ot.pos[0] - p[0]) + (ot.pos[1] - p[1]) * (ot.pos[1] - p[1]);
+            if dd <= best_d {
+                best_d = dd;
+                best = Some(o);
+            }
+        }
+        best
     }
 
     /// TargetTrack (GetTargets <d__8>.MoveNext VERIFIED-DISASM @0xe0b7d0; TrackTargetSupplier
@@ -9726,8 +9766,15 @@ impl Game {
                     let v = x.1 + step;
                     x.1 = if 360.0 <= v { v - 360.0 } else { v };
                 }
+                let now = self.sim_elapsed;
                 for ab in &mut tw.brews {
-                    ab.frames_left -= 1.0;
+                    // (Recording alch_400: a 12 s berserker brew landed at 18 is gone for the
+                    // rethrow at 740, not 739.)
+                    // (Only while rounds run: recording alch_400, a brew over the round change at
+                    // 2002 lasts 720 round frames.)
+                    if ab.added != now && rounds_on {
+                        ab.frames_left -= 1.0;
+                    }
                 }
                 tw.brews.retain(|a| a.frames_left > 0.0 && a.shots_left > 0);
                 // Ability.Initialise (VERIFIED-DISASM @0x180df9... Initialise): cooldownTimeRemaining
@@ -9976,36 +10023,6 @@ impl Game {
                 // ability attacks may start or release shots. Timers above still advance.
                 if (self.sandbox && self.lives <= 0.0) || ((paused || fresh_attack || sub_paused.get(ai) == Some(&true)) && ai < tier.attacks.len()) || ai.checked_sub(tier.attacks.len()).is_some_and(|k| waiting.get(k) == Some(&true)) {
                     wi += attack.weapons.len();
-                    continue;
-                }
-                if let Some(brew) = &attack.brew {
-                    for weapon in &attack.weapons {
-                        let i = wi;
-                        wi += 1;
-                        let clock = if weapon.between_rounds { self.sim_elapsed as i64 } else { self.round_clock };
-                        if !self.towers[t].weapons[i].ready(clock) || !(self.sandbox || self.round_active || !self.bloons.is_empty()) {
-                            continue;
-                        }
-                        match self.brew_target(t, brew, buff.attack_range(attack)) {
-                            Some(o) => {
-                                self.towers[t].weapons[i].last = clock;
-                                let to = self.towers[o].pos;
-                                let tw = &mut self.towers[t];
-                                tw.angle = (to[1] - pos[1]).atan2(to[0] - pos[0]);
-                                tw.attack_t = 0.0;
-                                tw.idle_t = 0.0;
-                                let ot = &mut self.towers[o];
-                                ot.brews.retain(|a| a.brew.id != brew.id && !brew.replaces.contains(&a.brew.id));
-                                ot.brews.push(ActiveBrew {
-                                    brew: brew.clone(),
-                                    shots_left: brew.shots.max(1),
-                                    frames_left: if brew.lifespan > 0.0 { brew.lifespan * FPS } else { f32::INFINITY },
-                                });
-                                self.bursts.push(Burst { pos: to, radius: 8.0, fire: brew.kind == "berserk", ice: false });
-                            }
-                            None => {}
-                        }
-                    }
                     continue;
                 }
                 // Fast path: while every weapon stays on cooldown and outside its animation lead
@@ -10447,11 +10464,54 @@ impl Game {
                 if attack.while_fx.is_some() {
                     self.towers[t].attacking_fx = best.is_some();
                 }
+                // TargetTrackOrDefaultAcidPool.GetTargets (MoveNext @0x180e0af40): with no bloon target,
+                // the next of its points (index wrapping to 0), 2 up. The points come from
+                // TargetTrackOrDefault.GeneratePoints (@0x180e07640): the attack's visible in-range
+                // path segments in Close order (squared distance from the tower, stable), shuffled
+                // with syncedRandom.Next(i, n) for each i (recording alch_002: draws 2, 3, 11, ...
+                // before the first frame; the first potion goes to the segment then at the front).
+                let mut acid_used = false;
                 if attack.pool_fallback && best.is_none() && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
-                    best = self.track_point(pos, range, 0.0);
+                    let tiers = self.towers[t].tiers;
+                    if self.towers[t].acid_pts.as_ref().is_none_or(|a| a.2 != tiers) {
+                        let tp = self.towers[t].pos;
+                        let mut segs: Vec<[f32; 2]> = self.visible_segments(pos, range, no_moab, attack.through_walls).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
+                        let d2 = |q: &[f32; 2]| (q[0] - tp[0]) * (q[0] - tp[0]) + (q[1] - tp[1]) * (q[1] - tp[1]);
+                        segs.sort_by(|a, b| d2(a).total_cmp(&d2(b)));
+                        let n = segs.len() as i32;
+                        for i in 0..n {
+                            let j = self.synced_range(i, n);
+                            segs.swap(i as usize, j as usize);
+                        }
+                        self.towers[t].acid_pts = Some((segs, 0, tiers));
+                    }
+                    if let Some((pts, idx, _)) = self.towers[t].acid_pts.as_mut() {
+                        if *idx >= pts.len() {
+                            *idx = 0;
+                        }
+                        if let Some(&q) = pts.get(*idx) {
+                            *idx += 1;
+                            best = Some((0.0, q, 0));
+                            acid_used = true;
+                        }
+                    }
                 }
                 // The target's height (Target.Position z) for ArriveAtTarget's altSpeed timing.
-                let mut aim_z = 0.0f32;
+                // The brew attack (TargetFriendlyModel): a tower, asked for only when its weapon can
+                // throw (recording alch_200: two draws at each throw, one per tower).
+                let mut brew_pick: Option<u64> = None;
+                if let Some(brew) = &attack.brew {
+                    best = None;
+                    if self.can_throw(t, wi, &attack) && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
+                        let pick = if brew.kind == "berserk" { self.brew_target(t, brew, range) } else { self.friendly_target(t, brew, range) };
+                        if let Some(o) = pick {
+                            brew_pick = Some(self.towers[o].id);
+                            best = Some((0.0, self.towers[o].pos, 0));
+                        }
+                    }
+                }
+                // (PathSegment.ToVector3: 2 up.)
+                let mut aim_z = if acid_used { 2.0f32 } else { 0.0f32 };
                 if let Some(off) = attack.track_target.filter(|_| mode != TargetMode::Point) {
                     // STAND-IN P-SMARTTRACK: Smart aims at the leading bloon's track spot in range
                     // (Normal when none); Automatic does that, else the closest spot.
@@ -10739,6 +10799,8 @@ impl Game {
                         st.anim = now_t;
                         st.last = clock;
                         st.aim_at = p;
+                        st.aim_z0 = aim_z;
+                        st.brew_to = brew_pick;
                         st.round_shots += 1;
                     }
                     // (Between rounds Process does nothing, so a throw in progress waits too: recording
@@ -10838,6 +10900,13 @@ impl Game {
                         let (mut target, target_id) = match (locked, best) {
                             (Some((p, id)), _) => (p, id),
                             (None, _) if lost && (weapon.projectile.instant || (weapon.projectile.only_target && weapon.emission.kind == "InstantDamage")) => (aimed, 0),
+                            // (A throw started at a track point keeps it: the attack's Target is the one
+                            // FindTarget gave as the throw started; recording alch_002 rt 6, the first
+                            // potion goes to its acid-pool point though a Black is in range by then.)
+                            (None, _) if aim_id == 0 && !ambient => {
+                                aim_z = self.towers[t].weapons[w].aim_z0;
+                                (aimed, 0)
+                            }
                             (None, Some((_, p, id))) => (p, id),
                             (None, None) if ambient => (pos, 0),
                             (None, None) => (aimed, 0),
@@ -11466,6 +11535,7 @@ impl Game {
                             // was when fired (its Curve only eases the motion), then expires.
                             if let Some(ar) = proj.arrive.as_ref().filter(|a| a.time > 0.0 || a.alt_speed > 0.0) {
                                 let now = self.sim_elapsed;
+                                let bheight = self.bloons.iter().find(|b| b.id == target_id).map(|b| b.height);
                                 for pr in &mut self.projectiles[start..] {
                                     // ArriveAtTarget.Process (VERIFIED-DISASM @0xca5c00): perc =
                                     // (time - startFrame) x 1/60 / timeToTake (at most 1), the position
@@ -11480,7 +11550,10 @@ impl Game {
                                     } else {
                                         // (A segment point stands 2 up: recording engineer_032, Cleansing
                                         // Foam eases in 0.662 / 0.974 of the way from 10.7 to 2.)
-                                        let (dx, dy, dz) = (target[0] - pr.pos[0], target[1] - pr.pos[1], pr.z - aim_z);
+                                        // (At a bloon, its Position.z: 20 once it has moved; recording alch_000 rt 9,
+                                        // a potion from z 7 eases in 0.217 of the way on its first frame.)
+                                        let tz = if target_id != 0 { bheight.unwrap_or(aim_z) } else { aim_z };
+                                        let (dx, dy, dz) = (target[0] - pr.pos[0], target[1] - pr.pos[1], pr.z - tz);
                                         (dx * dx + dy * dy + dz * dz).sqrt() / ar.alt_speed
                                     };
                                     if t_take > 0.0 && !ar.samples.is_empty() {
@@ -11517,8 +11590,12 @@ impl Game {
                             // CreateTypedTowerCurrentIndex.ProjectilesCreated (VERIFIED-DISASM @0xc70db0):
                             // each new shot's CreateTypedTower picks its sentry now.
                             let typed = (proj.create_tower.len() == 4).then(|| self.typed_tower_choice());
+                            let brew_to = attack.brew.as_ref().and_then(|b| self.towers[t].weapons[w].brew_to.map(|id| (id, Box::new(b.clone()))));
                             for pr in &mut self.projectiles[start..] {
                                 pr.camo = camo;
+                                if brew_to.is_some() {
+                                    pr.brew_to = brew_to.clone();
+                                }
                                 if pr.spec.create_tower.len() == 4 {
                                     pr.typed = typed;
                                 }
@@ -12279,6 +12356,13 @@ impl Game {
     /// Uniform in [0, 1).
     /// A uniform 0..1 draw from the sim's own generator.
     /// Simulation.syncedRandom.NextDouble().
+    /// BufferedRandom.Next(min, max) (VERIFIED-DISASM @0x182dc6a30): (int)(sample x 1/int.MaxValue
+    /// x (max - min)) + min.
+    fn synced_range(&mut self, lo: i32, hi: i32) -> i32 {
+        let d = self.synced_double();
+        (d * (hi as f64 - lo as f64)) as i32 + lo
+    }
+
     fn synced_double(&mut self) -> f64 {
         let seed = self.freeplay_seed;
         let d = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
@@ -13456,8 +13540,81 @@ impl Game {
     /// A projectile going (pierce or lifespan run out): its sounds, its exhaust and expire
     /// projectiles (with whether it ran out of pierce) and the sub-tower it makes.
     #[allow(clippy::type_complexity)]
+    fn land_brew(&mut self, tid: u64, brew: &crate::data::Brew) {
+        let Some(o) = self.towers.iter().position(|t| t.id == tid) else { return };
+        let to = self.towers[o].pos;
+        let now = self.sim_elapsed;
+        let first = brew.max_count.max(1);
+        let ot = &mut self.towers[o];
+        if let Some(ab) = ot.brews.iter_mut().find(|a| a.brew.id == brew.id) {
+            ab.shots_left = (ab.shots_left + first).min(brew.shots.max(1));
+            if brew.lifespan > 0.0 {
+                ab.frames_left = brew.lifespan * FPS;
+                ab.added = now;
+            }
+        } else {
+            ot.brews.retain(|a| !brew.replaces.contains(&a.brew.id));
+            ot.brews.push(ActiveBrew {
+                brew: brew.clone(),
+                shots_left: first,
+                frames_left: if brew.lifespan > 0.0 { brew.lifespan * FPS } else { f32::INFINITY },
+                added: now,
+            });
+        }
+        self.bursts.push(Burst { pos: to, radius: 8.0, fire: brew.kind == "berserk", ice: false });
+    }
+
+    /// TargetFriendly.GetTargets (MoveNext @0x180df2750): the towers in TowerManager order sorted
+    /// (a stable OrderBy) by MutatedOrder (@0x180de3ed0): one syncedRandom.NextDouble each, the key
+    /// -(int)(d x -10000) - 10000 for a tower without the brew's mutator, 10000 - (int)(d x -10000)
+    /// for one with it (so unbrewed first, random among each); then the first not on the ignore
+    /// list, not brewed with the other brew kind, with an attack, within the attack's range of the
+    /// Alchemist (2D, squared, strictly less).
+    fn friendly_target(&mut self, t: usize, brew: &crate::data::Brew, range: f32) -> Option<usize> {
+        let n = self.towers.len();
+        let mut keys: Vec<(i64, usize)> = Vec::with_capacity(n);
+        for o in 0..n {
+            let mutated = self.towers[o].brews.iter().any(|a| a.brew.id == brew.id);
+            let d = self.synced_double();
+            let k = ((d * -10000.0) as i32) as i64;
+            keys.push((if mutated { 10000 - k } else { -k - 10000 }, o));
+        }
+        keys.sort_by_key(|&(k, _)| k);
+        let p = self.towers[t].pos;
+        let r = range;
+        let acid = brew.id == "AcidicMixtureBuff" || brew.id == "AcidicMixturePermaBuff";
+        let other = if brew.id == "AcidicMixtureBuff" { Some("AcidicMixturePermaBuff") } else if brew.id == "AcidicMixturePermaBuff" { Some("AcidicMixtureBuff") } else { None };
+        keys.into_iter().map(|(_, o)| o).find(|&o| {
+            let ot = &self.towers[o];
+            let name = self.tower_defs[ot.def].0.as_str();
+            if ot.sub.is_some() || ot.paragon.is_some() {
+                return false;
+            }
+            // On the ignore list: out, except (for the acid brews) a MonkeyVillage with bottom path
+            // 4 or less; a GlueGunner with top path under 2 is out.
+            let mut skip = brew.target_ignore.iter().any(|x| x == name) && !(acid && name == "MonkeyVillage" && ot.tiers[2] <= 4);
+            if name == "GlueGunner" && ot.tiers[0] < 2 {
+                skip = true;
+            }
+            // (The two acid brews keep off each other's towers.)
+            if other.is_some_and(|id| ot.brews.iter().any(|a| a.brew.id == id)) {
+                skip = true;
+            }
+            let dd = (ot.pos[0] - p[0]) * (ot.pos[0] - p[0]) + (ot.pos[1] - p[1]) * (ot.pos[1] - p[1]);
+            let attacks = self.tier(o).is_some_and(|ti| ti.attacks.iter().any(|a| a.brew.is_none() && !a.weapons.is_empty()));
+            !skip && attacks && dd < r * r
+        })
+    }
+
     fn retire_projectile(&mut self, pr: &Projectile) -> (Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32), bool)>, Option<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)>) {
         let (mut out, mut sub) = (Vec::new(), None);
+            // AddAcidicMixtureToProjectile.Exhausted (VERIFIED-DISASM @0x180c80ef0): on the potion's
+            // end, at a live target tower: one already brewed with this mutator gets
+            // AcidicMixtureCheck.count + maxCount, up to cap; else the brew goes on with maxCount
+            // (recording alch_200: thrown at 1, the Dart Monkey brewed as it arrives at 18).
+            if let Some((tid, brew)) = &pr.brew_to {
+                self.land_brew(*tid, brew);
+            }
             // HYPOTHESIS P-EXPIRESOUND: expire sounds play whenever the projectile goes,
             // exhaust sounds only when its pierce ran out.
             self.sound(&pr.spec.expire_sounds, None);
@@ -13797,6 +13954,7 @@ impl Game {
                 },
                 crit,
                 crit_roll: None,
+                brew_to: None,
                 mirror: self.towers.iter().find(|t| t.id == owner).is_some_and(|t| t.flip),
                 hit: HitSet::default(),
                 clear_hits_next: false,

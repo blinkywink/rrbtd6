@@ -1336,6 +1336,12 @@ pub struct Brew {
     pub replaces: Vec<String>,
     /// Shots it lasts (cap) and seconds (lifespan; <= 0 = no time limit).
     pub shots: u32,
+    /// The Check model's maxCount: shots a new brew gives, and what a re-brew adds (up to `shots`).
+    #[serde(default)]
+    pub max_count: u32,
+    /// The targeting model's ignore list (TargetFriendlyModel / BrewTargettingModel).
+    #[serde(default)]
+    pub target_ignore: Vec<String>,
     pub lifespan: f32,
     pub damage: f32,
     pub pierce: f32,

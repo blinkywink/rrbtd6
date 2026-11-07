@@ -265,6 +265,9 @@ def main():
             return {"kind": "acid" if acid else "berserk", "id": bf.get("mutationId") or x["type"],
                     "replaces": [s.strip() for s in (bf.get("mutatorsToRemove") or "").split(",") if s.strip()],
                     "shots": int(min(bf.get("cap", 1), 2**31)), "lifespan": 0.0 if acid else bf.get("lifespan", -1.0),
+                    # AcidicMixtureCheckModel / BerserkerBrewCheckModel.maxCount: the shots a new brew
+                    # gives (and what a re-brew adds, up to cap).
+                    "max_count": next((int(m["f"].get("maxCount", 0)) for m in items(deref(bf.get("towerBehaviors"))) if m and m["type"] in ("AcidicMixtureCheckModel", "BerserkerBrewCheckModel")), 0),
                     "damage": 0.0 if acid else bf.get("damageUp", 0.0), "pierce": 0.0 if acid else bf.get("pierceUp", 0.0),
                     "rate": 0.0 if acid else bf.get("rateUp", 0.0), "range": 0.0 if acid else bf.get("rangeUp", 0.0),
                     "tag_mods": [tag_mod(m) for m in items(deref(bf.get("projBehaviors"))) if m and m["type"] == "DamageModifierForTagModel"]
@@ -1195,6 +1198,15 @@ def main():
                                        if x and x["type"] == "TargetFriendlyModel")
             attack_brew = next((br for w in items(af["weapons"]) if w
                                 for br in [brew(deref(w["f"]["projectile"]), friendly_ignore)] if br), None)
+            # The targeting model's own ignore list: TargetFriendlyModel.ignoreList (acid) or
+            # BrewTargettingModel.towerIgnoreList (berserk).
+            if attack_brew is not None:
+                ti = [t.strip() for t in friendly_ignore.split(",") if t.strip()]
+                for x in items(af["behaviors"]):
+                    if x and x["type"] == "BrewTargettingModel":
+                        lst = deref(x["f"].get("towerIgnoreList"))
+                        ti += [v for v in (lst if isinstance(lst, list) else []) if isinstance(v, str)]
+                attack_brew = dict(attack_brew, target_ignore=ti)
             pool_fallback = any(x and x["type"] == "TargetTrackOrDefaultAcidPoolModel" for x in items(af["behaviors"]))
             min_range = next((x["f"]["minimumRange"] for x in items(af["behaviors"])
                               if x and x["type"] == "AttackMinimumRangeModel"), 0.0)

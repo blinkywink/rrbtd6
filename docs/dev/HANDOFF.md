@@ -119,7 +119,7 @@ Ground rules follow.
 Last full run (2026-11-06): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
-spike, super, village. Next tower: Alchemist (throws match; potion hits differ from rt 132).
+spike, super, village. Current tower: Alchemist 8/34 (see its row).
 Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
 
@@ -140,7 +140,7 @@ checkpoint that changes `renderer/src/game.rs`.
 | Beast Handler | 34/34 | Exact. Re-recorded with seeds 2026-11-04. GyrfalconPattern ported from the disasm (fly_birds, GyrState): targets through GetGlobalBest (bestFirst/bestLast) then segment brackets of the handler's target type, snatch/hit around the target by Close bracket order, grapple uses the initial damage, held bloons are off track (Bloon.held: not filed, taken by range + radius) with blockSpawnChildrenCount (unmake_bloon), idle moves through Map bounds. Pets start a frame after they're made and sync the handler's target. CycleAnimation randomize draws. InstantDamage shot with a dead target stays till round end. |
 | Engineer | 34/34 | EXACT (2026-11-05): Pin re-stun slot rule and duplicate non-cascading slows (SimRecorder S / M lines). |
 | Ninja | 34/34 | done (all R-line recordings) |
-| Alchemist | 0/34 | throws match; potion hits differ from rt 132 |
+| Alchemist | 8/34 | Re-recorded with seeds 2026-11-06. ArriveAtTarget at a bloon times from its Position.z (20 once moved). TargetTrackOrDefaultAcidPool ported (GeneratePoints: visible in-range segments in Close order, shuffled with syncedRandom.Next(i, n); points taken in turn, 2 up). A throw started at a point keeps it (and its height) until it releases. Open: 000_close / 040 / 050 (few position frames), 002 rt 102, 003, 004, 005, 025, 032, 052, 2xx-5xx: NEXT port brews as the game does them (alch_200, bloons exact): the brew attack (TargetFriendlyModel x2 with ignoreList + mutationId, RotateToTarget, WeaponModel rate 10 animationOffset 0.25, SingleEmmisionTowardsTarget) throws a real potion (ArriveAtTarget altSpeed 250 to the tower, expireOnArrival; game rt 1 throw, released 16, arrives 18) whose AddAcidicMixtureToProjectileModel (cap 30; AcidicMixtureCheckModel maxCount 10) buffs the tower on arrival; rethrows every 600 frames (the clone applies brews instantly and only rethrows once the buff is gone). |
 | Ace | 0/25 | recorder doesn't log the plane yet |
 | Buccaneer 0/33, Dartling 0/23, Mortar 0/24, Druid 0/34, Banana Farm 0/25 | | Farm: EmissionsPerRoundFilter spacing (see TOWERS.md) |
 
