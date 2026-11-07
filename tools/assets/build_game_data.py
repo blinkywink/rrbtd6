@@ -430,7 +430,7 @@ def main():
                 # damage from Desperados and pay popCashMultiplier per pop.
                 if d and d["type"] == "DesperadoMarkModel":
                     df = d["f"]
-                    effects.append({"kind": "mark", "id": sf.get("mutationId") or "DesperadoMark", "lifespan": sf.get("lifespan", 0.0),
+                    effects.append({"kind": "mark", "id": sf.get("mutationId") or "DesperadoMark", "lifespan": sf.get("lifespan", 0.0), "overlay": sf.get("overlayType") or "",
                                     "layers": sf.get("layers", 1), "mult": df.get("desperadoDamageMultiplier", 1.0),
                                     "damage": df.get("popCashMultiplier", 1.0),
                                     "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
@@ -518,8 +518,12 @@ def main():
             # A mutator with no behaviour this exports (Rubber to Gold's GiveCashOnPop x1): still on
             # the bloon for its lifespan, which FilterMutatedTarget looks for.
             if len(effects) == n0 and sf.get("mutationId"):
-                effects.append({"kind": "mark", "id": sf["mutationId"], "lifespan": sf.get("lifespan", 0.0),
-                                "layers": sf.get("layers", 1), "mult": 1.0, "damage": 1.0,
+                # GiveCashOnPop.PreDegrade with no flat amount: pops x income x cashMultiplier more
+                # (Rubber to Gold's x1: the pop cash again).
+                extra = sum(x["f"].get("cashMultiplier", 0.0) for x in items(sf.get("behaviors")) if x and x["type"] == "GiveCashOnPopModel"
+                            and not x["f"].get("flatCashAmount"))
+                effects.append({"kind": "mark", "id": sf["mutationId"], "lifespan": sf.get("lifespan", 0.0), "overlay": sf.get("overlayType") or "",
+                                "layers": sf.get("layers", 1), "mult": 1.0, "damage": 1.0 + extra,
                                 "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
         # RemoveDamageTypeModifierModel (Embrittlement, Relentless Glue): the hit bloon (and
         # `layers` of its children) loses these bloonProperties (Lead 1, Frozen 16) for
@@ -790,7 +794,10 @@ def main():
             gold = next((x["f"] for x in subs if x["type"] == "GiveCashOnPopModel" and x["f"].get("flatCashAmount", 0) > 0), None)
             tag = next((x["f"]["tag"] for x in subs if x["type"] == "FilterWithTagModel"), None)
             if gold and tag:
-                out["cash_on_pop"] = {"amount": gold["flatCashAmount"], "tag": tag}
+                # GiveCashOnPop.PreDegrade: Simulation.CreateTextEffect(assetId, lifespan, "${0}"
+                # of the cash added) over the bloon (LeadToGoldPopEffect "$50").
+                out["cash_on_pop"] = {"amount": gold["flatCashAmount"], "tag": tag,
+                                      "effect": prefab_name(gold.get("assetId")) or "", "lifespan": gold.get("lifespan", 0.0)}
         if pb.get("RefreshPierceModel"):
             out["refresh_pierce"] = pb["RefreshPierceModel"][0]["f"]["interval"]
         # RemoveMutatorsFromBloonModel: by key (contained in the id), and by mutatorIds ("=id",
@@ -2423,11 +2430,11 @@ def main():
         return v
 
     # Kept from the previous game.json: what tools/mod/import_paths.py adds from the real game's
-    # map dump (CollisionGrid.orderedNeighborOffsets).
+    # map dump (CollisionGrid.orderedNeighborOffsets), and export_overlays.py's overlay table.
     gp = os.path.join(root, "game", "game.json")
     if os.path.exists(gp):
         prev = json.load(open(gp, encoding="utf-8"))
-        for k in ("grid_offsets",):
+        for k in ("grid_offsets", "overlays"):
             if k in prev and k not in out:
                 out[k] = prev[k]
     json.dump(finite(out), open(gp, "w"), indent=1, allow_nan=False)

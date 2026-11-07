@@ -33,8 +33,11 @@ def main():
                 walk(x)
 
     walk(game)
-    # MiniLych's prefabs are named LychMini...
-    names = {(c.replace("MiniLych", "LychMini") + o) for c in classes for o in overlays}
+    # GameData.bloonOverlayData (export_overlays.py): each type's prefab per class; a type not in
+    # it: "<class><type>" (MiniLych's prefabs are named LychMini...).
+    table = game.get("overlays") or {}
+    names = {n for o in overlays if o in table for c, n in table[o]["assets"].items() if c in classes}
+    names |= {(c.replace("MiniLych", "LychMini") + o) for c in classes for o in overlays if o not in table}
     by_name = {}
     for guid, n in prefabs.items():
         stem = n.rsplit("/", 1)[-1].removesuffix(".prefab")

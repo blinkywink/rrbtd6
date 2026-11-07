@@ -2939,6 +2939,8 @@ pub struct Game {
     pub bolts: Vec<([f32; 2], [f32; 2], crate::data::Bolts, u64)>,
     /// Cash collected since last drained: where and how much (display only).
     pub cash_pops: Vec<([f32; 2], f64)>,
+    /// GameData.bloonOverlayData (display only): overlay prefabs by overlayType and class.
+    pub overlays: HashMap<String, crate::data::OverlayDef>,
     /// ShowTextOnHit texts this frame (the renderer draws "Crit!" there).
     pub hit_texts: Vec<[f32; 2]>,
     /// Upgrades bought this frame, for the upgrade effect: (tower position, effect prefab).
@@ -2947,6 +2949,9 @@ pub struct Game {
     pub sacrifices: Vec<Sacrifice>,
     /// Towers placed this frame: (position, placement effect prefab, scale).
     pub place_fx: Vec<([f32; 2], String, f32)>,
+    /// Simulation.CreateTextEffect this frame (display only): position, effect prefab, its text,
+    /// lifespan in seconds (Lead to Gold's "$50").
+    pub text_fx: Vec<([f32; 2], String, String, f32)>,
     /// The next `Effect::seq`.
     pub effect_seq: u64,
     /// The round Monkey City's free Dart Monkey was taken.
@@ -3712,7 +3717,7 @@ macro_rules! collide_pass {
                 $s.pre_damage_effects(i, $p, dmg);
                 // HYPOTHESIS P-LEADGOLD: Lead to Gold pays its flat amount when a hit pops a
                 // bloon with the tag (the game attaches it to the bloon for its next pop).
-                let gold = $s.projectiles[$p].spec.cash_on_pop.as_ref().filter(|c| $s.defs[$s.bloons[i].kind].tags.contains(&c.tag)).map(|c| c.amount as f64);
+                let gold = $s.projectiles[$p].spec.cash_on_pop.as_ref().filter(|c| $s.defs[$s.bloons[i].kind].tags.contains(&c.tag)).map(|c| (c.amount as f64, c.effect.clone(), c.lifespan));
                 let tally0 = $s.damage_tally;
                 $s.distribute = ($s.projectiles[$p].spec.distribute, $s.projectiles[$p].spec.distribute_override);
                 let n = $s.damage(i, dmg.round() as i32, &mut $kids);
@@ -3778,9 +3783,12 @@ macro_rules! collide_pass {
                     }
                 }
                 popped_now = n;
-                if let (Some(v), true) = (gold, n > 0) {
+                if let (Some((v, fx, life)), true) = (gold, n > 0) {
                     $s.earn(v);
-                    $s.cash_pops.push((bp, v));
+                    // GiveCashOnPop.PreDegrade: its text effect, "${0}" of the cash.
+                    if !fx.is_empty() {
+                        $s.text_fx.push((bp, fx, format!("${v}"), life));
+                    }
                 }
                 let owner = $s.projectiles[$p].owner;
                 if let Some(ti) = $s.towers.iter().position(|t| t.id == owner) {
@@ -4480,6 +4488,8 @@ impl Game {
             bolts: Vec::new(),
             hit_texts: Vec::new(),
             cash_pops: Vec::new(),
+            text_fx: Vec::new(),
+            overlays: d.overlays.clone(),
             upgrade_fx: Vec::new(),
             sacrifices: Vec::new(),
             place_fx: Vec::new(),

@@ -512,24 +512,33 @@ impl LayerAnim {
     }
 }
 
-/// The overlay prefabs a bloon shows: "<BloonModel.overlayClass><mutator overlayType>" (e.g.
-/// WhiteRegrowGlueBasic, MoabIce; MiniLych's are LychMini...), one per distinct overlay among its
-/// effects, in their order. HYPOTHESIS: every distinct overlay it has shows at once.
-fn bloon_overlays(d: &data::BloonDef, b: &game::Bloon) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+/// The overlay prefabs a bloon shows: GameData.bloonOverlayData's prefab for the bloon's
+/// BloonModel.overlayClass under each mutator overlayType it has (AlchemistGold on a Red:
+/// RedRubberToGold; without that table: "<class><overlayType>", e.g. WhiteRegrowGlueBasic,
+/// MiniLych's LychMini...), one per distinct overlay, lowest displayLayer first.
+/// HYPOTHESIS: every distinct overlay it has shows at once.
+fn bloon_overlays(table: &HashMap<String, data::OverlayDef>, d: &data::BloonDef, b: &game::Bloon) -> Vec<String> {
+    let mut out: Vec<(i32, String)> = Vec::new();
     if d.overlay_class.is_empty() {
-        return out;
+        return Vec::new();
     }
     let class = if d.overlay_class == "MiniLych" { "LychMini" } else { d.overlay_class.as_str() };
     for e in &b.effects {
         if !e.overlay.is_empty() {
-            let name = format!("{class}{}", e.overlay);
-            if !out.contains(&name) {
-                out.push(name);
+            let (layer, name) = match table.get(&*e.overlay) {
+                Some(o) => match o.assets.get(d.overlay_class.as_str()) {
+                    Some(n) => (o.layer, n.clone()),
+                    None => continue,
+                },
+                None => (0, format!("{class}{}", e.overlay)),
+            };
+            if !out.iter().any(|(_, n)| *n == name) {
+                out.push((layer, name));
             }
         }
     }
-    out
+    out.sort_by_key(|(l, _)| *l);
+    out.into_iter().map(|(_, n)| n).collect()
 }
 
 /// Draws a layered projectile at Unity (x, y, z), flying along `heading` (radians), `age` seconds
@@ -2581,7 +2590,7 @@ async fn game_main() {
             // Overlay prefabs (glue, ice, bleed...) seen for the first time (models/projectiles/<name>).
             for b in &game.bloons {
                 if b.effects.iter().any(|e| !e.overlay.is_empty()) {
-                    for n in bloon_overlays(&game.defs[b.kind], b) {
+                    for n in bloon_overlays(&game.overlays, &game.defs[b.kind], b) {
                         if proj_tried.insert(n.clone()) {
                             if let Some(d) = load_work::complete_asset(load_proj(mod_assets::projectile(&root, &n))) {
                                 proj_displays.insert(n, d);
@@ -2593,7 +2602,7 @@ async fn game_main() {
             for &(p, i) in &bloon_order {
                 let b = &game.bloons[i];
                 let d = &game.defs[b.kind];
-                let overlays = if b.effects.iter().any(|e| !e.overlay.is_empty()) { bloon_overlays(d, b) } else { Vec::new() };
+                let overlays = if b.effects.iter().any(|e| !e.overlay.is_empty()) { bloon_overlays(&game.overlays, d, b) } else { Vec::new() };
                 let overlays: Vec<&ProjDisplay> = overlays.iter().filter_map(|n| proj_displays.get(n)).collect();
                 let model_name = d.model_at(b.hp as f32 / d.max_health.max(1) as f32);
                 let model = model_name.and_then(|m| bloon_models.get_mut(m)).and_then(|m| m.as_mut());
@@ -2971,6 +2980,15 @@ async fn game_main() {
             for (p, fx, k) in game.place_fx.drain(..) {
                 particles.spawn(&fx, [p[0], 0.0, p[1]], k);
             }
+            // Simulation.CreateTextEffect (Lead to Gold's "$50"): the prefab with its text set,
+            // removed after its lifespan.
+            for (p, fx, text, life) in game.text_fx.drain(..) {
+                fx_tag += 1;
+                if particles.spawn_display(&fx, [p[0], 0.0, p[1]], 1.0, 0.0, false, Some(fx_tag)) {
+                    particles.set_text(fx_tag, &text);
+                    degree_texts.push((fx_tag, game.sim_elapsed + (life * 60.0).round() as u64));
+                }
+            }
             // CreateEffectWhileAttacking (Inferno Ring): its loop while the attack has a target, the
             // exit effect as it stops.
             {
@@ -3339,6 +3357,7 @@ async fn game_main() {
             game.hit_texts.clear();
             game.upgrade_fx.clear();
             game.place_fx.clear();
+            game.text_fx.clear();
             // Map.
             let (lo, hi) = game.bounds;
             if !terrain_loaded {

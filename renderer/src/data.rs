@@ -13,6 +13,15 @@ pub struct BloonMutatorData {
     pub bad_immunity_tags: Vec<String>,
 }
 
+/// A BloonOverlayScriptable: its displayLayer and its prefab per BloonOverlayClass name.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct OverlayDef {
+    #[serde(default)]
+    pub layer: i32,
+    #[serde(default)]
+    pub assets: HashMap<String, String>,
+}
+
 #[derive(Deserialize)]
 pub struct GameData {
     #[serde(default)]
@@ -35,6 +44,10 @@ pub struct GameData {
     /// GameData.bloonMutatorData.
     #[serde(default)]
     pub bloon_mutator_data: BloonMutatorData,
+    /// GameData.bloonOverlayData.overlayTypes (tools/assets/export_overlays.py): each mutator
+    /// overlayType's displayLayer and prefab per BloonOverlayClass name.
+    #[serde(default)]
+    pub overlays: HashMap<String, OverlayDef>,
     /// GameModel.freeplayGroups: rounds past the round set are built from these.
     #[serde(default)]
     pub freeplay: Vec<FreeplayGroup>,
@@ -1368,6 +1381,11 @@ pub struct AcidPool {
 pub struct CashOnPop {
     pub amount: f32,
     pub tag: String,
+    /// GiveCashOnPopModel.assetId: the text effect showing "${0}" of the cash (display only).
+    #[serde(default)]
+    pub effect: String,
+    #[serde(default)]
+    pub lifespan: f32,
 }
 
 #[derive(Deserialize, Clone, Debug)]

@@ -40,6 +40,17 @@ os.makedirs(ROOT, exist_ok=True)
 envs = {}
 
 
+def load_bundle(bundle):
+    """The bundle's scene: from its decompressed files in local_extracted/_bundle_cache when
+    there (asset_references_assets_all is ~900 MB packed: decompressing it again runs out of
+    memory), else the bundle itself."""
+    cached = sorted(glob.glob(os.path.join("local_extracted/_bundle_cache", glob.escape(bundle) + "-*")))
+    cached = [d for d in cached if os.path.isdir(d)]
+    if cached:
+        return UnityPy.load(*[os.path.join(cached[0], f) for f in sorted(os.listdir(cached[0]))])
+    return UnityPy.load(os.path.join(AA, bundle))
+
+
 def full_rect_image(sp):
     """The sprite's image padded back to its full m_Rect: atlas packing trims transparent margins
     (m_RD.textureRect at textureRectOffset inside m_Rect, y up), and the renderer draws the image
@@ -265,7 +276,7 @@ for guid, p in sorted(plan.items(), key=lambda kv: (index.get(kv[1]["prefab"], "
         envs.clear()
         gc.collect()
         try:
-            envs[bundle] = UnityPy.load(os.path.join(AA, bundle))
+            envs[bundle] = load_bundle(bundle)
         except MemoryError:
             # asset_references_assets_all is ~900 MB packed; it needs several GB free.
             print(name, "FAIL out of memory loading", bundle, flush=True)
@@ -303,7 +314,7 @@ for guid, p in sorted(plan.items(), key=lambda kv: (index.get(kv[1]["prefab"], "
             done[name] = export_mesh(out, bundle, prefab)
         if done[name].startswith(("mesh 0 parts", "FAIL")) and bundle not in envs:
             try:
-                envs[bundle] = UnityPy.load(os.path.join(AA, bundle))
+                envs[bundle] = load_bundle(bundle)
                 root = dict(envs[bundle].container.items())[prefab].deref()
             except MemoryError:
                 envs.clear()

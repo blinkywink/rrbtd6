@@ -27,7 +27,14 @@ class SpriteImages:
         if self.atlas is None:
             import UnityPy
             path = glob.glob(str(Path(self.bundle_dir) / "sprite_atlases_assets_all_*.bundle"))[0]
-            self.atlas = UnityPy.load(path)
+            # Its decompressed files in local_extracted/_bundle_cache when there: decompressing
+            # the bundle again can run out of memory.
+            cached = [d for d in sorted(glob.glob(str(Path("local_extracted/_bundle_cache") / (glob.escape(Path(path).name) + "-*"))))
+                      if Path(d).is_dir()]
+            if cached:
+                self.atlas = UnityPy.load(*[str(f) for f in sorted(Path(cached[0]).iterdir())])
+            else:
+                self.atlas = UnityPy.load(path)
             for obj in self.atlas.objects:
                 if obj.type.name == "Sprite":
                     item = obj.read()
