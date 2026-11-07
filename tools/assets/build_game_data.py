@@ -899,6 +899,10 @@ def main():
             rd = next((x["f"] for x in items(e["f"].get("behaviors")) if x and x["type"] == "EmissionRotationOffProjectileDirectionModel"), None)
             if rd is not None:
                 out["dir_off"] = [rd.get("startingOffset", 0.0), rd.get("angleInBetween", 0.0), 1.0 if rd.get("alwaysCentre") else 0.0]
+            # AcidPoolEmissionModel.alwaysPoolOnCount: every that-many-th splash always pools.
+            ape = next((x["f"] for x in items(e["f"].get("behaviors")) if x and x["type"] == "AcidPoolEmissionModel"), None)
+            if ape is not None:
+                out["pool_every"] = int(ape.get("alwaysPoolOnCount", 0))
         return out
 
     def emission_kind(e):

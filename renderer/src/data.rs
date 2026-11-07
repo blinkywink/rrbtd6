@@ -1248,6 +1248,9 @@ pub struct Alternate {
 #[derive(Deserialize, Clone)]
 pub struct Emission {
     pub kind: String,
+    /// AcidPoolEmissionModel.alwaysPoolOnCount (0: none).
+    #[serde(default)]
+    pub pool_every: u32,
     /// RandomEmissionModel: ejectPointRandomness, useSpeedMultiplier, speedMultiplierMin / Max.
     #[serde(default)]
     pub eject_random: f32,

@@ -1434,6 +1434,8 @@ pub struct Tower {
     /// TargetTrackOrDefaultAcidPool's points (shuffled track segments) and its index, with the
     /// tiers they were made for.
     pub acid_pts: Option<(Vec<[f32; 2]>, usize, [u8; 3])>,
+    /// AcidPoolEmission.currentIndex: splashes emitted.
+    pub acid_splashes: u32,
     /// Set for sub-towers (Engineer sentries): not selectable, upgradable or sellable.
     pub sub: Option<SubTower>,
     /// The Heli's air unit; its attacks aim and fire from here.
@@ -2109,6 +2111,8 @@ pub struct Projectile {
     pub crit_roll: Option<[f32; 5]>,
     /// A brew potion: the tower it was thrown at, and the brew it gives on arrival.
     pub brew_to: Option<(u64, Box<crate::data::Brew>)>,
+    /// AcidPool.alwaysMakePool.
+    pub always_pool: bool,
     /// Its FollowPath is mirrored (thrown by the other hand: FlipFollowPath).
     pub mirror: bool,
     pub hit: HitSet,
@@ -4025,8 +4029,13 @@ macro_rules! collide_pass {
         // HYPOTHESIS P-ACIDPOOL: a splash that expires without hitting anything becomes a pool
         // (lifespanIfMisses, radiusIfMisses, pierce).
         let pr = &mut $s.projectiles[$p];
-        if pr.frames_left <= 0.0 && pr.hit.is_empty() {
+        // AcidPool.Process (VERIFIED-DISASM @0x180c80c40): once lifespanFrames old, with
+        // alwaysMakePool or nothing hit it pools (radius / pierce IfMisses), lasting till
+        // lifespanFramesIfMisses.
+        if pr.frames_left <= 0.0 && (pr.hit.is_empty() || pr.always_pool) {
             if let Some(ap) = pr.spec.acid_pool.take() {
+                // (lifespanFramesIfMisses more from then: recording alch_003, a pool made at 10 is
+                // gone at 430.)
                 pr.frames_left = ap.lifespan * FPS;
                 pr.spec.radius = ap.radius;
                 pr.pierce = ap.pierce;
@@ -5826,6 +5835,7 @@ impl Game {
             bank: 0.0,
             brews: Vec::new(),
             acid_pts: None,
+            acid_splashes: 0,
             sub: None,
             air: None,
             ability_cd: HashMap::new(),
@@ -6669,6 +6679,7 @@ impl Game {
             bank: 0.0,
             brews: Vec::new(),
             acid_pts: None,
+            acid_splashes: 0,
             sub: Some(SubTower { frames_left: if spec.lifespan > 0.0 { spec.lifespan * FPS } else { f32::INFINITY }, age: 0.0, rounds_left: spec.rounds, pet, spec, parent, path_index: None, z: 250.0, born: self.round_clock }),
             air: None,
             ability_cd: HashMap::new(),
@@ -7218,7 +7229,7 @@ impl Game {
             if let Some(pa) = &a.place_at {
                 self.towers[t].ability_cd.insert(name.to_string(), a.cooldown * FPS);
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None};
+                let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0};
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &pa.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -7578,7 +7589,7 @@ impl Game {
         // doesn't run in reverse).
         if let Some(proj) = &a.track_charge {
             let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-            let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None};
+            let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0};
             for k in 0..self.tracks.len() {
                 let reverse = proj.track_travel.as_ref().is_some_and(|x| x.reverse);
                 let d0 = if reverse { self.tracks[k].length() } else { 0.0 };
@@ -7601,7 +7612,7 @@ impl Game {
             let target = self.bloons.iter().filter(|b| on_map(b.pos, 0.0)).max_by(|x, y| x.progress().total_cmp(&y.progress())).map(|b| b.pos);
             if let Some(p) = target {
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None};
+                let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0};
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &lp.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -9542,7 +9553,7 @@ impl Game {
         if !self.bloons.iter().any(|b| b.id == target) {
             return;
         }
-        let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None};
+        let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0};
         for t in 0..self.towers.len() {
             let Some(proj) = self.tier(t).and_then(|tr| tr.preempt.clone()) else { continue };
             let [ex, ey, ez] = self.tier(t).map_or([0.0; 3], |tr| tr.preempt_offset);
@@ -10471,7 +10482,23 @@ impl Game {
                 // with syncedRandom.Next(i, n) for each i (recording alch_002: draws 2, 3, 11, ...
                 // before the first frame; the first potion goes to the segment then at the front).
                 let mut acid_used = false;
-                if attack.pool_fallback && best.is_none() && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
+                // (Its bloon targets are points too: MoveNext yields a Target at the bloon's Position,
+                // z less 180 for a boss, 120 for a MOAB-class bloon, else 20; recording alch_502 rt
+                // 97, the potion lands where the MOAB was as the throw started, the tower not turning.)
+                let mut acid_bz: Option<f32> = None;
+                if attack.pool_fallback {
+                    if let Some((d, p, id)) = best.filter(|b| b.2 != 0) {
+                        if let Some(b) = self.bloons.iter().find(|b| b.id == id) {
+                            let df = &self.defs[b.kind];
+                            let off = if df.tags.iter().any(|t| t == "Boss") { 180.0 } else if df.is_moab { 120.0 } else { 20.0 };
+                            acid_bz = Some(b.height - off);
+                            best = Some((d, p, 0));
+                        }
+                    }
+                }
+                // (Only as a throw starts: Weapon.Process's FindTarget; recording alch_502, one point per
+                // throw that had no bloon, in turn.)
+                if attack.pool_fallback && best.is_none() && self.can_throw(t, wi, &attack) && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
                     let tiers = self.towers[t].tiers;
                     if self.towers[t].acid_pts.as_ref().is_none_or(|a| a.2 != tiers) {
                         let tp = self.towers[t].pos;
@@ -10511,7 +10538,7 @@ impl Game {
                     }
                 }
                 // (PathSegment.ToVector3: 2 up.)
-                let mut aim_z = if acid_used { 2.0f32 } else { 0.0f32 };
+                let mut aim_z = if acid_used { 2.0f32 } else { acid_bz.unwrap_or(0.0f32) };
                 if let Some(off) = attack.track_target.filter(|_| mode != TargetMode::Point) {
                     // STAND-IN P-SMARTTRACK: Smart aims at the leading bloon's track spot in range
                     // (Normal when none); Automatic does that, else the closest spot.
@@ -11237,7 +11264,7 @@ impl Game {
                                 // point (recording ice_250: Absolute Zero's pierce-999 pulse with
                                 // the blast, both at z 7).
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None};
+                                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0};
                                     self.emit(from, dir, &single, sec, None, tiers, owner);
                                 }
                                 self.emit_z = 0.0;
@@ -11291,7 +11318,7 @@ impl Game {
                                 self.emit_target = None;
                                 // MultiEmissionModel: its secondary projectile from the tower too.
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None};
+                                    let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0};
                                     self.emit(pos, dir, &single, sec, None, tiers, owner);
                                 }
                                 if ambient {
@@ -12758,7 +12785,7 @@ impl Game {
         let pool = stored.floor() as i64;
         let (min, max_wave) = (nc.min_per_wave as i64, nc.max_per_wave as i64);
         let owner = self.towers[t].id;
-        let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None};
+        let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0};
         // Each undead bloon in turn: its pierce share, its spot on the track (the segment's
         // centre, less Random.Next(maxPathRandomRange) + half of it unless the player chose the
         // segment), then its offset (Vector3.GetOffsetFromRadius) as it is emitted.
@@ -13261,7 +13288,7 @@ impl Game {
                 "destroy_emit" => match &e.projectile {
                     Some(p) => EffectKind::DestroyEmit {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None})),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0})),
                         dont_copy: e.dont_copy,
                     },
                     None => continue,
@@ -13269,7 +13296,7 @@ impl Game {
                 "carry" => match &e.projectile {
                     Some(p) => EffectKind::Carry {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None})),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0})),
                         uids: Vec::new(),
                     },
                     None => continue,
@@ -13283,7 +13310,7 @@ impl Game {
                         ignore: e.ignore_same_frame,
                         skip: e.ignore_same_frame,
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None})),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0})),
                     },
                     None => continue,
                 },
@@ -13761,9 +13788,33 @@ impl Game {
     }
 
     fn emit(&mut self, from: [f32; 2], dir: f32, em: &Emission, spec: &Proj, crit: Option<f32>, tiers: [u8; 3], owner: u64) {
+        // AcidPoolEmission.OnEmit (VERIFIED-DISASM @0x180c364f0): each emit counts on (its
+        // currentIndex; INFERRED one per tower), the shots get AcidPool.alwaysMakePool when
+        // (index + 1) % alwaysPoolOnCount == 0 (recording alch_502 rt 2317: a splash that hit five
+        // bloons still pools).
+        if em.pool_every > 0 {
+            let start = self.projectiles.len();
+            if self.mod_runtime.intercepts & crate::mod_runtime::FIRE==0 { self.emit_native(from,dir,em,spec,crit,tiers,owner); } else { self.emit_modded(from,dir,em,spec,crit,tiers,owner); }
+            let always = match self.towers.iter_mut().find(|t| t.id == owner) {
+                Some(tw) => {
+                    let i = tw.acid_splashes;
+                    tw.acid_splashes += 1;
+                    (i + 1) % em.pool_every == 0
+                }
+                None => false,
+            };
+            for pr in &mut self.projectiles[start..] {
+                pr.always_pool = always;
+            }
+            return;
+        }
         if self.mod_runtime.intercepts & crate::mod_runtime::FIRE==0 {
             self.emit_native(from,dir,em,spec,crit,tiers,owner);return;
         }
+        self.emit_modded(from,dir,em,spec,crit,tiers,owner);
+    }
+
+    fn emit_modded(&mut self, from: [f32; 2], dir: f32, em: &Emission, spec: &Proj, crit: Option<f32>, tiers: [u8; 3], owner: u64) {
         let event=serde_json::json!({"owner":owner,"position":from,"direction":dir,"count":em.count,
             "damage":spec.damage,"speed":spec.speed,"pierce":spec.pierce,"tiers":tiers});
         // A mod's handler can change bloons.
@@ -13955,6 +14006,7 @@ impl Game {
                 crit,
                 crit_roll: None,
                 brew_to: None,
+                always_pool: false,
                 mirror: self.towers.iter().find(|t| t.id == owner).is_some_and(|t| t.flip),
                 hit: HitSet::default(),
                 clear_hits_next: false,
@@ -14338,7 +14390,7 @@ impl Game {
                 self.tick_bloon_effects(i, round_clock, &mut dots, &mut emits);
             }
         }
-        let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None};
+        let single = Emission { kind: "Single".into(), eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None , line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0};
         let mut emitted: Vec<(std::ops::Range<usize>, u64)> = Vec::new();
         for (pos, proj, owner, from, layer) in emits {
             let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
