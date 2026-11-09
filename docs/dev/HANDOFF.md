@@ -119,7 +119,7 @@ Ground rules follow.
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
-spike, super, village. Alchemist 34/34. Current tower: Druid 31/34.
+spike, super, village. Alchemist 34/34. Current tower: Druid 32/34.
 compare.sh now builds once and runs recordings in parallel (RRBTD6_JOBS, default 12): the whole
 regression takes ~1.5 min. Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -1133,11 +1133,20 @@ seek / closest, which skip carried bloons anyway.)
     order among equals (420_strong rt 3121: carried Yellows over the Reds beside them).
   - Removed "blown off this frame stays on its segment": 420_strong rt 3419, a Red a Tornado blew
     that frame is a Ball Lightning's off-track target (druid_400 rt 2369 is the grid-cell square).
+- DONE (Druid 32/34, druid_420_close matches): a lightning bounce's carried candidate is ranked by
+  the grid cell of where it is at the bolt's turn in the process list: moved if its MoveWithWind
+  (wind_since) comes before the bolt, else at its frame-start spot (prev). 420_close rt 3435: a
+  Yellow picked up after the bolt was made, moved out of the bolt's cell, is still taken first;
+  druid_320 rt 3113 (the older carried Blues, moved) still fits. (The ggrid cell alone broke 320.)
 - NEXT: 420_strong rt 3456/3457: the game's thorn 5718 (radius 0, pierce 1, at -100.69, -21.04
   after its move) destroys Red 5620 (at -91.07, -22.9, radius 8: 9.8 apart) in the collision pass,
   so bolt 5650's bounce finds nothing; the clone's thorn misses it (grid_hit false), and the bolt
   takes the Red. Work out what puts them in reach (the bloon's spot at the pass, a swept test, the
-  grid's shared-cell rule) before changing anything. 420_close rt 3436. DBGE=1: "DBGAIM throw / interval /
+  grid's shared-cell rule) before changing anything. LEAD (2026-11-09): the thorn (speed 340, 5.67 a
+  frame along D 0.6837 / 0.7298) does pop it (H health is after the hit, HB "True" = destroyed).
+  Endpoints: 9.8 from the Red's spot then (-91.07), 8.16 from its frame-start spot (-92.74); the
+  thorn's next step swept against -92.74 comes within 7.07 (< 8). Check Projectile.CollideBloons /
+  CollisionChecker for a swept or look-ahead test before porting. 420_close rt 3436. DBGE=1: "DBGAIM throw / interval /
   offtrack / hit / bounce" (bounce prints each candidate's segment-point distance and the range).
 
 ## Druid 22/34 (2026-11-08)

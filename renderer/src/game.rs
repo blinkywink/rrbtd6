@@ -5857,8 +5857,13 @@ impl Game {
             // cells nearest first by the grid's rank, each carried bloon in the cell of where it
             // is now (it has moved this frame), then the cell's own order.)
             let pc = grid_cell(from);
+            let bolt_born = self.projectiles[k].born;
             let carried_key = |b: &Bloon| -> (u16, u32, u64) {
-                let bc = grid_cell(b.pos);
+                // (Where it is at the bolt's turn in the process list: moved if its MoveWithWind
+                // comes before the bolt, else still at its frame-start spot; recording
+                // druid_420_close rt 3435, a Yellow carried after the bolt was made still in the
+                // bolt's cell.)
+                let bc = grid_cell(if b.wind_since > bolt_born && b.prev[0].is_finite() { b.prev } else { b.pos });
                 let (dx, dy) = (bc.0 - pc.0, bc.1 - pc.1);
                 let r = if self.has_grid_rank && dx.abs() <= 64 && dy.abs() <= 64 { self.grid_rank[((dx + 64) * 129 + (dy + 64)) as usize] } else { u16::MAX };
                 // (In one cell, the bucket's order as the grid was filled: recordings
