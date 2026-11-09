@@ -519,8 +519,6 @@ main .block { position: relative; }
 .sq { display: block; width: 9px; height: 9px; border-radius: 2px; background: var(--deeper); }
 .sq.on { background: var(--paper); }
 .sq.ghost { background: transparent; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .35); }
-@media (max-width: 640px) { .progress-total { grid-template-columns: 1fr; } }
-
 @media (max-width: 820px) {
   .list { grid-template-columns: 1fr; }
   .mods { grid-template-columns: 1fr; }
@@ -529,9 +527,24 @@ main .block { position: relative; }
   .nav-desktop { display: none; }
   .menu { display: block; }
 }
+/* Phones: the hero hugs its text instead of filling the screen, and cards and Progress tighten up. */
 @media (max-width: 640px) {
-  .hero { padding: 32px 0 48px; }  .lede { font-size: 16px; }
+  .hero { min-height: 0; padding: 64px 0 40px; }  .lede { font-size: 16px; margin-bottom: 28px; }
   .platforms { grid-template-columns: 1fr; }  .block { padding: 48px 0; }
+  .block h2 { margin-bottom: 18px; }
+  .list li, .platform, .mods-text { padding: 20px; }
+  .steps li { padding: 16px 18px; gap: 14px; }
+  .steps li + li::before, .steps li:has(+ li)::after { left: 37px; }
+  footer { margin-top: 96px; }
+  .progress-total > div { padding: 16px 18px; }
+  .progress-total .pnum { font-size: 32px; }
+  .progress-total .of { margin-left: 4px; }
+  .progress-total p { font-size: 13px; }
+  .prows { padding: 16px 18px; gap: 10px; }
+  .prow { grid-template-columns: minmax(0, 1fr) 26% 4.6em; gap: 10px; font-size: 13.5px; }
+  .pcount { font-size: 12px; }
+  .snippet { padding: 16px 18px 18px; }
+  .snippet code { font-size: 12px; }
   .download { width: 100%; min-width: 0; gap: 10px; padding: 17px 18px 13px; font-size: clamp(17px, 5.6vw, 23px); white-space: nowrap; }
   .foot { grid-template-columns: 1fr 1fr; }
   .foot-brand { grid-column: 1 / -1; }
