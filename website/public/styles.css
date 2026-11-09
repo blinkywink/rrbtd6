@@ -215,7 +215,7 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .fine { margin: 20px 0 0; color: var(--faint); font-size: 14px; }
 
 /* Sections */
-.block { padding: 40px 0; scroll-margin-top: 16px; }
+.block { padding: 56px 0; scroll-margin-top: 16px; }
 .block h2, .band h2 { font-size: clamp(28px, 4vw, 36px); margin-bottom: 20px; }
 .aside { margin: 14px 0 0; padding: 0 4px; color: var(--faint); font-size: 14px; line-height: 1.6; }
 
@@ -238,7 +238,7 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .icon svg { width: 22px; height: 22px; fill: none; stroke: var(--blue-text); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
 /* White band */
-.band { margin: 40px 0; padding: 56px 0; background: var(--paper); color: var(--paper-ink); scroll-margin-top: 0; width: 100vw; position: relative; left: 50%; transform: translateX(-50%); }
+.band { margin: 16px 0; padding: 64px 0; background: var(--paper); color: var(--paper-ink); scroll-margin-top: 0; width: 100vw; position: relative; left: 50%; transform: translateX(-50%); }
 .band-inner { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .band h2 { color: var(--blue-text); }
 .band a { color: var(--blue-text); text-decoration-color: rgba(31, 111, 232, .4); }
@@ -384,8 +384,8 @@ footer { margin-top: 56px; padding: 44px 20px 36px; background: var(--deep); }
   .hero { padding: 36px 0 56px; }
   .lede { font-size: 16px; }
   .list, .platforms, .split { grid-template-columns: 1fr; }
-  .block { padding: 30px 0; }
-  .band { padding: 40px 0; }
+  .block { padding: 40px 0; }
+  .band { padding: 48px 0; }
   .download { width: 100%; min-width: 0; gap: 10px; padding: 17px 18px 13px; font-size: clamp(17px, 5.6vw, 23px); white-space: nowrap; }
   .foot { grid-template-columns: 1fr 1fr; }
   .foot-brand { grid-column: 1 / -1; }
