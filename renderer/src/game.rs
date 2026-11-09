@@ -285,6 +285,11 @@ pub struct Bloon {
     /// Where the bloon grid has it: its cell is updated as it processes, before it moves, so a
     /// frame's collisions see the cell from a frame before `prev`.
     pub cell_pos: [f32; 2],
+    /// Where the next frame files it in the BloonGrid, if not `prev`: a degraded bloon is still
+    /// the parent object, filed where that was as the frame began (recording druid_420_strong
+    /// rt 3457: a Yellow a lightning bolt took to Red after its move is still in the cell of its
+    /// frame-start spot, a thorn there takes it though 9.8 away).
+    pub cell_next: Option<[f32; 2]>,
     /// Bloon.trackSpeedMultiplier: the path's speed multiplier where it was last processed.
     pub track_mult: f32,
     /// Its place in the bloon list a collision grid bucket fills from (creation order; a
@@ -3502,6 +3507,10 @@ macro_rules! collide_pass {
                             let sf = pr.spec.speed * FRAME_TIME;
                             pr.vel = [r[0] / l * sf, r[1] / l * sf];
                             pr.grot = None;
+                            // (Its Direction, game frame, becomes the normalized reflection.)
+                            if pr.dir.is_some() {
+                                pr.dir = Some([r[0] / l, -(r[1] / l)]);
+                            }
                         }
                     }
                 }
@@ -5546,7 +5555,7 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
-        self.bloons.push(Bloon { held: false, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, mult: 1.0, cell_pos: pos, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
+        self.bloons.push(Bloon { held: false, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, mult: 1.0, cell_pos: pos, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
         self.plist_add(id, path);
         self.dart_time_spawned();
         if self.grid_on {
@@ -9837,6 +9846,9 @@ impl Game {
         // if the parent was below its ceiling, else it starts now.
         let parent_grow = (self.defs[kind].layer_number < ceiling).then_some(b.grow_t);
         let parent_cell = b.cell_pos;
+        // (Popped in a Process after its move this frame: refiled from its frame-start spot.)
+        // (A chain of degrades in one hit keeps the first one's.)
+        let parent_next = b.cell_next.or((b.pos != b.prev).then_some(b.prev));
         let parent_obj = b.obj;
         let parent_order = b.order;
         let parent_born = b.born;
@@ -10233,6 +10245,7 @@ impl Game {
                 }
             }
             child.cell_pos = self.ghost_cell.take().unwrap_or(parent_cell);
+            child.cell_next = if n == 0 { parent_next } else { None };
             // Path.bloonsList (VERIFIED by recording): popped bloons leave by swapping in the last
             // one, new ones are appended, and the first child is the parent object, still in its
             // place.
@@ -15800,7 +15813,9 @@ impl Game {
             // (The base rotation is the emitter's direction in the game's frame, atan2(x, y) in
             // degrees, not one rebuilt from a clone angle: recording druid_502 rt 1629, a ball
             // 240 frames out from its Superstorm one float step off.)
-            let v = self.projectiles[p].vel;
+            // RandomEmission.Emit (VERIFIED-DECOMP @0x180c4a7a0): from a projectile, the base is
+            // Vector3Boxed.get_Rotation of its Direction (+0xc0), atan2(x, y) in degrees.
+            let v = self.projectiles[p].dir.map_or(self.projectiles[p].vel, |d| [d[0], -d[1]]);
             let saved_rot = self.emit_rot;
             if pick.is_none() && (v[0] != 0.0 || v[1] != 0.0) {
                 self.emit_rot = Some(RAD2DEG * crt_atan2(v[0], -v[1]));
@@ -16391,7 +16406,7 @@ impl Game {
         // since the last pass are all in it.
         for b in &mut self.bloons {
             if !b.fresh {
-                b.cell_pos = b.prev;
+                b.cell_pos = b.cell_next.take().unwrap_or(b.prev);
                 b.prev = b.pos;
                 b.prev_dist = b.dist;
             }
