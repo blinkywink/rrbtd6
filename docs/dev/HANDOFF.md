@@ -119,7 +119,7 @@ Ground rules follow.
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
-spike, super, village. Alchemist 34/34. Current tower: Druid 25/34.
+spike, super, village. Alchemist 34/34. Current tower: Druid 31/34.
 compare.sh now builds once and runs recordings in parallel (RRBTD6_JOBS, default 12): the whole
 regression takes ~1.5 min. Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -1092,9 +1092,53 @@ seek / closest, which skip carried bloons anyway.)
   collision-pass copies wait a frame (rt 2250). Such a copy is `unplaced` (not in the grid until
   its next fill); a carried bloon clears that at its MoveWithWind Process, not only at a track
   move (rt 2267: thorns hit both frozen Greens).
-- NEXT: druid_400 rt 2369 a Ball Lightning bolt the game doesn't make; druid_502 rt 1569 a bolt's
-  emit point (the game's fits draws 0.5926 / 0.6625 exactly); druid_upgrades_r30 rt 2332 a bolt the
-  game makes and the clone doesn't. DBGE=1 prints "DBGAIM interval" picks and "DBGAIM hit" lines.
+- DONE (Druid 27/34, druid_502 matches): interval shots run in uid (process-list) order even
+  with no bolts out (rt 1569: Superstorm 1205's ball spawn draws before Ball 2252's bolt). The
+  interval target sees the frame-start filing: a bloon blown off this frame (wind_since this
+  frame) is still on its segment and not on the off-track list; off-track ones only within range
+  + their radius (the BloonGrid query; druid_400 rt 2369). A spawn without a target turns from the
+  emitter's direction as atan2(x, y) of its velocity in the game's frame (rt 1629: one float step).
+- DONE (druid_upgrades_r30 matches, Druid 28/34): an attack lists its weapons in creation order
+  (Attack.UpdatedModel keeps those it had and adds new ones after; WeaponState.seq), which is how
+  the W lines number them. HYPOTHESIS P-ROTLIST: RotateToTarget.Process (@0x180dd80d0) turns the
+  tower while a weapon in its cached list is in its throw, and a weapon an upgrade added isn't in
+  that list, so its throw turns the tower only as it starts (rt 2547-2549: the 5-1-0 Superstorm's
+  throw holds its facing). WeaponState.initial marks the placement weapons. Every tower's upgrade
+  recording still matches.
+- DONE (Druid 29/34): each lightning shot does its bounce search or its hit in its own Process,
+  in creation order (Game::lightning_phase runs lightning_phase_one per uid; the pass is
+  idempotent). druid_400 rt 2625: bolt 2577 pops a Black before bolt 2587's search picks the Green
+  it became, so 2587's family holds the Green's layer and 2587 can take the Black's copy at 2629.
+- DONE (Druid 30/34, druid_420_last matches; druid_502_strong bloons + weapons exact):
+  - Bloons and projectiles share a creation count (cseq): a lightning Target with the shot's own
+    born stamp but made after it (a copy its first hit made) is hit where it stood (420_last rt 2766).
+  - A frozen Target newer than the shot is moved after the hit too: if the hit thaws it
+    (SpawnChildren.CreatedChildren depletes charges by DamageResult.changeInLayers, Yellow -> Red
+    = 3) it steps that frame (420_last rt 3028).
+  - CreateProjectileOnInterval's off-track candidates: any carried bloon in a grid cell of the
+    square range around the shooter, no distance of its own (502_strong rt 1903: one 52 away taken
+    at range 43; druid_400 rt 2369: one 62 away in a cell outside left).
+- DONE: HYPOTHESIS P-OFFCELL: the interval target's carried candidates, within one grid cell, the
+  later-filed first (502_strong rt 1903: Greens 2845 / 2854, ranks 1 / 2, 2854 taken; bloons and
+  weapons exact there now). A lightning bounce skips bloons not yet moved (`unplaced`: Bloon.Move
+  sets the path Path.Process files by) unless carried (420_strong rt 2625: a pop's copy behind the
+  entrance left; 420_strong to rt 3121, 420_close to rt 3357).
+- OPEN: 502_strong rt 2112, a Superstorm ball one float step off after 95 frames: its spawn base
+  rotation from atan2 of the storm's velocity; atan2 of velocity / speedFrames fixes it but breaks
+  502 / 502_last the same way, so neither is the game's (find the storm's own direction).
+- DONE (Druid 31/34, druid_400 matches):
+  - A lightning bounce's carried candidates, within one grid cell, in the bucket's fill order
+    (ggrid slot): 420_strong rt 3180 (4361 slot 0 over 4245 slot 2), druid_400 rt 2252.
+  - HYPOTHESIS P-OFFSTRONG: a Strong attack's off-track walk takes the strongest (danger), grid
+    order among equals (420_strong rt 3121: carried Yellows over the Reds beside them).
+  - Removed "blown off this frame stays on its segment": 420_strong rt 3419, a Red a Tornado blew
+    that frame is a Ball Lightning's off-track target (druid_400 rt 2369 is the grid-cell square).
+- NEXT: 420_strong rt 3456/3457: the game's thorn 5718 (radius 0, pierce 1, at -100.69, -21.04
+  after its move) destroys Red 5620 (at -91.07, -22.9, radius 8: 9.8 apart) in the collision pass,
+  so bolt 5650's bounce finds nothing; the clone's thorn misses it (grid_hit false), and the bolt
+  takes the Red. Work out what puts them in reach (the bloon's spot at the pass, a swept test, the
+  grid's shared-cell rule) before changing anything. 420_close rt 3436. DBGE=1: "DBGAIM throw / interval /
+  offtrack / hit / bounce" (bounce prints each candidate's segment-point distance and the range).
 
 ## Druid 22/34 (2026-11-08)
 

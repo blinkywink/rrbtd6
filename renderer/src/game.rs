@@ -328,6 +328,8 @@ pub struct Bloon {
     /// segment (Bloon.Move, which refiles it, doesn't run; recording ninja_020 rt 421: a Ninja
     /// targets a Red carried at 173.6 from its old segment in range).
     pub wind_seg: Option<f32>,
+    /// Its place among everything made (see Projectile::cseq).
+    pub cseq: u64,
     /// In a Gyrfalcon's claws (MoveWithAirUnit, offTrackCount): not filed on the path's segments.
     pub held: bool,
     /// The wind was attached to it by a Wind hit (offTrackCount), not taken over from a parent.
@@ -1104,6 +1106,11 @@ pub struct WeaponState {
     /// Its index in the game's weapon list (the tower's attacks' weapons, then every ability's,
     /// in ability order): what the recorder's W lines number it by.
     pub slot: usize,
+    /// When it was made (a game-wide count): an attack lists its weapons in that order, an
+    /// upgrade's new one after those it kept.
+    pub seq: u64,
+    /// One of the tower's first weapons (made at its placement): RotateToTarget's list.
+    pub initial: bool,
     /// Weapon name and occurrence (the k-th of that name): how a model change finds the same
     /// weapon.
     pub key: (String, u32),
@@ -1181,6 +1188,8 @@ impl WeaponState {
             fov_last: (i64::MIN / 2, false),
             line_mag: (-1.0, -1.0),
             slot: 0,
+            seq: 0,
+            initial: false,
             zone_in: None,
             key,
             last: NEVER,
@@ -2204,6 +2213,9 @@ impl HitSet {
 pub struct Projectile {
     /// Unique per projectile (display: its particle effects follow it).
     pub uid: u64,
+    /// Its place among everything made (bloons and projectiles share the count): orders two
+    /// with the same `born` stamp.
+    pub cseq: u64,
     /// timeSinceLastCollisionCheck: the frame it last checked for bloons (0 after a hit).
     pub check_t: u64,
     /// TravelStrait's direction (game frame, as emitted): what TrackTarget turns.
@@ -2957,6 +2969,10 @@ pub struct Game {
     /// A pop in progress: how deep its layers go, whether a child popped too, and the first id
     /// it made (the game works out a hit's whole result first, so in-between layers never exist).
     pop_depth: u32,
+    /// WeaponState.seq's count.
+    weapon_seq: u64,
+    /// Projectile::cseq / Bloon::cseq's count.
+    create_seq: u64,
     /// New objects a carried bloon's pop made, waiting for their MoveWithWind distance draw until
     /// the hit's damage is all dealt (only those still there get one).
     wind_copy_draws: Vec<(u64, Box<crate::data::Wind>)>,
@@ -4715,6 +4731,8 @@ impl Game {
             copy_root_tick: None,
             fm_pool: Vec::new(),
             pop_depth: 0,
+            weapon_seq: 0,
+            create_seq: 0,
             wind_copy_draws: Vec::new(),
             block_children: false,
             pop_nested: false,
@@ -5528,7 +5546,7 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
-        self.bloons.push(Bloon { held: false, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, mult: 1.0, cell_pos: pos, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, grave_zone: (false, false), obj });
+        self.bloons.push(Bloon { held: false, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, mult: 1.0, cell_pos: pos, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
         self.plist_add(id, path);
         self.dart_time_spawned();
         if self.grid_on {
@@ -5706,8 +5724,31 @@ impl Game {
     /// Lightning.Process (VERIFIED-DISASM @0x180cc84d0) for the lightning shots made before `bound`
     /// (a uid: their place in the process list). Run up to each seeking projectile's place before
     /// its TrackTarget, then for the rest; a shot that has hit or bounced isn't due again this frame.
+    /// Each lightning shot made before `bound` in its own Process, in creation order: its bounce
+    /// search or its hit before the next one's (recording druid_400 rt 2625: bolt 2577 pops a
+    /// Black before bolt 2587's search picks what it became, so 2587 can later take the Black's
+    /// copy).
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn lightning_phase(
+        &mut self,
+        bound: u64,
+        zones: &[([f32; 2], f32, crate::data::Zone)],
+        shoves: &[([f32; 2], crate::data::MoabShove)],
+        leak_voice: &mut bool,
+        subs: &mut Vec<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)>,
+        contacts: &mut Vec<([f32; 2], f32, crate::data::Contact, [u8; 3], u64, Option<u64>, f32)>,
+        exhausted: &mut Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32))>,
+    ) {
+        let now4 = self.sim_elapsed * 4;
+        let mut uids: Vec<u64> = self.projectiles.iter().filter(|pr| pr.spec.lightning && pr.uid < bound && pr.born < now4).map(|pr| pr.uid).collect();
+        uids.sort_unstable();
+        for u in uids {
+            self.lightning_phase_one(u + 1, zones, shoves, leak_voice, subs, contacts, exhausted);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn lightning_phase_one(
         &mut self,
         bound: u64,
         zones: &[([f32; 2], f32, crate::data::Zone)],
@@ -5776,7 +5817,10 @@ impl Game {
                 // (Not one whose wind ended this frame: off the off-track list and not on a
                 // segment until the path files it; recording druid_300 (probe b) rt 3046, a Red
                 // set down that frame 81 away left out.)
-                .filter(|(_, b)| !b.held && !b.hit_by(&shared) && b.wind_end != sim_now)
+                // (Nor one not yet moved (Bloon.Move sets its path, so Path.Process hasn't filed
+                // it): recording druid_420_strong rt 2625, a lightning pop's copy behind the entrance
+                // left for its parent.)
+                .filter(|(_, b)| !b.held && !b.hit_by(&shared) && b.wind_end != sim_now && (!b.unplaced || b.wind.is_some()))
                 .filter(|(_, b)| !(b.camo(&self.defs[b.kind]) && (filters_camo || !camo)))
                 // (BloonManager.GetTargets (VERIFIED-DISASM @0x180fcacc0): a bracket per path
                 // segment within range + 40, flagged PathSegment.IsInRange (@0x180f6ced0: its
@@ -5813,11 +5857,15 @@ impl Game {
             // cells nearest first by the grid's rank, each carried bloon in the cell of where it
             // is now (it has moved this frame), then the cell's own order.)
             let pc = grid_cell(from);
-            let carried_key = |b: &Bloon| -> (u16, u64) {
+            let carried_key = |b: &Bloon| -> (u16, u32, u64) {
                 let bc = grid_cell(b.pos);
                 let (dx, dy) = (bc.0 - pc.0, bc.1 - pc.1);
                 let r = if self.has_grid_rank && dx.abs() <= 64 && dy.abs() <= 64 { self.grid_rank[((dx + 64) * 129 + (dy + 64)) as usize] } else { u16::MAX };
-                (r, b.order)
+                // (In one cell, the bucket's order as the grid was filled: recordings
+                // druid_420_strong rt 3180, carried Red 4361 (slot 0) over 4245 (slot 2);
+                // druid_400 rt 2252, 1380 (slot 0) over 1452.)
+                let slot = self.bloons.iter().position(|x| x.id == b.id).map_or(u32::MAX, |i| self.ggrid.place_of(i).1);
+                (r, slot, b.order)
             };
             cands.sort_by(|(_, x), (_, y)| {
                 let (sx, sy) = (seg(x), seg(y));
@@ -5831,6 +5879,7 @@ impl Game {
                     _ => (if last { sy.total_cmp(&sx) } else { sx.total_cmp(&sy) }).then(rank(x).cmp(&rank(y))),
                 }
             });
+            if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM bounce rt {} uid {} from {:?} shared {:?} cands {:?}", self.round_clock, self.projectiles[k].uid, from, (shared.small.clone(), shared.big.len()), cands.iter().map(|(_, b)| { let kk = (b.prev_dist / 7.0).max(0.0) as usize; let sp = self.track_segs.get(b.path as usize).and_then(|sg| sg.get(kk)).copied().unwrap_or([0.0; 2]); (b.id, b.pos[0], b.wind.is_some(), b.prev_dist, ((sp[0] - from[0]).powi(2) + (sp[1] - from[1]).powi(2)).sqrt(), range) }).collect::<Vec<_>>()); }
             let ids: Vec<u64> = cands.iter().take(n).map(|(_, b)| b.id).collect();
             let layers: Vec<u64> = cands.iter().take(n).map(|(_, b)| b.layer).collect();
             if ids.is_empty() {
@@ -5877,6 +5926,8 @@ impl Game {
         for mut sp in splits_made {
             self.next_uid += 1;
             sp.uid = self.next_uid;
+            self.create_seq += 1;
+            sp.cseq = self.create_seq;
             self.proj_list.push(sp.uid);
             let obj = self.proj_pool.pop().unwrap_or_else(|| {
                 self.proj_objs += 1;
@@ -5900,10 +5951,15 @@ impl Game {
             let mut remove_after: Vec<u64> = Vec::new();
             for uid in &only {
                 if let Some(k) = self.projectiles.iter().position(|pr| pr.uid == *uid) {
-                    let (t, born) = (self.projectiles[k].target, self.projectiles[k].born);
+                    let (t, born, shot_cseq) = (self.projectiles[k].target, self.projectiles[k].born, self.projectiles[k].cseq);
                     if let Some(bi) = t.and_then(|id| self.bloons.iter().position(|b| b.id == id)) {
                         let b = &mut self.bloons[bi];
-                        if b.born > born && b.dist != b.prev_dist && b.wind.is_none() {
+                        // (A copy the shot's own first hit made has its stamp and still comes after it:
+                        // recording druid_420_last rt 2766, Black 3077's copy 3197 hit where it stood.)
+                        // (A frozen one hasn't moved either way; if the hit thaws it, its own Process
+                        // moves it after: recording druid_420_last rt 3028, Yellow 3942 popped to a
+                        // Red out of its freeze steps on that frame.)
+                        if (b.born > born || (b.born == born && b.cseq > shot_cseq)) && (b.dist != b.prev_dist || b.frozen()) && b.wind.is_none() {
                             b.dist = b.prev_dist;
                             b.pos = b.prev;
                             remove_after.push(b.id);
@@ -9779,6 +9835,7 @@ impl Game {
         let parent_obj = b.obj;
         let parent_order = b.order;
         let parent_born = b.born;
+        let parent_cseq = b.cseq;
         let parent_height = b.height;
         let (parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct) = (b.wind, b.wind_new, b.wind_seg, b.wind_direct);
         let parent_wind_since = b.wind_since;
@@ -10014,6 +10071,7 @@ impl Game {
                     // The parent's object, so its place in the process list (recording
                     // boomerang_400: a Black's Pink moves before a later glaive aims at it).
                     ch.born = parent_born;
+                    ch.cseq = parent_cseq;
                     ch.height = parent_height;
                 }
                 let j = self.bloons.len() - 1;
@@ -11188,6 +11246,7 @@ impl Game {
                 && all().zip(&self.towers[t].weapons).enumerate().all(|(i, (w, st))| st.key.0 == w.name && (st.key.1 == 1 || st.key == key(i, w)));
             if !same {
                 let mut old = std::mem::take(&mut self.towers[t].weapons);
+                let first = old.is_empty();
                 let (steps, rc) = self.towers[t].model_clock.unwrap_or((self.sim_elapsed as i64, self.round_clock));
                 self.towers[t].weapons = all()
                     .enumerate()
@@ -11195,14 +11254,33 @@ impl Game {
                         let k = key(i, w);
                         match old.iter().position(|o| o.key == k) {
                             Some(j) => old.swap_remove(j),
-                            None => WeaponState::new(k, w, if w.between_rounds { steps } else { rc }),
+                            None => {
+                                let mut st = WeaponState::new(k, w, if w.between_rounds { steps } else { rc });
+                                self.weapon_seq += 1;
+                                st.seq = self.weapon_seq;
+                                st.initial = first;
+                                st
+                            }
                         }
                     })
                     .collect();
             }
             {
                 let tw = &mut self.towers[t];
-                let slots: Vec<usize> = (0..base_weapons).chain(extra.iter().zip(&extra_slots).flat_map(|(x, &sl)| (0..x.weapons.len()).map(move |k| base_weapons + sl + k))).collect();
+                // (Attack.UpdatedModel keeps the weapons it had and adds the new ones after them:
+                // recording druid_upgrades_r30, Lightning (from 1-0-0) listed before Ball Lightning
+                // and Superstorm though the 5-1-0 model has it last.)
+                let mut base_slot = vec![0usize; base_weapons];
+                let mut s0 = 0;
+                for a in &tier.attacks {
+                    let mut idx: Vec<usize> = (s0..s0 + a.weapons.len()).collect();
+                    idx.sort_by_key(|&i| tw.weapons.get(i).map_or(0, |w| w.seq));
+                    for (r, &i) in idx.iter().enumerate() {
+                        base_slot[i] = s0 + r;
+                    }
+                    s0 += a.weapons.len();
+                }
+                let slots: Vec<usize> = base_slot.into_iter().chain(extra.iter().zip(&extra_slots).flat_map(|(x, &sl)| (0..x.weapons.len()).map(move |k| base_weapons + sl + k))).collect();
                 for (i, st) in tw.weapons.iter_mut().enumerate() {
                     st.slot = slots.get(i).copied().unwrap_or(i);
                 }
@@ -11770,6 +11848,12 @@ impl Game {
                     if self.has_grid_rank {
                         let q = pos;
                         off.sort_by_cached_key(|&i| self.grid_query_key(q, i));
+                        // HYPOTHESIS P-OFFSTRONG: Strong takes the strongest of them (BloonModel.danger),
+                        // grid order among equals (recording druid_420_strong rt 3121: carried Yellows
+                        // over the Reds beside them).
+                        if mode == TargetMode::Strong {
+                            off.sort_by(|&x, &y| self.defs[self.bloons[y].kind].danger.total_cmp(&self.defs[self.bloons[x].kind].danger));
+                        }
                     } else {
                         off.sort_by_key(|&i| std::cmp::Reverse(self.bloons[i].obj));
                     }
@@ -12312,6 +12396,7 @@ impl Game {
                         st.aim_z0 = aim_z;
                         st.brew_to = brew_pick;
                         st.round_shots += 1;
+                        if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM throw rt {} w {} at {:?} id {}", clock, w, p, st.aim_id); }
                     }
                     // (Between rounds Process does nothing, so a throw in progress waits too: recording
                     // sub_005, a throw due at the round's end leaves on the next round's first frame.)
@@ -12346,7 +12431,12 @@ impl Game {
                     // (One RotateToTarget per attack, at the attack's Target: the one its latest
                     // throw took; recording druid_300 rt 724, the thorns' throw turns the tower off
                     // the lightning's still in its throw.)
-                    if st.anim >= 0 && aim_id != 0 && attack.rotate && !turning && weapon.aim_offset.is_none() && extra_rot == 0.0 && newest == w {
+                    // HYPOTHESIS P-ROTLIST: RotateToTarget.Process (@0x180dd80d0) turns the tower while a
+                    // weapon of its cached list is in its throw; a weapon an upgrade added isn't in it,
+                    // so its throw turns the tower only as it starts (recording druid_upgrades_r30 rt
+                    // 2547-2549: the 5-1-0 Superstorm's throw holds the facing it started at).
+                    let in_list = st.initial || started.is_some();
+                    if st.anim >= 0 && aim_id != 0 && attack.rotate && !turning && weapon.aim_offset.is_none() && extra_rot == 0.0 && newest == w && in_list {
                         if let Some(b) = self.bloons.iter().find(|b| b.id == aim_id) {
                             let target = [b.pos[0] + aim_off[0], b.pos[1] + aim_off[1]];
                             let aim_from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
@@ -15702,7 +15792,16 @@ impl Game {
                 self.projectiles[p].interval_t = f32::MIN;
             }
             let start = self.projectiles.len();
+            // (The base rotation is the emitter's direction in the game's frame, atan2(x, y) in
+            // degrees, not one rebuilt from a clone angle: recording druid_502 rt 1629, a ball
+            // 240 frames out from its Superstorm one float step off.)
+            let v = self.projectiles[p].vel;
+            let saved_rot = self.emit_rot;
+            if pick.is_none() && (v[0] != 0.0 || v[1] != 0.0) {
+                self.emit_rot = Some(RAD2DEG * crt_atan2(v[0], -v[1]));
+            }
             self.emit(pos, dir, &oi.emission, &oi.projectile, None, tiers, owner);
+            self.emit_rot = saved_rot;
             for sp in &mut self.projectiles[start..] {
                 sp.camo = camo;
                 // (Made at the emit point; Instant.Process puts it on its Target from its next
@@ -15730,6 +15829,7 @@ impl Game {
         let pos = pr.pos;
         let no_moab = pr.spec.exclude_tags.iter().any(|t| t == "Moabs");
         let reach = range + if no_moab { 0.0 } else { 40.0 };
+        let now4 = self.sim_elapsed * 4;
         let takes = |b: &Bloon| b.hp > 0 && !b.hit_by(&pr.hit) && pr.spec.cant_hit & b.properties(&self.defs[b.kind]) == 0;
         let rank = |b: &Bloon| self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);
         for (pi, sg) in self.track_segs.iter().enumerate() {
@@ -15765,12 +15865,23 @@ impl Game {
                 }
             }
         }
-        let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].wind.is_some() || self.bloons[i].held) && takes(&self.bloons[i])).collect();
+        let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].wind.is_some() || self.bloons[i].held) && takes(&self.bloons[i]) && {
+            // (Through collisionChecker.BloonGrid's query from it, cell by cell: any bloon in a cell
+            // of the square range around it, no distance of its own; recordings druid_400 rt 2369,
+            // a carried Green 62 away in a cell outside it left; druid_502_strong rt 1903, one 52 away
+            // in a cell inside it taken at range 43.)
+            let (lo, hi) = (grid_cell([pos[0] - range, pos[1] + range]), grid_cell([pos[0] + range, pos[1] - range]));
+            let c = grid_cell(self.bloons[i].pos);
+            c.0 >= lo.0 && c.0 <= hi.0 && c.1 >= lo.1 && c.1 <= hi.1
+        }).collect();
         if self.has_grid_rank {
-            off.sort_by_cached_key(|&i| self.grid_query_key(pos, i));
+            // HYPOTHESIS P-OFFCELL: within a cell, the later-filed first (recording druid_502_strong
+            // rt 1903: carried Greens 2845 / 2854 in one cell, 2854 taken).
+            off.sort_by_cached_key(|&i| { let (r, slot, o) = self.grid_query_key(pos, i); (r, std::cmp::Reverse(slot), o) });
         } else {
             off.sort_by_key(|&i| std::cmp::Reverse(self.bloons[i].obj));
         }
+        if std::env::var_os("DBGE").is_some() && off.len() > 1 { eprintln!("DBGAIM offtrack rt {} {:?}", self.round_clock, off.iter().map(|&i| (self.bloons[i].id, self.bloons[i].pos[0], self.grid_query_key(pos, i), self.path_rank.get(&self.bloons[i].id).copied(), grid_cell(self.bloons[i].cell_pos))).collect::<Vec<_>>()); }
         off.first().map(|&i| self.bloons[i].id)
     }
 
@@ -15969,8 +16080,10 @@ impl Game {
             if spec.curvy && !curvy_drawn {
                 curvy_inc = (self.synced_double() * 2147483647.0).round() as i64 % 2 == 0;
             }
+            self.create_seq += 1;
             self.projectiles.push(Projectile {
                 uid: self.next_uid,
+                cseq: self.create_seq,
                 z: self.emit_height(),
                 dir: gdir.map(|v| [v[0], -v[1]]),
                 curvy: spec.curvy.then_some((None, curvy_inc)),
@@ -16695,7 +16808,13 @@ impl Game {
             }
         } else {
             self.track_targets(None);
-            self.interval_shots(None);
+            // (Still in process-list order: recording druid_502 rt 1569, Superstorm 1205's ball
+            // spawn draws before Ball Lightning 2252's bolt.)
+            let mut ivs: Vec<u64> = self.projectiles.iter().filter(|pr| pr.spec.on_interval.is_some()).map(|pr| pr.uid).collect();
+            ivs.sort_unstable();
+            for u in ivs {
+                self.interval_shots(Some(u));
+            }
         }
         // RetargetOnContact.Process (VERIFIED-DISASM @0xcf6c20): delayFrames after the last
         // collision, which resets startFrame each hit, this frame's included since Simulate
@@ -17921,7 +18040,7 @@ mod tests {
             if let Some((lo, hi)) = std::env::var("RRBTD6_REC_AT").ok().and_then(|v| v.split_once("..").map(|(a, b)| (a.parse::<i64>().unwrap_or(0), b.parse::<i64>().unwrap_or(0)))) {
                 if (lo..=hi).contains(rt) {
                     eprintln!("  rt {rt} clone bloons {:?}", g.bloons.iter().map(|b| (b.id, g.names[b.kind].as_str(), b.dist, b.hp)).collect::<Vec<_>>());
-                    eprintln!("  rt {rt} clone effects {:?}", g.bloons.iter().map(|b| (b.id, b.effects.iter().map(|e| (e.id.clone(), e.frames_left, if let EffectKind::Dot { tick, .. } = e.kind { tick } else { f32::NAN })).collect::<Vec<_>>())).collect::<Vec<_>>());
+                    eprintln!("  rt {rt} clone effects {:?}", g.bloons.iter().map(|b| (b.id, b.effects.iter().map(|e| (e.id.clone(), e.frames_left, if let EffectKind::Dot { tick, .. } = e.kind { tick } else { e.layers as f32 })).collect::<Vec<_>>())).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone darts {:?}", g.projectiles.iter().map(|p| (p.pos, p.vel, p.pierce, p.frames_left, p.grot, p.z, g.blocker_hit(p.prev, p.spec.vs_blocker_radius, p.z), p.target.is_some(), p.aim, p.seek, p.seek_t)).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone towerpos {:?}", g.towers.iter().map(|t| (t.pos[0], -t.pos[1])).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone towers {:?}", g.towers.iter().enumerate().map(|(i, t)| (t.game_rot, t.base_rot, g.range(i), t.weapons.iter().map(|w| (w.last, w.anim, w.rate_frames)).collect::<Vec<_>>(), t.orbit.as_ref().map(|o| (o.speed, o.angle, o.seen)))).collect::<Vec<_>>());
