@@ -1,1 +1,1 @@
-{"name": "sub_000_last", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 10, "towers": [{"id": "MonkeySub", "x": -2.8, "y": 3.0, "target": "Last"}]}
+{"name": "sub_000_last", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 10, "towers": [{"id": "MonkeySub", "x": -2.8, "y": 3.0, "target": "Last"}], "cash": 10000000}

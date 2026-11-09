@@ -1,1 +1,1 @@
-{"name": "engineer_100", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 20, "towers": [{"id": "EngineerMonkey-100", "x": -112.815414, "y": -30.9}]}
+{"name": "engineer_100", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 20, "towers": [{"id": "EngineerMonkey-100", "x": -112.815414, "y": -30.9}], "cash": 10000000}

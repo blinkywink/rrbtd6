@@ -3,8 +3,9 @@
 Static home page (`public/index.html`, `public/styles.css`) and a separate mod API docs site
 (`public/docs/`, its own `docs.css`), with self-hosted Luckiest Guy (headings), Inter (text) and Comic Neue (the wordmark, where Comic Sans
 isn't installed).
-Almost no JavaScript: the only script is `docs/nav.js`, which keeps the docs sidebar's scroll
-between pages (the CSP allows same-origin scripts only). Menus are CSS-only `<details>`. No
+Almost no JavaScript: `download.js` scrolls the home page to the install steps after a Download
+click, and `docs/nav.js` keeps the docs sidebar's scroll between pages (the CSP allows same-origin
+scripts only). Menus are CSS-only `<details>`. No
 analytics and no game assets.
 
 The docs pages are generated from `build_docs.py` and committed as plain HTML; after editing a

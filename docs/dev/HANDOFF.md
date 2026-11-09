@@ -116,11 +116,12 @@ Ground rules follow.
 
 ## Regression baseline (must not drop)
 
-Last full run (2026-11-06): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
+Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
-spike, super, village. Current tower: Alchemist 22/34 (see its row).
-Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
+spike, super, village. Alchemist 34/34. Current tower: Druid 23/34.
+compare.sh now builds once and runs recordings in parallel (RRBTD6_JOBS, default 12): the whole
+regression takes ~1.5 min. Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
 
 ## Status (recordings matching; update as they change)
@@ -141,9 +142,18 @@ checkpoint that changes `renderer/src/game.rs`.
 | Beast Handler | 34/34 | Exact. Re-recorded with seeds 2026-11-04. GyrfalconPattern ported from the disasm (fly_birds, GyrState): targets through GetGlobalBest (bestFirst/bestLast) then segment brackets of the handler's target type, snatch/hit around the target by Close bracket order, grapple uses the initial damage, held bloons are off track (Bloon.held: not filed, taken by range + radius) with blockSpawnChildrenCount (unmake_bloon), idle moves through Map bounds. Pets start a frame after they're made and sync the handler's target. CycleAnimation randomize draws. InstantDamage shot with a dead target stays till round end. |
 | Engineer | 34/34 | EXACT (2026-11-05): Pin re-stun slot rule and duplicate non-cascading slows (SimRecorder S / M lines). |
 | Ninja | 34/34 | done (all R-line recordings) |
-| Alchemist | 28/34 | Re-recorded with seeds 2026-11-06. ArriveAtTarget at a bloon times from its Position.z (20 once moved). TargetTrackOrDefaultAcidPool ported (Close-ordered in-range segments shuffled with syncedRandom.Next(i, n); points in turn, 2 up). A throw started at a point keeps it (and its height) until release. The acid-pool attack's bloon targets are points too (the bloon's Position, z less 180 boss / 120 MOAB / 20), and it takes its next track point only as a throw starts with no bloon (one per such throw). BREWS PORTED: thrown potions (ArriveAtTarget to the tower, z 0) landing on expiry (AddAcidicMixture/BerserkerBrewToProjectile.Exhausted): acid via TargetFriendly (MutatedOrder: one synced NextDouble per tower, unbrewed first; ignore list with the Village / GlueGunner rules; AcidicMixtureBuff vs PermaBuff exclusive), count maxCount (10), a re-brew adds maxCount up to cap (30); berserk via BrewTargetting (GetClosestTowerInRange, <=, later ties win; no tower already berserked); rateUp takes that fraction off the interval; a brew acts and counts down from the frame after it lands, its timer only while rounds run. ACID POOLS PORTED: AcidPoolEmission.OnEmit counts emits per tower (INFERRED), every alwaysPoolOnCount-th splash always pools; AcidPool.Process pools at lifespanFrames if alwaysMakePool or nothing hit, lasting lifespanFramesIfMisses more (002 / 003 / 502x match). Acid-pool points reshuffle on any model change, range included, even while the attack is off (052: transformation 121 / its end 1320), keeping the enumeration index; a throw at a point turns the tower as it starts; Total Transformation's morph ends lifespan + 1 frames on with fresh weapons (052 now bloon / position exact; 005 / 025 / 205 / 052 differ only in list order: simultaneous acid pops order their second children by path list, e.g. 052 rt 2577 8455 < 8600 < 8033, though b.order / path_rank as the DoT order breaks glue). A missed-frame double shot doesn't use up a brew's count (250 rt 137). The acid brew clears the Lead immunity bit of the tower's DamageModels (AddAcidicMixtureToProjectileMutator.Mutate); a brew's last frame doesn't buff that frame's shots (300 rt 799). A mutator with no exported behaviour (Rubber to Gold) is still kept (kind mark) for FilterMutatedTarget, its GiveCashOnPop cashMultiplier 1 as the mark's pop cash x2 (GiveCashOnPop.PreDegrade: pops x income x cashMultiplier + flat); Lead to Gold shows its LeadToGoldPopEffect with "${0}" of the cash (Simulation.CreateTextEffect), not the CashUp "+$"; bloon overlays come from GameData.bloonOverlayData (tools/assets/export_overlays.py: AlchemistGold -> <class>RubberToGold); RemoveBloonTypeModifier as RemoveDamageTypeModifier; lifespan -1 mutators stay (UnstableExplosion). MorphBloon ported (Bloon Master Alchemist: Damage for total health - 1 with children blocked, then the model becomes Red); a round-spawned bloon's Position.z is set in its spawn frame (120 MOAB / 20), so ArriveAtTarget at it arcs right; 005 / 025 / 205 are bloon- and position-exact, only list order differs (rt 1672: three acid pops of 2783, 2382, 2988 make their second children in path-list order 2783 < 2382, not creation order; ordering the DoT ticks by path rank broke glue). Open: 000_close / 040 / 050 (few position frames), 004 / 032 (bloon-exact; weapon 1 = the 0-0-4 ability?), 005/025/205 (weapon 1 #3 at 391), 032, 052, 250, 300 (#8 at 2261), 502x (weapons same), upgrades_r30. |
-| Ace | 0/25 | recorder doesn't log the plane yet |
-| Buccaneer 0/33, Dartling 0/23, Mortar 0/24, Druid 0/34, Banana Farm 0/25 | | Farm: EmissionsPerRoundFilter spacing (see TOWERS.md) |
+| Alchemist | 34/34 | EXACT (2026-11-07): DamageOverTime ticks run in the order the behaviours were made, across bloons (Effect.seq), not the bloons' order: the list-order frames of 005 / 025 / 205 / 052. Re-recorded with seeds 2026-11-06. upgrades_r30 MATCHES (2026-11-07): attacks run in creation order across towers (an attack newer than one on a later tower is put off, `deferred_attack`: the Alchemist's brew attack made at rt 600 acts after the older Dart Monkey's), and a brew goes with its last shot, in that frame. ArriveAtTarget at a bloon times from its Position.z (20 once moved). TargetTrackOrDefaultAcidPool ported (Close-ordered in-range segments shuffled with syncedRandom.Next(i, n); points in turn, 2 up). A throw started at a point keeps it (and its height) until release. The acid-pool attack's bloon targets are points too (the bloon's Position, z less 180 boss / 120 MOAB / 20), and it takes its next track point only as a throw starts with no bloon (one per such throw). BREWS PORTED: thrown potions (ArriveAtTarget to the tower, z 0) landing on expiry (AddAcidicMixture/BerserkerBrewToProjectile.Exhausted): acid via TargetFriendly (MutatedOrder: one synced NextDouble per tower, unbrewed first; ignore list with the Village / GlueGunner rules; AcidicMixtureBuff vs PermaBuff exclusive), count maxCount (10), a re-brew adds maxCount up to cap (30); berserk via BrewTargetting (GetClosestTowerInRange, <=, later ties win; no tower already berserked); rateUp takes that fraction off the interval; a brew acts and counts down from the frame after it lands, its timer only while rounds run. ACID POOLS PORTED: AcidPoolEmission.OnEmit counts emits per tower (INFERRED), every alwaysPoolOnCount-th splash always pools; AcidPool.Process pools at lifespanFrames if alwaysMakePool or nothing hit, lasting lifespanFramesIfMisses more (002 / 003 / 502x match). Acid-pool points reshuffle on any model change, range included, even while the attack is off (052: transformation 121 / its end 1320), keeping the enumeration index; a throw at a point turns the tower as it starts; Total Transformation's morph ends lifespan + 1 frames on with fresh weapons (052 now bloon / position exact; 005 / 025 / 205 / 052 differ only in list order: simultaneous acid pops order their second children by path list, e.g. 052 rt 2577 8455 < 8600 < 8033, though b.order / path_rank as the DoT order breaks glue). A missed-frame double shot doesn't use up a brew's count (250 rt 137). The acid brew clears the Lead immunity bit of the tower's DamageModels (AddAcidicMixtureToProjectileMutator.Mutate); a brew's last frame doesn't buff that frame's shots (300 rt 799). A mutator with no exported behaviour (Rubber to Gold) is still kept (kind mark) for FilterMutatedTarget, its GiveCashOnPop cashMultiplier 1 as the mark's pop cash x2 (GiveCashOnPop.PreDegrade: pops x income x cashMultiplier + flat); Lead to Gold shows its LeadToGoldPopEffect with "${0}" of the cash (Simulation.CreateTextEffect), not the CashUp "+$"; bloon overlays come from GameData.bloonOverlayData (tools/assets/export_overlays.py: AlchemistGold -> <class>RubberToGold); RemoveBloonTypeModifier as RemoveDamageTypeModifier; lifespan -1 mutators stay (UnstableExplosion). MorphBloon ported (Bloon Master Alchemist: Damage for total health - 1 with children blocked, then the model becomes Red); a round-spawned bloon's Position.z is set in its spawn frame (120 MOAB / 20), so ArriveAtTarget at it arcs right; 005 / 025 / 205 are bloon- and position-exact, only list order differs (rt 1672: three acid pops of 2783, 2382, 2988 make their second children in path-list order 2783 < 2382, not creation order; ordering the DoT ticks by path rank broke glue). ArriveAtTarget.SetTarget on its bloon's destroy retimes an altSpeed shot from startPos to the new Target (3D, the bloon's z), startFrame kept (000_close). |
+| Ace | 0/25 | re-record first (see below); recorder doesn't log the plane yet |
+| Dartling | 25/25 | Re-recorded with seeds and cash 2026-11-07 (Locked at (-130, -22.9)). Weapons same in all 25. Done: RotateToPointer.Process (@0xdd6270) = SmoothDampAngle (@0xf20a60, Unity's SmoothDamp @0x183971800 in f32) toward the point raised by weaponEjectZ / tan 60, smoothTime = |RoundAngle(want - cur)| / rate, yVelocity per tower (`turn_vel`); the harness reads `# point`; EmissionWithOffsets randomRotationCone (one synced NextDouble a shot, (float)(d x cone) - cone x 0.5, the direction only); CreateProjectileOnExhaustPierce (@0xca4050 / Process @0xca48a0): where the shot is unless useBloonPosition, count / minimumTimeDifferenceInFrames per shot, not on map hits, and canCollideWithBloons = gap <= now - last + 1 (later hits in the spawning frame refused, and the next frame's); CreateProjectileOnBlockerCollide exported (map hits only); TravelStraitSlowdown.Process (@0xcf65c0): no lifespan, expires at maxDistance, slowdown / min *Frames are 0 (not serialized), so each pellet keeps its speed. Rocket Storm: TravelCurvyModel exported as straight travel, and TravelCurvy.Initialise (@0xcf5ee0) draws a syncedRandom Next() per rocket after the emission's draws (d d d n): 040 / 250 now bloon-exact. ROCKETS DO SWING (2026-11-07, recording 250 D lines): TravelCurvy.Process turns the direction 12 degrees a frame (turnRatePerFrame = 720 / 60 IS set on load) between initial +- maxTurnAngle (45), reversing at the bound (that frame's step is (rot - min) + min, i.e. it holds a frame); incrementing = (TravelCurvy.Initialise's Next() is even) (odd: first steps go down: 593 -39.2, -51.2, -63.2, -75.2, -75.2, -63.2 ...); the P line's rotation stays the initial one, only the direction (D) turns. PORTED (2026-11-07): TravelCurvy swing (`curvy`, `curvy_turn`) and the draw order (BaseEmit makes the rocket, so its Initialise Next() comes before RandomEmission's rotation draw: rotation = 4th draw x angle + tower - angle / 2, exact for all ten in 250): 040 / 050 / 052 / 250 bloon-exact; 040 / 050 / 052 / 250 MATCH: a RandomEmission with useMainAttackRotation takes the tower's stored rotation as its base and the projectile keeps the rotation it drew (not one rebuilt from radians / the direction). The initial rotations still don't fit RandomEmission with one base (250, angle 36, useMainAttackRotation): probe RandomEmission.Emit's base (main attack rotation chain) with SimRecorder. DARTLING 4xx BEAM (LineProjectileEmission @0xc43e80 with useLengthSpeed): the emission object keeps currentMagnitude across shots; Emit sets targetMagnitude = |target - start| and draws the line (Simulation.EmitLine) at currentMagnitude; Process (@0xc45bb0) moves currentMagnitude toward targetMagnitude by lengthPerFrame (6) each frame; projectileAtEnd (endProjectileSharesPierce) via emissionAtEnd at the line's end. Recording 400: each shot makes the line projectile at the eject point and the end projectile (pierce 50 both); their gaps per shot are 1.0 (rt 4, the first: currentMagnitude 0 then, so EmitLine seems to give 1 at least), 17.4848 (rt 16: = |target - start|, the beam grown past it), 7.3285, then 1.4835 for every later shot (the barrel 19.5 out reaching the Locked point as the tower turns): the end goes to the target once currentMagnitude >= targetMagnitude. The line projectile's D points back along the beam (414: (0.069, -0.998) with the tower at -3.97), the end one's forward. upgrades_r30 differs only from rt 1312, the same beam (4-1-0 bought at rt 1300). PORTED (2026-11-07, 400 / upgrades_r30 MATCH): currentMagnitude / targetMagnitude start at -1 (the 1.0 first gap is a length of -1: Simulation.EmitLine @0xb460a0 puts the end at start + (0, 1) turned by the tower's rotation x length, so it points back), Emit sets targetMagnitude = |Target - start| and draws at the current length, Process grows it by lengthPerFrame; the line collides along it at once and the end projectile is emitted at its end (`line_grow`, `line_end`, WeaponState.line_mag). Map-blocker clipping (FindBlockerIntersection) isn't ported. Open: 500 / 502 / 520 (Ray of Doom, first diff 500 rt 64: the clone's MOAB survives). Its LineProjectileEmissionModel: useTargetAsEndPoint and useTowerRotation off, useLengthSpeed on but no target length (so no growth: Emit's length is the constant 400 @0x183e5005c), ignoreBlockers off (Map.FindBlockerIntersection clips the end), projectileInitialHitModel (pierce 1, damage 140, LaserShock4 +20) and emissionAtEnd; the line projectile pierce 999 damage 30. Emit @0xc43e80: with an initial-hit model (and the line able to collide) each bloon on the line passing Projectile.IsCollisionValid gets an initial-hit projectile emitted at it and CollideBloon'd at once (H lines: 500 rt 52 shot 468 on MOAB 442 at health 60, rt 64 shot 487 at 10); the 50 between (30 + LaserShock 20) is the line projectile's own hit through the list CollideBloons the recorder doesn't log. Rotation with useTowerRotation off: the attack entity's parent rotation if any, else Vector2.get_Rotation(Target - start). TRIED (2026-11-07, reverted): 400 long along the tower's rotation + an initial-hit projectile per listed bloon gets the MOAB's first hit at rt 52 like the game (a 400 line along -45.9 passes ~24 from it: its circles reach), but the game's MOAB health goes 200 -> 60 (rt 52, initial 140 only) -> 10 (rt 64, then popped by the rt 64 initial hit): the line projectile's own 30 (+20 LaserShock) lands at rt 64 only, not with every list hit, and before that frame's initial hit. Leads: the line projectile collides normally at its own (start) position during its 3-frame life (MOAB 23.8 from the start at 64, 30.7 at 52), (LaserShock4 IS a DamageOverTimeModel, 20 every 0.95 s from 52 -> first tick ~109, so not it; the rt 64 +20 is the line's DamageModifierForBloonState on a shocked bloon). PORTED (2026-11-07): Emit's branch (@0xc43e80): with an initial-hit model and the line able to collide (Projectile.CanProjectileCollide @0xc8b920: not destroyed, canCollideWithBloons, pierce > 0) it walks the list to the FIRST bloon passing IsCollisionValid, makes the initial-hit projectile on it and CollideBloon's it, then the line CollideBloons the list after that one; the Ray of Doom draws 400 (no useTargetAsEndPoint) clipped by Map.FindBlockerIntersection (@0xf57390, `Game::blocker_clip`). 500 now exact to rt 75 (the MOAB 200 -> 60 -> popped at 52 / 64 as the game). NEXT 500 rt 76: the initial hit takes Ceramic 442 (nearest), the line then hits 506 and 515 but not 497 of three stacked Ceramics (H lines): CollideBloons' count argument is (int)param_2->0x3c - 1 (param_2 = Emit's 2nd argument: find which object / field, maybe a max-collisions count) or IsCollisionValid refuses 497. Checked (2026-11-07): param_2 is the line's ProjectileModel and +0x3c its pierce (count 998); CollideBloons/3 (@0xc8bd70) walks the list (IsCollisionValid @0xc8d840: destroyed / vtable 0x778 / FilterBloon / map LOS) and stops at the first CollideBloon that returns false. The clone's line hits all three stacked Ceramics; the game only two: add a SimRecorder probe logging the GetInLine list (ids in order) for the Ray of Doom's Emit. Keeping list collisions for both broke 500 / 502 / 520 further; growing the RoD line (target length) kept upgrades_r30 matching, so check whether 4-x-x -> 5-x-x keeps the emission state. NEXT (040 rt 185, 250 rt 125): the rockets' rotations don't fit RandomEmission's d x angle + base - angle / 2 with one base (250 rt 124: -39.2, -29.3, -55.5 from tower -41.32); RandomEmission.Emit (@0xc4a7a0) with useMainAttackRotation takes the main attack entity's rotation (+0x48 -> +0x60 -> +0x58 / +0x50 chain), and TravelCurvy.Process may swing them if turnRatePerFrame is set on load (check: the swing is +-maxTurnAngle 45 at turnRate 720 / 60). 004 / 025 / 205 MATCH (2026-11-07): RateBasedAnimationOffset.Initialise (@0xc908d0) sets the weapon's animationOffsetFrames = (int)(rate / baseRate x offset x 60) (the 0-0-4 guns leave 0 / 18 / 36 / 54 frames after their shared throw), and a RotateToPointer with rotateTower off turns its own attack from 0 (`aim_rots`), the gun's shots along it. 005 MATCHES: KnockbackMutator.Mutate (@0x1811e7110) picks light / heavy / MOAB by the bloon's current model, so a knocked Ceramic's children go back at the light multiplier (`Knock { m: [light, heavy, moab] }`). DONE 2026-11-08 (25/25): the Ray of Doom's Emit (@0xc43e80) passes CollideBloons OrderBy(GetInLine).Skip(i + 1), all lazy (SimRecorder CB lines: an Enumerable.Skip iterator over an OrderedEnumerable over GetInLine's iterator). Count / ElementAt find the first bloon passing the line projectile's IsCollisionValid (index i; none, no initial hit: a Camo Rainbow the 5-0-0 can't see). The initial-hit projectile is made and CollideBloon'd, and only then is the line's list walked: GetInLine again, so a bloon the initial hit destroyed is gone and Skip skips the next one (500 rt 76: three stacked Ceramics, the line on two). |
+| Buccaneer 34/34 (re-recorded with seeds 2026-11-07), Mortar 25/25, Druid 17/34, Banana Farm 0/25 | | Farm: EmissionsPerRoundFilter spacing (see TOWERS.md) |
+
+TOWERLESS RECORDINGS (found 2026-11-07, owner saw it on screen): the game starts with 650 and
+CreateTowerAt refuses a tower it can't pay for, silently (log: `placed ... False`), so nearly all old
+pending dartling (23/23), ace, heli, spike (24/25 each) and super (32/33) recordings have no tower (no
+W lines). All their scenarios now have "cash": 10000000 (gen_scenarios.py gives every scenario that);
+re-record them before use. Dartling's targetTypes ids are "Normal" (pointer) and "Locked" (selected
+point), not "Point": scenarios use Locked. Normal (follow the mouse) can't be recorded by hand; plan:
+have SimRecorder set the input manager's cursor from the scenario each frame, so it's scripted.
 
 TOWERS.md has the longer per-tower notes.
 
@@ -975,3 +985,524 @@ seek / closest, which skip carried bloons anyway.)
   Regression: dart 70/70, boomerang 99/99, wizard 13/34, ace 0/25.
 - 2026-10-31 bdb1023: Wall of Fire start cooldown, track point and seed; trophies; co-op
   profiles; UI work.
+
+## Mortar 25/25 (2026-11-08)
+
+- Seeded recordings are in research/dumps/recordings/pending/mortar. All 25 match.
+- Done:
+  - RotateToPointer rotateOnlyOnEmit: one SmoothDampAngle step per throw start.
+  - Target spread: sin/cos x (d x radius).
+  - applyOnlyIfDamaged refuses immune bloons.
+  - P-INSTANTFRESH: an instant shot doesn't meet objects popped out earlier in the same collision pass.
+  - DamageInRingRadius: 3D distance, bloon at its Position.z (`height`: 20 / MOAB 120; new
+    unmoved objects 20, P-RINGZ), blast at 0.
+  - P-CELLCIRCLE: a whole grid cell counts for a big query only if its circumscribed circle is
+    inside the query circle.
+  - DoT intervalFrames = (int)(interval x 60), truncated.
+  - Projectile FilterWithTagModel (MoabBurn).
+  - P-ABSMARKER: Mortar 0-4-x+ shells start at the weapon's ThrowMarkerOffset markers, cycled by
+    the throw count (a missed-frame double takes the next without advancing), turned and raised
+    from (0,0). Not traced in code: no behaviour overrides EmitPosition, so whatever supplies the
+    eject point here skips the tower position.
+- Open:
+  - 050 rt 178: two blasts made the same frame (rate 4.05 frames) live 2 and 3 frames in the game
+    (1549 and 1535), the other way round in the clone. Look at the creation phase of the second
+    (double) shell's exhaust.
+  - 052 rt 1198 and 250 rt 673: one bloon each. In 250, blast 5331 destroys a Black (H health 0) at
+    rt 671 and again hits its new Green child 5346 at rt 673 (pierce 44 -> 43, health 0); the clone's
+    child inherits the blast's hit (lineage) and is spared. The child sat behind the entrance (166.9)
+    and is snapped to 173.6 that frame. When does a child not inherit collidedWith?
+    Checked 2026-11-08: SpawnChildren.CreatedChildren (@0x181008930) copies the parent's list at
+    +0x180 onto every child it makes (copies too), then Bloon.UpdateLayerId on the parent. Here the
+    parent 5298 itself was destroyed (H health 0; Degrade's RootObject.Destroy path), leaving only
+    the copy 5346. Next: read Projectile.CollideBloon to see which id the blast records (the parent's
+    id before or after UpdateLayerId) and whether +0x180 holds the parent's own current id.
+    (Now: 025 first differs at rt 853, 052 at rt 1198 and 250 at rt 673, all on a bloon at the
+    173.6 entrance snap.)
+  - DONE 2026-11-08 (025 matches, mortar 22/25):
+    - An instant shot's candidates are always put in grid order, even with pierce for all of them:
+      the order sets the order their children are listed in (rt 945).
+    - A bloon in the grid ranks by the bucket it was filed in (cell_pos), then its slot in that
+      bucket (path-list order at the fill), not its current position / creation order (rt 2329: a
+      White listed before an older Black in their cell is hit first).
+    - HYPOTHESIS P-DEADCOPIES: when a projectile's hit destroys the bloon's own object (no first
+      child carrying it on), the copies that pop made don't carry the layers up to the hit one, so
+      the same projectile can hit them again (250 rt 633 / 652 / 672 / 843 re-hits). Not for DoT
+      damage (glue_205's Ceramics stay protected). Not traced in code: SpawnChildren
+      .CreatedChildren copies the parent's lineage (+0x180) to every child and UpdateLayerId lists
+      each new id. Treating spawned or copied bloons' first ids as unlisted broke every MOAB.
+  - DONE 2026-11-08 (050 052 250 match, mortar 25/25): Projectile.Process runs in creation
+    order (the process list), not the factory list's order after a flush. Exhaust / expire
+    projectiles are made in the creation order of the shots they came from (Exhaust.src; 250 rt
+    670: shell 5086 expires before 5098, listed after it, so its blast takes the Black first).
+
+## Druid 23/34 (2026-11-08)
+
+- SOLVED druid_052 rt 285 (druid_052 MATCHES): JungleVineLimitProjectile. FilterEmission
+  (@0x180c7b880) lets the vine weapon shoot only while one of its `limit` slots (UpdateLimits:
+  made at -999999999) is at or before Simulation.roundTime. JungleVineEffect.Collide
+  (@0x180cc23b0), not on MOAB-class: duration = (sqrt(GetTotalLeakDamage) + 1, +5 with the Lead
+  tag, +10 with Ceramic) x 0.125; AddLimiter (@0x180c7b790) on the emitting weapon fills the
+  first free slot with roundTime + delayInFrames + ageingDestroyModel.timeFrames + (int)(duration
+  x 60). timeFrames = (int)(time x 60) (AgeingDestroyModel.set_Time). The 0-5-x vine's
+  destroyAfterPopTime is 0.3 (18 frames, not 84): the Ceramic grabbed at 143 holds the vine to
+  143 + 18 + 158 = 319. Exported as projectile vine_frames and weapon vine_limit.
+- DONE: Ball Lightning's CreateProjectileOnInterval (Process @0x180ca55e0): BloonManager.GetTarget
+  filters with Projectile.FilterBloon (@0x180c8c980), which skips bloons whose lineage the ball has
+  already hit (druid_500 rt 97-196: ball 491 among the carried MOAB and Ceramics it touches never
+  fires; the clone bolted them at 96 and 138). With onlyIfHasTarget and none it returns before
+  createNextProjAt moves, so it tries again each frame. druid_500 / 502 / 520 now go to rt 138,
+  druid_400 to rt 967.
+- DONE: MoveWithWind.Process (@0x180ffeeb0) steps in 3D: from Position (z included) to the path
+  point at its distance, whose z Path.DistanceToPointInfoBloon (@0x180f6e030) makes 180 for
+  isBoss, 120 for isMoab, else 20. Step = normalised 3D direction x BloonModel.speedFrames x
+  speedMultiplier; the wind ends within 3 x speedFrames (3D). A carried bloon runs no Bloon.Move,
+  so it keeps its z (Bloon.height no longer reset while carried): a MOAB's first Ceramic child
+  keeps the MOAB object's 120 and goes 0.945 a frame across where the other Ceramics go 2.604
+  (druid_500 Ceramic 443). druid_5xx bloons now match to rt 448-469.
+- DONE: MoveWithWind is a mutator keyed "Wind" (WindModel.get_mutator @0x181203f00), so
+  FilterMutatedTarget "Wind" (the Tornado's) passes over carried bloons (druid_500 rt 141: the
+  game's Tornado keeps pierce 60 and turns for Ceramic 443). druid_5xx positions match to 440-448.
+- NEXT druid_500: the clone draws one synced random at rt 316 as the second Superstorm (805)
+  appears; the game draws none there (RRBTD6_RNG_LOG against the R lines). Then the game draws 2
+  per Ball Lightning bolt (468, 489, 522 ...), the clone none: CreateProjectileOnInterval's
+  Vector3.RandomOffsetFromRadius(range) on the emit point (range 43) and/or the Random target.
+
+## Druid 22/34 (2026-11-08)
+
+- SOLVED druid_320 rt 3394 (druid_320 MATCHES). SimRecorder now logs wind-carried bloons: "WC id
+  offTrackCount x y distance" as each frame starts, "WM bloon model speedFrames x y" after every
+  MoveWithWind.Process, "BO id offTrackCount" in the frame's bloon dump (a Harmony patch on
+  Bloon.Degrade broke the game: its trampoline throws, so degrades never happen; don't patch it).
+  Fresh probe recording pending/druid_probe/druid_320w (matches).
+  - A carried bloon steps in its MoveWithWind behaviour's Process, whose place in the process list
+    is its pickup (WM lines interleave with the bolts' CB hits, old bloons stepping after newer
+    bolts). A lightning Target picked up after the bolt was made is hit at its frame-start spot and
+    steps after at what it has become (rt 3394: two Yellows turned Blue step 0.729); one picked up
+    before steps first (probe rt 3394: Green 5240 steps as a Green, then turns Red; rt 2838). No
+    degrade redoes a step that is done. Bloon.wind_since = pickup time x 4 + phase (the first child
+    keeps it, other children of a carried pop get theirs at the pop).
+  - The lightning's carried candidates go in collisionChecker.BloonGrid query order from the bolt:
+    cell rank of where each one is now (moved this frame), same cell by creation (INFERRED). Probe
+    druid_320w rt 3113 (2810, 3161, 3152 in cells (7, 3), (8, 3), (8, 4)) and druid_300 probe b rt 875
+    (Red 875 a cell nearer than 790; same start-of-frame cell) both fit; factory-list, pickup-order and
+    object-number orders each fail one of them.
+
+## Druid 21/34 (2026-11-08)
+
+- Re-recorded with seeds into research/dumps/recordings/pending/druid (old unseeded ones in
+  pending/druid_old). The full regression now includes `druid`.
+- DONE: OffsetModel (thorns, range 45): Offset.ProjectilesCreated (@0x180c7fa10). After the
+  RandomEmission has made all five (three NextDouble each: offset direction, radius, rotation),
+  each thorn in turn gets angle = Next(0, 1000) x range / 1000 - range / 2 + angleOffset. Its
+  direction is turned by it (Vector3Boxed.Rotate) and its rotation + it. 000 / 000_* / 001 / 010
+  / 020 / 100 match.
+- DONE: LifeBasedAttackSpeed.GetRate (@0x180c7bfb0): rate / (baseRateIncrease + 1) at or above
+  calculateFrom (Attatched @0x180c7bf20: the lives then, clamped to 0..Simulation.startingHealth),
+  under it / (min(lost, lifeCap) x ratePerLife + 1 + baseRateIncrease) (002: 66 -> 60 frames).
+- DONE: DamageBasedAttackSpeed (OnBloonDamaged @0x180d19ee0, Process @0x180d1a0a0, UpdateRate
+  @0x180d1a160): currentDamage accumulates, stacks = (int)(currentDamage / threshold) clamped to
+  maxStacks (nothing taken off per stack); idleFrames after the last damage it is re-rated and
+  zeroed; each stack's mutator is a rate / (1 + stacks x increase). HYPOTHESIS P-OWNDAMAGE: a
+  hit counts its damage at most the health down the hit bloon's own line, not what the copies
+  took (005 rt 931-963). 002 003 004 005 match.
+- DONE (030 032 040 match): the Jungle Vine attack's filters. FilterOutOffscreen
+  (@0x180c3f5c0): Map.IsPointOnMap of the bloon, with its radius as border when
+  includeBloonRadius (0-3-0 has both, so its centre must be on; 0-3-2 has only the radius one).
+  FilterWithTagsModel (the list form, inclusive Moabs / Frontier: no MOAB-class) exported like
+  FilterWithTagModel.
+- Open: tornado 3xx+, 05x (Spirit of the Forest: 050 bloon-exact to rt 157), 4xx/5xx.
+- Spirit of the Forest PORTED (2026-11-08):
+  - SpiritOfTheForest.Initialise (@0x180d93d40) / GeneratePositions (@0x180d93560): every second
+    path segment (0, 2, 4...), not bloonsInvulnerable, gets two NextDouble draws (x, y: point +
+    d x offsetMax - offsetMax x 0.5), kept when on the map. The Tutorial has 184 segments: 184
+    synced draws at placement (before the recorder opens its file, so unlogged; the clone's
+    draw 185 is the recording's first).
+  - Process (@0x180d94c20) / Update (@0x180d95240): currentRadius starts at the model range, +=
+    round frames x amountPerFrame (0.05) to circleRadius (360); while it is over
+    currentGeneratedRadius by more than generateRadius (6), the kept positions in the next ring
+    (over gen^2, under (gen + 6)^2 from the tower) each AddObjectAtPosition (@0x180d92f10: three
+    NextDouble: object, rotation, scale), gen += 6. Rings every 120 frames (rt 180, 300, 420...).
+  - DamageOverTimeZones (Far, Middle, Close, in that order): ranges currentGeneratedRadius, min(100,
+    gen), min(50, gen) (GetRangeMiddle / Close @0x180d93c90 / @0x180d93c60). Zoned<Bloon> runs
+    before the round's bloons move: a centre within range (off the map too) gets the mutator, a
+    DamageOverTimeCustom (triggerImmediate, distributeToChildren; damage + additive on its tags);
+    out of range, BloonExit takes it off. Mutators go in at Mutable.AddMutator's count / 2 slot,
+    and pass to children through MOAB pops (rt 153 / 154).
+  - Bloon.Process after a DamageOverTime degrades the bloon goes on down the (kept) behaviour list:
+    a later DoT that is due ticks the same frame (rt 153: Middle pops the MOAB, Close hits the
+    Ceramic it became).
+  - Zoned.Run keeps inZone: BloonEnter only for a bloon newly in, BloonExit only for one it had in,
+    so a copy born outside keeps the mutators it copied (rt 158). BehaviorCreated: a spawned bloon
+    enters at once (rt 156 / 157).
+  - A DoT continuing after a degrade goes in behaviour (seq) order, not mutator order (rt 157).
+  - Within one Damage every copy copies the bloon first hit ("copy ... from 6701" for all four of a
+    RainbowRegrow's): a copy made in the same Damage keeps its source's (already copied) order
+    (rt 2933); across frames a copy's copies are copy_order'd again (rt 2935).
+  - ActivateAttack.Activate (@0x180e01df0) with isOneShot / processOnActivate runs its weapons once
+    at the activation; lifespanFrames 0, it then RemoveProcess: Vine Crush used with only a MOAB
+    about never fires (the old 1 s grace stays for other one-shots).
+  - druid_050 MATCHES.
+  - SimRecorder now logs "BD id index lastTick model" for every DamageOverTime behaviour and lists
+    Spirit mutators in the "S" line (ground truth for the rules below; druid_052 re-recorded with
+    them, extra probe recordings in pending/druid_probe).
+  - A zone's mutator id is mutatorId, or the zone model's name when that is "" (0-x-2 / 2-x-0's Middle:
+    "DamageOverTimeZoneModel_MediumSpiritOfTheForest", not in BloonManager's keep list, so a MOAB pop
+    strips it: druid_052 rt 142).
+  - PostDegrade for every copy of one Damage uses the first-hit bloon's DoTs (its last one's
+    lastTick), not an intermediate copy's (druid_250 rt 154). A DoT continuation skips behaviours made
+    this frame (druid_052 rt 143).
+  - Open: druid_052 rt 285, the Jungle Vine fires in the clone at a DoT-popped Blue (1543) the game
+    never takes, though it later takes 1570 with the same history; 1543 stays in the path's
+    bloonsList after it is destroyed at 309. The two Blues' state (position, BD, S) is identical
+    at 299 and 318; rateFrames stays 142 and the thorn W0 keeps its 60. Not explained yet.
+  - Lightning bounces search in process-list (creation) order, not the projectile factory list's
+    (which a swap-remove reorders): probe druid_200 rt 2026 MATCHES with it.
+  - SimRecorder probes: "LG proj hitTarget currentDelayFrames shared:.. collided:.." per lightning,
+    "BL bloon layerId lineage". Probe recordings: pending/druid_probe (druid_200 matches; druid_300 /
+    druid_300b with LG, 300b also BL).
+  - The search rule from the decompile (BloonManager.GetTargets @0x180fcacc0 -> Targetting.GetTargets
+    @0x180fdbe70): (1) Targetting.GetGlobalBest (@0x180fdb5f0): the path's cached best for the type,
+    if on a fetched segment and passing the BloonFilter, goes first (AddTemporaryTarget); (2) the
+    brackets of the path segments within range + 40 (constant 0x183e4ff98), sorted by the type's
+    comparer, each bloon taken with NO distance check unless MOAB-class (CanHitMoab); (3) then the
+    off-track (wind-carried) bloons (pathManager +0x69 / list at +0x120). Tried in the clone: range
+    + 40 segments without the global best breaks druid_200 at 306; "range + 2" by position fixes
+    300b rt 319 (Green 719 at 87.19 taken) but not probe 200 rt 2716 (Green 2163 at 87.9 left by
+    2442, taken by 2454: likely 2442's own collidedWith through the lineage; check with BL).
+  - PORTED: each fetched segment's bracket is flagged PathSegment.IsInRange (@0x180f6ced0: segment
+    point within range + 2); a bloon of a flagged segment is taken whatever its own distance, a
+    MOAB-class one of another through its circles; wind-carried (off-track) bloons come after the
+    brackets, by position within range + 2. targetLast off (+0xa8) matches none of First / Last /
+    Close in GetTargets, so the brackets stay in fetch order (entrance first). The global best is
+    not ported (no cache entry for that type, INFERRED). druid_300 probes now to rt 497 / 651 / 725.
+  - Next, druid_300 (probe b) rt 494: the thorn attack starts its throw (W0 anim 509) with the tower
+    turned from 61.14 to -2.73 in the game, 33.6 in the clone, then turning about -3.8 a frame
+    (clone about -3.0). The candidates are wind-carried Greens circling the tower 8-21 away (distance
+    173.6). The RNG stays aligned to the end, so it is the thorn attack's target / turn against
+    carried bloons (Targetting's off-track list for tower attacks?), not a draw.
+    Solved the aim: the game's rotation is exactly atan2 from (tower + 10 / tan60) to Green 1056's
+    previous-frame position (the clone's RotateToTarget formula), so only the target choice
+    differs. The four carried Greens tie at distance 173.6 (the Lead is sharp-immune); the
+    tie-break is likely their wind_seg / path rank.
+  - FIXED: a tower attack's off-track pass takes the newest carried bloon by creation (id), not by
+    reused factory slot (P-OFFTRACKORDER's obj): rt 494, the thorns take Green 1056. ninja stays
+    34/34.
+  - FIXED: the lightning bounce takes carried bloons after the brackets within range + their radius
+    (rt 875: a Red 93.5 away at range 86), newest factory object first (obj; by id breaks rt 737).
+  - REPLACED the id order: Targetting.GetTargets walks the off-track bloons through
+    collisionChecker.BloonGrid's query (sim + 0x120 -> +0x60), so a tower attack's off-track pass now
+    uses CollisionGrid query order from the tower (`grid_query_key`, the instant-hit sort): probe
+    druid_300 rt 648 (oldest of four carried Pinks) and probe b rt 494 (newest of four Greens) both
+    fit. The lightning's carried candidates keep factory-object order (grid order breaks probe b rt
+    879).
+  - A bloon whose wind ended this frame is in neither list for the lightning (Bloon.wind_end; probe b
+    rt 3046).
+  - Probe druid_300 MATCHES; probe b is bloon-exact, positions to rt 3489 (a thorn 0.07 off).
+  - One RotateToTarget per attack, at the attack's Target: the first of the attack's weapons in its
+    throw (counted from the frame its throw starts) turns the tower, and a later weapon releasing
+    during that throw shoots from that facing at that weapon's target (druid_300 rt 724-726: the
+    lightning lands on the thorns' Pink; druid_205 rt 172: the thorns keep their own target under
+    the lightning's later throw). druid_300 MATCHES.
+  - Lightning hits go one shot at a time in creation order (each its own instant pass): druid_320
+    rt 2148, two lightning pops' copies listed in their shots' order.
+  - TrackTarget's validity includes the projectile's FilterBloonIfDamageTypeModel (cant_hit):
+    druid_320 rt 3060, the tornado (can't hit White) seeks a Blue past a nearer White.
+  - druid_320 now to rt 3394. There a carried Yellow (5004, also 5087) popped to a Blue by a
+    lightning split (5633, newer than the bloon, so hitting in its Process after the bloon moved)
+    moves that frame at Blue speed in the game (0.73) and Yellow speed in the clone (1.66). The
+    tornado 5369 also touches it that frame (H lines, no pierce change). Next: re-record 3-2-0 with
+    the probes and log MoveWithWind state (offTrackCount, the wind's speed) per carried bloon to see
+    whether the degrade re-attaches or re-runs the move.
+    Tried (reverted, uncommitted): MoveWithWind has only its model (field_offsets), so the step is the
+    bloon's model speed when it moves. (a) Moving a carried lightning Target after the hit (as a newer
+    Target) fixes rt 3394 (bloons exact to 3570) but breaks rt 2838, where a carried Blue the bolt
+    destroys was hit at its moved spot (the bolt sits at -85.578, the moved position). (b) Redoing
+    the move for a carried Target the hit degrades: the clone's `prev` already equals the moved spot
+    for carried bloons, so the redo must start from the frame's start (cell_pos is a candidate,
+    untested). Both cases fit "move first, and a degrade by a later bolt redoes the step at the new
+    speed", or a degrade that resets the position to the frame start; a probe recording should settle
+    it.
+  - druid_300 (probe b) was exact in positions to rt 3046 before these (weapons same). Still open: the pending
+    druid_300 (rt 725), probe druid_300 (rt 651), 3-2-0 (497 bloon frames), 4xx / 5xx.
+  - Open, druid_300 rt 319 (3-0-0's lightning with the tornado): the bounce search of bolt 817 at
+    -149.07 takes wind-carried Blue 590 / Red 599 (distance 173.6, blown back since before 296);
+    the clone's search skips carried bloons (`b.wind.is_none()`) and finds none. Allowing them
+    breaks rt 315, where the game's search from -90.11 takes Lead 810 and Pink 801 and leaves 599
+    (34 away, least far along) out. Neither the wind state nor the lineage differs between 315 and
+    319: look at the segment GetTargets files a carried bloon on (wind_seg) against the search's
+    segment range next.
+  - BloonEnter adds the mutator even when the bloon has one with that id (a copy entering): a second
+    entry at count / 2 that only shapes the mutator order (behaviours are one per id, the old one keeps
+    its lastTick). druid_250 rt 154 (S lines [Far, Medium, Close, Far, Close]). druid_250 MATCHES.
+- Lightning PORTED 2026-11-08 (druid_200 exact to rt 1680, weapons same). Game::step_native's
+  lightning block after the bloons move:
+  - It stays at the eject point when made and isn't Instant-followed.
+  - Its hit is in a pass of its own after the move (children start where the bloon is, not
+    `fresh`). A Target newer than the shot is put back to its start-of-frame spot for the hit,
+    then moved as what it became.
+  - It sits where it hit. delayFrames later it looks within splitRange (First / Last order,
+    off-map too, past its group's sharedCollidedWith = all hit / picked layers of the shot and
+    its splits): the first is its Target, further ones (up to `splits`) are split copies there,
+    all hitting next frame; none, it goes. A shot that has hit nothing goes when its Target is
+    gone.
+  - The P-LIGHTNING retarget export is gone (`lightning_split`).
+  - The bounce search order: targetLast off takes the TargetType static at +0xa8, which behaves
+    as Last (INFERRED, rt 1679: the two least far along in range).
+  - sharedCollidedWith is one list per family, appended by every bounce search's picks (not the
+    first Target). A search excludes its own collidedWith plus that list; splits start with an
+    empty collidedWith (rt 306 / 310 / 1683).
+  druid_200 MATCHES.
+- Lightning, from the decompile of Lightning.Process (@0x180cc84d0):
+  - LightningModel: delay 0.05 s (delayFrames at +0x48), splitRange (+0x30), splits,
+    targetLast (+0x4c: TargetType First or Last).
+  - Process, while not hitTarget: currentDelayFrames -= 1, and nothing until it is <= 0. Then
+    BloonManager.GetTargets from the projectile's position, splitRange, BloonFilter. The first
+    target is the projectile's Target (its layerId into sharedCollidedWith); each further one
+    gets a CreateSplit (also into sharedCollidedWith). A valid Target: currentDelayFrames =
+    delayFrames, hitTarget = 1, projectile.SetTarget (vtable 0x7e8). None: the projectile goes
+    (0x808).
+  - With hitTarget: the projectile's Target (0x7d8); invalid, it goes.
+  - Recording druid_200 rt 22-23: lightning 466 is made at the eject point at 22 (P line). It
+    hits Black 419 on frame 23 after the Black has moved at Black speed (Yellows at 194.22 /
+    185.62), so the damage is in its Process (after the older bloons move), not the collision
+    pass. The clone hits in the collision pass, before the move (194.95 / 184.69).
+
+## Buccaneer 34/34 (2026-11-08)
+
+- The 34 seeded recordings are in research/dumps/recordings/pending/bucc (old unseeded ones in pending/bucc_old).
+  All 34 match.
+- Done: broadside. RotateToTarget turns the tower to the target's rotation + additionalRotation
+  (-90) in game degrees; the eject point turns with the tower; EmissionRotationOffTowerDirection
+  (@0xc3c3c0) sends the shot at the tower's rotation + offsetRotation.
+- Open, the secondary gun (FireWhenAlternateWeaponIsReady + FilterTargetAngleFilter). From the
+  decompile (FilterEmission @0x180c76350):
+  - shareFilterTargets: the result is re-evaluated only when clock - timeOfLastTargetUpdate >
+    minTimeBetweenFilterTargetsFrames (56), else the cached lastFireResult; it is shared by the
+    tower's filters.
+  - It walks Attack.GetTargets: a target passes if Vector3.AngleBetween(bloon - tower, Rotate(up,
+    display rotation + baseTowerRotationOffset)) is strictly inside +-fieldOfView/2.
+  - FireWhenAlternateWeaponIsReady: set_FireWeapon (@0xc77eb0) lasts until clock + 1; Process
+    clears it after that; EmissionStarted clears it; its FilterEmission comes first in the list.
+  - Unresolved, recording bucc_001: at rt 2170 the game holds the secondary off with a Yellow 70.4
+    away at -43.6 flat (it passes in 2D); at rt 538 it fires with a Yellow 70.5 away at -44.5 flat
+    (it fails in 3D with z 20). So it's neither plain 2D nor 3D with the bloon at 20. Check what
+    Attack.GetTargets holds (which bloons and positions) and the display rotation (+0x70 display
+    behaviour).
+  - DONE 2026-11-07 (bucc 10/34): the filter goes over Attack.GetTargets. With no target
+    supplier list that is GetVisibleTargets (the clone's visible_spot: track segments in range + 2),
+    with a flat angle; 3D with the bloon's height loses recordings. The 56-frame cache didn't change
+    any recording.
+- DONE (040/050/052/250 match): MOAB Takedown is a real hook (Game::hooks_step, after the bloons
+  move: LinearTravel out in 3D, kill at the snap, back at 2.5/frame, gone within 6), the round end
+  waits for it, and it counts as the ability weapon's throw. Grape Shot's
+  EmissionArcRotationOffTowerDirection: the arc is built round the tower and each shot turns by the
+  offset after (read back from its direction). The angle filters share one result for 56 frames
+  (shareFilterTargets).
+- DONE: DamageModifierForCashAmount, one per stackId (the last whose threshold is met), applied
+  after the tag modifiers (004 / 005 match).
+- Open: 010 020 032 320 (the secondary gun's rotation, below), upgrades_r30, and the Aircraft
+  Carrier family 400 420_* 500 502* 520. Recording bucc_400: the planes are sub-towers flying
+  FighterPilotPattern* paths (towers 1 and 2 throw 72 / 85 times in the game, 184 / 180 in the
+  clone, from rt 31); the ship's own darts (weapon 0) never fire in the clone. A port of its own.
+  Findings (bucc_400):
+  - The ship's dart attack fires from rt 427 at rotation 0. The carrier doesn't turn; in the clone
+    the planes kill everything first.
+  - Each plane is a sub-tower (W ids 249 / 440 / 766) with three weapons: rate frames 13, 72 and
+    180. W's position stays at the spawn spot (-2.8, -1.04).
+  - Weapon 1 (72) first fires at rt 3: an 8-way radial burst (rotations 180, -135 ... 135) from
+    (-2.8, 8.958549) at z 257, each dart 1.667 a frame outward (P 300-349, rt 28).
+  - The clone's planes throw 184 / 180 times vs 72 / 85: rates or weapons are wrong. Start from the
+    BuccaneerPlane TowerModel's weapons and the FighterPilotPattern* paths (P-FIGHTER is a stand-in).
+  - BuccaneerPlane (create_tower from the "Plane Spawner" attack, max 3): air speed 50, accel 105;
+    air_modes exported empty, so the FighterPilotPattern{First,Close,Last,Strong} paths aren't
+    exported. Attacks: twin darts (0.21 s, markers +-2.5, no target types: fired by a filter like
+    FilterBloonsToWithinAngle; the game throws 72 times vs the clone's 184), Radial 8-way arc
+    (1.2 s), Anti-MOAB missile (3 s, targets First...). Port the pattern movement and the dart
+    filter first.
+  - The plane's dart attack has FighterPilotPattern{First,Close,Last,Strong} (offsetDistance 25) as its
+    target suppliers (Initialise @0x180db72b0, GetTarget @0x180db7180, GetTargets @0x180db7230,
+    GetPursuitDestination @0x180db7030, SearchForTarget @0x180db73f0, IsBloonValidAndCamo).
+    Its AirUnitModel has FighterMovementModel (maxSpeed 50, turningSpeed 0.035,
+    minDistanceToTargetBeforeFlyover 40, distanceOfFlyover 75, bank 70 / 0.025, roll 2.3 s /
+    run-up 100 / every >= 12 s / chance 0.02 a second, loop 4.6 s / run-up 100 / >= 20 s / 0.015 a
+    second / radius 36.6). FighterMovement.Process @0x180d23c90 (it inlines ApplyMovement
+    @0x180d22930): Quaternion.AngleAxis turns, Math.LerpAngle, Math.TruncateVector3, flyover state,
+    and barrel-roll / loop checks (lastTimeCheckedForABarrelRoll: check whether those draw synced
+    randoms; R lines in the recording). Init @0x180d233a0.
+  - The radial attack has fireWithoutTarget; the missile attack targets with *AirUnit suppliers
+    and an attack offset (-199.1, 743.1).
+  - PORT SPEC (decompiled 2026-11-07):
+    - FighterMovement.Process each frame:
+      - timer += 1; outside a flyover, every updatePathTime frames (Init) take currPath =
+        supplier.GetPath() = [GetPursuitDestination()]: SearchForTarget's attackTarget position,
+        else the parent tower's position. It keeps a valid target for 15 frames, then searches
+        again: BloonManager.GetTarget from the parent tower's position, infinite range, the
+        pattern's mode (First / Close / Last / Strong), the attack's filter.
+      - target = currPath[0], or flyoverTarget while flyoverEngaged; TruncateVector3(target, 3).
+      - dir = target - pos.
+      - newRot = Math.LerpAngle(transform rotation, get_Rotation(dir), turningSpeed 0.035):
+        d = (b - a) - floor((b - a) / 360) x 360, clamped to [0, 360], minus 360 if over 180;
+        a + clamp01(t) x d.
+      - rotation = Rotate((0, 1), newRot); pos = Truncate3(pos + rotation x (maxSpeed x 1/60));
+        transform rotation = get_Rotation(Truncate3(rotation)).
+      - If Distance(old pos, target) <= 40 (minDistanceToTargetBeforeFlyover): when not in a
+        flyover, start one with flyoverTarget = pos + Rotate((0, 1), rotation) x 75 x
+        (_UNK_183e4fc3c); otherwise the flyover ends.
+      - Barrel rolls are deterministic and display only.
+    - TruncateVector3(v, n): (float)(Math.Truncate((double)(v x 10^n)) / 10^n) per component.
+    - Darts: AttackFilter FilterTargetAngleModel (fov 90, offset 0, the plane's rotation) +
+      FilterInvisible; target = the pattern's attackTarget when Attack.FilterTarget passes.
+  - PORTED (2026-11-07):
+    - Game::fighter_step / fighter_search; the plane doesn't move on the frame it is made; no
+      on_map filter in the search (the MOAB entering counts).
+    - The plane's shots fire along its rotation (FireFromAirUnit), no seek-launch.
+    - Twin darts: shot k from marker k.
+    - Accelerate comes after the move and grows speedFrames / turnRatePerFrame for tracking shots.
+    - bucc_400 is exact to rt 147.
+  - bucc_upgrades_r30 progress (2026-11-07):
+    - P-NEWWEAPONS: weapons an upgrade adds to a kept Attack get their own place in the process
+      list (Tower.weapon_born): they aim after the bloons have moved (the 1-1-0's Grape Shot at
+      rt 547).
+    - RotateToDefaultPositionTower.OnUpgraded (@0x180d86c70): reaching tier 4 / 5 turns the
+      tower to 0 by RotateTower((0 - rot) x Deg2Rad), leaving 3.8146973e-06.
+    - Aircraft Carrier (RotateToTarget rotateTower off, EmissionRotationOffDisplay): the parallel
+      darts are laid out on the tower's rotation and sent at the display's rotation + 90; the angle
+      filter reads the display's rotation (Tower.disp_rot).
+    - Carrier display (RotateToTarget.ApplyRotation @0x180dd7930, rotateTower off): the attack's
+      transform turns to tower + ((additionalRotation + target rotation) - tower). The shots go at
+      display - offsetRotation (main -151.11, secondary 28.889 for a display at -61.11). The main
+      darts are laid out on the tower's rotation; the angle filter's facing is display + base.
+      bucc_upgrades_r30 is exact to rt 1364 (then a plane shot one float step off, like bucc_400 rt
+      147).
+    - Lead for the plane drift: the path point is the target bloon's position when the plane reads
+      it. In the game, a bloon older than the plane has already moved by then and a newer one hasn't;
+      the clone reads every bloon before the move (move_air runs before the bloons move, and must
+      stay before the plane's attacks). TRIED (2026-11-07): running fighter_step in the towers phase at the plane's
+      place after process_bloons_before(its earliest attack stamp), once a frame before its position
+      is read. It is worse (bucc_400 rt 110, upgrades rt 1312), so not that.
+    - SOLVED with the FM probe. SimRecorder now writes "FM tower x y rotX rotY targetX targetY timer
+      flyover" for each FighterMovement every frame; bucc_400 was re-recorded with it.
+      - The plane moves after the towers' attacks each frame (from the frame after it is made),
+        before the bloons move.
+      - Its path point reads a bloon newer than the plane where it was at the frame's start (prev
+        if the towers phase already moved it); an older bloon where it is now.
+      - The radial ArcEmission (no useAirUnitRotation) goes from 0, its eject point still turned
+        with the plane.
+      - Planes 1 and 2 now match the game's FM lines every frame.
+    - DONE: SubTowerFilter.FilterEmission counts live createdProjectiles + createdSubTowers.
+      (P-SPAWNPROJ, "counts for 90 frames", is gone: 2026-11-08 below.)
+    - DONE: the plane tower's own Rotation stays 0 (W lines); only the air unit turns.
+      - The eject point turns with the plane (FireFromAirUnit.EmitPosition).
+      - The FighterPilotPattern darts leave along the plane's heading.
+      - The missile and the radial leave from 0.
+    - DONE: TrackTarget validity uses the projectile's tag filters (the missile lets go of a MOAB
+      that became a Ceramic, rt 311).
+    - Next, bucc_400:
+      - DONE (default): the carrier's darts go at display + offset, laid out normally. bucc_400 is
+        now exact to rt 452 (positions), while bucc_upgrades_r30 drops back to rt 1306 (its first shot
+        after the upgrade went the other way; RRBTD6_CARRIER_FIRST=1 brings back the old rule:
+        display - offset, laid out on the tower). Find what makes that first shot differ.
+      - Was rt 427: the carrier's first dart pair. The game sends it at -21.56, laid out along -21.56,
+        i.e. display + 90 for display = target - 90. In bucc_upgrades_r30 rt 1306 the same 4-x-0
+        weapon went at display - 90, laid out on 0. The two disagree under one rule; maybe the
+        display rotation's state matters (it rotates every frame, onlyRotateDuringThrow off, and the
+        4-1-0's was new at the upgrade). Add a probe of the attack display's rotation (Attack's
+        transform +0x84 / world) per frame, like the FM line.
+      - DONE 2026-11-08, bucc_400 MATCHES (all 3600 frames):
+        - SearchForTarget's BloonManager.GetTarget is GetTargets(count 1). For First / Last it
+          takes the path's leading bloon (Path.bestFirst, furthest along) before the segment
+          order. Plane 2 at rt 452 took the Pink furthest along of four on one segment.
+        - The twin darts are made in marker order on every throw: the first at marker 0 (+2.5).
+          The collision pass takes them in that order (rt 416 / 466).
+        - Note: the H / M / X lines after a frame's dump belong to the next frame.
+      - DONE 2026-11-08, bucc_500 MATCHES (re-recorded with FM lines, as were 420_* 502* 520
+        upgrades_r30):
+        - EmissionWithOffsets.rotateProjectileWithTower (Emit @0x180c3d170) is off on the 5-x-x
+          planes: each dart goes along the flat line from the plane to its Target (exported as
+          Emission.with_tower).
+        - SubTowerFilter.createdProjectiles holds pooled Projectile objects. FilterEmission (only
+          as the weapon is ready) drops those whose RootObject.isDestroyed is set. A flushed object
+          taken by a newer projectile (Factory: the last flushed first) counts again while that one
+          lives. The third plane comes 91 / 101 frames after the second (a radial dart's object).
+          Game::proj_obj / proj_pool; a projectile the clone's projectile phase ended this frame
+          still holds its object at the tower's turn (proj_objs_start).
+      - DONE 2026-11-08 (bucc 27/34; 502 502_close 502_last 502_strong 520 420_last match):
+        - The planes' FighterPilotPattern follows the carrier's targeting (the plane tower's own is
+          Pursuit), and uses its attack's camo filter (the 5-0-2's planes see camo).
+        - Close is GetClosestTarget: the nearest track segment from the carrier that holds a
+          bloon, its first in list order (as TrackTarget's seek_pick).
+        - ArcEmission.useAirUnitRotation (4-2-0 / 5-2-0 planes' grape arc): round the plane's
+          rotation, not 0 (exported as Emission.air_rot).
+      - DONE: track_targets runs after the bloons' DoT damage (an older bloon's DamageOverTime ticks
+        before a newer dart's TrackTarget; 420_close rt 1750, a dart whose Green burned up flies
+        straight). bucc 28/34.
+      - DONE (bucc 29/34): Strong for the planes is Targetting.GetTargets' Path.FindBestBloon (per
+        path in list order, highest danger, ties to the one strictly further along), on the
+        distances as the frame began (Path.Process files them then; 420_strong rt 400: a White 0.5
+        ahead of a Black listed first). The carrier's Secondary (no EmissionRotationOffDisplay) is
+        laid out on the tower's rotation and sent at display - 90; the RRBTD6_CARRIER_FIRST flag is
+        gone (upgrades_r30 now exact to rt 1423).
+      - DONE 2026-11-08 (bucc 31/34; 010 020 match): FilterTargetAngleFilter's shared result is
+        per filter: each looks again once more than its own minTimeBetweenFilterTargetsFrames after
+        its timeOfLastTargetUpdate. A look hands its time and result to the filters made before it
+        (filterTargetAngleFilterBehaviors), not later ones (WeaponState.fov_last). SimRecorder now
+        writes "FA tower weapon displayRotation towerZ timeOfLastTargetUpdate lastFireResult" each
+        frame, and "BZ id z" for a bloon whose Position.z isn't 0 (on Logs every bloon is at 20, the
+        tower at 0; the Buccaneer's filter has no display, so it uses the tower's rotation).
+      - DONE (bucc 33/34; 032 320 match):
+        - Dot:Buccaneer stacks as many copies (isUnique, inserted mid-list); only the first copy
+          with its id drives the bloon's DamageOverTime. When copies run out together, the first
+          one's lastTick goes on to the next live copy. Before, the second expiring copy
+          overwrote it (bucc_320 rt 831: the MOAB's next tick at 853, not 832).
+        - HYPOTHESIS P-DOTCHILD: the new objects a DamageOverTime pop makes in Bloon.Process are
+          `unplaced` (not in the CollisionGrid until they move), and so are the further layers of
+          one made in the same pop (bucc_320 rt 1141: a burnt Black's second Pink, on to a Yellow,
+          isn't hit until 1143).
+      - DONE 2026-11-08, upgrades_r30 MATCHES (bucc 34/34; re-recorded with FA lines):
+        - An upgraded tower's angle filters share their look both ways (UpdatedModel regathers
+          every filter; Initialise only the ones made before it): `Tower.upgraded`.
+        - The carrier plane's dart rotation is the air unit's as it is. The projectile-made
+          sub-tower's b + (g - b) cost an ulp at 78.049355 (rt 1423).
+        - Upgrading to a tier whose plane model differs (AircraftCarrierPlane ->
+          CarrierFlagshipPlane) removes the old planes (STAND-IN: told by the air display).
+        - FighterMovement behaviours are pooled: a gone plane's goes back at the next 60-frame
+          flush, and the next plane made takes the last flushed. It keeps that one's timer (11:
+          no search on its first move) and its path point is (0, 0): it turns from 0 toward the
+          origin and flies over at once (rt 1862). A fresh one has timer 15 (`fm_pool`).
+        - FireWhenAlternateWeaponIsReady's set_FireWeapon lasts until clock + 1: a secondary whose
+          filter fails as its main fires goes the frame after if the shared look turns true (rt
+          1892; `Tower.alt_at`).
+  - Open, rt 147: plane 1's radial burst x -12.256329 vs -12.255328: the plane's x truncates to
+    -5.741 vs the game's -5.740, a float-step difference in the turn or step math built up since
+    rt 75. Check Vector2.Rotate / get_Rotation (atan2f) against the clone's game_dir / crt_atan2,
+    and the bloon position the path point takes.
+  - 010 rt 665: the dart secondary fails in the game with a Black 27 away at 35.5 degrees flat, using
+    the post-turn rotation (62.35). It would fail with the pre-turn rotation (-196.75), or 3D with
+    z >= 15.5. But 000 rt 932 needs the post-turn rotation, and 001 rt 538 needs z <= 9.3 in 3D. The
+    filter reads the display's rotation (FilterTargetAngleFilter +0x70, FindDisplay): probe when the
+    display node's rotation is updated, e.g. a SimRecorder line with the display rotation vs
+    Tower.Rotation at each secondary check.
+- Was: 040/050/052/250 (Monkey Pirates' MOAB Takedown, scenario "ability 120"): the clone's
+  P-TAKEDOWN destroys the MOAB at once; the game hooks it. Recording bucc_040: the hook projectile
+  (LinearTravel, speed 2000, forceCollisionOnSnap) leaves at rt 121 (~26/frame), meets the MOAB at
+  ~127-129, then the MOAB is dragged toward the ship at 150 (2.5/frame; TravelTowardsEmitTower,
+  delayedActivation, lifespan 6.67) until within destroyBloonRadius 6 (MoabTakedown: x2 worth).
+  Methods: LinearTravel.Process @0x180ccb620; MoabTakedown Collide @0x180cccc50 / Process
+  @0x180ccd6b0 / DestroyIfReachedTarget @0x180ccd450; TravelTowardsEmitTower.Process @0x180cf6e10.
+  The ability's attack: GrappleEmission with EmissionRotationOffTowerDirection(90),
+  RotateToTarget(-90), weapon eject (0, 2, 3.5), TargetGrapplable hooks 1.
+  LinearTravel.Process (decompiled): while age < lifespanFrames and the Target is alive:
+  - d = Target.Position - Position (Vector3, so the MOAB's z 120 counts).
+  - If speed^2 < |d.xy|^2 - (model +0x2a float x the same): Position += Normalized(d) x speed
+    (model +0x38), 3D, so the flat step is under speed (recording: ~26/frame flat for 33.3).
+  - Else: Position = Target.Position; with forceCollisionOnSnap and not yet forced,
+    Projectile.CollideBloon(target, 1) and forcedCollision = true.
+  MoabTakedown.Collide (@0xcccc50), first contact only (startPullingBloonTowardsTower): the bloon must
+  carry tag 0x2000. Bloon.Damage with a huge amount (the bloon is destroyed at contact, worth through
+  bloonWorthMutator x2). A display effect (bloonEffect) and the rope follow the projectile.
+  Spawner.BlockRoundEnding until it's done. MoabTakedown.Process / TravelTowardsEmitTower (150) then
+  bring the projectile back to the ship; DestroyIfReachedTarget ends it (destroyBloonRadius 6).
+  To port: make the hook a real projectile (its P positions are compared): its first frame one
+  LinearTravel step from the eject point (rt 121 at (-24.44,-13.78) for a ship at (-2.8,3)), the kill
+  at the snap, then 2.5/frame back to the tower. Replace P-TAKEDOWN's instant kill.

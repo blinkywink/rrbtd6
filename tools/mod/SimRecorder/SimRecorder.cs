@@ -1004,6 +1004,26 @@ static class SimulatePatch
         }
     }
 
+    // Wind-carried bloons as the frame starts: "WC id offTrackCount x y distance" (written before
+    // the frame's F line, so it belongs to the frame that F line opens).
+    static void Prefix(Simulation __instance)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try
+        {
+            var bs = __instance.factory.GetFactory<Bloon>().up.list;
+            for (int k = 0; k < bs.Count; k++)
+            {
+                var b = bs[k];
+                if (b == null || b.IsDestroyed || b.offTrackCount <= 0) continue;
+                var p = b.Position;
+                w.WriteLine($"WC {b.Id.Id} {b.offTrackCount} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(b.distanceTraveled)}");
+            }
+        }
+        catch (Exception) { }
+    }
+
     static void Postfix(Simulation __instance)
     {
         var w = Recorder.Out;
@@ -1090,6 +1110,31 @@ static class SimulatePatch
                 if (b == null || b.IsDestroyed) continue;
                 var p = b.Position;
                 w.WriteLine($"B {b.Id.Id} {b.bloonModel.id} {Recorder.F(b.distanceTraveled)} {Recorder.F(p.X)} {Recorder.F(p.Y)} {b.health}");
+                // Its offTrackCount when carried: "BO id count".
+                if (b.offTrackCount > 0) w.WriteLine($"BO {b.Id.Id} {b.offTrackCount}");
+                // Its Position.z when that isn't 0: "BZ id z".
+                if (p.Z != 0f) w.WriteLine($"BZ {b.Id.Id} {Recorder.F(p.Z)}");
+                // Its layerId and lineage: "BL id layer a,b,c".
+                try
+                {
+                    var lin = new StringBuilder();
+                    if (b.lineage != null) foreach (var x in b.lineage) lin.Append(x).Append(',');
+                    w.WriteLine($"BL {b.Id.Id} {b.layerId} {lin}");
+                }
+                catch (Exception) { }
+                // Its DamageOverTime behaviours in Bloon.bloonBehaviors order: "BD id index lastTick
+                // model name" (index among all its behaviours).
+                try
+                {
+                    var bbs = b.bloonBehaviors?.list;
+                    for (int j = 0; bbs != null && j < bbs.Count; j++)
+                    {
+                        var dot = bbs[j]?.TryCast<Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.DamageOverTime>();
+                        if (dot == null) continue;
+                        w.WriteLine($"BD {b.Id.Id} {j} {dot.lastTick} {dot.damageOverTimeModel?.name}");
+                    }
+                }
+                catch (Exception) { }
             }
         });
         // Every stun-like mutator instance on each bloon that has one: "S bloon id:removeAt ..."
@@ -1109,7 +1154,7 @@ static class SimulatePatch
                     var tm = m._items[j];
                     if (tm == null || tm.mutator == null) continue;
                     var id = tm.mutator.id ?? "?";
-                    stun |= id.Contains("Stun");
+                    stun |= id.Contains("Stun") || id.Contains("SpiritOfTheForest");
                     line += $" {id}:{tm.removeAt}";
                 }
                 if (stun) w.WriteLine(line);
@@ -1134,6 +1179,19 @@ static class SimulatePatch
             {
                 var t = ts[j];
                 if (t == null || t.IsDestroyed || t.attackBehaviorsInDependants == null) continue;
+                // Carrier planes' FighterMovement each frame: "FM tower x y rotX rotY targetX targetY timer flyover"
+                // (transformPosition is where it was as its Process began).
+                Il2CppAssets.Scripts.Simulation.Towers.Behaviors.FighterMovement fm = null;
+                var ftb = t.towerBehaviors?.list;
+                for (int k = 0; ftb != null && k < ftb.Count && fm == null; k++)
+                {
+                    var au = ftb[k]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.AirUnit>();
+                    var mb = au?.modelBehaviors;
+                    for (int q = 0; mb != null && q < mb.Count && fm == null; q++)
+                        fm = mb[q]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.FighterMovement>();
+                }
+                if (fm != null)
+                    w.WriteLine($"FM {t.Id.Id} {Recorder.F(fm.transformPosition.x)} {Recorder.F(fm.transformPosition.y)} {Recorder.F(fm.rotation.x)} {Recorder.F(fm.rotation.y)} {Recorder.F(fm.targetPosition.x)} {Recorder.F(fm.targetPosition.y)} {fm.timer} {(fm.flyoverEngaged ? 1 : 0)}");
                 int i = 0;
                 var l = t.attackBehaviorsInDependants.list;
                 for (int k = 0; k < l.Count; k++)
@@ -1141,6 +1199,21 @@ static class SimulatePatch
                     var wp = l[k]?.TryCast<Weapon>();
                     if (wp == null) continue;
                     w.WriteLine($"W {t.Id.Id} {i++} {wp.lastEmission} {wp.animationStartedAt} {wp.rateFrames} {Recorder.F(wp.missedRate)} {Recorder.F(t.Rotation)} {Recorder.F(t.Position.X)} {Recorder.F(t.Position.Y)}");
+                    // FilterTargetAngleFilter's inputs each frame: "FA tower weapon displayRotation towerZ
+                    // timeOfLastTargetUpdate lastFireResult" (FilterEmission @0x180c76350 reads
+                    // display.node.rotation and the 3D angle from Tower.Position to Bloon.Position).
+                    if (wp.weaponBehaviors != null)
+                    {
+                        var fbl = wp.weaponBehaviors.list;
+                        for (int q = 0; q < fbl.Count; q++)
+                        {
+                            var fa = fbl[q]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Weapons.Behaviors.FilterTargetAngleFilter>();
+                            if (fa == null) continue;
+                            var node = fa.display?.node;
+                            string dr = node == null || node.rotation == null ? "none" : Recorder.F(node.rotation.value);
+                            w.WriteLine($"FA {t.Id.Id} {i - 1} {dr} {Recorder.F(t.Position.Z)} {fa.timeOfLastTargetUpdate} {(fa.lastFireResult ? 1 : 0)}");
+                        }
+                    }
                     // Zoned<Bloon> (Vagrant's bloon zone) methods' addresses, once: "zone_methods IsInZone Process".
                     if (!ZoneProbe.Done && wp.weaponBehaviors != null)
                     {
@@ -1201,6 +1274,22 @@ static class SimulatePatch
                 w.WriteLine($"P {pr.Id.Id} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(pr.pierce)} {Recorder.F(pr.EjectRotation)} {Recorder.F(ef.x)} {Recorder.F(ef.y)} {Recorder.F(ef.z)} {Recorder.F(p.Z)} {Recorder.F(pr.VsBlockerRadius)}");
                 // Its Direction: "D projectile x y z".
                 try { var dv = pr.Direction; if (dv != null) w.WriteLine($"D {pr.Id.Id} {Recorder.F(dv.X)} {Recorder.F(dv.Y)} {Recorder.F(dv.Z)}"); } catch (Exception) { }
+                // A Lightning's state: "LG projectile hitTarget currentDelayFrames shared:a,b collided:c,d".
+                try
+                {
+                    var pbs = pr.projectileBehaviors?.list;
+                    for (int j = 0; pbs != null && j < pbs.Count; j++)
+                    {
+                        var lg = pbs[j]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Behaviors.Lightning>();
+                        if (lg == null) continue;
+                        var sh = new StringBuilder();
+                        if (lg.sharedCollidedWith != null) foreach (var x in lg.sharedCollidedWith) sh.Append(x).Append(',');
+                        var cw = new StringBuilder();
+                        if (pr.collidedWith != null) foreach (var x in pr.collidedWith) cw.Append(x).Append(',');
+                        w.WriteLine($"LG {pr.Id.Id} {(lg.hitTarget ? 1 : 0)} {lg.currentDelayFrames} shared:{sh} collided:{cw}");
+                    }
+                }
+                catch (Exception) { }
                 // Its Target: "PT projectile bloon(-1 none) valid".
                 try
                 {
@@ -1264,6 +1353,26 @@ static class SyncedNextRangePatch
     static void Postfix(Il2CppNinjaKiwi.Common.BufferedRandom __instance, int __0, int __1, int __result)
     {
         if (SyncedRandomLog.IsSynced(__instance)) Recorder.Out.WriteLine($"R r {__0} {__1} {__result}");
+    }
+}
+
+// Every MoveWithWind step: "WM bloon model speedFrames x y" after it moves (twice in a frame would
+// mean the step is redone).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.MoveWithWind), nameof(Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.MoveWithWind.Process))]
+static class MoveWithWindPatch
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.MoveWithWind __instance)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try
+        {
+            var b = __instance.bloon;
+            if (b == null) return;
+            var p = b.Position;
+            w.WriteLine($"WM {b.Id.Id} {b.bloonModel.id} {Recorder.F(b.bloonModel.speedFrames)} {Recorder.F(p.X)} {Recorder.F(p.Y)}");
+        }
+        catch (Exception) { }
     }
 }
 
@@ -1462,6 +1571,43 @@ static class EndLog
     {
         if (p == null || Recorder.Out == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
         try { Recorder.Out.WriteLine($"X {how} {p.Id.Id} {p.Age} {Recorder.F(p.pierce)}"); } catch (Exception) { }
+    }
+}
+
+// A line's list collisions (LineProjectileEmission.Emit -> Projectile.CollideBloons): "CB projectile
+// count pierce src <class> skip n". The Ray of Doom passes OrderBy(GetInLine(...)).Skip(n), all lazy
+// (enumerating it here would run it again), so only the Skip iterator's arguments are read.
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Projectile), "CollideBloons", new Type[] {
+    typeof(Il2CppSystem.Collections.Generic.IEnumerable<Il2CppAssets.Scripts.Simulation.Bloons.Bloon>), typeof(int),
+    typeof(Il2CppSystem.Collections.Generic.List<Il2CppAssets.Scripts.Simulation.SMath.Vector3>) })]
+static class CollideBloonsPatch
+{
+    static void Prefix(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Projectile __instance,
+        Il2CppSystem.Collections.Generic.IEnumerable<Il2CppAssets.Scripts.Simulation.Bloons.Bloon> __0, int __1)
+    {
+        if (__instance == null || Recorder.Out == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try
+        {
+            var l = __0?.TryCast<Il2CppSystem.Collections.Generic.List<Il2CppAssets.Scripts.Simulation.Bloons.Bloon>>();
+            var sb = new StringBuilder($"CB {__instance.Id.Id} {__1} {Recorder.F(__instance.pierce)}");
+            int skip = 0;
+            if (l == null && __0 != null)
+            {
+                // Enumerable.Skip's iterator: read its source list and count without enumerating it.
+                IntPtr obj = ((Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase)(object)__0).Pointer;
+                // (Not started, state -2: its arguments are in <>3__source @0x30 and <>3__count @0x3c,
+                // from the CBFIELDS dump of the object.)
+                IntPtr src = System.Runtime.InteropServices.Marshal.ReadIntPtr(obj + 0x30);
+                if (src != IntPtr.Zero) l = new Il2CppSystem.Collections.Generic.List<Il2CppAssets.Scripts.Simulation.Bloons.Bloon>(src);
+                skip = System.Runtime.InteropServices.Marshal.ReadInt32(obj + 0x3c);
+                if (src != IntPtr.Zero) sb.Append(" src ").Append(System.Runtime.InteropServices.Marshal.PtrToStringAnsi(Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_name(Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(src))));
+            }
+            sb.Append(" skip ").Append(skip);
+            if (l == null) sb.Append(" ?");
+            else for (int k = 0; k < l.Count; k++) sb.Append(' ').Append(l[k] == null ? -1 : l[k].Id.Id);
+            Recorder.Out.WriteLine(sb.ToString());
+        }
+        catch (Exception e) { try { Recorder.Out.WriteLine("CBERR " + e.GetType().Name + " " + e.Message.Replace((char)10, (char)32)); } catch (Exception) { } }
     }
 }
 

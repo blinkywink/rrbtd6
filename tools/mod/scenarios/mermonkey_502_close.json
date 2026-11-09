@@ -1,1 +1,1 @@
-{"name": "mermonkey_502_close", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "Mermonkey-502", "x": -2.8, "y": 3.0, "target": "Close"}], "ability": 120}
+{"name": "mermonkey_502_close", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "Mermonkey-502", "x": -2.8, "y": 3.0, "target": "Close"}], "ability": 120, "cash": 10000000}

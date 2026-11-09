@@ -1152,6 +1152,8 @@ impl Hud {
             }
         } else if fe.screen == Screen::Main {
             fe.draw_world().await;
+            // Footage mode (main.rs menu_background_mode): the island only, no UI or popups.
+            if crate::menu_background_mode() { return None; }
         } else {
             let size = (screen_width() as u32, screen_height() as u32);
             if fe.backdrop.as_ref().is_none_or(|(w,h,_)| (*w,*h) != size) {

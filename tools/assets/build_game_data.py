@@ -286,6 +286,11 @@ def main():
         for b in items(f["behaviors"]):
             if b:
                 pb.setdefault(b["type"], []).append(b)
+        # DamageInRingRadiusModel is a DamageModel (Mortar's Shockwave) whose Collide
+        # (VERIFIED-DISASM @0xcb1950) only damages at a distance >= radius x innerRingRadius.
+        ring = pb.get("DamageInRingRadiusModel")
+        if ring and not pb.get("DamageModel"):
+            pb["DamageModel"] = ring
         dmg = (pb.get("DamageModel") or [{"f": {}}])[0]["f"]
         ts = (pb.get("TravelStraitModel") or [{"f": {}}])[0]["f"]
         age = (pb.get("AgeModel") or [{"f": {}}])[0]["f"]
@@ -294,10 +299,18 @@ def main():
             ar = pb["AgeRandomModel"][0]["f"]
             age = dict(ar, lifespan=(ar.get("minLifespan", 0.0) + ar.get("maxLifespan", 0.0)) / 2)
         disp = (pb.get("DisplayModel") or [{"f": {}}])[0]["f"]
+        if not ts and pb.get("TravelCurvyModel"):
+            # TravelCurvy.Process (VERIFIED-DISASM @0xcf5fc0): swings the rotation within
+            # +-maxTurnAngle by turnRatePerFrame, which isn't serialized (0): straight travel
+            # (Dartling's Rocket Storm rockets).
+            ts = pb["TravelCurvyModel"][0]["f"]
         if not ts and pb.get("TravelStraitSlowdownModel"):
-            # HYPOTHESIS P-SLOWDOWN: the slowdown is ignored; speed * lifespan ~ maxDistance.
+            # TravelStraitSlowdown.Process (VERIFIED-DISASM @0xcf65c0) replaces TravelStrait's: no
+            # lifespan, it expires at maxDistance (`slowdown` below).
             sd = pb["TravelStraitSlowdownModel"][0]["f"]
-            ts = {"speed": sd["speed"], "lifespan": sd.get("lifespan") or sd["maxDistance"] / sd["speed"]}
+            ts = {"speed": sd["speed"], "lifespan": 99999.0}
+        sdm = (pb.get("TravelStraitSlowdownModel") or [{"f": None}])[0]["f"]
+        slowdown = [sdm.get("slowdownSpeed", 0.0), sdm.get("minSpeed", 0.0), sdm.get("maxDistance", 0.0)] if sdm else None
         # Hero homing shots (AdoraTrackTargetModel, SilasTrackTargetModel) accelerate from
         # minimumSpeed to maximumSpeed while turning `rotation` degrees per frame. STAND-IN
         # P-HEROTRACK: constant maximumSpeed, seeking like TrackTargetModel.
@@ -312,7 +325,7 @@ def main():
             rr = pb["RandomRangeTravelStraitModel"][0]["f"]
             ts = {"speed": rr["speed"], "lifespan": (rr["minRange"] + rr["maxRange"]) / 2 / rr["speed"]}
             random_range = [rr["minRange"], rr["maxRange"], rr["speed"]]
-        filters, exclude_bloons, exclude_tags = [], [], []
+        filters, exclude_bloons, exclude_tags, require_tags = [], [], [], []
         skip_mutated, need_mutated = [], []
         glue_filter, skip_frozen, cant_hit = 0, False, 0
         out_require_effects = None
@@ -330,6 +343,11 @@ def main():
                         exclude_bloons.append(x["f"]["bloonId"])
                     if x["type"] == "FilterOutTagModel":
                         exclude_tags.append(x["f"]["tag"])
+                    # FilterWithTag.FilterBloon (VERIFIED-DISASM @0xc5fbc0): the tag (moabTag:
+                    # MOAB-class) must be there, or with inclusive must not (Mortar's MoabBurn).
+                    if x["type"] == "FilterWithTagModel" and (x["f"].get("moabTag") or x["f"].get("tag")):
+                        t = "Moabs" if x["f"].get("moabTag") else x["f"]["tag"]
+                        (exclude_tags if x["f"].get("inclusive") else require_tags).append(t)
                     if x["type"] == "FilterGlueLevelModel":
                         glue_filter = x["f"]["glueLevel"]
                     if x["type"] == "FilterFrozenBloonsModel":
@@ -608,6 +626,7 @@ def main():
             # ProjectileModel.canCollisionBeBlockedByMapLos: a hit needs a clear line to the bloon.
             "los_blocked": bool(f.get("canCollisionBeBlockedByMapLos", False)),
             "damage": dmg.get("damage", 0.0), "immune": dmg.get("immuneBloonProperties", 0),
+            "ring_inner": ring[0]["f"].get("innerRingRadius", 0.0) if ring else 0.0,
             # DamageModel.distributeToChildren / overrideDistributeBlocker.
             "distribute": bool(dmg.get("distributeToChildren", True)),
             "distribute_override": bool(dmg.get("overrideDistributeBlocker", False)),
@@ -617,7 +636,7 @@ def main():
             "damage_model": bool(pb.get("DamageModel")),
             # Its DamageModel's name has "FirstStrike": SubCommanderSupport doesn't scale its damage.
             "first_strike_dm": any("FirstStrike" in (d["f"].get("_name") or "") for d in pb.get("DamageModel", [])),
-            "speed": ts.get("speed", 0.0), "lifespan": ts.get("lifespan") or age.get("lifespan", 0.0),
+            "speed": ts.get("speed", 0.0), "lifespan": ts.get("lifespan") or age.get("lifespan", 0.0), "slowdown": slowdown, "curvy": bool(pb.get("TravelCurvyModel")), "curvy_turn": [pb["TravelCurvyModel"][0]["f"].get("turnRate", 0.0), pb["TravelCurvyModel"][0]["f"].get("maxTurnAngle", 0.0)] if pb.get("TravelCurvyModel") else None,
             "random_range": random_range,
             # Its AgeModel's lifespan (Projectile.lifespan for the exhaust duration fraction).
             "age_lifespan": pb["AgeModel"][0]["f"].get("lifespan") if pb.get("AgeModel") else None,
@@ -653,7 +672,7 @@ def main():
             "exclude_bloons": exclude_bloons,
             "skip_mutated": skip_mutated,
             "need_mutated": need_mutated,
-            "exclude_tags": exclude_tags,
+            "exclude_tags": exclude_tags, "require_tags": require_tags,
             "glue_filter": glue_filter,
             "skip_frozen": skip_frozen,
             "cant_hit": cant_hit,
@@ -780,8 +799,9 @@ def main():
             # Lightning.Process hits its targets itself (Projectile.CollideBloons), not through the
             # CollisionChecker that dontUseCollisionChecker skips.
             out["lightning"] = True
-            out["retarget"] = {"distance": lf["splitRange"], "max_bounces": int(f["pierce"]), "delay": lf["delay"],
-                               "expire_if_none": True}
+            # Lightning.Process (@0x180cc84d0): splitRange, splits, targetLast, delay (its own bounce
+            # in Game; no RetargetOnContact).
+            out["lightning_split"] = [lf["splitRange"], float(lf.get("splits", 0)), 1.0 if lf.get("targetLast") else 0.0, lf["delay"]]
             out["lifespan"] = max(out["lifespan"] or 0.0, lf["delay"] * (f["pierce"] + 1) + 0.1)
         if pb.get("AcidPoolModel"):
             ap = pb["AcidPoolModel"][0]["f"]
@@ -798,6 +818,12 @@ def main():
                 # of the cash added) over the bloon (LeadToGoldPopEffect "$50").
                 out["cash_on_pop"] = {"amount": gold["flatCashAmount"], "tag": tag,
                                       "effect": prefab_name(gold.get("assetId")) or "", "lifespan": gold.get("lifespan", 0.0)}
+        # JungleVineEffect.Collide (VERIFIED-DECOMP @0x180cc23b0): the emitting weapon's
+        # JungleVineLimitProjectile.AddLimiter(ageingDestroyModel.timeFrames + grab frames);
+        # AgeingDestroyModel.set_Time: timeFrames = (int)(time * 60).
+        if pb.get("JungleVineEffectModel"):
+            ad = deref(pb["JungleVineEffectModel"][0]["f"].get("ageingDestroyModel"))
+            out["vine_frames"] = int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", (ad or {}).get("f", {}).get("time", 0.0)))[0] * 60.0))[0])
         if pb.get("RefreshPierceModel"):
             out["refresh_pierce"] = pb["RefreshPierceModel"][0]["f"]["interval"]
         # RemoveMutatorsFromBloonModel: by key (contained in the id), and by mutatorIds ("=id",
@@ -818,7 +844,7 @@ def main():
         # the DamageModel, or listed after it in the same pass, sees the hit's damage done
         # (recording wizard_020: a Fireball that pops a Red explodes where the fireball was).
         order = [b for b in items(f["behaviors"]) if b]
-        dmg_at = next(((i, b["f"].get("collisionPass", 0)) for i, b in enumerate(order) if b["type"] == "DamageModel"), None)
+        dmg_at = next(((i, b["f"].get("collisionPass", 0)) for i, b in enumerate(order) if b["type"] in ("DamageModel", "DamageInRingRadiusModel")), None)
         def after_damage(b):
             if dmg_at is None:
                 return False
@@ -881,11 +907,22 @@ def main():
                                   for ce in pb.get("EmitOnDestroyModel", []) if deref(ce["f"].get("projectile"))]
             # HYPOTHESIS P-EXHAUSTPIERCE: CreateProjectileOnExhaustPierceModel with pierceInterval 1
             # (Rocket Storm missiles) spawns its projectile at every hit, like an on-contact one.
-            for ce in pb.get("CreateProjectileOnExhaustPierceModel", []):
+            # CreateProjectileOnBlockerCollideModel (Dartling shots): its projectile where the
+            # shot meets a map blocker (CollideMap), never on bloons.
+            for ce in pb.get("CreateProjectileOnBlockerCollideModel", []):
                 cf = ce["f"]
                 if deref(cf.get("projectile")):
                     out["on_contact"].append({"projectile": projectile(deref(cf["projectile"]), depth + 1),
-                                              "emission": emission(deref(cf.get("emission")))})
+                                              "emission": emission(deref(cf.get("emission"))), "at_shot": True, "map_only": True})
+            for ce in pb.get("CreateProjectileOnExhaustPierceModel", []):
+                cf = ce["f"]
+                if deref(cf.get("projectile")):
+                    # (Collide @0xca4050: on the bloon only with useBloonPosition, else where the
+                    # shot is: recording dartling_030 rt 31.)
+                    out["on_contact"].append({"projectile": projectile(deref(cf["projectile"]), depth + 1),
+                                              "emission": emission(deref(cf.get("emission"))),
+                                              "at_shot": not cf.get("useBloonPosition", False),
+                                              "gap": float(cf.get("minimumTimeDifferenceInFrames", 0)), "max_count": min(int(cf.get("count", 0)), 4294967295)})
         # CreateTowerModel / CreateTypedTowerModel (Engineer sentries): a sub-tower where it lands.
         subs = []
         for ct in pb.get("CreateTowerModel", []):
@@ -913,16 +950,26 @@ def main():
         out["keep_spent"] = bool(f.get("ignorePierceExhaustion"))
         # DamageModifierForCashAmountModel (VERIFIED-DISASM IsValid @0xcd2670): with at least
         # cashThreshold cash, damage x damageMultiplier + damageAdditive.
-        cm = (pb.get("DamageModifierForCashAmountModel") or [None])[0]
-        out["cash_damage"] = [cm["f"].get("damageMultiplier", 1.0), cm["f"].get("damageAdditive", 0.0),
-                              cm["f"].get("cashThreshold", 0.0)] if cm else None
+        # With one stackId only one counts: the last whose threshold is met (recording bucc_004:
+        # Favored Trades' darts x3 on 10M cash, not x2 x 3). The 4th value numbers the stack.
+        stacks = []
+        out["cash_damage"] = []
+        for cm in pb.get("DamageModifierForCashAmountModel", []):
+            sid = cm["f"].get("stackId") or f"#{len(stacks)}"
+            if sid not in stacks:
+                stacks.append(sid)
+            out["cash_damage"].append([cm["f"].get("damageMultiplier", 1.0), cm["f"].get("damageAdditive", 0.0),
+                                       cm["f"].get("cashThreshold", 0.0), float(stacks.index(sid))])
         # IgnoreDmgImmunityModel (Ice Paragon...): its damage ignores these bloon properties.
         for m in pb.get("IgnoreDmgImmunityModel", []):
             if m["f"].get("chance", 1.0) >= 1.0:
                 out["immune"] &= ~m["f"].get("removeBloonProperties", 0)
         # AccelerateModel: speeds up by `acceleration` per second up to maxSpeed.
         acc = (pb.get("AccelerateModel") or [None])[0]
-        out["accel"] = [acc["f"].get("acceleration", 0.0), acc["f"].get("maxSpeed", 0.0)] if acc and not acc["f"].get("decelerate") else None
+        # (Accelerate.Process @0x180c80890 also turns TrackTarget's turnRatePerFrame up by
+        # turnRateChange x (1/60)^2 a frame, to maxTurnRate / 60.)
+        out["accel"] = [acc["f"].get("acceleration", 0.0), acc["f"].get("maxSpeed", 0.0),
+                        acc["f"].get("turnRateChange", 0.0), acc["f"].get("maxTurnRate", 0.0)] if acc and not acc["f"].get("decelerate") else None
         return out
 
     def emission(e):
@@ -933,6 +980,11 @@ def main():
             rd = next((x["f"] for x in items(e["f"].get("behaviors")) if x and x["type"] == "EmissionRotationOffProjectileDirectionModel"), None)
             if rd is not None:
                 out["dir_off"] = [rd.get("startingOffset", 0.0), rd.get("angleInBetween", 0.0), 1.0 if rd.get("alwaysCentre") else 0.0]
+            # EmissionArcRotationOffTowerDirectionModel (Buccaneer Grape Shot): each shot of the arc
+            # (built round the tower's rotation) turns by offsetRotation from its own direction.
+            ao = next((x["f"] for x in items(e["f"].get("behaviors")) if x and x["type"] == "EmissionArcRotationOffTowerDirectionModel"), None)
+            if ao is not None:
+                out["arc_off"] = float(ao.get("offsetRotation", 0))
             # AcidPoolEmissionModel.alwaysPoolOnCount: every that-many-th splash always pools.
             ape = next((x["f"] for x in items(e["f"].get("behaviors")) if x and x["type"] == "AcidPoolEmissionModel"), None)
             if ape is not None:
@@ -944,7 +996,8 @@ def main():
             return {"kind": "Single", "count": 1}
         f = e["f"]
         if e["type"] == "ArcEmissionModel":
-            return {"kind": "Arc", "count": f.get("SliceSize", 1), "angle": f.get("angle", 0.0), "offset": f.get("offset", 0.0)}
+            return {"kind": "Arc", "count": f.get("SliceSize", 1), "angle": f.get("angle", 0.0), "offset": f.get("offset", 0.0),
+                    "air_rot": bool(f.get("useAirUnitRotation"))}
         if e["type"] == "LineProjectileEmissionModel":
             # A plain line (LineProjectileEmission.Emit, VERIFIED-DISASM @0x180c42910): 400 long from
             # the emit point towards the target (or along the tower with useTowerRotation), its
@@ -955,14 +1008,19 @@ def main():
             return {"kind": "Line", "count": 1, "line_plain": bool(plain), "line_tower_rot": bool(f.get("useTowerRotation")),
                     "line_ignore_blockers": bool(f.get("ignoreBlockers")),
                     # emitFromTarget: the line starts on the Target, emitFromTargetLength long.
-                    "line_from_target": f.get("emitFromTargetLength", 0.0) if f.get("emitFromTarget") else None}
+                    "line_from_target": f.get("emitFromTargetLength", 0.0) if f.get("emitFromTarget") else None,
+                    # useLengthSpeed (Dartling beams, LineProjectileEmission.Process @0xc45bb0).
+                    "line_grow": f.get("lengthPerFrame", 0.0) if f.get("useLengthSpeed") else None,
+                    "line_end": projectile(deref(f["projectileAtEndModel"]), 1) if deref(f.get("projectileAtEndModel")) else None,
+                    "line_target_end": bool(f.get("useTargetAsEndPoint")),
+                    "line_initial": projectile(deref(f["projectileInitialHitModel"]), 1) if deref(f.get("projectileInitialHitModel")) else None}
         # STAND-IN P-WERERABBIT: the Wererabbit leaps onto its target; its blast lands there.
         if e["type"] == "InstantDamageEmissionModel":
             return {"kind": "InstantDamage", "count": 1}
         if e["type"] == "WererabbitEmissionModel":
             return {"kind": "AtTarget", "count": 1}
         if e["type"] == "RandomEmissionModel":
-            return {"kind": "Random", "count": f.get("count", 1), "angle": f.get("angle", 0.0),
+            return {"kind": "Random", "count": f.get("count", 1), "angle": f.get("angle", 0.0), "main_rot": bool(f.get("useMainAttackRotation")),
                     "offset_start": f.get("startOffset", 0.0),
                     "eject_random": f.get("ejectPointRandomness", 0.0), "use_speed": bool(f.get("useSpeedMultiplier", False)),
                     "speed_min": f.get("speedMultiplierMin", 1.0), "speed_max": f.get("speedMultiplierMax", 1.0)}
@@ -984,8 +1042,11 @@ def main():
         # from its ThrowMarkerOffsetModels, each shot from the next one (spreadProjectilesAcrossMarkers).
         if e["type"] == "EmissionWithOffsetsModel":
             ms = [m["f"] for m in items(f.get("throwMarkerOffsetModels")) if m]
-            return {"kind": "Single", "count": f.get("projectileCount", 1),
-                    "markers": [[m.get("ejectX", 0.0), m.get("ejectY", 0.0), m.get("ejectZ", 0.0)] for m in ms]}
+            return {"kind": "Single", "count": f.get("projectileCount", 1), "cone": f.get("randomRotationCone", 0.0),
+                    "markers": [[m.get("ejectX", 0.0), m.get("ejectY", 0.0), m.get("ejectZ", 0.0)] for m in ms],
+                    # rotateProjectileWithTower off (Emit @0x180c3d170): each shot goes along the
+                    # normalized flat line from the tower to the Target, not the tower's heading.
+                    "with_tower": bool(f.get("rotateProjectileWithTower", True))}
         return {"kind": "Single", "count": 1}
 
     def tier(tobj):
@@ -1036,7 +1097,7 @@ def main():
             need_effects, mtp_filter = [], False
             # TargetMoabModel (Bomb Shooter's "Boom" attack): MOAB-class bloons first.
             prio_moab = any(x and x["type"] == "TargetMoabModel" for x in items(af["behaviors"]))
-            glue_filter, skip_frozen, cant_hit, only_camo = 0, False, 0, False
+            glue_filter, skip_frozen, cant_hit, only_camo, offscreen = 0, False, 0, False, 0
             for x in items(af["behaviors"]):
                 if x and x["type"] == "AttackFilterModel":
                     for flt in items(x["f"]["filters"]):
@@ -1051,10 +1112,21 @@ def main():
                             (exclude_tags if flt["f"].get("inclusive") else require_tags).append(flt["f"]["tag"])
                         if flt and flt["type"] == "FilterOutTagModel":
                             exclude_tags.append(flt["f"]["tag"])
+                        # FilterWithTagsModel: as FilterWithTagModel, a list (Druid's Jungle Vine:
+                        # inclusive Moabs / Frontier, no MOAB-class targets).
+                        if flt and flt["type"] == "FilterWithTagsModel":
+                            tags = [t for t in (deref(flt["f"].get("tags")) or []) if isinstance(t, str)]
+                            (exclude_tags if flt["f"].get("inclusive") else require_tags).extend(tags)
                         if flt and flt["type"] == "FilterGlueLevelModel":
                             glue_filter = flt["f"]["glueLevel"]
                         if flt and flt["type"] == "FilterFrozenBloonsModel":
                             skip_frozen = True
+                        # FilterOutOffscreen.FilterBloon (@0x180c3f5c0): Map.IsPointOnMap of the bloon
+                        # (Druid's Jungle Vine).
+                        if flt and flt["type"] == "FilterOutOffscreenModel":
+                            # 1: on the map counting the bloon's radius (includeBloonRadius), 2: its
+                            # centre on the map (the stricter one wins when both are there).
+                            offscreen = max(offscreen, 1 if flt["f"].get("includeBloonRadius") else 2)
                         # FilterOnlyCamoIn.FilterBloon (@0xc20590): bloon.bloonModel.isCamo (Shimmer).
                         if flt and flt["type"] == "FilterOnlyCamoInModel":
                             only_camo = True
@@ -1122,6 +1194,10 @@ def main():
                            if x and x["type"] == "LimitProjectileModel"), {})
                 limit_id, limit_delay = lp.get("projectileId") or "", lp.get("delayInFrames", 0)
                 limit_destroyed = bool(lp.get("limitByDestroyedPriorProjectile"))
+                # JungleVineLimitProjectile (VERIFIED-DECOMP FilterEmission @0x180c7b880, AddLimiter
+                # @0x180c7b790): `limit` slots of until-times; a shot needs one at or before roundTime.
+                vl = next((x["f"] for x in items(w["f"].get("behaviors")) if x and x["type"] == "JungleVineLimitProjectileModel"), None)
+                vine_limit = [vl.get("limit", 0), vl.get("delayInFrames", 0)] if vl else None
                 # Broadside guns (Buccaneer): Emission*RotationOff{Tower,Display}*Model fire at the
                 # tower's facing + offsetRotation; FireWhenAlternateWeaponIsReadyModel fires only
                 # with the main gun; FilterTargetAngleFilterModel needs a bloon in its arc.
@@ -1137,7 +1213,9 @@ def main():
                                   if x and x["type"] == "FireWhenAlternateWeaponIsReadyModel"), None)
                 alt_id = next((x["f"].get("weaponId") for x in items(w["f"].get("behaviors"))
                                if x and x["type"] == "FireAlternateWeaponModel"), None)
-                fov = next(([x["f"]["fieldOfView"], x["f"].get("baseTowerRotationOffset", 0.0)] for x in items(w["f"].get("behaviors"))
+                # (shareFilterTargets: the result kept minTimeBetweenFilterTargetsFrames; -1 if not shared.)
+                fov = next(([x["f"]["fieldOfView"], x["f"].get("baseTowerRotationOffset", 0.0),
+                             float(x["f"].get("minTimeBetweenFilterTargetsFrames", 0)) if x["f"].get("shareFilterTargets") else -1.0] for x in items(w["f"].get("behaviors"))
                             if x and x["type"] == "FilterTargetAngleFilterModel"), None)
                 max_subs = next(({"ids": [s for s in (deref(x["f"].get("baseSubTowerIds")) or []) if isinstance(s, str)]
                                           or [x["f"].get("baseSubTowerId", "")],
@@ -1164,6 +1242,8 @@ def main():
                                 # LeakDangerAttackSpeedModel: up to maxRateIncreasePercent faster as bloons near the exit.
                                 "leak_danger": next((x["f"].get("maxRateIncreasePercent", 0.0) for x in items(w["f"].get("behaviors"))
                                                      if x and x["type"] == "LeakDangerAttackSpeedModel"), 0.0), "animation_offset": w["f"].get("animationOffset", 0.0),
+                                         # RateBasedAnimationOffsetModel (Dartling 0-0-4 guns): (baseRate, offset).
+                                         "rate_anim_offset": next(([x["f"].get("baseRate", 1.0), x["f"].get("offset", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "RateBasedAnimationOffsetModel"), None),
                                 # fireBetweenRounds (weapon clock is Simulation.time, not roundTime),
                                 # startInCooldown / customStartCooldown (Weapon.ApplyStartingCooldown).
                                 "between_rounds": bool(w["f"].get("fireBetweenRounds")),
@@ -1179,6 +1259,13 @@ def main():
                                 "custom_start": w["f"].get("customStartCooldown", 0.0),
                                 "max_subs": max_subs,
                                 "eject": [w["f"].get("ejectX", 0.0), w["f"].get("ejectY", 0.0), w["f"].get("ejectZ", 0.0)],
+                                # HYPOTHESIS P-ABSMARKER (Mortar 0-4-x+): weapon-level ThrowMarkerOffsetModels
+                                # with CycleAnimationModel and EjectEffectWithOffsetsModel: each throw starts
+                                # at the next marker, turned and raised, from (0, 0).
+                                "abs_markers": ([[m["f"].get("ejectX", 0.0), m["f"].get("ejectY", 0.0), m["f"].get("ejectZ", 0.0)]
+                                                 for m in items(w["f"].get("behaviors")) if m and m["type"] == "ThrowMarkerOffsetModel"]
+                                                if {"ThrowMarkerOffsetModel", "CycleAnimationModel", "EjectEffectWithOffsetsModel"} <= {m["type"] for m in items(w["f"].get("behaviors")) if m}
+                                                else []),
                                 # EjectEffectModel / AlternatingEjectEffectModel: the muzzle effect at
                                 # the eject point on each throw (visual only).
                                 "eject_fx": fx_list(items(w["f"].get("behaviors")), "EjectEffectModel", "AlternatingEjectEffectModel", "EjectEffectWithOffsetsModel"),
@@ -1193,10 +1280,24 @@ def main():
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "LineEffectModel"), None),
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
-                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed,
+                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
+                                # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
+                                # the emission is laid out on the tower's rotation, each shot then sent at
+                                # the attack display's rotation + offsetRotation.
+                                # (With EmissionRotationOffDisplayOnEmitModel too it's laid out on the shot's
+                                # own rotation: recording bucc_upgrades_r30 rt 1306, the secondary darts.)
+                                "disp_rot": any(x and x["type"] == "EmissionRotationOffDisplayModel" for x in items((em or {}).get("f", {}).get("behaviors")))
+                                            and not any(x and x["type"] == "EmissionRotationOffDisplayOnEmitModel" for x in items((em or {}).get("f", {}).get("behaviors"))),
                                 # PrinceOfDarknessEmissionModel: this weapon sends the Prince's ghost.
                                 "prince": (em or {}).get("type") == "PrinceOfDarknessEmissionModel", "with_main": with_main, "alt_id": alt_id, "fov": fov,
+                                # OffsetModel (Druid thorns): each shot made turned by Next(0, 1000) x range / 1000
+                                # - range / 2 + angleOffset (Offset.ProjectilesCreated @0x180c7fa10).
+                                # LifeBasedAttackSpeedModel (Druid 0-0-2+): ratePerLife, lifeCap, baseRateIncrease.
+                                "life_speed": next(([x["f"].get("ratePerLife", 0.0), float(x["f"].get("lifeCap", 0)), x["f"].get("baseRateIncrease", 0.0)]
+                                                    for x in items(w["f"].get("behaviors")) if x and x["type"] == "LifeBasedAttackSpeedModel"), None),
+                                "offset_model": next(([x["f"].get("range", 0.0), x["f"].get("angleOffset", 0.0)] for x in items(w["f"].get("behaviors"))
+                                                      if x and x["type"] == "OffsetModel"), None),
                                 "fire_sounds": behavior_sounds(items(w["f"].get("behaviors")),
                                                                "CreateSoundOnProjectileCreatedModel", SOUND_KEYS),
                                 "to_bank": (deref(w["f"]["emission"]) or {}).get("type") == "SendToBankModel"})
@@ -1281,11 +1382,20 @@ def main():
                     # AttackModel name: Tower.UpdatedModel keeps the Attack of the same name.
                     "model_name": af.get("_name") or "",
                     "range": af["range"], "camo": camo, "rotate": rotate, "turn_rate": turn_rate,
+                    "turn_tower": next((bool(x["f"].get("rotateTower")) for x in items(af["behaviors"]) if x and x["type"] == "RotateToPointerModel"), True),
+                    "turn_eject_z": next((x["f"].get("weaponEjectZ", 0.0) for x in items(af["behaviors"]) if x and x["type"] == "RotateToPointerModel"), 0.0),
+                    # RotateToPointerModel.rotateOnlyOnEmit (Mortar): one turn step as a throw starts.
+                    "turn_on_emit": any(x and x["type"] == "RotateToPointerModel" and x["f"].get("rotateOnlyOnEmit") for x in items(af["behaviors"])),
                     "targets": targets, "weapons": weapons,
+                    # FighterPilotPattern* target suppliers (carrier planes) with the attack's
+                    # FilterTargetAngleModel fieldOfView: the plane's pattern target, in that arc.
+                    "fighter": (next((flt["f"].get("fieldOfView", 360.0) for y in items(af["behaviors"]) if y and y["type"] == "AttackFilterModel"
+                                      for flt in items(y["f"]["filters"]) if flt and flt["type"] == "FilterTargetAngleModel"), 360.0)
+                                if any(y and y["type"].startswith("FighterPilotPattern") for y in items(af["behaviors"])) else None),
                     "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
                     "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "fixed_range": bool(af.get("fixedRange")), "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
-                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
+                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "offscreen": offscreen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
                     "while_fx": next(([prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")) or "", prefab_name((deref(x["f"].get("exitEffectModel")) or {"f": {}})["f"].get("assetId")) or ""] for x in items(af["behaviors"]) if x and x["type"] == "CreateEffectWhileAttackingModel"), None),
                     "fire_without_target": af.get("fireWithoutTarget", False),
                     # AttackModel.attackThroughWalls: no Map.IsTargetLineClear check.
@@ -1333,7 +1443,9 @@ def main():
                                     for t in (deref(flt["f"].get("tags")) or []) if isinstance(t, str)]
                             takedown = {"hooks": tg.get("hooks", 1), "zomg": tg.get("zomgHooksRequired", 9999999),
                                         "bad": tg.get("badHooksRequired", 9999999), "mult": mt.get("multiplier", 1.0),
-                                        "add": mt.get("additive", 0.0), "exclude": excl}
+                                        "add": mt.get("additive", 0.0), "exclude": excl,
+                                        "turn": next((y["f"].get("additionalRotation", 0) for y in items(a["f"].get("behaviors")) if y and y["type"] == "RotateToTargetModel"), 0),
+                                        "eject": next(([w["f"].get("ejectX", 0.0), w["f"].get("ejectY", 0.0), w["f"].get("ejectZ", 0.0)] for w in items(a["f"].get("weapons")) if w), [0.0, 0.0, 0.0])}
                     if takedown:
                         out["takedown"] = takedown
                 if x["type"] == "ActivateAttackModel" and not takedown:
@@ -1682,7 +1794,11 @@ def main():
                     # (sideways acceleration speed x turningSpeed x 60), so it overshoots and
                     # comes round again like the game's flyovers. Rolls and loops aren't drawn.
                     air = {"display": prefab_name(b["f"].get("display")), "speed": fm["maxSpeed"],
-                           "accel": fm["maxSpeed"] * fm.get("turningSpeed", 0.035) * 60.0, "slowdown": 1.0}
+                           "accel": fm["maxSpeed"] * fm.get("turningSpeed", 0.035) * 60.0, "slowdown": 1.0,
+                           # FighterMovement.Process (VERIFIED-DISASM @0x180d23c90): maxSpeed,
+                           # turningSpeed, minDistanceToTargetBeforeFlyover, distanceOfFlyover.
+                           "fighter": [fm["maxSpeed"], fm.get("turningSpeed", 0.035), fm.get("minDistanceToTargetBeforeFlyover", 40.0),
+                                       fm.get("distanceOfFlyover", 75.0)]}
                 elif hm:
                     air = {"display": prefab_name(b["f"].get("display")), "speed": hm["maxSpeed"],
                            "accel": hm["movementForceStart"], "slowdown": hm["slowdownRadiusMax"]}
@@ -1882,11 +1998,21 @@ def main():
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
                 # SpiritOfTheForestModel (Druid x-x-4+): vines along the track; each zone's
                 # DamageOverTimeCustomModel by distance from the Druid (close / middle / far).
+                # (Vines: offsetMax jitters each other path segment's point; currentRadius grows by
+                # amountPerFrame a round frame from the range to circleRadius, a ring of vines each
+                # generateRadius; SpiritOfTheForest.GeneratePositions / Process / Update.)
                 "spirit": next(({"close": b["f"].get("closeRange", 0.0), "middle": b["f"].get("middleRange", 0.0),
-                                 "zones": [(lambda d: {"damage": d.get("damage", 0.0), "interval": d.get("interval", 1.0),
+                                 "offset": b["f"].get("offsetMax", 0.0), "circle": b["f"].get("circleRadius", 0.0),
+                                 "step": b["f"].get("generateRadius", 0.0), "per_frame": b["f"].get("amountPerFrame", 0.0),
+                                 # (Each zone's mutator id: DamageOverTimeZone.InitialiseZone (@0x180d1aca0)
+                                 # takes mutatorId, or the model's name when that is "": 0-x-2's
+                                 # "DamageOverTimeZoneModel_Medium", not kept on a MOAB pop.)
+                                 "zones": [(lambda z, d: {"damage": d.get("damage", 0.0), "interval": d.get("interval", 1.0),
                                                        "immune": d.get("immuneBloonProperties", 0),
                                                        "tags": [t for t in (deref(d.get("bloonTagsList")) or []) if isinstance(t, str)],
-                                                       "mult": d.get("multiplier", 1.0), "add": d.get("additive", 0.0)})(
+                                                       "mult": d.get("multiplier", 1.0), "add": d.get("additive", 0.0),
+                                                       "id": z.get("mutatorId") or z.get("_name", "")})(
+                                               (deref(b["f"].get(k)) or {}).get("f", {}),
                                                ((deref((deref(b["f"].get(k)) or {}).get("f", {}).get("behaviorModel")) or {}).get("f") or {}))
                                            for k in ("damageOverTimeZoneModelClose", "damageOverTimeZoneModelMiddle", "damageOverTimeZoneModelFar")]}
                                 for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "SpiritOfTheForestModel"), None),
@@ -1941,6 +2067,10 @@ def main():
                                  if b and b["type"] == "PreEmptiveStrikeLauncherModel" and deref(b["f"].get("projectileModel"))), None),
                 "preempt_offset": next(([b["f"].get("throwOffsetX", 0.0), b["f"].get("throwOffsetY", 0.0), b["f"].get("throwOffsetZ", 0.0)]
                                         for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "PreEmptiveStrikeLauncherModel"), [0.0, 0.0, 0.0]),
+                # RotateToDefaultPositionTowerModel (Buccaneer 4xx / 5xx): on reaching that tier the
+                # tower turns to `rotation` (OnUpgraded @0x180d86c70).
+                "default_rot": [[b["f"].get("rotation", 0.0), float(b["f"].get("onlyOnReachingTier", 0))]
+                                for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "RotateToDefaultPositionTowerModel"],
                 # PlacementAreaTypeRangeBuffModel (Mermonkey): range x this when placed on water.
                 # ChurchillBaseRotationModel (Apex Plasma Master): the base turns to the turret.
                 "base_rotation": any(b and b["type"] == "ChurchillBaseRotationModel" for b in items(tobj["f"]["behaviors"])),

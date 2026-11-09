@@ -626,6 +626,9 @@ pub struct Tier {
     /// PreEmptiveStrikeLauncherModel throwOffsetX / Y / Z.
     #[serde(default)]
     pub preempt_offset: [f32; 3],
+    /// RotateToDefaultPositionTowerModel: (rotation, onlyOnReachingTier).
+    #[serde(default)]
+    pub default_rot: Vec<[f32; 2]>,
     /// MerchantShipModel: a merchant ship (counted by Trade Empire).
     #[serde(default)]
     pub merchant: bool,
@@ -877,6 +880,15 @@ pub struct Attack {
     /// AttackModel has a RotateToTargetModel (the tower turns to face its target).
     #[serde(default = "yes")]
     pub rotate: bool,
+    /// RotateToPointerModel.weaponEjectZ: the height its aim point is raised by.
+    #[serde(default)]
+    pub turn_eject_z: f32,
+    /// RotateToPointerModel.rotateOnlyOnEmit: the turn steps once as each throw starts.
+    #[serde(default)]
+    pub turn_on_emit: bool,
+    /// RotateToPointerModel.rotateTower (default true).
+    #[serde(default = "yes")]
+    pub turn_tower: bool,
     /// RotateToPointerModel.rate: degrees per second the tower turns towards its aim point.
     #[serde(default)]
     pub turn_rate: Option<f32>,
@@ -908,6 +920,9 @@ pub struct Attack {
     /// AttackModel.attackThroughWalls: targets aren't checked for a clear line (Map.IsTargetLineClear).
     #[serde(default)]
     pub through_walls: bool,
+    /// FighterPilotPattern target suppliers: FilterTargetAngleModel fieldOfView.
+    #[serde(default)]
+    pub fighter: Option<f32>,
     /// TargetSelectedPointModel.startWithClosestTrackPoint (Wall of Fire past 3-x-x).
     #[serde(default)]
     pub point_start_track: bool,
@@ -915,6 +930,10 @@ pub struct Attack {
     pub glue_filter: u32,
     #[serde(default)]
     pub skip_frozen: bool,
+    /// FilterOutOffscreenModel (Map.IsPointOnMap of the bloon's position): 0 none, 1 with the
+    /// bloon's radius as border (includeBloonRadius), 2 its centre on the map.
+    #[serde(default)]
+    pub offscreen: u8,
     /// FilterBloonIfDamageTypeModel.ifCantHitBloonProperties: bloons with these properties
     /// that the damage is immune to are skipped.
     #[serde(default)]
@@ -1042,6 +1061,9 @@ pub struct Weapon {
     /// WeaponModel.animationOffset: the attack animation starts this many seconds before the shot.
     #[serde(default)]
     pub animation_offset: f32,
+    /// RateBasedAnimationOffsetModel: (baseRate, offset).
+    #[serde(default)]
+    pub rate_anim_offset: Option<[f32; 2]>,
     /// WeaponModel.fireBetweenRounds: the weapon's clock is Simulation.time (always running)
     /// instead of roundTime (stopped between rounds).
     #[serde(default)]
@@ -1057,6 +1079,9 @@ pub struct Weapon {
     /// WeaponModel.ejectX/Y/Z: launch point relative to the tower (x right, y forward, z up).
     #[serde(default)]
     pub eject: [f32; 3],
+    /// HYPOTHESIS P-ABSMARKER: throw markers each throw starts at in turn, from (0, 0) (Mortar 0-4-x+).
+    #[serde(default)]
+    pub abs_markers: Vec<[f32; 3]>,
     /// EjectEffectModel / AlternatingEjectEffectModel: muzzle effect (prefab, scale) at the
     /// eject point on each throw, visual only.
     #[serde(default)]
@@ -1086,6 +1111,9 @@ pub struct Weapon {
     pub limit_delay: i64,
     #[serde(default)]
     pub limit_destroyed: bool,
+    /// JungleVineLimitProjectileModel: [limit, delayInFrames].
+    #[serde(default)]
+    pub vine_limit: Option<[i64; 2]>,
     /// SendToBankModel emission: the cash goes into the tower's bank instead of the map.
     #[serde(default)]
     pub to_bank: bool,
@@ -1102,6 +1130,9 @@ pub struct Weapon {
     /// plus this, not at the target (Buccaneer broadsides).
     #[serde(default)]
     pub aim_offset: Option<f32>,
+    /// EmissionRotationOffDisplayModel: laid out on the tower's rotation, shot at the display's.
+    #[serde(default)]
+    pub disp_rot: bool,
     /// EmissionRotationOffBloonDirectionModel: shots head for the target bloon from the eject
     /// point ("eject", OnEmit) or the tower ("tower", dontSetAfterEmit), whatever the facing;
     /// "air" (useAirUnitPosition: from the plane, Monkey Ace) isn't applied yet.
@@ -1117,10 +1148,16 @@ pub struct Weapon {
     /// FireAlternateWeaponModel.weaponId: firing this also fires the weapons paired with it.
     #[serde(default)]
     pub alt_id: Option<i32>,
+    /// OffsetModel: (range, angleOffset).
+    #[serde(default)]
+    pub offset_model: Option<[f32; 2]>,
+    /// LifeBasedAttackSpeedModel: ratePerLife, lifeCap, baseRateIncrease.
+    #[serde(default)]
+    pub life_speed: Option<[f32; 3]>,
     /// FilterTargetAngleFilterModel [fieldOfView, baseTowerRotationOffset] (degrees): fires
     /// only with a bloon in range inside that arc around the tower's facing.
     #[serde(default)]
-    pub fov: Option<[f32; 2]>,
+    pub fov: Option<[f32; 3]>,
 }
 
 /// TradeEmpireBuffModel (Buccaneer 0-0-5).
@@ -1231,6 +1268,11 @@ pub struct Takedown {
     /// FilterWithTagsModel (inclusive): tags never hooked.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// The ability attack's RotateToTarget additionalRotation and its weapon's eject point.
+    #[serde(default)]
+    pub turn: f32,
+    #[serde(default)]
+    pub eject: [f32; 3],
 }
 
 #[derive(Deserialize, Clone)]
@@ -1287,6 +1329,15 @@ pub struct Emission {
     /// EmissionWithOffsetsModel: launch points (as WeaponModel.eject) the shots take in turn.
     #[serde(default)]
     pub markers: Vec<[f32; 3]>,
+    /// EmissionWithOffsetsModel.randomRotationCone: each shot turned within this cone (degrees).
+    #[serde(default)]
+    pub cone: f32,
+    /// EmissionWithOffsetsModel.rotateProjectileWithTower (false: shots go at the Target).
+    #[serde(default = "yes")]
+    pub with_tower: bool,
+    /// RandomEmissionModel.useMainAttackRotation: from the main attack's rotation (the tower's).
+    #[serde(default)]
+    pub main_rot: bool,
     /// RandomArcEmissionModel.randomAngle: each shot turned by up to this many degrees.
     #[serde(default)]
     pub random_angle: f32,
@@ -1301,6 +1352,12 @@ pub struct Emission {
     /// alwaysCentre as 0 / 1).
     #[serde(default)]
     pub dir_off: Option<[f32; 3]>,
+    /// EmissionArcRotationOffTowerDirectionModel.offsetRotation (Grape Shot).
+    #[serde(default)]
+    pub arc_off: Option<f32>,
+    /// ArcEmissionModel.useAirUnitRotation: the arc is laid round the air unit's rotation.
+    #[serde(default)]
+    pub air_rot: bool,
     /// LineProjectileEmissionModel with none of its extras: collided at once along GetInLine.
     #[serde(default)]
     pub line_plain: bool,
@@ -1313,6 +1370,18 @@ pub struct Emission {
     /// emitFromTarget: the line starts on the Target and is emitFromTargetLength long.
     #[serde(default)]
     pub line_from_target: Option<f32>,
+    /// useLengthSpeed: lengthPerFrame, the line's length growing toward the target each frame.
+    #[serde(default)]
+    pub line_grow: Option<f32>,
+    /// projectileAtEndModel (emissionAtEndModel a Single): made where the line ends.
+    #[serde(default)]
+    pub line_end: Option<Box<Proj>>,
+    /// useTargetAsEndPoint (the length follows the target); off: 400 (Ray of Doom).
+    #[serde(default)]
+    pub line_target_end: bool,
+    /// projectileInitialHitModel: made on the first bloon the line meets and collided at once.
+    #[serde(default)]
+    pub line_initial: Option<Box<Proj>>,
 }
 
 fn one_u() -> u32 {
@@ -1422,6 +1491,9 @@ pub struct OnDestroy {
 
 #[derive(Deserialize, Clone)]
 pub struct Exhaust {
+    /// (Runtime: the uid of the projectile it came from, for the process-list order.)
+    #[serde(skip)]
+    pub src: u64,
     pub projectile: Proj,
     pub emission: Emission,
     /// Fires once the share of its pierce used reaches `fraction`, or (when >= 0) the share
@@ -1460,6 +1532,14 @@ pub struct Contact {
     /// dontCreateAtBloon: made where the shot is instead of on the bloon.
     #[serde(default)]
     pub at_shot: bool,
+    /// CreateProjectileOnBlockerCollideModel: only when the shot meets a map blocker.
+    #[serde(default)]
+    pub map_only: bool,
+    /// CreateProjectileOnExhaustPierceModel.minimumTimeDifferenceInFrames / count (0: no gate).
+    #[serde(default)]
+    pub gap: f32,
+    #[serde(default)]
+    pub max_count: u32,
     /// Runs after the hit's damage (a later collisionPass than the DamageModel, or after it in
     /// the same pass): made where the shot is when that destroyed the bloon.
     #[serde(default)]
@@ -1488,6 +1568,15 @@ pub struct Proj {
     /// damage on (non-MOAB, MOAB-class) bloons.
     #[serde(skip)]
     pub unstable_add: Option<(f32, f32)>,
+    /// TravelStraitSlowdownModel: (slowdownSpeed, minSpeed, maxDistance).
+    #[serde(default)]
+    pub slowdown: Option<[f32; 3]>,
+    /// TravelCurvyModel: travels straight here, but draws a syncedRandom Next() as it's made.
+    #[serde(default)]
+    pub curvy: bool,
+    /// TravelCurvyModel: (turnRate, maxTurnAngle).
+    #[serde(default)]
+    pub curvy_turn: Option<[f32; 2]>,
     /// RemoveBloonModifiersModel.cleanseRegen / cleanseFortified / cleanseLead.
     #[serde(default)]
     pub cleanse_regrow: bool,
@@ -1510,6 +1599,9 @@ pub struct Proj {
     /// It has a DamageModel.
     #[serde(default)]
     pub damage_model: bool,
+    /// DamageInRingRadiusModel.innerRingRadius: no damage nearer than radius x this (0: none).
+    #[serde(default)]
+    pub ring_inner: f32,
     /// Its DamageModel's name contains "FirstStrike".
     #[serde(default)]
     pub first_strike_dm: bool,
@@ -1608,6 +1700,9 @@ pub struct Proj {
     pub bolts: Option<Bolts>,
     #[serde(default)]
     pub retarget: Option<Retarget>,
+    /// LightningModel: splitRange, splits, targetLast (1), delay (s).
+    #[serde(default)]
+    pub lightning_split: Option<[f32; 4]>,
     /// FollowPathModel (boomerangs): a fixed path, x right and y forward of the throw.
     #[serde(default)]
     pub path: Option<FollowPath>,
@@ -1651,6 +1746,9 @@ pub struct Proj {
     /// Projectile FilterOutTagModel tags (Ice Monkey: "Moabs").
     #[serde(default)]
     pub exclude_tags: Vec<String>,
+    /// FilterWithTagModel on the projectile: every tag here must be on the bloon.
+    #[serde(default)]
+    pub require_tags: Vec<String>,
     /// FilterGlueLevelModel.glueLevel: skips bloons already glued at this level or higher (0 = off).
     #[serde(default)]
     pub glue_filter: u32,
@@ -1683,10 +1781,10 @@ pub struct Proj {
     pub override_filter: Option<(Vec<String>, String, String)>,
     /// DamageModifierForCashAmountModel: (multiplier, additive, cash threshold).
     #[serde(default)]
-    pub cash_damage: Option<[f32; 3]>,
+    pub cash_damage: Vec<[f32; 4]>,
     /// AccelerateModel: (acceleration, maxSpeed) in units per second.
     #[serde(default)]
-    pub accel: Option<[f32; 2]>,
+    pub accel: Option<[f32; 4]>,
     /// RemoveBloonModifiersModel.cleanseCamo: damaged bloons lose camo (Counter-Espionage).
     #[serde(default)]
     pub decamo: bool,
@@ -1711,6 +1809,9 @@ pub struct Proj {
     /// AgeModel.rounds: round ends it survives (Long Life Spikes); otherwise cleared at round end.
     #[serde(default)]
     pub rounds: u32,
+    /// JungleVineEffectModel.ageingDestroyModel.timeFrames: added to the grab's limiter frames.
+    #[serde(default)]
+    pub vine_frames: Option<i64>,
     /// RefreshPierceModel.interval: pierce is restored every this many seconds (Druid vines).
     #[serde(default)]
     pub refresh_pierce: Option<f32>,
@@ -1923,12 +2024,24 @@ pub struct OrbitTower {
 pub struct Spirit {
     pub close: f32,
     pub middle: f32,
+    /// offsetMax, circleRadius, generateRadius, amountPerFrame.
+    #[serde(default)]
+    pub offset: f32,
+    #[serde(default)]
+    pub circle: f32,
+    #[serde(default)]
+    pub step: f32,
+    #[serde(default)]
+    pub per_frame: f32,
     pub zones: Vec<SpiritZone>,
 }
 
 /// DamageOverTimeCustomModel: `damage` every `interval` s (x mult + add on `tags`).
 #[derive(Deserialize, Clone)]
 pub struct SpiritZone {
+    /// The zone's mutator id (mutatorId, or the zone model's name).
+    #[serde(default)]
+    pub id: String,
     pub damage: f32,
     pub interval: f32,
     pub immune: u32,
@@ -2090,6 +2203,10 @@ pub struct AirSpec {
     /// Monkey Ace flight patterns (selectable *PatternModels); empty for a Heli.
     #[serde(default)]
     pub patterns: Vec<AirPattern>,
+    /// FighterMovementModel: maxSpeed, turningSpeed, minDistanceToTargetBeforeFlyover,
+    /// distanceOfFlyover (Aircraft Carrier planes).
+    #[serde(default)]
+    pub fighter: Option<[f32; 4]>,
     /// PathMovementModel.rotation: degrees per second it can turn while rejoining its path.
     #[serde(default = "full_turn")]
     pub turn: f32,

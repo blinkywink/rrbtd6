@@ -1,1 +1,1 @@
-{"name": "bucc_502_strong", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "MonkeyBuccaneer-502", "x": -2.8, "y": 3.0, "target": "Strong"}], "ability": 120}
+{"name": "bucc_502_strong", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "MonkeyBuccaneer-502", "x": -2.8, "y": 3.0, "target": "Strong"}], "ability": 120, "cash": 10000000}

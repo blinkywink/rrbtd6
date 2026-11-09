@@ -447,7 +447,15 @@ async fn tex(path: PathBuf) -> Option<Texture2D> {
 /// Cursor size in screen pixels (f32 bits): the game's Normal hardware cursor is 64.
 static CURSOR_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x4280_0000);
 
+/// RRBTD6_MENU_BACKGROUND=1: footage mode for the website header. It opens straight on the
+/// home island, windowed, with no menu UI, popups or cursor and a fixed window title.
+pub(crate) fn menu_background_mode() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("RRBTD6_MENU_BACKGROUND").is_some())
+}
+
 fn draw_cursor(up: &Option<Texture2D>, down: &Option<Texture2D>) {
+    if menu_background_mode() { return; }
     let (mx, my) = mouse_position();
     let held = is_mouse_button_down(MouseButton::Left) || is_mouse_button_down(MouseButton::Right);
     if let (Some(up), Some(down)) = (up, down) {
@@ -648,6 +656,11 @@ async fn game_main() {
     let mut adv = advanced::Advanced::load(&read_settings(&root));
     if std::env::var_os("RRBTD6_AUTOTEST").is_some() {
         adv.fullscreen = std::env::var("RRBTD6_FULLSCREEN").is_ok_and(|v| v == "1");
+    }
+    if menu_background_mode() {
+        adv.fullscreen = false;
+        adv.show_fps = false;
+        adv.skip_startup = true;
     }
     apply_display_mode(&adv);
     let mut display_pending = true;

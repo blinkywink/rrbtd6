@@ -1,1 +1,1 @@
-{"name": "ninja_004", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "NinjaMonkey-004", "x": -112.815414, "y": -30.9}], "ability": 120}
+{"name": "ninja_004", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "NinjaMonkey-004", "x": -112.815414, "y": -30.9}], "ability": 120, "cash": 10000000}

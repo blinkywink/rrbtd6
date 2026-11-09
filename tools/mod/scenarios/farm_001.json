@@ -1,1 +1,1 @@
-{"name": "farm_001", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 20, "towers": [{"id": "BananaFarm-001", "x": -112.815414, "y": -30.9}, {"id": "DartMonkey", "x": -96.815414, "y": -30.9}]}
+{"name": "farm_001", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 20, "towers": [{"id": "BananaFarm-001", "x": -112.815414, "y": -30.9}, {"id": "DartMonkey", "x": -96.815414, "y": -30.9}], "cash": 10000000}

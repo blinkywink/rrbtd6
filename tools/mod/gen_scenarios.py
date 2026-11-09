@@ -18,7 +18,9 @@ SPOT2 = [(-96.815414, -30.9), (-112.815414, -46.9), (-101.50171, -42.213707)]
 
 def base_scenario(name, towers, rnd, **extra):
     s = {"name": name, "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600,
-         "quit": True, "round": rnd, "towers": towers}
+         "quit": True, "round": rnd, "towers": towers,
+         # (The game starts with 650: CreateTowerAt refuses a tower it can't pay for, silently.)
+         "cash": 10000000}
     s.update(extra)
     return s
 
@@ -121,7 +123,7 @@ MORE = [
     ("druid", "Druid", True, ("502", "420"), {}),
     ("alch", "Alchemist", True, ("502", "420"), {"companions": DART_NEXT}),
     ("mortar", "MortarMonkey", False, (), {"point": TRACK_POINT}),
-    ("dartling", "DartlingGunner", False, (), {"point": TRACK_POINT, "mode_target": "Point"}),
+    ("dartling", "DartlingGunner", False, (), {"point": TRACK_POINT, "mode_target": "Locked"}),
     ("engineer", "EngineerMonkey", True, ("502", "420"), {}),
     ("heli", "HeliPilot", False, (), {}),
     ("ace", "MonkeyAce", False, (), {}),

@@ -1,1 +1,1 @@
-{"name": "bucc_000_last", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 10, "towers": [{"id": "MonkeyBuccaneer", "x": -2.8, "y": 3.0, "target": "Last"}]}
+{"name": "bucc_000_last", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 10, "towers": [{"id": "MonkeyBuccaneer", "x": -2.8, "y": 3.0, "target": "Last"}], "cash": 10000000}

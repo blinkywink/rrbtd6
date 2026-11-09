@@ -43,6 +43,7 @@
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   scroll-behavior: smooth;
+  scroll-padding-top: 88px;
 }
 * { box-sizing: border-box; }
 /* Code shows the characters typed: no ligatures (!= stays !=). */
@@ -60,18 +61,59 @@ code { font-size: .86em; padding: 2px 7px; border-radius: 6px; background: var(-
 
 /* Header */
 .top {
-  position: relative;
+  position: sticky;
+  top: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   width: min(var(--width), calc(100% - 40px));
   margin: 0 auto;
-  padding: 20px 0;
+  padding: 12px 0;
   z-index: 10;
+}
+/* The header bar's background spans the whole width. It's solid by default; where scroll-driven
+   animations exist it starts clear (and taller) over the hero video and settles into a slimmer
+   frosted bar over the first 240px of scrolling. Every animated value blends (blur 0 -> 14px,
+   never from `none`, which would snap). */
+.top::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: 0; bottom: 0;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  background: rgba(27, 95, 204, .86);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .14), 0 10px 30px rgba(10, 40, 100, .18);
+}
+@supports (animation-timeline: scroll()) {
+  .top { animation: header-slim ease-in-out both; animation-timeline: scroll(root); animation-range: 0 240px; }
+  .top::before { animation: header-solid ease-in-out both; animation-timeline: scroll(root); animation-range: 0 240px; }
+  @keyframes header-slim {
+    from { padding: 20px 0; }
+    to { padding: 12px 0; }
+  }
+  @keyframes header-solid {
+    from {
+      background: rgba(27, 95, 204, 0);
+      backdrop-filter: blur(0) saturate(1);
+      -webkit-backdrop-filter: blur(0) saturate(1);
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0), 0 10px 30px rgba(10, 40, 100, 0);
+    }
+    to {
+      background: rgba(27, 95, 204, .86);
+      backdrop-filter: blur(14px) saturate(1.2);
+      -webkit-backdrop-filter: blur(14px) saturate(1.2);
+      box-shadow: 0 1px 0 rgba(255, 255, 255, .14), 0 10px 30px rgba(10, 40, 100, .18);
+    }
+  }
 }
 /* The wordmark matches the app icon's lettering: Comic Sans where installed, else the
    self-hosted Comic Neue (a free Comic Sans-style font). */
+.brand img { width: 32px; height: 32px; border-radius: 8px; flex: none; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font-family: "Comic Sans MS", "Comic Sans", "Comic Neue", cursive; font-size: 24px; font-weight: 700; letter-spacing: -.01em; color: var(--ink); text-decoration: none; }
 .nav-desktop { display: flex; align-items: center; gap: 22px; }
 .nav-desktop a { color: var(--muted); font-size: 14px; text-decoration: none; transition: color .15s ease; }
@@ -115,9 +157,36 @@ code { font-size: .86em; padding: 2px 7px; border-radius: 6px; background: var(-
 main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 
 /* Hero */
-.hero { position: relative; text-align: center; padding: 84px 0 96px; }
+.hero { position: relative; isolation: isolate; text-align: center; padding: 84px 0 96px; }
+/* Full-width looping background (files in public/hero/, supplied by the owner; without them the
+   plain --bg shows). The tint keeps the white text readable; the bottom fades into the page. */
+.hero-media {
+  position: absolute;
+  z-index: -1;
+  top: -120px; bottom: 0;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  overflow: hidden;
+  background: var(--bg) url("/hero/poster.jpg") center / cover no-repeat;
+}
+.hero-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* --tint: overall strength of the blue wash over the video (0 = none, 1 = as originally set). */
+.hero-media { --tint: .6; }
+.hero-media::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg,
+      rgba(22, 79, 174, calc(.55 * var(--tint))) 0%,
+      rgba(22, 79, 174, calc(.35 * var(--tint))) 45%,
+      rgba(47, 128, 245, calc(.7 * var(--tint))) 85%,
+      var(--bg) 100%);
+}
 .hero h1 { font-size: clamp(42px, 7.6vw, 76px); line-height: 1.03; margin-bottom: 22px; text-shadow: 0 4px 0 var(--deep); }
 .lede { max-width: 580px; margin: 0 auto 36px; color: var(--muted); font-size: 18px; line-height: 1.6; }
+.hero .lede { color: var(--ink); text-shadow: 0 2px 10px rgba(10, 40, 100, .55); }
 .cta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 14px 18px; }
 
 .download {
@@ -324,4 +393,6 @@ footer { margin-top: 56px; padding: 44px 20px 36px; background: var(--deep); }
 @media (prefers-reduced-motion: reduce) {
   :root { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
+  .hero-media video { display: none; }
+  .top, .top::before { animation: none !important; }
 }

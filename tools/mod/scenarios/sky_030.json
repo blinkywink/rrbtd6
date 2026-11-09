@@ -1,1 +1,1 @@
-{"name": "sky_030", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 30, "towers": [{"id": "Skywarden-030", "x": -112.815414, "y": -30.9}]}
+{"name": "sky_030", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 30, "towers": [{"id": "Skywarden-030", "x": -112.815414, "y": -30.9}], "cash": 10000000}

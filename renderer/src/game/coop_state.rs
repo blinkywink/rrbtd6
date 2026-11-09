@@ -34,7 +34,7 @@ impl Game{
         }else if let Some(pa)=&ability.place_at{
             let Some(p)=point else{return false;};if target.is_some(){return false;}
             let (tiers,owner)=(self.towers[t].tiers,self.towers[t].id);
-            let single=Emission{kind:"Single".into(),eject_random:0.0,use_speed:false,speed_min:1.0,speed_max:1.0,count:1,angle:0.0,spread:0.0,offset_start:0.0,target_spread:0.0,markers:Vec::new(),secondary:None,random_angle:0.0,offset:0.0,dir_off:None,line_plain:false,line_tower_rot:false,line_ignore_blockers:false,line_from_target:None,pool_every:0};
+            let single=Emission{kind:"Single".into(),cone:0.0,main_rot:false,line_grow:None,line_end:None,line_target_end:false,line_initial:None,eject_random:0.0,use_speed:false,speed_min:1.0,speed_max:1.0,count:1,angle:0.0,spread:0.0,offset_start:0.0,target_spread:0.0,markers:Vec::new(),secondary:None,random_angle:0.0,offset:0.0,dir_off:None,arc_off:None,line_plain:false,line_tower_rot:false,line_ignore_blockers:false,line_from_target:None,pool_every:0,with_tower:true,air_rot:false};
             let first=self.projectiles.len();self.emit(p,0.0,&single,&pa.projectile,None,tiers,owner);
             for pr in &mut self.projectiles[first..]{pr.pos=p;pr.vel=[0.0;2];pr.wait=pa.delay*FPS;}
         }else if let Some(ds)=&ability.darkshift{
@@ -82,7 +82,7 @@ impl Game{
                     EffectKind::Worth{per_tier}=>{feed!(h,8u8,per_tier);},
                     EffectKind::Trance{centre,radius,angle,rate}=>{feed!(h,9u8,centre,radius,angle,rate);},EffectKind::Cooldown=>10u8.feed(h),
                     EffectKind::Unarmor{bits}=>{feed!(h,11u8,bits);},
-                    EffectKind::Knock{m}=>{feed!(h,12u8,m.to_bits());},
+                    EffectKind::Knock{m}=>{feed!(h,12u8,m[0].to_bits());feed!(h,m[1].to_bits());feed!(h,m[2].to_bits());},
                     EffectKind::Carry{uids,..}=>{feed!(h,14u8,uids);},
                     EffectKind::PopFx{..}=>15u8.feed(h),
                 }

@@ -1,1 +1,1 @@
-{"name": "sub_500", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "MonkeySub-500", "x": -2.8, "y": 3.0}], "ability": 120}
+{"name": "sub_500", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "MonkeySub-500", "x": -2.8, "y": 3.0}], "ability": 120, "cash": 10000000}

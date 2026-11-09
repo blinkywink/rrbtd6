@@ -1,2 +1,1 @@
-{"name": "boomerang_002", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600,
- "towers": [{"id": "BoomerangMonkey-002", "x": -112.815414, "y": -30.9}], "quit": true}
+{"name": "boomerang_002", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "towers": [{"id": "BoomerangMonkey-002", "x": -112.815414, "y": -30.9}], "quit": true, "cash": 10000000}
