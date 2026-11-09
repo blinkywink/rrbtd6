@@ -55,6 +55,10 @@ rotation={'path':path,'speed':settings['speed'],'axis':[settings['rotationAxis']
           'rest':em.world_matrix(af,transform.path_id).T.flatten().tolist()}
 (root/'models/mainmenu_anim/rotations.json').write_text(json.dumps([rotation],indent=1))
 
+# The Town Hall clock hands follow the computer's clock (ClockTimeAnimator).
+from export_home_clock import export_clock
+export_clock(af,em,scene_path,root)
+
 # Clouds are rigid meshes with PlayableAnimatorSimple curves. Keep the original
 # cubic channels instead of baking long loops into thousands of vertex frames.
 sys.argv=[sys.argv[0],game,str(root/'ui/runtime')]

@@ -365,6 +365,10 @@ are preserved. This matters for same-name round / rectangular icons and transpar
 
 Frontend capture names (`RRBTD6_FRONT`) now also include `knowledge`, `knowledge_tree`,
 `social`, `powers`, `achievements`, `store`, `trophy_store`, `legends`, `mailbox`, `loading`.
+`RRBTD6_WORLD_LAYERS=spec.json` (with `RRBTD6_MENU_BACKGROUND=1 RRBTD6_FRONT=main`) draws the home
+island into PNGs once whole and once per listed group of scene paths with that group hidden, then
+exits; `website/build_hero_silhouette.py` writes the spec and turns the differences into the
+site's silhouette hero.
 Menu services and account progression are unbound; the extracted catalogs are visual shells.
 Screens and textures load on demand. Off-screen catalog graphics do not load their textures.
 Home-world motion is extracted by `export_home_animations.py`: continuous source clips

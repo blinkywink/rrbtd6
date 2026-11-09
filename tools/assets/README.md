@@ -37,6 +37,7 @@ The exporters behind [`tools/extract_all.py`](../extract_all.py), which runs the
 | [`export_game_version.py`](export_game_version.py) | Export the installed BTD6's display version (local only). |
 | [`export_hero_portraits.py`](export_hero_portraits.py) | Export hero portraits to local_extracted/ui/portraits/<HeroId>/ with uniform names. |
 | [`export_home_animations.py`](export_home_animations.py) | Bake original continuous home-world idle clips in scene coordinates; local assets only. |
+| [`export_home_clock.py`](export_home_clock.py) | The home world's Town Hall clock hands (ClockTimeAnimator): pivots and parents for `models/mainmenu_anim/clock.json`; run by `export_home_animations.py` or alone. |
 | [`export_home_buttons.py`](export_home_buttons.py) | Extract native Home menu hit volumes; proprietary output remains local. |
 | [`export_home_events.py`](export_home_events.py) | Export native Home event controls and resolve their sprites in separate RAM-bounded passes. |
 | [`export_home_interactions.py`](export_home_interactions.py) | Export original home interaction clips and their native BoxColliders. |

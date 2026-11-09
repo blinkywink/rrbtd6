@@ -3,8 +3,9 @@
     python website/build_progress.py
 
 Replaces everything between the <!-- progress:start --> and <!-- progress:end --> markers in
-website/public/index.html. One square per recorded tower scenario (filled: it matches the real
-game frame by frame), and ten squares per area (a rough estimate).
+website/public/index.html. The totals with one overall bar, then one row and bar per tower (recorded scenarios that match the real game
+frame by frame), with every scenario as a square behind "Show every recorded scenario", and a bar
+per area (a rough estimate out of ten).
 """
 import html
 import json
@@ -19,6 +20,12 @@ def squares(done, total, cls="sq"):
     return "".join(f'<i class="{cls}{" on" if k < done else ""}"></i>' for k in range(total))
 
 
+def row(name, done, total, count, state=""):
+    bar = f'<span class="pbar"><i style="--p:{100 * done / total:.0f}%"></i></span>' if total else '<span class="pbar"></span>'
+    return (f'      <li class="prow {state}"><span class="pname">{html.escape(name)}</span>{bar}'
+            f'<span class="pcount">{count}</span></li>')
+
+
 def build(data):
     towers = data["towers"]
     done = sum(t[1] for t in towers)
@@ -27,23 +34,32 @@ def build(data):
     out = []
     out.append('  <section id="progress" class="block">')
     out.append("    <h2>Progress</h2>")
-    out.append('    <p class="progress-lede">Every tower is checked against recordings of the real game: a recorder mod plays a scenario in BTD6, RustTD6 replays it, and a square fills in when every bloon and projectile matches frame by frame.</p>')
+    out.append('    <p class="intro">Every tower is checked against recordings of the real game: a recorder mod plays a scenario in BTD6, RustTD6 replays it, and the scenario counts once every bloon and projectile matches frame by frame.</p>')
     out.append('    <div class="progress-total">')
     out.append(f'      <div><span class="pnum">{done}</span><span class="of">of {total}</span><p>recorded scenarios match</p></div>')
     out.append(f'      <div><span class="pnum">{finished}</span><span class="of">of {len(towers)}</span><p>towers fully matched</p></div>')
     out.append("    </div>")
-    out.append('    <div class="towers-grid">')
+    out.append(f'    <div class="poverall"><span class="pbar"><i style="--p:{100 * done / total:.0f}%"></i></span>'
+               f'<span class="ppct">{100 * done / total:.0f}%</span></div>')
+    state = lambda d, t: "done" if t and d == t else ("none" if t == 0 else "")
+    out.append('    <ul class="prows">')
     for name, d, t in towers:
-        state = "done" if t and d == t else ("none" if t == 0 else "")
+        out.append(row(name, d, t, f"{d}/{t}" if t else "not recorded", state(d, t)))
+    out.append("    </ul>")
+    out.append('    <details class="progress-more">')
+    out.append('      <summary>Show every recorded scenario</summary>')
+    out.append('      <div class="towers-grid">')
+    for name, d, t in towers:
         count = f"{d}/{t}" if t else "not recorded yet"
-        out.append(f'      <div class="tower-card {state}"><div class="tower-head"><strong>{html.escape(name)}</strong><span>{count}</span></div>'
+        out.append(f'        <div class="tower-card {state(d, t)}"><div class="tower-head"><strong>{html.escape(name)}</strong><span>{count}</span></div>'
                    f'<div class="squares">{squares(d, t) if t else squares(0, 10, "sq ghost")}</div></div>')
-    out.append("    </div>")
-    out.append('    <h3 class="progress-sub">Everything else <span>(rough estimates)</span></h3>')
-    out.append('    <div class="areas">')
+    out.append("      </div>")
+    out.append("    </details>")
+    out.append('    <h3 class="sub">Everything else <span>(rough estimates)</span></h3>')
+    out.append('    <ul class="prows">')
     for name, n in data["areas"]:
-        out.append(f'      <div class="area"><strong>{html.escape(name)}</strong><div class="squares">{squares(n, 10, "sq big")}</div></div>')
-    out.append("    </div>")
+        out.append(row(name, n, 10, f"{n}/10"))
+    out.append("    </ul>")
     out.append(f'    <p class="aside">Updated {html.escape(data["updated"])}. Towers are matched one at a time; the details live in <a href="https://github.com/blinkywink/rrbtd6/blob/main/docs/dev/TOWERS.md">TOWERS.md</a>.</p>')
     out.append("  </section>")
     return "\n".join(out)

@@ -42,6 +42,18 @@
   scroll-behavior: smooth;
 }
 * { box-sizing: border-box; }
+/* The site's hand cursor everywhere (build_cursor.py; hotspot at the fingertip), the pressed hand while
+   the button is held or over something clickable, and the usual text cursor over code. */
+html, html * {
+  cursor: url("/cursor/hand.png") 14 3, auto !important;
+  cursor: image-set(url("/cursor/hand.png") 1x, url("/cursor/hand@2x.png") 2x) 14 3, auto !important;
+}
+html:active, html:active *, html a:hover, html a:hover *, html summary:hover, html summary:hover *, html button:hover, html button:hover * {
+  cursor: url("/cursor/hand-down.png") 14 3, pointer !important;
+  cursor: image-set(url("/cursor/hand-down.png") 1x, url("/cursor/hand-down@2x.png") 2x) 14 3, pointer !important;
+}
+html:root pre, html:root pre *, html:root code, html:root code * { cursor: text !important; }
+html:root a:hover code, html:root a:hover pre { cursor: inherit !important; }
 /* Code shows the characters typed: no ligatures (!= stays !=). */
 code, pre { font-variant-ligatures: none; font-feature-settings: "calt" 0, "liga" 0; }
 body { margin: 0; }

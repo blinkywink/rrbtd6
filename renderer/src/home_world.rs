@@ -25,6 +25,39 @@ fn ray_box(origin:Vec3,direction:Vec3,inverse:Mat4,center:Vec3,size:Vec3)->Optio
     }
     Some(lo)
 }
+/// A Town Hall clock hand (ClockTimeAnimator, see tools/assets/export_home_clock.py).
+#[derive(serde::Deserialize)]
+struct ClockHandData { role: String, divisor: f32, position: [f32;3], scale: [f32;3], parent: [f32;16], rest: [f32;16], path: String }
+struct ClockHand { data: ClockHandData, parent: Mat4, inverse_rest: Mat4, parts: Vec<(usize, Vec<Vec3>)> }
+
+/// The computer's local wall-clock time (DateTime.Now): hour, minute, second.
+fn local_hms() -> (u32, u32, u32) {
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct SystemTime { year: u16, month: u16, dow: u16, day: u16, hour: u16, minute: u16, second: u16, ms: u16 }
+        unsafe extern "system" { fn GetLocalTime(t: *mut SystemTime); }
+        let mut t = SystemTime { year: 0, month: 0, dow: 0, day: 0, hour: 0, minute: 0, second: 0, ms: 0 };
+        unsafe { GetLocalTime(&mut t) };
+        (t.hour as u32, t.minute as u32, t.second as u32)
+    }
+    #[cfg(unix)]
+    {
+        #[repr(C)]
+        struct Tm { sec: i32, min: i32, hour: i32, mday: i32, mon: i32, year: i32, wday: i32, yday: i32, isdst: i32, gmtoff: i64, zone: *const i8 }
+        unsafe extern "C" { fn localtime_r(t: *const i64, out: *mut Tm) -> *mut Tm; }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let mut tm = Tm { sec: 0, min: 0, hour: 0, mday: 0, mon: 0, year: 0, wday: 0, yday: 0, isdst: 0, gmtoff: 0, zone: std::ptr::null() };
+        unsafe { localtime_r(&now, &mut tm) };
+        (tm.hour as u32, tm.min as u32, tm.sec as u32)
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        ((s / 3600 % 24) as u32, (s / 60 % 60) as u32, (s % 60) as u32)
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct RotationData {
     path: String, speed: f32, axis: [f32;3], position: [f32;3], scale: [f32;3],
@@ -105,6 +138,7 @@ pub(super) struct HomeMotion {
     debug_clicked:bool,
     shaders: Option<Shaders>,
     rotations: Vec<Rotation>,
+    clock: Vec<ClockHand>,
     rigid: Vec<RigidClip>,
     vegetation_pending:Option<JoinHandle<Vec<SkinData>>>,
     vegetation:Vec<SkinClip>,
@@ -154,6 +188,14 @@ impl HomeMotion {
                 let parts = world.subtree_parts(&data.path).into_iter().map(|i|
                     (i,world.parts[i].vertices.iter().map(|v|v.position).collect())).collect();
                 self.rotations.push(Rotation {parent:Mat4::from_cols_array(&data.parent),
+                    inverse_rest:Mat4::from_cols_array(&data.rest).inverse(),data,parts});
+            }
+            let hands: Vec<ClockHandData> = std::fs::read_to_string(base.join("clock.json")).ok()
+                .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default();
+            for data in hands {
+                let parts = world.subtree_parts(&data.path).into_iter().map(|i|
+                    (i,world.parts[i].vertices.iter().map(|v|v.position).collect())).collect();
+                self.clock.push(ClockHand {parent:Mat4::from_cols_array(&data.parent),
                     inverse_rest:Mat4::from_cols_array(&data.rest).inverse(),data,parts});
             }
             let clips: Vec<RigidData> = std::fs::read_to_string(base.join("rigid_clips.json")).ok()
@@ -237,6 +279,25 @@ impl HomeMotion {
                 }
             }
         }
+        // ClockTimeAnimator.Update (VERIFIED-DECOMP @0x1804e0dc0): each hand's localRotation =
+        // Euler(0, 0, -(part / whole x 360)) from DateTime.Now: hour % 12 of 12 (whole hours
+        // only), minute of 60, second of 60.
+        if !self.clock.is_empty() {
+            let (h, m, sec) = local_hms();
+            for hand in &self.clock {
+                let data = &hand.data;
+                let part = match data.role.as_str() { "hourHand" => (h % 12) as f32, "minuteHand" => m as f32, _ => sec as f32 };
+                let z = -(part / data.divisor * 360.0);
+                let local = Mat4::from_scale_rotation_translation(Vec3::from_array(data.scale),
+                    Quat::from_axis_angle(Vec3::Z, z.to_radians()), Vec3::from_array(data.position));
+                let matrix = reflection * hand.parent * local * hand.inverse_rest * reflection;
+                for (i,original) in &hand.parts {
+                    for (vertex,position) in world.parts[*i].vertices.iter_mut().zip(original) {
+                        vertex.position=matrix.transform_point3(*position);
+                    }
+                }
+            }
+        }
         let mut uploaded_trigger=false;
         if let Some(particles)=&mut self.particles {
             particles.update(get_frame_time().min(0.1));
@@ -274,22 +335,27 @@ impl HomeMotion {
         }
     }
     pub(super) fn draw(&mut self, forward: Vec3) {
+        self.draw_where(forward, get_time() as f32, &|_| true, true);
+    }
+    /// At idle-clip time `time`, only the animated models whose scene path `shown` accepts.
+    pub(super) fn draw_where(&mut self, forward: Vec3, time: f32, shown: &dyn Fn(&str) -> bool, particles: bool) {
         let Some(shaders) = &mut self.shaders else { return };
         shaders.forward = forward;
-        let time = get_time() as f32;
         for (path,model) in &mut self.models {
+            if !shown(path) {continue;}
             if self.triggers.iter().any(|t|t.began.is_some() && &t.data.path==path){continue;}
             let clip = model.idle_clip();
             model.draw(shaders, clip, time, [0.0;3], 0.0, 0.7, false, None);
         }
         for trigger in &mut self.triggers {
+            if !shown(&trigger.data.path) {continue;}
             if trigger.began.is_none() && self.models.iter().any(|(p,_)|p==&trigger.data.path){continue;}
             if let Some(model)=&mut trigger.model {
                 let time=trigger.began.map_or(0.0,|began|(get_time()-began) as f32);
                 let clip=model.idle_clip();model.draw(shaders,clip,time,[0.0;3],0.0,0.7,false,None);
             }
         }
-        if let Some(particles)=&mut self.particles {
+        if let Some(particles)=self.particles.as_mut().filter(|_|particles) {
             let right=forward.cross(Vec3::Y).normalize_or_zero();
             let up=right.cross(forward).normalize_or_zero();
             particles.draw(right,up,screen_height()/(2.0*(26.991467_f32.to_radians()*0.5).tan()*800.0),screen_height());

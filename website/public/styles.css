@@ -46,15 +46,32 @@
   scroll-padding-top: 88px;
 }
 * { box-sizing: border-box; }
+/* The site's hand cursor everywhere (build_cursor.py; hotspot at the fingertip), the pressed hand while
+   the button is held or over something clickable, and the usual text cursor over code. */
+html, html * {
+  cursor: url("/cursor/hand.png") 14 3, auto !important;
+  cursor: image-set(url("/cursor/hand.png") 1x, url("/cursor/hand@2x.png") 2x) 14 3, auto !important;
+}
+html:active, html:active *, html a:hover, html a:hover *, html summary:hover, html summary:hover *, html button:hover, html button:hover * {
+  cursor: url("/cursor/hand-down.png") 14 3, pointer !important;
+  cursor: image-set(url("/cursor/hand-down.png") 1x, url("/cursor/hand-down@2x.png") 2x) 14 3, pointer !important;
+}
+html:root pre, html:root pre *, html:root code, html:root code * { cursor: text !important; }
+html:root a:hover code, html:root a:hover pre { cursor: inherit !important; }
 /* Code shows the characters typed: no ligatures (!= stays !=). */
 code, pre { font-variant-ligatures: none; font-feature-settings: "calt" 0, "liga" 0; }
-body { margin: 0; overflow-x: hidden; }
+/* The body clips whatever reaches past the window's sides (the decorations, the full-width bands),
+   so nothing can scroll sideways. html's own overflow keeps the body's from passing to the window. */
+html { overflow-x: hidden; scrollbar-color: rgba(255, 255, 255, .5) var(--deep); }
+body { margin: 0; overflow-x: clip; }
+::selection { background: var(--paper); color: var(--blue-text); }
+p, li { text-wrap: pretty; }
 .skip { position: absolute; left: 12px; top: -60px; z-index: 50; padding: 10px 16px; border-radius: 10px; background: var(--paper); color: var(--blue-text); text-decoration: none; }
 .skip:focus { top: 12px; }
 a { color: var(--ink); font-weight: 600; text-decoration-color: rgba(255, 255, 255, .45); text-underline-offset: 3px; }
 a:hover { text-decoration-color: var(--ink); }
 a:focus-visible, summary:focus-visible { outline: 3px solid var(--ink); outline-offset: 4px; border-radius: 8px; }
-h1, h2 { font-family: "Luckiest Guy", sans-serif; font-weight: 400; letter-spacing: .01em; margin: 0; }
+h1, h2, h3 { font-family: "Luckiest Guy", sans-serif; font-weight: 400; letter-spacing: .01em; margin: 0; text-wrap: balance; }
 strong { font-weight: 700; color: var(--ink); }
 em { font-style: normal; font-weight: 700; color: var(--ink); }
 code { font-size: .86em; padding: 2px 7px; border-radius: 6px; background: var(--deep); color: var(--ink); overflow-wrap: anywhere; }
@@ -73,9 +90,9 @@ code { font-size: .86em; padding: 2px 7px; border-radius: 6px; background: var(-
   z-index: 10;
 }
 /* The header bar's background spans the whole width. It's solid by default; where scroll-driven
-   animations exist it starts clear (and taller) over the hero video and settles into a slimmer
-   frosted bar over the first 240px of scrolling. Every animated value blends (blur 0 -> 14px,
-   never from `none`, which would snap). */
+   animations exist it starts clear (and taller) over the hero and settles into a slimmer frosted
+   bar over the first 140px of scrolling, before the headline reaches it. Every animated value
+   blends (blur 0 -> 14px, never from `none`, which would snap). */
 .top::before {
   content: "";
   position: absolute;
@@ -89,9 +106,11 @@ code { font-size: .86em; padding: 2px 7px; border-radius: 6px; background: var(-
   -webkit-backdrop-filter: blur(14px) saturate(1.2);
   box-shadow: 0 1px 0 rgba(255, 255, 255, .14), 0 10px 30px rgba(10, 40, 100, .18);
 }
-@supports (animation-timeline: scroll()) {
-  .top { animation: header-slim ease-in-out both; animation-timeline: scroll(root); animation-range: 0 240px; }
-  .top::before { animation: header-solid ease-in-out both; animation-timeline: scroll(root); animation-range: 0 240px; }
+@supports (animation-timeline: view()) {
+  body { timeline-scope: --hero; }
+  .top, .top::before { animation-timeline: scroll(root); animation-range: 0 140px; }
+  .top { animation-name: header-slim; animation-timing-function: ease-in-out; animation-fill-mode: both; }
+  .top::before { animation-name: header-solid; animation-timing-function: ease-in-out; animation-fill-mode: both; }
   @keyframes header-slim {
     from { padding: 20px 0; }
     to { padding: 12px 0; }
@@ -118,10 +137,14 @@ code { font-size: .86em; padding: 2px 7px; border-radius: 6px; background: var(-
 .nav-desktop { display: flex; align-items: center; gap: 22px; }
 .nav-desktop a { color: var(--muted); font-size: 14px; text-decoration: none; transition: color .15s ease; }
 .nav-desktop a:hover { color: var(--ink); }
-.nav-desktop .gh { color: var(--blue-text); background: var(--paper); padding: 8px 16px; border-radius: 999px; transition: transform .15s ease; }
-.nav-desktop .gh:hover { color: var(--blue-text); transform: translateY(-1px); }
+/* A short underline grows from the middle of a hovered link. */
+.nav-desktop a { padding: 4px 0; background: linear-gradient(var(--ink), var(--ink)) bottom center / 0 2px no-repeat; transition: color .15s ease, background-size .2s ease; }
+.nav-desktop a:hover { background-size: 100% 2px; }
+/* The link for the section being read (site.js) stays lit and underlined. */
+.nav-desktop a[aria-current] { color: var(--ink); background-size: 100% 2px; }
+.menu nav a[aria-current] { background: #eaf2ff; }
 
-/* Mobile menu: a <details> dropdown (the site runs no JavaScript). */
+/* Mobile menu: a <details> dropdown (no JavaScript needed). */
 .menu { display: none; }
 .menu summary {
   list-style: none;
@@ -151,15 +174,31 @@ code { font-size: .86em; padding: 2px 7px; border-radius: 6px; background: var(-
   border-radius: 18px;
   box-shadow: 0 6px 0 var(--paper-shadow), 0 18px 40px rgba(10, 40, 100, .28);
 }
+.menu[open] nav { animation: menu-in .2s ease-out; }
+@keyframes menu-in { from { opacity: 0; translate: 0 -8px; scale: .98; } }
 .menu nav a { padding: 14px 16px; border-radius: 12px; color: var(--blue-text); font-size: 17px; text-decoration: none; }
 .menu nav a:hover, .menu nav a:focus-visible { background: #eaf2ff; outline: none; }
 
 main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 
 /* Hero */
-.hero { position: relative; isolation: isolate; text-align: center; padding: 84px 0 96px; }
-/* Full-width looping background (files in public/hero/, supplied by the owner; without them the
-   plain --bg shows). The tint keeps the white text readable; the bottom fades into the page. */
+.hero {
+  position: relative;
+  isolation: isolate;
+  text-align: center;
+  /* Fills the screen under the header (~76px at the top of the page) except ~130px, where the next
+     section's heading peeks in; content centred. */
+  min-height: calc(100vh - 210px);
+  min-height: calc(100svh - 210px);
+  view-timeline: --hero block;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 48px 0 64px;
+}
+/* Full-width background: the main-menu island in silhouette (build_hero_silhouette.py), as the sky,
+   the clouds drifting slowly in front of it, and the island over both. The tint keeps the white
+   text readable; the bottom fades into the page. */
 .hero-media {
   position: absolute;
   z-index: -1;
@@ -168,16 +207,44 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
   width: 100vw;
   transform: translateX(-50%);
   overflow: hidden;
-  background: var(--bg) url("/hero/poster.jpg") center / cover no-repeat;
+  background: var(--bg);
 }
-.hero-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
-/* --tint: overall strength of the blue wash over the video (0 = none, 1 = as originally set). */
-.hero-media { --tint: .6; }
+.hero-media::before, .hero-clouds, .hero-scene { position: absolute; inset: 0; background: center / cover no-repeat; }
+.hero-media::before { content: ""; background-image: url("/hero/sky.webp"); }
+.hero-clouds { background-image: url("/hero/clouds-1920.webp"); animation: clouds-drift 50s ease-in-out infinite alternate; }
+.hero-scene { background-image: url("/hero/scene-1920.webp"); }
+@media (max-width: 800px) {
+  .hero-clouds { background-image: url("/hero/clouds-1280.webp"); }
+  .hero-scene { background-image: url("/hero/scene-1280.webp"); }
+}
+@media (min-width: 1921px), (min-width: 1300px) and (min-resolution: 1.5dppx) {
+  .hero-clouds { background-image: url("/hero/clouds-2560.webp"); }
+  .hero-scene { background-image: url("/hero/scene-2560.webp"); }
+}
+@keyframes clouds-drift { from { transform: translateX(-2%); } to { transform: translateX(2%); } }
+/* Parallax: as the hero scrolls away, its layers sink back at different speeds (--depth of their own
+   height over the hero's exit), the far sky most and the island least, while the text scrolls
+   normally. `translate`, so the clouds' drift (`transform`) still runs alongside. */
+@supports (animation-timeline: view()) {
+  .hero-media::before { --depth: 45%; animation: hero-sink linear both; animation-timeline: --hero; animation-range: exit; }
+  .hero-clouds {
+    --depth: 34%;
+    animation: clouds-drift 50s ease-in-out infinite alternate, hero-sink linear both;
+    animation-timeline: auto, --hero;
+    animation-range: normal, exit;
+  }
+  .hero-scene { --depth: 16%; animation: hero-sink linear both; animation-timeline: --hero; animation-range: exit; }
+  @keyframes hero-sink { from { translate: 0 0; } to { translate: 0 var(--depth); } }
+}
+/* --tint: overall strength of the blue wash over the picture (0 = none, 1 = as originally set). */
+.hero-media { --tint: .15; }
 .hero-media::after {
   content: "";
   position: absolute;
   inset: 0;
   background:
+    /* A soft shade behind the headline, lede and button so they stand off the picture. */
+    radial-gradient(ellipse 46% 40% at 50% 54%, rgba(14, 52, 128, .3), rgba(14, 52, 128, .12) 55%, transparent 100%),
     linear-gradient(180deg,
       rgba(22, 79, 174, calc(.55 * var(--tint))) 0%,
       rgba(22, 79, 174, calc(.35 * var(--tint))) 45%,
@@ -187,7 +254,16 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .hero h1 { font-size: clamp(42px, 7.6vw, 76px); line-height: 1.03; margin-bottom: 22px; text-shadow: 0 4px 0 var(--deep); }
 .lede { max-width: 580px; margin: 0 auto 36px; color: var(--muted); font-size: 18px; line-height: 1.6; }
 .hero .lede { color: var(--ink); text-shadow: 0 2px 10px rgba(10, 40, 100, .55); }
+.hero .fine { color: var(--ink); text-shadow: 0 1px 6px rgba(10, 40, 100, .7); }
+.hero .release { margin-top: 16px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.hero .release + .fine { margin-top: 6px; }
 .cta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 14px 18px; }
+/* On load the headline, line, button and notes fade up in turn. */
+.hero > :not(.hero-media) { animation: hero-in .7s cubic-bezier(.2, .7, .2, 1) both; }
+.hero > .lede { animation-delay: .08s; }
+.hero > .cta { animation-delay: .16s; }
+.hero > .fine { animation-delay: .24s; }
+@keyframes hero-in { from { opacity: 0; translate: 0 14px; } }
 
 .download {
   display: inline-flex;
@@ -203,101 +279,130 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
   letter-spacing: .03em;
   color: var(--blue-text);
   text-decoration: none;
-  background: var(--paper);
+  background: linear-gradient(180deg, var(--paper) 40%, #edf4ff);
   border-radius: 16px;
-  box-shadow: 0 6px 0 var(--paper-shadow);
-  transition: transform .12s ease, box-shadow .12s ease;
 }
 .download svg { margin-top: -4px; }
-.download:hover { color: var(--blue-text); transform: translateY(-2px); box-shadow: 0 8px 0 var(--paper-shadow); }
-.download:active { transform: translateY(5px); box-shadow: 0 1px 0 var(--paper-shadow); }
 .download:focus-visible { outline-offset: 6px; }
+/* The white buttons stand on a pale edge; the smaller one lifts on hover and presses down when clicked. */
+.download { box-shadow: 0 6px 0 var(--paper-shadow); }
+.download:hover { color: var(--blue-text); }
+.pill-link { box-shadow: 0 4px 0 var(--paper-shadow); transition: transform .12s ease, box-shadow .12s ease; }
+.pill-link:hover { color: var(--blue-text); transform: translateY(-2px); box-shadow: 0 6px 0 var(--paper-shadow); }
+.pill-link:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--paper-shadow); }
 .fine { margin: 20px 0 0; color: var(--faint); font-size: 14px; }
 
 /* Sections */
-.block { padding: 56px 0; scroll-margin-top: 16px; }
-.block h2, .band h2 { font-size: clamp(28px, 4vw, 36px); margin-bottom: 20px; }
+.block { padding: 72px 0; scroll-margin-top: 0; }
+/* Section headings share the hero title's chunky drop shadow. */
+.block h2 { font-size: clamp(28px, 4vw, 36px); margin-bottom: 22px; text-shadow: 0 3px 0 var(--deep); }
+.intro { margin: 0 0 18px; color: var(--muted); font-size: 16px; line-height: 1.6; max-width: 720px; }
+.sub { margin: 32px 0 12px; font-size: 20px; text-shadow: 0 2px 0 var(--deep); }
+.sub span { color: var(--faint); font-family: Inter, sans-serif; font-size: 13px; font-weight: 700; }
+/* Cards stand on a darker bottom edge, like the download button and the code box. */
+.list li, .steps li, .platform, .faq details, .mods-text, .prows, .progress-total > div, .tower-card {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 4px 0 var(--edge-shade, var(--deep));
+}
+/* The white badges (feature icons, step numbers) stand on the same pale edge as the white buttons;
+   the game font's numbers and names get the headings' shadow. */
+.icon, .num { box-shadow: 0 3px 0 var(--paper-shadow); }
+.progress-total .pnum { text-shadow: 0 3px 0 var(--deep); }
+.platform strong { text-shadow: 0 2px 0 var(--deep); }
 .aside { margin: 14px 0 0; padding: 0 4px; color: var(--faint); font-size: 14px; line-height: 1.6; }
+/* Each piece of a section rises gently into place as it scrolls into view. */
+@supports (animation-timeline: view()) {
+  .block > * { animation: rise ease-out both; animation-timeline: view(); animation-range: entry 0% entry 80px; }
+  @keyframes rise { from { opacity: 0; translate: 0 20px; } }
+}
 
 .list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.list li {
-  padding: 22px 22px;
-  background: var(--card);
-  border-radius: 16px;
-  color: var(--muted);
-  font-size: 15px;
-  line-height: 1.6;
-}
-.list li strong { display: block; margin-bottom: 4px; font-size: 17px; }
-.list li { transition: transform .15s ease, background .15s ease; }
-.list li:hover { transform: translateY(-2px); background: var(--card-open); }
+.list li { padding: 24px; background: var(--card); border-radius: 16px; color: var(--muted); font-size: 15px; line-height: 1.6; }
+/* A feature's icon gives a little wiggle when its card is hovered. */
+.list li:hover .icon { animation: wiggle .45s ease; }
+@keyframes wiggle { 25% { rotate: -9deg; } 50% { rotate: 7deg; } 75% { rotate: -3deg; } }
+.list li strong { display: block; font-size: 16px; }
 .card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
 .card-head .icon { margin: 0; flex: none; }
-.card-head strong { margin: 0 !important; line-height: 1.25; }
+.card-head strong { line-height: 1.25; }
 .icon { display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 14px; border-radius: 12px; background: var(--paper); }
 .icon svg { width: 22px; height: 22px; fill: none; stroke: var(--blue-text); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-/* White band */
-.band { margin: 16px 0; padding: 64px 0; background: var(--paper); color: var(--paper-ink); scroll-margin-top: 0; width: 100vw; position: relative; left: 50%; transform: translateX(-50%); }
-.band-inner { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
-.band h2 { color: var(--blue-text); }
-.band a { color: var(--blue-text); text-decoration-color: rgba(31, 111, 232, .4); }
-.band code { background: #e8f0fe; color: var(--paper-ink); }
-.band .aside { color: var(--paper-muted); }
+/* Install */
+.aside strong { color: var(--ink); }
 .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
 .steps li {
+  position: relative;
   display: flex;
   gap: 16px;
   align-items: center;
   padding: 18px 24px;
-  background: #f1f6ff;
+  background: var(--card);
   border-radius: 16px;
-  color: var(--paper-ink);
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.6;
 }
+/* A faint line runs from each step's number to the next, through the gap between the cards. */
+.steps li + li::before, .steps li:has(+ li)::after {
+  content: ""; position: absolute; left: 43px; width: 2px; background: rgba(255, 255, 255, .3);
+}
+.steps li + li::before { top: -12px; height: calc(50% - 20px + 12px); }
+.steps li:has(+ li)::after { top: calc(50% + 23px); bottom: -12px; }
 .num {
   flex: none;
   display: grid;
   place-items: center;
-  width: 36px; height: 36px;
+  width: 40px; height: 40px;
   padding-top: 4px;
-  border-radius: 50%;
+  border-radius: 12px;
   font-family: "Luckiest Guy", sans-serif;
-  font-size: 18px;
-  color: var(--ink);
-  background: var(--bg);
+  font-size: 20px;
+  color: var(--blue-text);
+  background: var(--paper);
 }
 
-/* How it works */
-.step-tag { display: inline-block; margin-bottom: 10px; padding: 3px 10px 2px; border-radius: 999px; background: var(--paper); color: var(--blue-text); font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
-.arrow { display: grid; place-items: center; }
-.arrow svg { width: 26px; height: 26px; fill: none; stroke: var(--paper); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
-
 /* Mods teaser */
-.mods { display: grid; grid-template-columns: 1fr 1.15fr; gap: 16px; align-items: stretch; }
-.mods-text { padding: 26px; background: var(--card); border-radius: 16px; color: var(--muted); font-size: 16px; line-height: 1.7; display: flex; flex-direction: column; justify-content: space-between; gap: 18px; }
+.mods { display: grid; grid-template-columns: 1fr 1.15fr; gap: 12px; align-items: stretch; }
+.mods-text { padding: 24px; background: var(--card); border-radius: 16px; color: var(--muted); font-size: 15px; line-height: 1.65; display: flex; flex-direction: column; justify-content: space-between; gap: 18px; }
 .mods-text p { margin: 0; }
-.pill-link { align-self: flex-start; padding: 11px 18px; border-radius: 999px; background: var(--paper); color: var(--blue-text); text-decoration: none; }
-.pill-link:hover { color: var(--blue-text); }
-.snippet { margin: 0; padding: 24px; border-radius: 16px; background: var(--paper); color: var(--paper-ink); overflow-x: auto; box-shadow: 0 6px 0 var(--paper-shadow); }
-.snippet code { padding: 0; background: none; color: inherit; font-size: 13.5px; line-height: 1.75; white-space: pre; overflow-wrap: normal; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
-.snippet .c { color: #7a8bab; }
+.pill-link { align-self: flex-start; padding: 10px 18px; border-radius: 999px; background: var(--paper); color: var(--blue-text); font-size: 14px; text-decoration: none; }
+.pill-link span { display: inline-block; transition: transform .15s ease; }
+.pill-link:hover span { transform: translateX(3px); }
+/* The code sits in a little window: a bar with the file's name and a Copy button (shown by
+   site.js, which does the copying), over the code. */
+.code-window { display: flex; flex-direction: column; min-width: 0; border-radius: 16px; background: var(--paper); color: var(--paper-ink); box-shadow: 0 6px 0 var(--paper-shadow); }
+.code-bar { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 18px; border-bottom: 1px solid #e2ecfb; }
+.dots { display: flex; gap: 6px; }
+.dots i { width: 10px; height: 10px; border-radius: 50%; background: #d3e2fa; }
+.code-file { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--paper-muted); font: 600 12px ui-monospace, "Cascadia Code", Consolas, monospace; }
+.copy { padding: 6px 12px; border: 0; border-radius: 999px; background: #eaf2ff; color: var(--blue-text); font: 700 12px Inter, system-ui, sans-serif; transition: background .15s ease; }
+.copy:hover { background: #dbe9ff; }
+.copy:focus-visible { outline: 3px solid var(--blue-text); outline-offset: 2px; }
+.snippet { flex: 1; margin: 0; padding: 18px 24px 22px; overflow-x: auto; scrollbar-width: thin; }
+.snippet code { padding: 0; background: none; color: inherit; font-size: 13px; line-height: 1.75; white-space: pre; overflow-wrap: normal; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
 .snippet .s { color: #1f6fe8; }
 .snippet .n { color: #c2410c; }
 
 /* Platforms */
-.platforms { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.platform { padding: 22px; background: var(--card); border-radius: 16px; color: var(--muted); font-size: 15px; line-height: 1.6; }
+.platforms { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 28px; }
+.platform { padding: 24px; background: var(--card); border-radius: 16px; color: var(--muted); font-size: 15px; line-height: 1.6; }
 .platform strong { display: block; font-family: "Luckiest Guy", sans-serif; font-weight: 400; font-size: 24px; margin: 10px 0 2px; }
 .platform p { margin: 0; }
+.platform strong:has(.os) { display: flex; align-items: center; gap: 10px; }
+.os { flex: none; width: 24px; height: 24px; margin-top: -4px; fill: var(--ink); filter: drop-shadow(0 2px 0 var(--deep)); }
+.os .cut { fill: var(--card); }
 .tag { display: inline-block; padding: 3px 10px 2px; border-radius: 999px; background: var(--paper); color: var(--blue-text); font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
 .tag-soft { background: var(--deep); color: var(--ink); }
 
 /* FAQ */
-.faq { display: grid; gap: 10px; }
+/* One answer open at a time (the details share a name). Where the browser can animate to `auto`,
+   answers (and Progress's "Show every recorded scenario") slide open and shut; elsewhere they just
+   appear. */
+.faq { display: grid; gap: 12px; }
+.faq details, .progress-more { interpolate-size: allow-keywords; }
+.faq details::details-content, .progress-more::details-content { block-size: 0; overflow: hidden; transition: block-size .25s ease, content-visibility .25s allow-discrete; }
+.faq details[open]::details-content, .progress-more[open]::details-content { block-size: auto; }
 .faq details { background: var(--card); border-radius: 16px; padding: 0 24px; transition: background .15s ease; }
-.faq details[open] { background: var(--card-open); }
+.faq details:hover, .faq details[open] { background: var(--card-open); }
 .faq summary {
   list-style: none;
   cursor: pointer;
@@ -310,7 +415,7 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
   font-size: 16px;
 }
 .faq summary::-webkit-details-marker { display: none; }
-.faq details p { margin: -4px 0 20px; color: var(--muted); font-size: 15px; line-height: 1.65; }
+.faq details p { margin: -4px 0 20px; color: var(--muted); font-size: 15px; line-height: 1.6; }
 .plus { position: relative; flex: none; width: 14px; height: 14px; }
 .plus::before, .plus::after {
   content: "";
@@ -324,20 +429,50 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .plus::after { transform: rotate(90deg); }
 details[open] .plus::after { transform: rotate(0); }
 
-/* Included / left out, requirements */
-.split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.panel { padding: 22px 24px; background: var(--card); border-radius: 16px; }
-.panel-soft { background: var(--deep); }
-.panel ul { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 9px; }
-.panel li { position: relative; padding-left: 28px; color: var(--muted); font-size: 15px; line-height: 1.55; }
-.ticks li::before { content: ""; position: absolute; left: 3px; top: 6px; width: 12px; height: 7px; border-left: 3px solid var(--ink); border-bottom: 3px solid var(--ink); transform: rotate(-45deg); }
-.crosses li::before, .crosses li::after { content: ""; position: absolute; left: 2px; top: 10px; width: 14px; height: 2.5px; border-radius: 2px; background: rgba(255, 255, 255, .7); transform: rotate(45deg); }
-.crosses li::after { transform: rotate(-45deg); }
-
-/* Built to match */
-
 /* Footer */
-footer { margin-top: 56px; padding: 44px 20px 36px; background: var(--deep); }
+/* The footer rises out of an island (build_decor.py): a distant one behind, a near one in the
+   footer's colour. Both images are 2560x375 and cover the width, never narrower than 1100px. */
+footer { position: relative; margin-top: calc(max(100vw, 1100px) * .14); padding: 44px 20px 36px; background: var(--deep); }
+footer::before, footer::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: calc(100% - 1px); pointer-events: none;
+  height: calc(max(100vw, 1100px) * 375 / 2560);
+  -webkit-mask: var(--shape) bottom center / max(100%, 1100px) auto no-repeat; mask: var(--shape) bottom center / max(100%, 1100px) auto no-repeat;
+}
+footer::before { --shape: url("/decor/island-far.webp"); background: var(--card); }
+footer::after { --shape: url("/decor/island-near.webp"); background: var(--deep); }
+
+/* Clouds in the margins beside the sections, cut from the hero (build_decor.py; white masks, coloured
+   here), one each side, drifting slowly. Each comes in from beyond the window's edge and reaches --in
+   of the way across its margin, so they keep to the margins at any width; the small, faint ones read
+   as further off and drift less. Placed from the top, so an opening FAQ answer doesn't move them.
+   The body clips them at the window's sides. */
+main .block { position: relative; }
+.block::before, .block::after {
+  --edge: calc((100% - 100vw) / 2);
+  --shape: url("/decor/cloud-a.webp");
+  content: ""; position: absolute; z-index: -1; pointer-events: none;
+  width: var(--w); aspect-ratio: 876 / 160;
+  -webkit-mask: var(--shape) center / contain no-repeat; mask: var(--shape) center / contain no-repeat;
+  background: #4188ec; opacity: var(--o, 1);
+  animation: cloud-drift var(--dur, 70s) ease-in-out var(--delay, 0s) infinite alternate;
+}
+.block::before { right: calc(var(--edge) * (1 - var(--in)) - var(--w)); }
+.block::after { left: calc(var(--edge) * (1 - var(--in)) - var(--w)); scale: -1 1; }
+.block:nth-of-type(odd)::before, .block:nth-of-type(even)::after { --shape: url("/decor/cloud-b.webp"); }
+#about::before     { --w: 420px; --in: .75; top: 60px;  --dur: 80s; --delay: -50s; }
+#about::after      { --w: 380px; --in: .75; top: 320px; --delay: -12s; }
+#install::before   { --w: 360px; --in: .7;  top: 330px; --delay: -40s; }
+#install::after    { --w: 220px; --in: .55; top: 580px; --o: .6; --dur: 95s; --dx: 18px; --delay: -8s; }
+#progress::before  { --w: 200px; --in: .5;  top: 160px; --o: .55; --dur: 90s; --dx: 16px; --delay: -15s; }
+#progress::after   { --w: 340px; --in: .7;  top: 620px; --dur: 80s; --delay: -55s; }
+#mods::before      { --w: 400px; --in: .75; top: 120px; --dur: 75s; --delay: -35s; }
+#mods::after       { --w: 200px; --in: .55; top: 40px;  --o: .55; --dur: 100s; --dx: 16px; --delay: -45s; }
+#faq::before       { --w: 380px; --in: .7;  top: 260px; --dur: 70s; --delay: -5s; }
+#faq::after        { --w: 420px; --in: .75; top: 520px; --dur: 85s; --delay: -42s; }
+@keyframes cloud-drift { from { translate: calc(var(--dx, 36px) * -1) 0; } to { translate: var(--dx, 36px) 0; } }
+@media (max-width: 1000px) {
+  .block::before, .block::after { display: none; }
+}
 .foot { width: min(var(--width), 100%); margin: 0 auto; display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 28px; }
 .foot-brand p { margin: 10px 0 0; color: var(--faint); font-size: 14px; line-height: 1.6; max-width: 300px; }
 .foot nav { display: grid; align-content: start; gap: 10px; }
@@ -346,15 +481,36 @@ footer { margin-top: 56px; padding: 44px 20px 36px; background: var(--deep); }
 .foot nav a:hover { color: var(--ink); text-decoration: underline; }
 .legal { width: min(var(--width), 100%); margin: 32px auto 0; padding-top: 20px; border-top: 1px solid rgba(255, 255, 255, .15); color: var(--faint); font-size: 12px; line-height: 1.6; }
 
-/* Progress: one square per recorded scenario (filled: matches the real game frame by frame). */
-.progress-lede { margin: 0 0 18px; color: var(--muted); font-size: 16px; line-height: 1.6; max-width: 720px; }
+/* Progress: a bar per tower (recorded scenarios matching the real game frame by frame) and per area;
+   "Show every recorded scenario" opens one square per scenario. site.js fills the bars on scroll. */
+.prows { list-style: none; margin: 0; padding: 20px 24px; background: var(--card); border-radius: 16px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 11px 36px; }
+.prow { display: grid; grid-template-columns: minmax(0, 11.5em) 1fr 5.2em; align-items: center; gap: 12px; font-size: 14px; }
+.pname { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pbar { height: 8px; border-radius: 4px; background: var(--deeper); overflow: clip; }
+.pbar i { display: block; width: var(--p); height: 100%; border-radius: inherit; background: var(--paper); transform-origin: left; }
+.pcount { color: var(--faint); font-size: 12.5px; font-weight: 800; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.prow.none { color: var(--faint); }
+.prow.none .pbar { background: transparent; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .3); }
+.progress-more { margin-top: 12px; }
+.progress-more summary { display: inline-block; list-style: none; padding: 8px 14px; border-radius: 999px; background: var(--deep); color: var(--muted); font-size: 13px; font-weight: 700; transition: color .15s ease; }
+.progress-more summary::-webkit-details-marker { display: none; }
+.progress-more summary:hover { color: var(--ink); }
+.progress-more summary::after { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 2px 3px 10px; border: solid currentColor; border-width: 0 2px 2px 0; rotate: 45deg; transition: rotate .2s ease, translate .2s ease; }
+.progress-more[open] summary::after { rotate: 225deg; translate: 0 3px; }
+.progress-more[open] summary { margin-bottom: 12px; }
+@media (max-width: 720px) { .prows { grid-template-columns: 1fr; } }
 .progress-total { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 18px; }
-.progress-total > div { padding: 18px 22px; background: var(--card); border-radius: 16px; }
+.progress-total > div { padding: 20px 24px; background: var(--card); border-radius: 16px; }
 .progress-total .pnum { font-family: "Luckiest Guy", sans-serif; font-size: 40px; line-height: 1; }
 .progress-total .of { margin-left: 8px; vertical-align: 4px; color: var(--faint); font-weight: 800; }
 .progress-total p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
-.towers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
-.tower-card { padding: 14px 16px; background: var(--card); border-radius: 14px; }
+/* One bar for every recorded scenario together, under the totals. */
+.poverall { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px; margin: 0 4px 22px; }
+.poverall .pbar { height: 12px; border-radius: 6px; }
+.ppct { padding-top: 3px; font-family: "Luckiest Guy", sans-serif; font-size: 22px; line-height: 1; text-shadow: 0 2px 0 var(--deeper); }
+.towers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.tower-card { padding: 16px 18px; background: var(--card); border-radius: 16px; }
 .tower-card.none { opacity: .75; }
 .tower-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; }
 .tower-head strong { font-size: 15px; }
@@ -363,29 +519,19 @@ footer { margin-top: 56px; padding: 44px 20px 36px; background: var(--deep); }
 .sq { display: block; width: 9px; height: 9px; border-radius: 2px; background: var(--deeper); }
 .sq.on { background: var(--paper); }
 .sq.ghost { background: transparent; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .35); }
-.sq.big { width: 18px; height: 18px; border-radius: 4px; }
-.progress-sub { margin: 28px 0 12px; font-size: 20px; }
-.progress-sub span { color: var(--faint); font-family: Inter, sans-serif; font-size: 13px; font-weight: 700; }
-.areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
-.area { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; background: var(--card); border-radius: 14px; }
-.area strong { font-size: 15px; }
 @media (max-width: 640px) { .progress-total { grid-template-columns: 1fr; } }
 
 @media (max-width: 820px) {
-  .list, .platforms { grid-template-columns: 1fr 1fr; }
+  .list { grid-template-columns: 1fr; }
   .mods { grid-template-columns: 1fr; }
-      .arrow svg { transform: rotate(90deg); }
 }
 @media (max-width: 700px) {
   .nav-desktop { display: none; }
   .menu { display: block; }
 }
 @media (max-width: 640px) {
-  .hero { padding: 36px 0 56px; }
-  .lede { font-size: 16px; }
-  .list, .platforms, .split { grid-template-columns: 1fr; }
-  .block { padding: 40px 0; }
-  .band { padding: 48px 0; }
+  .hero { padding: 32px 0 48px; }  .lede { font-size: 16px; }
+  .platforms { grid-template-columns: 1fr; }  .block { padding: 48px 0; }
   .download { width: 100%; min-width: 0; gap: 10px; padding: 17px 18px 13px; font-size: clamp(17px, 5.6vw, 23px); white-space: nowrap; }
   .foot { grid-template-columns: 1fr 1fr; }
   .foot-brand { grid-column: 1 / -1; }
@@ -393,6 +539,5 @@ footer { margin-top: 56px; padding: 44px 20px 36px; background: var(--deep); }
 @media (prefers-reduced-motion: reduce) {
   :root { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .hero-media video { display: none; }
   .top, .top::before { animation: none !important; }
 }

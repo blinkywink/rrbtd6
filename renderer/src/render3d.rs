@@ -406,6 +406,28 @@ impl Model {
         }
     }
 
+    /// Also hide every part whose path doesn't start with one of `prefixes` ("path$": exactly
+    /// that path; "-prefix": hide those even if another entry matches); returns the previous
+    /// state for `restore_hidden`.
+    pub fn isolate(&mut self, prefixes: &[String]) -> Vec<bool> {
+        let saved = self.hidden.clone();
+        for (hidden, path) in self.hidden.iter_mut().zip(&self.paths) {
+            if !path_shown(prefixes, path) { *hidden = true; }
+        }
+        saved
+    }
+    pub fn restore_hidden(&mut self, saved: Vec<bool>) { self.hidden = saved; }
+}
+
+/// Model::isolate's test for one scene path.
+pub fn path_shown(prefixes: &[String], path: &str) -> bool {
+    let matches = |p: &str| p.strip_suffix('$').map_or(path.starts_with(p), |exact| path == exact);
+    prefixes.iter().any(|p| !p.starts_with('-') && matches(p))
+        && !prefixes.iter().any(|p| p.strip_prefix('-').is_some_and(matches))
+}
+
+impl Model {
+
     /// Replace a precise scene subtree only once its animated model is ready.
     pub fn hide_subtree(&mut self, path: &str) -> bool {self.set_subtree_hidden(path,true)}
     pub fn set_subtree_hidden(&mut self, path: &str, hidden:bool) -> bool {
@@ -433,6 +455,8 @@ impl Model {
     pub fn draw(&self) {
         self.draw_inner(opaque_batching(),get_time() as f32);
     }
+    /// With shader time `time` rather than the clock.
+    pub fn draw_with_time(&self, time: f32) { self.draw_inner(opaque_batching(), time); }
 
     /// Identity-transform, unclipped map pass. Menu worlds and mutable prop
     /// models deliberately retain the streaming path.

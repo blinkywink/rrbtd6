@@ -1055,17 +1055,58 @@ impl FrontEnd {
         let pitch = 2.0 * 0.166_949_42f32.asin();
         let pos = crate::render3d::gl(0.0, -510.0, -726.0);
         let fwd = crate::render3d::gl(0.0, -pitch.sin(), pitch.cos());
-        set_camera(&Camera3D {
+        let camera = |aspect: f32, render_target: Option<RenderTarget>| Camera3D {
             position: pos,
             target: pos + fwd,
             up: crate::render3d::gl(0.0, pitch.cos(), pitch.sin()),
             fovy: 26.991_467f32.to_radians(),
-            aspect: Some(screen_width() / screen_height()),
+            aspect: Some(aspect),
             projection: Projection::Perspective,
             z_near: 100.0,
             z_far: 1300.0,
+            render_target,
             ..Default::default()
-        });
+        };
+        // RRBTD6_WORLD_LAYERS=spec.json draws the island's `base` parts and animated models
+        // (render3d::path_shown's prefixes; no particles) into _base.png, then once more per
+        // layer with that layer's hidden ({name}.png), and exits: where the two differ is where
+        // the layer shows (website/build_hero_silhouette.py). Spec: {"out", "width", "height",
+        // "wait" (frames, default 240), "base": [prefix..], "layers": [{"name", "paths"}]}.
+        if let Some(spec) = std::env::var("RRBTD6_WORLD_LAYERS").ok()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        {
+            static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let wait = spec["wait"].as_u64().unwrap_or(240);
+            if FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= wait {
+                let strings = |v: &serde_json::Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|p| p.as_str().map(str::to_owned)).collect() };
+                let out = PathBuf::from(spec["out"].as_str().unwrap_or("."));
+                let (width, height) = (spec["width"].as_u64().unwrap_or(1920) as u32, spec["height"].as_u64().unwrap_or(1080) as u32);
+                let target = render_target_ex(width, height, RenderTargetParams { sample_count: 1, depth: true });
+                let base = strings(&spec["base"]);
+                let mut renders = vec![("_base".to_owned(), base.clone())];
+                for layer in spec["layers"].as_array().into_iter().flatten() {
+                    let mut prefixes = base.clone();
+                    prefixes.extend(strings(&layer["paths"]).into_iter().map(|p| format!("-{p}")));
+                    renders.push((layer["name"].as_str().unwrap_or("layer").to_owned(), prefixes));
+                }
+                let time = get_time() as f32;
+                for (name, prefixes) in renders {
+                    let saved = w.isolate(&prefixes);
+                    set_camera(&camera(width as f32 / height as f32, Some(target.clone())));
+                    clear_background(Color::new(0.0, 0.0, 0.0, 0.0));
+                    w.draw_with_time(time);
+                    self.world_motion.draw_where(fwd, time, &|path| crate::render3d::path_shown(&prefixes, path), false);
+                    set_default_camera();
+                    w.restore_hidden(saved);
+                    let file = out.join(format!("{name}.png"));
+                    target.texture.get_texture_data().export_png(&file.to_string_lossy());
+                    eprintln!("world layer: {}", file.display());
+                }
+                std::process::exit(0);
+            }
+        }
+        set_camera(&camera(screen_width() / screen_height(), None));
         if self.screen==Screen::Main && allow_input {
             let vp=unsafe {get_internal_gl()}.quad_gl.get_projection_matrix();
             self.world_motion.debug_interact(vp,w);

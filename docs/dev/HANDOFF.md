@@ -119,7 +119,7 @@ Ground rules follow.
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
-spike, super, village. Alchemist 34/34. Current tower: Druid 23/34.
+spike, super, village. Alchemist 34/34. Current tower: Druid 25/34.
 compare.sh now builds once and runs recordings in parallel (RRBTD6_JOBS, default 12): the whole
 regression takes ~1.5 min. Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -1063,10 +1063,38 @@ seek / closest, which skip carried bloons anyway.)
 - DONE: MoveWithWind is a mutator keyed "Wind" (WindModel.get_mutator @0x181203f00), so
   FilterMutatedTarget "Wind" (the Tornado's) passes over carried bloons (druid_500 rt 141: the
   game's Tornado keeps pierce 60 and turns for Ceramic 443). druid_5xx positions match to 440-448.
-- NEXT druid_500: the clone draws one synced random at rt 316 as the second Superstorm (805)
-  appears; the game draws none there (RRBTD6_RNG_LOG against the R lines). Then the game draws 2
-  per Ball Lightning bolt (468, 489, 522 ...), the clone none: CreateProjectileOnInterval's
-  Vector3.RandomOffsetFromRadius(range) on the emit point (range 43) and/or the Random target.
+- DONE (druid_500 / 520: bloons and weapons match all 3600 frames; 87 projectile-position frames
+  left from rt 1546):
+  - A carried bloon's pop: BloonDegradeStepper settles what the damage leaves before children are
+    made, so a new object the same hit destroys gets no MoveWithWind and no distance draw (rt 316:
+    the Superstorm's 100 popping carried Blacks outright draws nothing). The draws now wait to the
+    end of the top-level damage, for the children still there.
+  - CreateProjectileOnInterval: OnEmit sets createNextProjAt = roundTime + intervalFrames as it is
+    made, so the creation frame doesn't count (ball made at 448 bolts at 469; a Superstorm from 316
+    spawns its ball at 496). Its target (onlyIfHasTarget) is BloonManager.GetTarget: TargetType
+    Random goes through GetTargets unsorted (no PathManager global best), so it is the first bloon
+    in segment order (GetPathSegmentsInRange: range + 40 unless it can't hit MOABs, paths in order,
+    segments ascending; Path.bloonsList order; plain within range + 2, else MOAB circles), then the
+    carried ones (no range) in BloonGrid order; no draw. With range > 0 the emit point moves by
+    Vector3.RandomOffsetFromRadius (@0x180f47ff0): r = (float)NextDouble x range, angle Deg2Rad x
+    -(NextDouble x 360), x + cos x r, y + sin x r (two draws per bolt). The bolt sits at that point
+    on its first frame, then Instant puts it on its Target. Without a target the emission turns from
+    the emitting projectile's heading (the Superstorm's 57.56 degrees + the RandomEmission's spread).
+- DONE (druid_500 / druid_520 MATCH): Lightning.Process, TrackTarget and CreateProjectileOnInterval
+  run in process-list (creation, uid) order when bolts are out: Game::lightning_phase(bound) runs
+  the bolts made before each seeker / interval projectile first (a bolt that has hit or bounced
+  isn't due again in the frame, so the later full pass is safe). druid_500 rt 1546: Tornado 2205
+  loses Zebra 2148 to the earlier Lightning 2195 and flies straight; druid_400 rt 2073: Ball 778
+  looks before Lightning 1242 pops the Black beside it and finds nothing.
+- DONE (druid_400 to rt 2369): a freeze sets a non-MOAB model's speed to its own (0), and
+  MoveWithWind steps by BloonModel.speedFrames, so a frozen carried bloon holds still (rt 2220). A
+  carried copy made in a Process (a lightning pop, after the moves) steps on the next frame; only
+  collision-pass copies wait a frame (rt 2250). Such a copy is `unplaced` (not in the grid until
+  its next fill); a carried bloon clears that at its MoveWithWind Process, not only at a track
+  move (rt 2267: thorns hit both frozen Greens).
+- NEXT: druid_400 rt 2369 a Ball Lightning bolt the game doesn't make; druid_502 rt 1569 a bolt's
+  emit point (the game's fits draws 0.5926 / 0.6625 exactly); druid_upgrades_r30 rt 2332 a bolt the
+  game makes and the clone doesn't. DBGE=1 prints "DBGAIM interval" picks and "DBGAIM hit" lines.
 
 ## Druid 22/34 (2026-11-08)
 
