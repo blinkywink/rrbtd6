@@ -721,7 +721,8 @@ const KEPT_ON_MOAB_POP: [&str; 19] = [
 #[derive(Clone)]
 pub enum EffectKind {
     Slow { mult: f32, glue: u32 },
-    Freeze,
+    /// FreezeModel.Mutator; `immune`: its damageModel's immuneBloonProperties.
+    Freeze { immune: u32 },
     /// DamageOverTime: `interval` in frames; `tick` is lastTick on the round clock (whole frames).
     /// `mods`: its DamageModifierForTag models (DamageOverTime.DealDamage, per tick on what the
     /// bloon is then).
@@ -895,8 +896,13 @@ impl Bloon {
         })
     }
 
+    /// The first freeze that holds this bloon (P-FREEZEIMMUNE).
+    pub fn holding_freeze(&self, def: &BloonDef) -> Option<&Effect> {
+        self.effects.iter().find(|e| matches!(e.kind, EffectKind::Freeze { immune } if immune & def.bloon_properties == 0))
+    }
+
     pub fn frozen(&self) -> bool {
-        self.effects.iter().any(|e| matches!(e.kind, EffectKind::Freeze))
+        self.effects.iter().any(|e| matches!(e.kind, EffectKind::Freeze { .. }))
     }
 
     pub fn glue(&self) -> u32 {
@@ -912,7 +918,10 @@ impl Bloon {
     /// HYPOTHESIS P-SLOW: slows with different ids multiply; a freeze stops the bloon (a
     /// MOAB-class one instead gets the speed `frozen_speed` gives it).
     pub fn speed_mult(&self, def: &BloonDef) -> f32 {
-        if self.frozen() && !def.tags.iter().any(|t| t == "Moabs") {
+        // HYPOTHESIS P-FREEZEIMMUNE: a freeze doesn't hold a bloon its damageModel is immune to
+        // (recording mermonkey_040 rt 251: a frozen Rainbow's Zebra, Black + White, moves the frame
+        // it pops; the Ice Monkey's Cold Snap freezes can hold Whites: recordings ice_005 / 025).
+        if self.holding_freeze(def).is_some() && !def.tags.iter().any(|t| t == "Moabs") {
             return 0.0;
         }
         // (Mutable.ApplyMutation: only the first mutator with an id applies.)
@@ -931,7 +940,7 @@ impl Bloon {
     /// still multiply it.
     pub fn frozen_speed(&self, def: &BloonDef, speed: f32) -> f32 {
         let has = |t: &str| def.tags.iter().any(|x| x == t);
-        let Some(e) = self.effects.iter().find(|e| matches!(e.kind, EffectKind::Freeze)) else { return speed };
+        let Some(e) = self.holding_freeze(def) else { return speed };
         // (Any other bloon takes the freeze's speed, 0: what MoveWithWind steps by; recording
         // druid_400 rt 2220, a carried Black a Ball Lightning froze stays put.)
         if !has("Moabs") {
@@ -2251,6 +2260,9 @@ impl HitSet {
 
 #[derive(Clone)]
 pub struct Projectile {
+    /// ScaleProjectileOverTime.timePassed (frames) and the model radius it scales.
+    pub scale_t: f32,
+    pub radius0: f32,
     /// Unique per projectile (display: its particle effects follow it).
     pub uid: u64,
     /// Its place among everything made (bloons and projectiles share the count): orders two
@@ -2984,6 +2996,8 @@ pub struct Game {
     fill_first_id: Option<u64>,
     /// The cell position of the grid place a new bloon took over from its object's dead bloon.
     ghost_cell: Option<[f32; 2]>,
+    /// TranceTotemSpawner: totems its next Process makes (parent id, spec, spot).
+    pending_pets: Vec<(u64, std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2])>,
     /// On a flush frame, the list places from before it: the collision grid is filled in that
     /// order (recording dart_052: a Blue ahead of a Yellow the flush moved in front of it).
     grid_rank_pre: Option<FastMap<u64, u32>>,
@@ -3545,6 +3559,9 @@ macro_rules! collide_pass {
                             let sf = pr.spec.speed * FRAME_TIME;
                             pr.vel = [r[0] / l * sf, r[1] / l * sf];
                             pr.grot = None;
+                            // (clearCollidedWith: it can hit them again; recording mermonkey_250 rt
+                            // 155, an ice shard back off the edge into its MOAB.)
+                            pr.clear_hits_next |= pr.spec.rebound_clear;
                             // (Its Direction, game frame, becomes the normalized reflection.)
                             if pr.dir.is_some() {
                                 pr.dir = Some([r[0] / l, -(r[1] / l)]);
@@ -3553,6 +3570,23 @@ macro_rules! collide_pass {
                     }
                 }
                 pr.border_last = Some(pr.pos);
+            }
+            // ScaleProjectileOverTime.Process (VERIFIED-DECOMP @0x180cdaa20): timePassed + 1, scale =
+            // timePassed / 60 x scalePerSecond + baseScale (at most maxScale), Radius = scale x the
+            // model's. It runs after the frame's collisions, so they use the last Process's radius.
+            if let Some([base, max, sps]) = pr.spec.scale_over_time {
+                let mut sc = (pr.scale_t / 60.0) * sps + base;
+                if max < sc {
+                    sc = max;
+                }
+                if pr.scale_t > 0.0 {
+                    pr.spec.radius = sc * pr.radius0;
+                }
+                pr.scale_t += 1.0;
+                // (Scale <= 0: it expires.)
+                if (pr.scale_t / 60.0) * sps + base <= 0.0 {
+                    pr.frames_left = 0.0;
+                }
             }
             // TranceBloon.Process (VERIFIED-DECOMP @0x180cf5420): the projectile's Position is set
             // to its tower's each frame (recording mermonkey_003 rt 602: from the eject point to
@@ -3846,7 +3880,9 @@ macro_rules! collide_pass {
             let mut popped_now = 0u64;
             let mut dmg = pr.crit.unwrap_or(pr.spec.damage);
             for m in &pr.spec.state_mods {
-                if m.states.iter().any(|s| b.in_state(s)) {
+                // (Its own behaviours before the DamageModel collide first: recording mermonkey_050
+                // rt 121, the Snowstorm's slow "Freeze:Popseidon:Normal" makes its own hit +70.)
+                if m.states.iter().any(|s| b.in_state(s) || (s != "Ice" && s != "Frozen" && s != "Glue" && pr.spec.effects.iter().any(|e| !e.after_damage && e.kind != "freeze" && e.id.contains(s.as_str())))) {
                     dmg = dmg * m.mult + m.add;
                 }
             }
@@ -4505,7 +4541,41 @@ macro_rules! collide_pass {
             let heading = pr.vel[1].atan2(pr.vel[0]);
             // (Not CreateProjectileOnExhaustPierce: only its Collide, on bloons, makes anything.)
             for c in pr.spec.on_contact.iter().filter(|c| !c.on_damage && !c.on_pop && c.gap == 0.0) {
-                $contacts.push((pr.prev, heading, c.clone(), pr.tiers, pr.owner, None, pr.z));
+                // (Position + Direction x back x -1, game frame: Vector3Boxed.op_Multiply then
+                // Vector3.op_Multiply by -1.)
+                let at = if c.back > 0.0 {
+                    match pr.dir {
+                        Some(d) => {
+                            let o = [-(d[0] * c.back), -(d[1] * c.back)];
+                            [pr.prev[0] + o[0], -(-pr.prev[1] + o[1])]
+                        }
+                        None => {
+                            let l = (pr.vel[0] * pr.vel[0] + pr.vel[1] * pr.vel[1]).sqrt();
+                            if l > 0.0 { [pr.prev[0] - pr.vel[0] / l * c.back, pr.prev[1] - pr.vel[1] / l * c.back] } else { pr.prev }
+                        }
+                    }
+                } else {
+                    pr.prev
+                };
+                let mut c = c.clone();
+                // (The projectile's Rotation follows its Direction once that turns: recording
+                // mermonkey_052 rt 477, a trident launched at -56.43 now heading -45.16.)
+                if c.emission.proj_rot {
+                    c.rot = match (pr.dir, pr.grot) {
+                        (Some(d), Some(g)) if (RAD2DEG * crt_atan2(d[0], d[1]) - g).abs() > 1e-3 => Some(RAD2DEG * crt_atan2(d[0], d[1])),
+                        (Some(d), None) => Some(RAD2DEG * crt_atan2(d[0], d[1])),
+                        (None, None) => Some(RAD2DEG * crt_atan2(pr.vel[0], -pr.vel[1])),
+                        _ => pr.grot,
+                    };
+                }
+                // (CreateBonusProjectile: each bonus's baseScale = min(this one's scale now, its
+                // maxScale).)
+                if let (Some([b0, _, sps]), Some(cs)) = (pr.spec.scale_over_time, c.projectile.scale_over_time.as_mut()) {
+                    // (The collision pass comes before this frame's Process: timePassed is a frame back.)
+                    let now = ((pr.scale_t - 1.0).max(0.0) / 60.0) * sps + b0;
+                    cs[0] = if now <= cs[1] { now } else { cs[1] };
+                }
+                $contacts.push((at, heading, c, pr.tiers, pr.owner, None, pr.z));
             }
             // CollisionChecker.Process (VERIFIED-DISASM @0xf31590): CollideMap, then
             // RootObject.Destroy: no Expire, so no expire projectiles (recording sub_005: an
@@ -4553,6 +4623,13 @@ macro_rules! collide_pass {
                     continue;
                 }
                 let mut ex = ex.clone();
+                // ScaleProjectileOverTime.Expired / Exhausted (CreateBonusProjectile): the bonus's
+                // baseScale = min(this one's scale, its maxScale), timePassed as of the last Process
+                // (expiry and exhaustion come before this frame's).
+                if let (Some([b0, _, sps]), Some(cs)) = (pr.spec.scale_over_time, ex.projectile.scale_over_time.as_mut()) {
+                    let now = ((pr.scale_t - 1.0).max(0.0) / 60.0) * sps + b0;
+                    cs[0] = if now <= cs[1] { now } else { cs[1] };
+                }
                 if let Some([interval, pierce, radius]) = ex.per_distance.filter(|d| d[0] > 0.0) {
                     let n = ((pr.pos[0] - pr.origin[0]).hypot(pr.pos[1] - pr.origin[1]) / interval).floor();
                     ex.projectile.pierce += n * pierce;
@@ -4774,6 +4851,7 @@ impl Game {
             ghosts_src: Vec::new(),
             fill_first_id: None,
             ghost_cell: None,
+            pending_pets: Vec::new(),
             grid_rank_pre: None,
             proj_list: Vec::new(),
             proj_obj: Default::default(),
@@ -6221,7 +6299,8 @@ impl Game {
         }
         // HYPOTHESIS P-SEEKOFFTRACK: a bloon the wind carries (offTrackCount) isn't a new target
         // (recording ninja_032 rt 3175: a shuriken passes over a Black blown back from its spot).
-        if b.off_track() {
+        // (A tranced one still is: recording mermonkey_004 rt 604, a trident on a totem's MOAB.)
+        if b.wind.is_some() || b.held {
             return false;
         }
         // (A bloon made after the projectile hasn't moved yet when its TrackTarget looks: its
@@ -6231,7 +6310,9 @@ impl Game {
         if sk.max_angle < 360.0 && angle_diff(dy.atan2(dx), pr.vel[1].atan2(pr.vel[0])).abs().to_degrees() > sk.max_angle {
             return false;
         }
-        pr.spec.ignore_blockers || self.line_clear(pr.pos, 0.0, bp)
+        // (Map.IsTargetLineClear @0x180f5c3b0 from the bloon's Position: only blockers taller
+        // than its z count; recording mermonkey_005 rt 1238, a MOAB at 120 over a log.)
+        pr.spec.ignore_blockers || self.line_clear(pr.pos, b.height, bp)
     }
 
     /// TrackTarget.GetNewTarget (VERIFIED-DISASM @0xd12be0): BloonManager.GetTarget with
@@ -8003,6 +8084,14 @@ impl Game {
                 None => self.pet_spot(t, &pet),
             };
             if let Some(q) = spot {
+                // (TranceTotemSpawner.Process makes it (shouldSpawnTotem), from the next frame:
+                // recording mermonkey_004, its weapon's start cooldown from rt 1.)
+                if pet.name == "TranceTotem" {
+                    // (On the Mermonkey's spot, selectTargetModeActive off: CreateSubtower.)
+                    let h = self.towers[t].pos;
+                    self.pending_pets.push((id, pet, h));
+                    continue;
+                }
                 let circling = pet.circle.is_some();
                 self.spawn_sub(pet, q, id, true);
                 if circling {
@@ -8382,7 +8471,7 @@ impl Game {
             if let Some(pa) = &a.place_at {
                 self.towers[t].ability_cd.insert(name.to_string(), a.cooldown * FPS);
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false};
+                let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &pa.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -8743,7 +8832,7 @@ impl Game {
         // doesn't run in reverse).
         if let Some(proj) = &a.track_charge {
             let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-            let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false};
+            let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
             for k in 0..self.tracks.len() {
                 let reverse = proj.track_travel.as_ref().is_some_and(|x| x.reverse);
                 let d0 = if reverse { self.tracks[k].length() } else { 0.0 };
@@ -8766,7 +8855,7 @@ impl Game {
             let target = self.bloons.iter().filter(|b| on_map(b.pos, 0.0)).max_by(|x, y| x.progress().total_cmp(&y.progress())).map(|b| b.pos);
             if let Some(p) = target {
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false};
+                let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &lp.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -9611,6 +9700,23 @@ impl Game {
     }
 
     fn compute_buffs(&self) -> Vec<Buff> {
+        let mut v = self.compute_buffs_raw();
+        // TranceTotemSpawner.SyncMutators (VERIFIED-DECOMP @0x180dbc8c0): the totem gets its
+        // Mermonkey's mutators, so its range buffs (recording mermonkey_004 rt 594: the totem's
+        // trance reaches a MOAB 66.5 away, 32 x 1.35 x 1.075).
+        for t in 0..self.towers.len() {
+            let Some(sub) = self.towers[t].sub.as_ref().filter(|s| s.pet && s.spec.name == "TranceTotem") else { continue };
+            if let Some(pt) = self.towers.iter().position(|o| o.id == sub.parent) {
+                let (rm, rx, ra) = (v[pt].range_mult, v[pt].range_x, v[pt].range_add);
+                v[t].range_mult = rm;
+                v[t].range_x = rx;
+                v[t].range_add = ra;
+            }
+        }
+        v
+    }
+
+    fn compute_buffs_raw(&self) -> Vec<Buff> {
         let trade_empire = (0..self.towers.len()).find_map(|t| self.tier(t).and_then(|tr| tr.trade_empire.clone()));
         let flagship = (0..self.towers.len()).filter_map(|t| self.tier(t).and_then(|tr| tr.flagship)).reduce(f32::min);
         (0..self.towers.len())
@@ -10167,7 +10273,7 @@ impl Game {
             let child_tags = &self.defs[c].tags;
             let keep: Vec<Effect> = inherited
                 .iter()
-                .filter(|e| !matches!(e.kind, EffectKind::Freeze) || !child_tags.iter().any(|t| t == "Moabs"))
+                .filter(|e| !matches!(e.kind, EffectKind::Freeze { .. }) || !child_tags.iter().any(|t| t == "Moabs"))
                 .filter(|e| n == 0 || !matches!(e.kind, EffectKind::DestroyEmit { dont_copy: true, .. }))
                 .cloned()
                 .map(|mut e| {
@@ -10186,7 +10292,7 @@ impl Game {
                     // (recording ice_025: a re-frozen copy thaws when its parent would have).
                     // INFERRED, freezes only: glue_005 / glue_025 need a copy's glue mutators to get
                     // their full lifespan back (see HANDOFF, Ice notes).
-                    if n > 0 && matches!(e.kind, EffectKind::Freeze) {
+                    if n > 0 && matches!(e.kind, EffectKind::Freeze { .. }) {
                         e.total = e.frames_left;
                     }
                     // A copy's CarryProjectile is new: Attatched makes its own projectiles
@@ -10956,7 +11062,7 @@ impl Game {
         if !self.bloons.iter().any(|b| b.id == target) {
             return;
         }
-        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false};
+        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
         for t in 0..self.towers.len() {
             let Some(proj) = self.tier(t).and_then(|tr| tr.preempt.clone()) else { continue };
             let [ex, ey, ez] = self.tier(t).map_or([0.0; 3], |tr| tr.preempt_offset);
@@ -12258,6 +12364,22 @@ impl Game {
                         turning = true;
                     }
                 }
+                // RotateToTarget.Process with onlyRotateDuringThrow and rotateOnlyOnThrow off: the
+                // tower turns to its target every frame, from 10 above (HYPOTHESIS P-ROTALWAYS: the
+                // target where it was as the frame before began; recording mermonkey_040 rt 121-126,
+                // the ability turning the tower from 122).
+                if attack.rotate_always && attack.turn_body && attack.offset_rot.is_none() {
+                    if let Some((_, _, id)) = best.filter(|b| b.2 != 0) {
+                        if let Some(b) = self.bloons.iter().find(|b| b.id == id) {
+                            let tp = self.towers[t].pos;
+                            let from = [tp[0], tp[1] + DISPLAY_TOWER_HEIGHT / TAN60];
+                            let q = b.prev;
+                            let r = RAD2DEG * crt_atan2(q[0] - from[0], -(q[1] - from[1])) + attack.extra_rotation;
+                            self.towers[t].game_rot = Some(r);
+                            self.towers[t].angle = (r - 90.0) * DEG2RAD;
+                        }
+                    }
+                }
                 // RotateToTargetAttackOffset.SetRotation (VERIFIED-DECOMP @0x180ddb500): the attack's
                 // own rotation, Vector2.get_Rotation(Target.Position - GetOrigin) + additionalRotation,
                 // GetOrigin (@0x180ddaf70) its spot (the tower + offsetX / offsetY, the tower's
@@ -13121,7 +13243,7 @@ impl Game {
                                 // point (recording ice_250: Absolute Zero's pierce-999 pulse with
                                 // the blast, both at z 7).
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false};
+                                    let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
                                     self.emit(from, dir, &single, sec, None, tiers, owner);
                                 }
                                 self.emit_z = 0.0;
@@ -13242,7 +13364,7 @@ impl Game {
                                 self.emit_target = None;
                                 // MultiEmissionModel: its secondary projectile from the tower too.
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false};
+                                    let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
                                     self.emit(pos, dir, &single, sec, None, tiers, owner);
                                 }
                                 if ambient {
@@ -13898,7 +14020,10 @@ impl Game {
                 x.counted = Some(self.round_clock);
                 x.frames_left -= 1.0;
                 let fired = tw.weapons.get(i0..i0 + n).is_some_and(|c| c.iter().any(|w| w.last != NEVER && w.anim < 0));
-                let done = if x.one_shot { fired || x.once || x.frames_left < -FPS } else { x.frames_left <= 0.0 };
+                // HYPOTHESIS P-ACTIVATEFRAME: run at the activation too (processOnActivate), it acts
+                // for lifespan + 1 frames (recording mermonkey_040: a 3 s ability used at 120
+                // throws at 300 too).
+                let done = if x.one_shot { fired || x.once || x.frames_left < -FPS } else if x.now { x.frames_left < 0.0 } else { x.frames_left <= 0.0 };
                 if done {
                     tw.temp.remove(k);
                     if tw.weapons.len() >= i0 + n {
@@ -15038,7 +15163,7 @@ impl Game {
         let pool = stored.floor() as i64;
         let (min, max_wave) = (nc.min_per_wave as i64, nc.max_per_wave as i64);
         let owner = self.towers[t].id;
-        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false};
+        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
         // Each undead bloon in turn: its pierce share, its spot on the track (the segment's
         // centre, less Random.Next(maxPathRandomRange) + half of it unless the player chose the
         // segment), then its offset (Vector3.GetOffsetFromRadius) as it is emitted.
@@ -15349,7 +15474,7 @@ impl Game {
             self.bloons[i].effects.retain(|e| {
                 let keep = !keys.iter().any(|k| {
                     k.strip_prefix('=').map_or_else(|| e.id.contains(k.as_str()), |x| e.id == x)
-                        || (k == "Ice" && matches!(e.kind, EffectKind::Freeze))
+                        || (k == "Ice" && matches!(e.kind, EffectKind::Freeze { .. }))
                         || (k == "Glue" && matches!(e.kind, EffectKind::Slow { glue: 1.., .. }))
                 });
                 if !keep {
@@ -15495,7 +15620,7 @@ impl Game {
             }
             let kind = match e.kind.as_str() {
                 "slow" => EffectKind::Slow { mult, glue: e.glue },
-                "freeze" => EffectKind::Freeze,
+                "freeze" => EffectKind::Freeze { immune: e.immune },
                 // DamageOverTime.Initialise (VERIFIED-DISASM @0x1003e50): lastTick = the clock +
                 // initialDelayFrames, or -999999999 with triggerImmediate (recording glue_005: Super
                 // Glue's MOAB DoT deals its 30 the frame after the hit).
@@ -15553,7 +15678,7 @@ impl Game {
                 "destroy_emit" => match &e.projectile {
                     Some(p) => EffectKind::DestroyEmit {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false})),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false})),
                         dont_copy: e.dont_copy,
                     },
                     None => continue,
@@ -15561,7 +15686,7 @@ impl Game {
                 "carry" => match &e.projectile {
                     Some(p) => EffectKind::Carry {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false})),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false})),
                         uids: Vec::new(),
                     },
                     None => continue,
@@ -15576,7 +15701,7 @@ impl Game {
                         ignore: e.ignore_same_frame,
                         skip: e.ignore_same_frame,
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false})),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false})),
                     },
                     None => continue,
                 },
@@ -15932,6 +16057,11 @@ impl Game {
                     continue;
                 }
                 let mut ex = ex.clone();
+                // (CreateBonusProjectile on Expired / Exhausted: as above.)
+                if let (Some([b0, _, sps]), Some(cs)) = (pr.spec.scale_over_time, ex.projectile.scale_over_time.as_mut()) {
+                    let now = ((pr.scale_t - 1.0).max(0.0) / 60.0) * sps + b0;
+                    cs[0] = if now <= cs[1] { now } else { cs[1] };
+                }
                 if let Some([interval, pierce, radius]) = ex.per_distance.filter(|d| d[0] > 0.0) {
                     let n = ((pr.pos[0] - pr.origin[0]).hypot(pr.pos[1] - pr.origin[1]) / interval).floor();
                     ex.projectile.pierce += n * pierce;
@@ -15940,7 +16070,10 @@ impl Game {
                 // (Out of pierce, it was exhausted in Projectile.CollideBloon, before this
                 // frame's move: recording boomerang_paragon_r63, a glaive on a Lead leaves
                 // its MoabDot where it was.)
-                let at = if pr.pierce <= 0.0 { pr.prev } else { pr.pos };
+                // (TravelStrait.Process expires it instead of moving it once its lifespan is up: the
+                // ScaleProjectileOverTime bonus where it was; recording mermonkey_052 rt 533. Kept to
+                // those for now.)
+                let at = if pr.pierce <= 0.0 || (pr.spec.scale_over_time.is_some() && pr.frames_left <= 0.0) { pr.prev } else { pr.pos };
                 // Projectile.GetPositionOfTarget (VERIFIED-DISASM @0xc8cba0): with the bloon gone, the
                 // Target's cached first spot (recording sub_030: a Ballistic Missile explodes where
                 // it first was, not where its bloon died); no target at all, its own position. A live
@@ -15981,7 +16114,11 @@ impl Game {
             // ArcEmission.GetDirection starts from the emitting tower's rotation now (recording
             // dart_500: a Juggernaut's burst turns with the tower's newer throw); the projectile's
             // own when the tower's isn't known.
-            self.emit_rot = self.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).or(grot);
+            // (With useProjectileRotation, the projectile's: recording mermonkey_040 rt 773, an
+            // expired trident's bonus pair along its 143.54 + 90.)
+            // (Its Rotation follows a turned Direction: recording mermonkey_052 rt 534.)
+            let prot = match grot { Some(g) if (dir_rot - g).abs() <= 1e-3 => g, _ => dir_rot };
+            self.emit_rot = if ex.emission.proj_rot { Some(prot) } else { self.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).or(grot) };
             self.emit_z = z;
             self.emit_target = target;
             self.emit_dir_rot = Some(dir_rot);
@@ -16361,6 +16498,8 @@ impl Game {
             }
             self.create_seq += 1;
             self.projectiles.push(Projectile {
+                scale_t: 0.0,
+                radius0: spec.radius,
                 uid: self.next_uid,
                 cseq: self.create_seq,
                 z: self.emit_height(),
@@ -16607,6 +16746,11 @@ impl Game {
         if self.rounds_active() {
             self.round_clock += 1;
         }
+        for (parent, spec, q) in std::mem::take(&mut self.pending_pets) {
+            if self.towers.iter().any(|t| t.id == parent) {
+                self.spawn_sub(spec, q, parent, true);
+            }
+        }
         // Slow zones (Arctic Wind), measured from the tower.
         // MOAB Shove: around each Heli that has it (where the Heli is now).
         let shoves: Vec<([f32; 2], crate::data::MoabShove)> = (0..self.towers.len())
@@ -16821,7 +16965,7 @@ impl Game {
                 self.tick_bloon_effects(i, round_clock, &mut dots, &mut emits);
             }
         }
-        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false};
+        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
         let mut emitted: Vec<(std::ops::Range<usize>, u64)> = Vec::new();
         for (pos, proj, owner, from, layer) in emits {
             let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
@@ -17160,7 +17304,12 @@ impl Game {
         for (pos, dir, c, tiers, owner, skip, z) in contacts {
             let start = self.projectiles.len();
             self.emit_z = z;
+            let saved = self.emit_rot;
+            if c.rot.is_some() {
+                self.emit_rot = c.rot;
+            }
             self.emit(pos, dir, &c.emission, &c.projectile, None, tiers, owner);
+            self.emit_rot = saved;
             self.emit_z = 0.0;
             if let Some(id) = skip {
                 for pr in &mut self.projectiles[start..] {

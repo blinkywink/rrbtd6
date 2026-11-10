@@ -403,7 +403,9 @@ def main():
             effects.append({"kind": "freeze", "id": sf.get("mutationId") or "", "mult": sf.get("speed", 0.0),
                             "lifespan": sf.get("lifespan", 0.0), "layers": sf.get("layers", 1), "overlay": sf.get("overlayType") or "",
                             "moabs": sf.get("canFreezeMoabs", False), "boss_immunity": bool(sf.get("bossImmunity", False)),
-                            "after_damage": bool(sf.get("applyAfterDamage", False))})
+                            "after_damage": bool(sf.get("applyAfterDamage", False)),
+                            # Its damageModel's immuneBloonProperties: bloons it can't hold.
+                            "immune": ((deref(sf.get("damageModel")) or {}).get("f") or {}).get("immuneBloonProperties", 0)})
         # PsiEffectModel (Psi): the hit bloon is held and takes damagePerTick every tickRate
         # seconds for up to maxDuration. HYPOTHESIS P-PSIHOLD: held = speed 0 meanwhile.
         for s in pb.get("PsiEffectModel", []):
@@ -655,6 +657,7 @@ def main():
             "round_time": bool(age.get("useRoundTime")),
             "rounds": age.get("rounds", 0),
             "rebound": bool(pb.get("MapBorderReboundModel")),
+            "rebound_clear": bool(pb.get("MapBorderReboundModel") and pb["MapBorderReboundModel"][0]["f"].get("clearCollidedWith")),
             # ProjectileBlockerCollisionReboundModel: bounces off blocker areas' edges.
             "blocker_rebound": next(({"clear": b["f"].get("clearCollidedWith", False)} for b in pb.get("ProjectileBlockerCollisionReboundModel", [])), None),
             "knockback": (pb.get("KnockbackModel") or [{"f": None}])[0]["f"],
@@ -767,6 +770,11 @@ def main():
                                    # disableRotateWithPathDirection (the Necromancer's undead): it keeps the
                                    # rotation it was made with instead of turning along the track.
                                    "fixed_rotation": bool(tf.get("disableRotateWithPathDirection"))}
+        # ScaleProjectileOverTimeModel: [baseScale, maxScale, scalePerSecond]; the collision radius
+        # is scale x the model's radius.
+        if pb.get("ScaleProjectileOverTimeModel"):
+            sf = pb["ScaleProjectileOverTimeModel"][0]["f"]
+            out["scale_over_time"] = [sf.get("baseScale", 1.0), sf.get("maxScale", 1.0), sf.get("scalePerSecond", 0.0)]
         # ScaleDamageWithTimeModel (Mermonkey): damage grows with the time flown.
         if pb.get("ScaleDamageWithTimeModel"):
             sf = pb["ScaleDamageWithTimeModel"][0]["f"]
@@ -902,6 +910,17 @@ def main():
                 if deref(cf.get("subProjectile")):
                     out["on_exhaust"] += [{"projectile": projectile(deref(cf["subProjectile"]), depth + 1),
                                            "emission": emission(deref(cf.get("projectileEmission")))}]
+            # ScaleProjectileOverTimeModel (Mermonkey 0-4-x): its bonusProjectile with its emission
+            # once as it goes (Expired / Exhausted / CollideMap, VERIFIED-DECOMP @0x180cda410).
+            for ce in pb.get("ScaleProjectileOverTimeModel", []):
+                if deref(ce["f"].get("bonusProjectileModel")) and deref(ce["f"].get("emission")):
+                    out["on_exhaust"] += [{"projectile": projectile(deref(ce["f"]["bonusProjectileModel"]), depth + 1),
+                                           "emission": emission(deref(ce["f"]["emission"]))}]
+                    # CollideMap (@0x180cd9b50): CreateBonusProjectile(vsBlockerRadius x 3): that far
+                    # back along its direction (recording mermonkey_040 rt 510).
+                    out["on_contact"].append({"projectile": projectile(deref(ce["f"]["bonusProjectileModel"]), depth + 1),
+                                              "emission": emission(deref(ce["f"]["emission"])), "at_shot": True, "map_only": True,
+                                              "back": f.get("vsBlockerRadius", 0.0) * 3.0})
             # EmitOnDestroyModel (Glue linger, Desperado): spawned whenever the projectile goes.
             out["on_exhaust"] += [{"projectile": projectile(deref(ce["f"]["projectile"]), depth + 1),
                                    "emission": emission(deref(ce["f"].get("emission")))}
@@ -978,6 +997,9 @@ def main():
         # EmissionRotationOffProjectileDirectionModel (Airburst Darts): from a projectile, the
         # shots turn off its direction.
         if e is not None:
+            # ArcEmissionModel.useProjectileRotation: from a projectile, its rotation, not the tower's.
+            if e["f"].get("useProjectileRotation"):
+                out["proj_rot"] = True
             rd = next((x["f"] for x in items(e["f"].get("behaviors")) if x and x["type"] == "EmissionRotationOffProjectileDirectionModel"), None)
             if rd is not None:
                 out["dir_off"] = [rd.get("startingOffset", 0.0), rd.get("angleInBetween", 0.0), 1.0 if rd.get("alwaysCentre") else 0.0]
@@ -1881,6 +1903,12 @@ def main():
             # sub-tower that exists while the tower does, kept like pets.
             if b and b["type"] == "TowerCreateTowerModel":
                 sp = sub_tower(deref(b["f"].get("towerModel")), None)
+                if sp:
+                    pets.append(sp)
+            # TranceTotemSpawnerModel (Mermonkey x-x-4+): its TranceTotem sub-tower, on the
+            # Mermonkey's spot while no target point is set (Process @0x180dbc4a0), kept like pets.
+            if b and b["type"] == "TranceTotemSpawnerModel":
+                sp = sub_tower(deref(b["f"].get("tower")), None)
                 if sp:
                     pets.append(sp)
             # DroneSupportModel (Etienne): `count` drones (droneModel), kept like pets.

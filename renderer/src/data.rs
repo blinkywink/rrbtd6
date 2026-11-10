@@ -1317,6 +1317,9 @@ pub struct Alternate {
 #[derive(Deserialize, Clone)]
 pub struct Emission {
     pub kind: String,
+    /// ArcEmissionModel.useProjectileRotation.
+    #[serde(default)]
+    pub proj_rot: bool,
     /// AcidPoolEmissionModel.alwaysPoolOnCount (0: none).
     #[serde(default)]
     pub pool_every: u32,
@@ -1540,6 +1543,13 @@ pub struct Exhaust {
 pub struct Contact {
     pub projectile: Proj,
     pub emission: Emission,
+    /// A map-only one made this far back along the shot's direction (ScaleProjectileOverTime
+    /// .CollideMap: vsBlockerRadius x 3).
+    #[serde(default)]
+    pub back: f32,
+    /// Runtime: the rotation an emission with useProjectileRotation starts from.
+    #[serde(skip)]
+    pub rot: Option<f32>,
     /// passOnCollidedWith: the sub-projectiles can't hit the bloon that triggered them.
     #[serde(default)]
     pub pass_on_collided: bool,
@@ -1661,6 +1671,9 @@ pub struct Proj {
     /// MapBorderReboundModel: bounces off the map's edges.
     #[serde(default)]
     pub rebound: bool,
+    /// MapBorderReboundModel.clearCollidedWith: a bounce empties its hit list.
+    #[serde(default)]
+    pub rebound_clear: bool,
     /// ProjectileBlockerCollisionReboundModel: bounces off blocker areas' edges.
     #[serde(default)]
     pub blocker_rebound: Option<BlockerRebound>,
@@ -1878,6 +1891,9 @@ pub struct Proj {
     /// ScaleDamageWithTimeModel [baseDamage, scalePerSecond, maxDamage].
     #[serde(default)]
     pub scale_damage: Option<[f32; 3]>,
+    /// ScaleProjectileOverTimeModel [baseScale, maxScale, scalePerSecond].
+    #[serde(default)]
+    pub scale_over_time: Option<[f32; 3]>,
     /// FilterAllExceptTargetModel: hits only its target bloon.
     #[serde(default)]
     pub only_target: bool,

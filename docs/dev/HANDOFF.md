@@ -119,7 +119,7 @@ Ground rules follow.
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
-spike, super, village. Alchemist 34/34. Druid 34/34 (2026-11-09). Current tower: Mermonkey 24/34.
+spike, super, village. Alchemist 34/34. Druid 34/34 (2026-11-09). Mermonkey 34/34 (2026-11-10).
 compare.sh now builds once and runs recordings in parallel (RRBTD6_JOBS, default 12): the whole
 regression takes ~1.5 min. Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -1036,7 +1036,7 @@ seek / closest, which skip carried bloons anyway.)
     projectiles are made in the creation order of the shots they came from (Exhaust.src; 250 rt
     670: shell 5086 expires before 5098, listed after it, so its blast takes the Black first).
 
-## Mermonkey 24/34 (2026-11-09, current tower; re-recorded with seeds, old ones in pending/mermonkey_old)
+## Mermonkey 34/34 (2026-11-10, DONE; re-recorded with seeds, old ones in pending/mermonkey_old)
 
 - DONE: SupportStackingRange (MutatorTower.Mutate @0x180d91c50): per Mermonkey x-x-2+ (global, max 10)
   range, attack ranges and the first TravelStrait lifespan x 1.075 (set_Lifespan rounds half up).
@@ -1051,12 +1051,18 @@ seek / closest, which skip carried bloons anyway.)
   (SetRotation @0x180ddb500 from the offset spot raised 10; lost target: RotateToStartingPoint; the
   tower rotation untouched), plain-emission Instant shots start at the eject point, ignoreTargetZ,
   a placed dontFollowTarget shot outlives its target.
-- OPEN: 004/005/025/205: TranceTotemSpawner (@0x180dbc4a0 / CreateSubtower @0x180dbb680) not
-  ported (a TranceTotem sub-tower on the Mermonkey's spot running the Trance attack).
-- OPEN: 040/050/052/250: 0-4-x ability (ActivateAttack, AddHeatToBloon, TargetSelectedPointOrDefault).
-- OPEN: 032 / 030: tridents hit their own target MOAB from about their moved spot (32 first hits in
-  032: radius-1 hits need the next step's position, d1 <= 0.9); one case (rt 694) contradicts. Not
-  understood; TrackTarget / TravelStrait don't collide themselves.
+- DONE (030 / 040 match): ScaleProjectileOverTime (Process @0x180cdaa20: radius = scale x model,
+  scale = t/60 x sps + base, <= 0 expires; CreateBonusProjectile @0x180cd9bb0 once on expire / exhaust /
+  map hit, map hit vsBlockerRadius x 3 back, the bonus's baseScale = min(parent scale a Process back,
+  max); ArcEmission.useProjectileRotation). RotateToTarget every frame (P-ROTALWAYS, target a frame
+  back). A freeze doesn't hold a bloon its damageModel is immune to (P-FREEZEIMMUNE). processOnActivate
+  attacks act lifespan + 1 frames (P-ACTIVATEFRAME). AddHeatToBloon only acts on OverheatTrigger bloons.
+- DONE (050/052/250): a DamageModifierForBloonState counts the shot's own pre-damage effects
+  (Snowstorm slow 'Freeze:...' makes its hit +70); MapBorderRebound.clearCollidedWith; useProjectileRotation
+  follows a turned Direction (dir_rot); a TravelStrait-expired bonus starts where its parent was.
+- DONE (004/005/025/205): TranceTotem as a pet, made the frame after (spawner Process), on the
+  Mermonkey's spot, with its range mutators (SyncMutators); TrackTarget keeps tranced targets;
+  IsTargetLineClear from the bloon's height (a MOAB at 120 over a log).
 
 ## Druid 34/34 (2026-11-09, Druid DONE)
 
