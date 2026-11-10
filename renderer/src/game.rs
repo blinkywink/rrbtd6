@@ -605,6 +605,32 @@ fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
 /// BloonProperties.Frozen: set while a freeze effect is active.
 pub const FROZEN: u32 = 16;
 
+/// MermonkeyTrance (the bloon behaviour TranceBloon.Collide's mutator adds), VERIFIED-DECOMP
+/// Initialise @0x180fbecb0, Process @0x180fbf560, MoveTowardsTarget @0x180fbf090,
+/// MoveInCirclePattern @0x180fbee20, SetOrbitTower @0x180fbf7e0.
+#[derive(Clone, Debug)]
+pub struct TranceState {
+    /// towerToOrbit (by id).
+    pub tower: u64,
+    /// The orbit angle in degrees (game frame; Vector2.Rotate of (0, orbitRadius)).
+    pub rotation: f32,
+    pub elapsed: i32,
+    /// Where it left the track (the path point at its distance).
+    pub orig: [f32; 2],
+    pub entered: bool,
+    pub in_seq: bool,
+    pub ended_at: i64,
+    pub radius: f32,
+    /// bloonOrbitSpeedMultiplier / moabOrbitSpeed: units a frame toward a point, degrees a
+    /// frame round the orbit.
+    pub speed: f32,
+    pub moab_speed: f32,
+    pub duration: i32,
+    pub cooldown: i32,
+    /// Added this frame: its first Process is the next.
+    pub new: bool,
+}
+
 /// An active bloon effect (built from an `EffectSpec` when a projectile hits).
 #[derive(Clone)]
 pub struct Effect {
@@ -730,7 +756,7 @@ pub enum EffectKind {
     Worth { per_tier: f32 },
     /// TranceBloonModel: off the track, circling `centre` at `radius`; `angle` in radians,
     /// `rate` in radians per frame.
-    Trance { centre: [f32; 2], radius: f32, angle: f32, rate: f32 },
+    Trance(Box<TranceState>),
     /// No effect: blocks the effect id `id` minus "Cooldown" until it runs out.
     Cooldown,
     /// CreateEffectOnPopModel: its effect (name, scale) where the bloon pops (visual only).
@@ -851,6 +877,12 @@ impl Bloon {
 
     pub fn has_effect(&self, id: &str) -> bool {
         self.effects.iter().any(|e| e.id == id)
+    }
+
+    /// offTrackCount > 0: carried by wind, held, or in a Mermonkey trance (MermonkeyTrance
+    /// .Initialise adds one, the walk back to its track spot takes it off).
+    pub fn off_track(&self) -> bool {
+        self.wind.is_some() || self.held || self.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq))
     }
 
     /// Mutable.IsMutatedBy(string) (VERIFIED-DISASM @0xf55180): a mutator's id, or the parts
@@ -1550,6 +1582,9 @@ pub struct Tower {
     pub look: Option<(String, f32)>,
     /// Frames left with the tower's own attacks off (MutateRemoveAllAttacks...).
     pub mute: f32,
+    /// PauseOtherAttacks (VERIFIED-DECOMP ProjectilesCreated @0x180c802d0, Process @0x180c80270):
+    /// the attack index whose weapon paused the others, and the roundTime it fired at.
+    pub pause_others: Option<(usize, i64)>,
     /// Overclock / Take Aim on this tower: (interval multiplier, Village range multiplier, range
     /// multiplier, frames left).
     pub overclock: Option<(f32, f32, f32, f32)>,
@@ -2560,6 +2595,8 @@ pub struct Buff {
     /// VigilanteMutator's loseLifeRangeBuff: added to the tower's range and to its attacks'
     /// ranges, except attacks with fixedRange (VERIFIED-DISASM @0x126e830, AttackModel+0x66).
     pub vig_range: f32,
+    /// Range mutators that multiply the model's range (SupportStackingRange's MutatorTower).
+    pub range_x: f32,
     pub rate_mult: f32,
     pub pierce_add: f32,
     /// Shinobi Tactics: (multiplier, stacks); each stack adds (1 - multiplier) x the original
@@ -2596,6 +2633,7 @@ impl Default for Buff {
             pierce_all: 0.0,
             radius_mult: 1.0,
             range_mult: 0.0,
+            range_x: 1.0,
             range_add: 0.0,
             vig_range: 0.0,
             rate_mult: 1.0,
@@ -2675,7 +2713,7 @@ impl Buff {
         if r >= 1e5 {
             return r;
         }
-        let r = r * (1.0 + self.range_mult) + self.range_add + vig;
+        let r = r * self.range_x * (1.0 + self.range_mult) + self.range_add + vig;
         match &self.fan {
             Some(fc) => r.max(fc.range),
             None => r,
@@ -3516,6 +3554,15 @@ macro_rules! collide_pass {
                 }
                 pr.border_last = Some(pr.pos);
             }
+            // TranceBloon.Process (VERIFIED-DECOMP @0x180cf5420): the projectile's Position is set
+            // to its tower's each frame (recording mermonkey_003 rt 602: from the eject point to
+            // the tower, z 0, the frame after it is made).
+            if pr.spec.effects.iter().any(|e| e.kind == "trance") {
+                if let Some(w) = $s.towers.iter().find(|w| w.id == pr.owner) {
+                    pr.pos = w.pos;
+                    pr.z = if w.sub.as_ref().is_some_and(|s| s.spec.circle.is_some()) { 250.0 } else { 0.0 };
+                }
+            }
             // Instant shots stay on their target (InstantModel.dontFollowTarget = false) and
             // expire if it is gone (HYPOTHESIS P-INSTANT).
             // TravelAlongPathModel: along the track at `speed`, backwards when `reverse`
@@ -3546,7 +3593,7 @@ macro_rules! collide_pass {
                     // destroyIfInvalid (recording sub_050: Pre-emptive Strike's missile on a
                     // MOAB a Ballistic Missile popped lives out its lifespan).
                     (None, true) => {
-                        if pr.spec.instant_destroy {
+                        if pr.spec.instant_destroy && !(pr.spec.instant_once && pr.instant_set) {
                             pr.frames_left = 0.0;
                         }
                         // CreateEffectProjectileAfterTime.SpawnEffect (VERIFIED-DISASM @0xca0540),
@@ -6174,7 +6221,7 @@ impl Game {
         }
         // HYPOTHESIS P-SEEKOFFTRACK: a bloon the wind carries (offTrackCount) isn't a new target
         // (recording ninja_032 rt 3175: a shuriken passes over a Black blown back from its spot).
-        if b.wind.is_some() || b.held {
+        if b.off_track() {
             return false;
         }
         // (A bloon made after the projectile hasn't moved yet when its TrackTarget looks: its
@@ -6738,6 +6785,7 @@ impl Game {
             range_up: None,
             ultra: (0, 1.0, 1.0),
             mute: 0.0,
+            pause_others: None,
             rage: (0, 0.0, 0, 0),
             hit_damage: 0.0,
             temp_supports: Vec::new(),
@@ -6921,7 +6969,7 @@ impl Game {
                         .bloons
                         .iter()
                         .filter(|b| b.path as usize == pi && (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize == k)
-                        .filter(|b| b.wind.is_none() && !b.held && (camo || !b.camo(&self.defs[b.kind])))
+                        .filter(|b| !b.off_track() && (camo || !b.camo(&self.defs[b.kind])))
                         .min_by_key(|b| self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1))
                     {
                         best = Some((dd, b.id));
@@ -6934,7 +6982,7 @@ impl Game {
         // highest BloonModel.danger, ties to the one strictly further along (recording
         // bucc_420_strong rt 400: a White 0.6 ahead of a Black listed first, both danger 6).
         let strong = (mode == TargetMode::Strong).then(|| {
-            let mut order: Vec<&Bloon> = self.bloons.iter().filter(|b| b.wind.is_none() && !b.held && (camo || !b.camo(&self.defs[b.kind]))).collect();
+            let mut order: Vec<&Bloon> = self.bloons.iter().filter(|b| !b.off_track() && (camo || !b.camo(&self.defs[b.kind]))).collect();
             order.sort_by_key(|b| self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1));
             let mut best: Option<(f32, f32, u64)> = None;
             for b in order {
@@ -6950,7 +6998,7 @@ impl Game {
         let pick = lead.or(close.flatten()).or(strong.flatten()).or_else(|| {
             self.bloons
                 .iter()
-                .filter(|b| b.wind.is_none() && !b.held && (camo || !b.camo(&self.defs[b.kind])))
+                .filter(|b| !b.off_track() && (camo || !b.camo(&self.defs[b.kind])))
                 .min_by(|x, y| key(x).total_cmp(&key(y)).then_with(|| self.path_rank.get(&x.id).map(|r| r.1).cmp(&self.path_rank.get(&y.id).map(|r| r.1))))
                 .map(|b| b.id)
         });
@@ -7492,8 +7540,8 @@ impl Game {
         // Targetting.GetGlobalBest @0xffa100: Path.bestFirst / bestLast (FindBestBloon, as they were
         // filed: the distance at the frame's start) before the segments.
         let best = match mode {
-            TargetMode::First => self.bloons.iter().filter(|b| b.wind.is_none() && !b.held).max_by(|x, y| x.prev_dist.total_cmp(&y.prev_dist).then_with(|| self.path_rank.get(&y.id).map(|r| r.1).cmp(&self.path_rank.get(&x.id).map(|r| r.1)))).map(|b| b.id),
-            TargetMode::Last => self.bloons.iter().filter(|b| b.wind.is_none() && !b.held).min_by(|x, y| x.prev_dist.total_cmp(&y.prev_dist).then_with(|| self.path_rank.get(&x.id).map(|r| r.1).cmp(&self.path_rank.get(&y.id).map(|r| r.1)))).map(|b| b.id),
+            TargetMode::First => self.bloons.iter().filter(|b| !b.off_track()).max_by(|x, y| x.prev_dist.total_cmp(&y.prev_dist).then_with(|| self.path_rank.get(&y.id).map(|r| r.1).cmp(&self.path_rank.get(&x.id).map(|r| r.1)))).map(|b| b.id),
+            TargetMode::Last => self.bloons.iter().filter(|b| !b.off_track()).min_by(|x, y| x.prev_dist.total_cmp(&y.prev_dist).then_with(|| self.path_rank.get(&x.id).map(|r| r.1).cmp(&self.path_rank.get(&y.id).map(|r| r.1)))).map(|b| b.id),
             _ => None,
         };
         let key = |b: &Bloon| if Some(b.id) == best { f32::MIN } else { match mode {
@@ -7797,6 +7845,7 @@ impl Game {
             range_up: None,
             ultra: (0, 1.0, 1.0),
             mute: 0.0,
+            pause_others: None,
             rage: (0, 0.0, 0, 0),
             hit_damage: 0.0,
             temp_supports: Vec::new(),
@@ -9519,6 +9568,9 @@ impl Game {
                 if !sp.bases.is_empty() && !sp.bases.iter().any(|b| b == name) {
                     continue;
                 }
+                if sp.min_tiers != [0; 3] && !skip.is_some_and(|t| (0..3).all(|k| self.towers[t].tiers[k] >= sp.min_tiers[k])) {
+                    continue;
+                }
                 let r = sp.radius.unwrap_or(tier.range) + reach;
                 if !sp.global && (src.pos[0] - p[0]).powi(2) + (src.pos[1] - p[1]).powi(2) > r * r {
                     continue;
@@ -9595,6 +9647,14 @@ impl Game {
                         }
                         "rate" => b.rate_mult *= sp.mult.powi(n as i32),
                         "pierce" => b.pierce_add += sp.add * k,
+                        // SupportStackingRange.MutatorTower.Mutate (VERIFIED-DECOMP @0x180d91c50):
+                        // range x (1 + rangeMultiplier) per stack (SelfStackingSupportCompounding
+                        // .AddMutator @0x180d87950: one per such tower, up to maxStacks).
+                        "range_x" => {
+                            for _ in 0..n {
+                                b.range_x *= 1.0 + sp.mult;
+                            }
+                        }
                         "pierce_pct" => b.pierce_pct = Some((sp.mult, n)),
                         "speed" => b.speed_mult += sp.mult * k,
                         "camo" => b.camo = true,
@@ -11466,7 +11526,15 @@ impl Game {
                     || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0);
                 // At zero Sandbox health, bloons keep moving but neither base nor temporary
                 // ability attacks may start or release shots. Timers above still advance.
-                if (self.sandbox && self.lives <= 0.0) || ((paused || fresh_attack || sub_paused.get(ai) == Some(&true)) && ai < tier.attacks.len()) || ai.checked_sub(tier.attacks.len()).is_some_and(|k| waiting.get(k) == Some(&true)) {
+                // PauseOtherAttacks.Process, in its own attack's turn: durationFrames + lastFiredAt
+                // < roundTime unpauses the others.
+                if let Some((src, at)) = self.towers[t].pause_others {
+                    if src == ai && attack.weapons.iter().find_map(|w| w.pause_others).is_some_and(|d| d + at < self.round_clock) {
+                        self.towers[t].pause_others = None;
+                    }
+                }
+                let paused_by = self.towers[t].pause_others.is_some_and(|(src, _)| src != ai);
+                if (self.sandbox && self.lives <= 0.0) || ((paused || paused_by || fresh_attack || sub_paused.get(ai) == Some(&true)) && ai < tier.attacks.len()) || ai.checked_sub(tier.attacks.len()).is_some_and(|k| waiting.get(k) == Some(&true)) {
                     wi += attack.weapons.len();
                     continue;
                 }
@@ -11628,7 +11696,7 @@ impl Game {
                     let b = &self.bloons[bi];
                     // Path.Process (VERIFIED-DISASM @0xf6fe60) files on its segments only the bloons
                     // with offTrackCount 0; the wind's are taken after them (below).
-                    if b.wind.is_some() || b.held {
+                    if b.off_track() {
                         continue;
                     }
                     let d = &self.defs[b.kind];
@@ -11731,6 +11799,9 @@ impl Game {
                         continue;
                     }
                     if !attack.require_tags.iter().all(|t| d.tags.contains(t)) || (!buff.unfilter && attack.exclude_tags.iter().any(|t| d.tags.contains(t))) {
+                        continue;
+                    }
+                    if !self.target_angle_ok(t, attack, b.pos) {
                         continue;
                     }
                     if (attack.glue_filter > 0 && b.glue() >= attack.glue_filter)
@@ -11858,14 +11929,28 @@ impl Game {
                 // ninja_520 rt 334: a carried bloon is a target when nothing on the segments is;
                 // ninja_420_last: not over one).
                 if best.is_none() && mode != TargetMode::Point {
-                    let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].wind.is_some() || self.bloons[i].held) && self.bloons[i].hp > 0).collect();
+                    let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].off_track()) && self.bloons[i].hp > 0).collect();
                     // (Targetting.GetTargets (VERIFIED-DISASM @0x180fdbe70) walks the off-track ones
                     // through collisionChecker.BloonGrid's query from the tower: its order, as the
                     // instant-hit sort. Recordings druid_300 probe b rt 494 / probe rt 648: four
                     // carried Greens / Pinks born together, a different one taken each time.)
                     if self.has_grid_rank {
                         let q = pos;
-                        off.sort_by_cached_key(|&i| self.grid_query_key(q, i));
+                        // HYPOTHESIS P-TRANCECELL: a tranced bloon is in the cell it is in now for a
+                        // tower's search, ties by list order (recording mermonkey_003 rt 963 / 1611 /
+                        // 2115: every off-track pick between circling Leads), though a frame behind
+                        // for the CollisionChecker that frame (rt 1548).
+                        off.sort_by_cached_key(|&i| {
+                            let b = &self.bloons[i];
+                            if b.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq)) {
+                                let (pc, bc) = (grid_cell(q), grid_cell(b.pos));
+                                let (dx, dy) = (bc.0 - pc.0, bc.1 - pc.1);
+                                let r = if dx.abs() <= 64 && dy.abs() <= 64 { self.grid_rank[((dx + 64) * 129 + (dy + 64)) as usize] } else { u16::MAX };
+                                (r, 0, b.order)
+                            } else {
+                                self.grid_query_key(q, i)
+                            }
+                        });
                         // HYPOTHESIS P-OFFSTRONG: Strong takes the strongest of them (BloonModel.danger),
                         // grid order among equals (recording druid_420_strong rt 3121: carried Yellows
                         // over the Reds beside them).
@@ -11882,6 +11967,9 @@ impl Game {
                             continue;
                         }
                         if !attack.require_tags.iter().all(|t| d.tags.contains(t)) || (!buff.unfilter && attack.exclude_tags.iter().any(|t| d.tags.contains(t))) {
+                            continue;
+                        }
+                        if !self.target_angle_ok(t, attack, b.pos) {
                             continue;
                         }
                         if (attack.glue_filter > 0 && b.glue() >= attack.glue_filter)
@@ -12169,6 +12257,17 @@ impl Game {
                         }
                         turning = true;
                     }
+                }
+                // RotateToTargetAttackOffset.SetRotation (VERIFIED-DECOMP @0x180ddb500): the attack's
+                // own rotation, Vector2.get_Rotation(Target.Position - GetOrigin) + additionalRotation,
+                // GetOrigin (@0x180ddaf70) its spot (the tower + offsetX / offsetY, the tower's
+                // rotation ignored) raised 10 in display space; the weapons eject and aim along it
+                // (recording mermonkey_300 rt 607: an Instant shot at -42.49, the tower at -38.83).
+                if let (Some([ox, oy, add, _]), Some((_, aim, _))) = (attack.offset_rot, best) {
+                    let tp = self.towers[t].pos;
+                    let from = [tp[0] + ox, tp[1] - oy + DISPLAY_TOWER_HEIGHT / TAN60];
+                    attack_rot = Some(RAD2DEG * crt_atan2(aim[0] - from[0], -(aim[1] - from[1])) + add);
+                    turning = true;
                 }
                 // ToggleFocusStanceModel: with a LongWeapon, Spread fires the others and Focus
                 // only it (HYPOTHESIS P-STANCE: the swap list decodes empty; matched by name).
@@ -12673,13 +12772,27 @@ impl Game {
                             if let (Some(b), true, false) = (tw.sub_base, target_id != 0, air_shot) {
                                 grot = grot.map(|g| b + (g - b));
                             }
+                            // (At the release, from the throw's Target where it is now: recording
+                            // mermonkey_300 rt 1090, a throw whose bloon left the arc still turns to it.)
+                            // (Its Target gone, ApplyRotation (HasValidTarget) leaves it where
+                            // RotateToStartingPoint put it: startRotation; recording mermonkey_400 rt
+                            // 2415, a shot along 247.5.)
+                            if let Some([ox, oy, add, start]) = attack.offset_rot {
+                                let tp = tw.pos;
+                                let from = [tp[0] + ox, tp[1] - oy + DISPLAY_TOWER_HEIGHT / TAN60];
+                                // (RotateToStartingPoint @0x180ddb3f0: SetRotation at the origin +
+                                // Vector2.Rotate((0, 1), startRotation): -112.500015 for 247.5.)
+                                let to = if lost { let d = game_dir(start); [from[0] + d[0], from[1] + d[1]] } else { target };
+                                attack_rot = Some(RAD2DEG * crt_atan2(to[0] - from[0], -(to[1] - from[1])) + add);
+                                turning = true;
+                            }
                             if turning {
                                 grot = attack_rot.or(tw.game_rot);
                                 if let Some(r) = attack_rot {
                                     dir = (r - 90.0) * DEG2RAD;
                                 }
                             }
-                            if let (true, Some(_), Some(g)) = (lost, grot, tw.game_rot) {
+                            if let (true, Some(_), Some(g), None) = (lost, grot, tw.game_rot, attack.offset_rot) {
                                 grot = Some(g);
                                 dir = (g - 90.0) * DEG2RAD;
                             }
@@ -12714,7 +12827,8 @@ impl Game {
                             } else {
                                 (!body_turns && (target_id == 0 || tw.sub.is_none())).then(|| tw.game_rot.unwrap_or(0.0))
                             };
-                            if grot.is_some() && body_turns && broadside.is_none() {
+                            // (RotateToTargetAttackOffset turns only its attack: rotateTower off.)
+                            if grot.is_some() && body_turns && broadside.is_none() && attack.offset_rot.is_none() {
                                 tw.game_rot = grot;
                                 tw.turret_rel = grot.unwrap() - tw.base_rot;
                                 // On a turning base the turret's angle is its base's plus its own
@@ -12748,6 +12862,9 @@ impl Game {
                             if !double {
                                 tw.shots += 1;
                                 tw.weapons[w].emits += 1;
+                            }
+                            if weapon.pause_others.is_some() {
+                                tw.pause_others = Some((ai, round_clock));
                             }
                             // (A missed-frame extra shot isn't counted: recording alch_250 rt 141,
                             // the Dart Monkey's double at 137 leaves its acid a throw longer.)
@@ -12829,6 +12946,25 @@ impl Game {
                                 if add > 0.0 {
                                     q.lifespan += add;
                                 }
+                                buffed = Some(q);
+                            }
+                            // SupportStackingRange's MutatorTower.Mutate (VERIFIED-DECOMP @0x180d91c50):
+                            // an attack without fixedRange has its first TravelStrait's lifespan
+                            // x (1 + rangeMultiplier) too.
+                            if buff.range_x != 1.0 && !attack.fixed_range && std::ptr::eq(weapon, &attack.weapons[0]) && std::ptr::eq(proj, &weapon.projectile) && proj.lifespan > 0.0 {
+                                let mut q = buffed.take().unwrap_or_else(|| proj.clone());
+                                // (TravelStraitModel.set_Lifespan @0x181202b90: lifespanFrames =
+                                // (int)(lifespan x 60 + 0.5), not the load's half-to-even: recording
+                                // mermonkey_002 rt 3121, a 1.075 s trident lives 65 frames.)
+                                let frames = ((q.lifespan * buff.range_x) * 60.0 + 0.5) as i32;
+                                q.lifespan = frames as f32 / FPS;
+                                buffed = Some(q);
+                            }
+                            // LinkProjectileRadiusToTowerRange.OnRangeChanged on a weapon whose projectile
+                            // shares the linked one's id: radius = range + projectileRadiusOffset.
+                            if let Some(o) = proj.range_radius {
+                                let mut q = buffed.take().unwrap_or_else(|| proj.clone());
+                                q.radius = range + o;
                                 buffed = Some(q);
                             }
                             // A crit shot looks like the crit's displayModel (Crossbow Master's crit arrow).
@@ -13197,7 +13333,10 @@ impl Game {
                                     // (recording desperado_400: at the barrel at 73, on the MOAB at 74).
                                     // (Lightning stays at the eject point until its Process hits: recording
                                     // druid_200 rt 22.)
-                                    if !(proj.instant && !emission.markers.is_empty()) && !proj.lightning {
+                                    // (Nor from a plain emission: recording mermonkey_300 rt 607, the
+                                    // Instant shots of a SingleEmission at the eject point, on the
+                                    // bloon from 608.)
+                                    if !(proj.instant && (!emission.markers.is_empty() || !(emission.kind == "AtTarget" || emission.kind == "InstantDamage"))) && !proj.lightning {
                                         pr.pos = target;
                                         // (Its Position is the Target's, z too: the bloon's height; recording sniper_250, a
                                         // shot on a MOAB at z 120.)
@@ -13790,7 +13929,7 @@ impl Game {
             let mut segs: Vec<Vec<Vec<u32>>> = vec![Vec::new(); self.tracks.len()];
             for (bi, b) in self.bloons.iter().enumerate() {
                 // The wind's bloons aren't filed on segments (towers_phase skips them).
-                if b.wind.is_some() || b.held {
+                if b.off_track() {
                     continue;
                 }
                 // (Its segment as of the frame's start: a tower processed after the bloons moved
@@ -13828,7 +13967,7 @@ impl Game {
         let mut lead: Vec<Option<(usize, f32, u32)>> = vec![None; self.tracks.len()];
         for (bi, b) in self.bloons.iter().enumerate() {
             let d = &self.defs[b.kind];
-            if (b.camo(d) && !camo) || (no_moab && d.tags.iter().any(|t| t == "Moabs")) || b.wind.is_some() || b.held {
+            if (b.camo(d) && !camo) || (no_moab && d.tags.iter().any(|t| t == "Moabs")) || b.off_track() {
                 continue;
             }
             let rank = self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);
@@ -13938,11 +14077,12 @@ impl Game {
             }
         }
         let b = &mut self.bloons[i];
-        if let Some(EffectKind::Trance { centre, radius, angle, rate }) = b.effects.iter_mut().map(|e| &mut e.kind).find(|k| matches!(k, EffectKind::Trance { .. })) {
-            *angle += *rate;
-            b.pos = [centre[0] + *radius * angle.cos(), centre[1] + *radius * angle.sin()];
-            return false;
+        if let Some(k) = b.effects.iter().position(|e| matches!(e.kind, EffectKind::Trance(_))) {
+            if self.trance_step(i, k) {
+                return false;
+            }
         }
+        let b = &mut self.bloons[i];
         // MoveWithWind.Process (VERIFIED-DISASM @0xffeeb0) with Bloon.Process skipping the track
         // move while offTrackCount > 0: within 3 x speedFrames of its track spot the wind ends,
         // else it moves straight at it by speedFrames x speedMultiplier.
@@ -14595,6 +14735,91 @@ impl Game {
     /// of its Vector3.MoveTowards, VERIFIED-DISASM @0xd578d0), so its shots start 250 up and
     /// clear the map's blockers (recording wizard_050: Phoenix shots at z 257 fly past the
     /// entrance trees). HYPOTHESIS P-PHOENIXZ: it is at 250 from the start.
+    /// MermonkeyTrance.Process (VERIFIED-DECOMP @0x180fbf560) in the bloon's Process, its track
+    /// move skipped while offTrackCount > 0: toward the orbit point, then round it, then back to
+    /// where it left the track, then the cooldown until the mutator goes. True while it is off
+    /// the track (no track move): Bloon.Process comes first, so the frame its walk back ends it
+    /// still holds, and moves on the track from the next (recording mermonkey_003 rt 965 / 966).
+    fn trance_step(&mut self, i: usize, k: usize) -> bool {
+        let now = self.round_clock;
+        let is_moab = self.defs[self.bloons[i].kind].is_moab;
+        let EffectKind::Trance(t) = &self.bloons[i].effects[k].kind else { return false };
+        let mut t = t.clone();
+        let tower = self.towers.iter().position(|w| w.id == t.tower);
+        let centre = tower.map(|w| self.towers[w].pos);
+        let tz = tower.map_or(0.0, |w| self.tower_height(w));
+        let b = &mut self.bloons[i];
+        let off = t.in_seq;
+        if std::mem::take(&mut t.new) {
+            if let EffectKind::Trance(s) = &mut b.effects[k].kind {
+                **s = *t;
+            }
+            return off;
+        }
+        t.elapsed += 1;
+        let dead = centre.is_none();
+        // Vector2.Rotate((0, r), deg), game frame, + the tower (the clone's y flipped).
+        let orbit = |c: [f32; 2], r: f32, deg: f32| {
+            let a = DEG2RAD * -deg;
+            let (sa, ca) = crt_sin_cos(a);
+            let (gx, gy) = (ca * 0.0 - sa * r, ca * r + sa * 0.0);
+            [c[0] + gx, -(-c[1] + gy)]
+        };
+        // MoveTowardsTarget: within speed of it, no move (false); else speed along
+        // Vector2.Normalize(target - position).
+        let toward = |b: &mut Bloon, to: [f32; 2], sp: f32| {
+            let (dx, dy) = (to[0] - b.pos[0], to[1] - b.pos[1]);
+            if dx * dx + dy * dy <= sp * sp {
+                return false;
+            }
+            let l = (dx * dx + dy * dy).sqrt();
+            b.pos = [b.pos[0] + dx / l * sp, b.pos[1] + dy / l * sp];
+            true
+        };
+        let mut remove = false;
+        'step: {
+            if !t.in_seq {
+                if now > t.cooldown as i64 + t.ended_at {
+                    remove = true;
+                }
+                break 'step;
+            }
+            let circle = |b: &mut Bloon, t: &mut TranceState| {
+                // MoveInCirclePattern: on the orbit point, 45 above the tower, then the angle
+                // + bloonOrbitSpeedMultiplier (moabOrbitSpeed for MOAB-class).
+                b.pos = orbit(centre.unwrap(), t.radius, t.rotation);
+                b.height = tz + 45.0;
+                t.rotation += if is_moab { t.moab_speed } else { t.speed };
+            };
+            if !t.entered && t.elapsed < t.duration && !dead {
+                let to = orbit(centre.unwrap(), t.radius, t.rotation);
+                let moved = toward(b, to, t.speed);
+                t.entered = !moved;
+                if moved {
+                    break 'step;
+                }
+                circle(b, &mut t);
+                break 'step;
+            }
+            if t.elapsed < t.duration && !dead {
+                circle(b, &mut t);
+                break 'step;
+            }
+            if toward(b, t.orig, t.speed) {
+                break 'step;
+            }
+            t.in_seq = false;
+            t.ended_at = now;
+            b.height = 0.0;
+        }
+        if remove {
+            b.effects.remove(k);
+        } else if let EffectKind::Trance(s) = &mut b.effects[k].kind {
+            **s = *t;
+        }
+        off
+    }
+
     fn tower_height(&self, t: usize) -> f32 {
         if self.towers[t].sub.as_ref().is_some_and(|s| s.spec.circle.is_some()) { 250.0 } else { 0.0 }
     }
@@ -14630,6 +14855,25 @@ impl Game {
             });
     }
 
+    /// FilterTargetAngle.FilterBloon (VERIFIED-DECOMP @0x180c402b0): Vector3.AngleBetween
+    /// (@0x180f475f0: flat, the atan2 difference wrapped into -pi..pi, negated, in degrees) of the
+    /// bloon from the tower and Vector2.Rotate((0, 1), base + baseTowerRotationOffset), base 0
+    /// with ignoreTowerRotation, else the tower's rotation; within fieldOfView x 0.5 (inclusive).
+    fn target_angle_ok(&self, t: usize, attack: &crate::data::Attack, bp: [f32; 2]) -> bool {
+        let Some([fov, off, ignore]) = attack.target_angle else { return true };
+        let base = if ignore != 0.0 { 0.0 } else { self.towers[t].game_rot.unwrap_or(0.0) };
+        let d = game_dir(base + off);
+        let pos = self.towers[t].pos;
+        let (vx, vy) = (bp[0] - pos[0], -(bp[1] - pos[1]));
+        let mut a = crt_atan2(-d[1], d[0]) - crt_atan2(vy, vx);
+        if a > std::f32::consts::PI {
+            a += -2.0 * std::f32::consts::PI;
+        } else if a < -std::f32::consts::PI {
+            a += 2.0 * std::f32::consts::PI;
+        }
+        (RAD2DEG * -a).abs() <= fov * 0.5
+    }
+
     /// Where a bloon is as a target of an attack at `pos` (Targetting.GetTargets): on a segment in
     /// range + 2 whose line is clear, itself; a MOAB-class one otherwise by the first of its
     /// collision circles that's in range and seen (Targetting.CanHitMoab, as towers_phase); off
@@ -14649,7 +14893,12 @@ impl Game {
         if !attack.require_tags.iter().all(|t| d.tags.contains(t)) || attack.exclude_tags.iter().any(|t| d.tags.contains(t)) {
             return None;
         }
-        if b.wind.is_some() || b.held {
+        if let Some(t) = self.towers.iter().position(|w| w.pos == pos) {
+            if !self.target_angle_ok(t, attack, b.pos) {
+                return None;
+            }
+        }
+        if b.off_track() {
             let rr = range + d.radius;
             return ((b.pos[0] - pos[0]).powi(2) + (b.pos[1] - pos[1]).powi(2) <= rr * rr).then_some((f32::MAX, b.pos));
         }
@@ -15259,29 +15508,39 @@ impl Game {
                     start: if e.trigger_immediate { None } else { Some((e.initial_delay * FPS).round()) },
                 },
                 "brittle" => EffectKind::Brittle { damage: e.damage },
-                // HYPOTHESIS P-TRANCE: the bloon leaves its track spot and circles the tower that
-                // hit it at orbitRadius, entering where it was hit, at its own speed x
-                // speedMultiplier (MOAB-class: moabOrbitSpeed), then goes back to the spot it
-                // left. It can't be entranced again for `cooldown` seconds after.
+                // TranceBloon.Collide (VERIFIED-DECOMP @0x180cf4b30): not if immune (its fakeDamage's
+                // immuneBloonProperties) or already mutated by it (the mutator stays through the
+                // cooldown); AddMutatorForNumLayers(999), then SetOrbitTower: the orbit angle is
+                // Vector2.AngleBetween((0, 1), bloon - tower), game frame.
                 "trance" => {
                     let b = &self.bloons[i];
-                    if b.has_effect(&format!("{}Cooldown", e.id)) || e.immune & b.properties(&self.defs[b.kind]) != 0 {
+                    if b.has_effect(&e.id) || e.immune & b.properties(&self.defs[b.kind]) != 0 {
                         continue;
                     }
                     let Some(c) = self.towers.iter().find(|t| t.id == owner).map(|t| t.pos) else { continue };
-                    let f = if has("Moabs") { e.moab_mult } else { e.mult };
-                    let r = e.radius.max(1.0);
-                    add.push((
-                        Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Cooldown, id: format!("{}Cooldown", e.id), frames_left: (lifespan + e.cooldown) * FPS, total: (lifespan + e.cooldown) * FPS, added: self.sim_elapsed, layers: 1, owner, distribute: (true, false), keep: false },
-                        false,
-                        (false, false, false),
-                    ));
-                    EffectKind::Trance {
-                        centre: c,
-                        radius: r,
-                        angle: (b.pos[1] - c[1]).atan2(b.pos[0] - c[0]),
-                        rate: self.defs[self.bloons[i].kind].speed * f / FPS / r,
+                    let v = [b.pos[0] - c[0], -(b.pos[1] - c[1])];
+                    let mut a = crt_atan2(v[1], v[0]) - crt_atan2(1.0, 0.0);
+                    if a > std::f32::consts::PI {
+                        a += -2.0 * std::f32::consts::PI;
+                    } else if a < -std::f32::consts::PI {
+                        a += 2.0 * std::f32::consts::PI;
                     }
+                    lifespan = f32::INFINITY;
+                    EffectKind::Trance(Box::new(TranceState {
+                        tower: owner,
+                        rotation: RAD2DEG * -a,
+                        elapsed: 0,
+                        orig: self.tracks[b.path as usize].bloon_pos(b.dist),
+                        entered: false,
+                        in_seq: true,
+                        ended_at: 0,
+                        radius: e.radius,
+                        speed: e.mult,
+                        moab_speed: e.moab_mult,
+                        duration: (e.lifespan * FPS).round() as i32,
+                        cooldown: (e.cooldown * FPS).round() as i32,
+                        new: true,
+                    }))
                 }
                 "emit" => match &e.projectile {
                     Some(p) => EffectKind::Emit { interval: e.interval, tick: 0.0, proj: p.clone() },
@@ -15865,7 +16124,7 @@ impl Game {
                 let found = self
                     .bloons
                     .iter()
-                    .filter(|b| b.wind.is_none() && !b.held && b.path as usize == pi && (b.prev_dist / 7.0).max(0.0) as usize == k)
+                    .filter(|b| !b.off_track() && b.path as usize == pi && (b.prev_dist / 7.0).max(0.0) as usize == k)
                     .filter(|b| pr.camo || !b.camo(&self.defs[b.kind]))
                     .filter(|b| {
                         near || {
@@ -15885,7 +16144,7 @@ impl Game {
                 }
             }
         }
-        let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].wind.is_some() || self.bloons[i].held) && takes(&self.bloons[i]) && {
+        let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].off_track()) && takes(&self.bloons[i]) && {
             // (Through collisionChecker.BloonGrid's query from it, cell by cell: any bloon in a cell
             // of the square range around it, no distance of its own; recordings druid_400 rt 2369,
             // a carried Green 62 away in a cell outside it left; druid_502_strong rt 1903, one 52 away
@@ -16632,7 +16891,9 @@ impl Game {
         // on a bloon the execution popped that frame is gone at the frame's end).
         {
             let live: FastSet<u64> = self.bloons.iter().map(|b| b.id).collect();
-            self.projectiles.retain(|pr| !(pr.spec.instant && pr.spec.instant_destroy && pr.born < now && pr.target.is_some_and(|id| !live.contains(&id))));
+            // (With dontFollowTarget, once placed it returns before that check: it lives out
+            // its age; recording mermonkey_320 rt 2528.)
+            self.projectiles.retain(|pr| !(pr.spec.instant && pr.spec.instant_destroy && pr.born < now && !(pr.spec.instant_once && pr.instant_set) && pr.target.is_some_and(|id| !live.contains(&id))));
         }
         for pr in self.projectiles.iter_mut().filter(|pr| pr.spec.instant && !pr.spec.lightning && pr.born < now && !(pr.spec.instant_once && pr.instant_set)) {
             // (Target.Position: the bloon's plus the collision circle it was aimed at; recording
@@ -16645,7 +16906,7 @@ impl Game {
             // (Instant.Process sets the whole Position, so z too: the bloon's height, 120 on a MOAB
             // (recording sniper_250: an Elite shot on a MOAB at z 120 is above the blocker that ends
             // one at 20).)
-            let tz = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.height);
+            let tz = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.height).filter(|_| !pr.spec.instant_keep_z);
             if let Some(z) = tz {
                 pr.z = z;
             }
@@ -18916,7 +19177,7 @@ mod beast_tests {
         let mut tranced = false;
         for _ in 0..1800 {
             g.step();
-            tranced |= g.bloons.iter().any(|b| b.effects.iter().any(|e| matches!(e.kind, EffectKind::Trance { .. })));
+            tranced |= g.bloons.iter().any(|b| b.effects.iter().any(|e| matches!(e.kind, EffectKind::Trance(_))));
         }
         assert!(tranced, "a bloon was entranced");
     }

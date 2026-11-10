@@ -80,7 +80,7 @@ impl Game{
                     EffectKind::Emit{interval,tick,..}=>{feed!(h,4u8,interval,tick);},EffectKind::PopEmit{..}=>5u8.feed(h),EffectKind::DestroyEmit{..}=>13u8.feed(h),
                     EffectKind::Mark{damage_mult,cash_mult}=>{feed!(h,6u8,damage_mult,cash_mult);},EffectKind::Strip=>7u8.feed(h),
                     EffectKind::Worth{per_tier}=>{feed!(h,8u8,per_tier);},
-                    EffectKind::Trance{centre,radius,angle,rate}=>{feed!(h,9u8,centre,radius,angle,rate);},EffectKind::Cooldown=>10u8.feed(h),
+                    EffectKind::Trance(t)=>{let (tw,rot,el,o,en,sq,ea)=(&t.tower,&t.rotation,&t.elapsed,&t.orig,&t.entered,&t.in_seq,&(t.ended_at as i32));feed!(h,9u8,tw,rot,el,o,en,sq,ea);},EffectKind::Cooldown=>10u8.feed(h),
                     EffectKind::Unarmor{bits}=>{feed!(h,11u8,bits);},
                     EffectKind::Knock{m}=>{feed!(h,12u8,m[0].to_bits());feed!(h,m[1].to_bits());feed!(h,m[2].to_bits());},
                     EffectKind::Carry{uids,..}=>{feed!(h,14u8,uids);},

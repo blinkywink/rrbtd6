@@ -704,6 +704,7 @@ def main():
             # InstantModel.destroyIfInvalid / dontFollowTarget.
             "instant_destroy": bool(pb.get("InstantModel") and pb["InstantModel"][0]["f"].get("destroyIfInvalid")),
             "instant_once": bool(pb.get("InstantModel") and pb["InstantModel"][0]["f"].get("dontFollowTarget")),
+            "instant_keep_z": bool(pb.get("InstantModel") and pb["InstantModel"][0]["f"].get("ignoreTargetZ")),
             "retarget": None,
             "hit_sounds": behavior_sounds(items(f["behaviors"]), "CreateSoundOnProjectileCollisionModel", SOUND_KEYS),
             "expire_sounds": behavior_sounds(items(f["behaviors"]), "CreateSoundOnProjectileExpireModel", SOUND_KEYS),
@@ -1225,6 +1226,9 @@ def main():
                                 # WeaponRateMinModel: buffs can't take the interval below this.
                                 "rate_min": next((x["f"].get("min", 0.0) for x in items(w["f"].get("behaviors"))
                                                   if x and x["type"] == "WeaponRateMinModel"), 0.0),
+                                # PauseOtherAttacksModel: its shots pause the tower's other attacks.
+                                "pause_others": next((x["f"].get("durationFrames") for x in items(w["f"].get("behaviors"))
+                                                      if x and x["type"] == "PauseOtherAttacksModel"), None),
                                 # BloonDistanceRateBonusModel (Desperado): faster against farther
                                 # targets (rateBonusPerRange, rangeMax).
                                 "dist_rate": next(([x["f"].get("rateBonusPerRange", 0.0), x["f"].get("rangeMax", 0)]
@@ -1315,6 +1319,15 @@ def main():
                         # radius = the tower's range + projectileRadiusOffset.
                         lm = next((l for l in link_models if not refs or (l.get("projectileModel") or {}).get("$ref") == pr.get("$ref")), link_models[0])
                         w["projectile"]["link_offset"] = lm.get("projectileRadiusOffset", 0.0)
+                    elif isinstance(pr, dict):
+                        # OnRangeChanged (VERIFIED-DECOMP @0x180d34730) finds the weapons by their
+                        # projectile's id (String.Equals), so another weapon whose projectile has the
+                        # linked one's id gets the radius too (Mermonkey 0-0-3: the trident, id
+                        # "Projectile" like the Trance ring; recording mermonkey_003 rt 676).
+                        pid = ((deref(pr) or {}).get("f") or {}).get("id")
+                        lm = next((l for l in link_models if ((deref(l.get("projectileModel")) or {}).get("f") or {}).get("id") == pid), None)
+                        if pid and lm is not None:
+                            w["projectile"]["range_radius"] = lm.get("projectileRadiusOffset", 0.0)
             prio_camo = any(x and "PrioCamo" in x["type"] for x in items(af["behaviors"]))
             # TargetDesperado*Model: the upgrade panel's camo and bounty (marked) toggles.
             desperado = [x["f"] for x in items(af["behaviors"]) if x and x["type"].startswith("TargetDesperado")]
@@ -1395,6 +1408,16 @@ def main():
                     "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
                     "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "fixed_range": bool(af.get("fixedRange")), "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
+                    # RotateToTargetAttackOffsetModel: the attack turns itself from its offset spot,
+                    # [offsetX, offsetY, additionalRotation, startRotation].
+                    "offset_rot": next(([af.get("offsetX", 0.0), af.get("offsetY", 0.0), float(x["f"].get("additionalRotation", 0)), x["f"].get("startRotation", 0.0)]
+                                        for x in items(af["behaviors"]) if x and x["type"] == "RotateToTargetAttackOffsetModel"), None),
+                    # FilterTargetAngleModel in the attack's filter (not a carrier plane's pattern):
+                    # [fieldOfView, baseTowerRotationOffset, ignoreTowerRotation].
+                    "target_angle": (None if any(y and y["type"].startswith("FighterPilotPattern") for y in items(af["behaviors"])) else
+                                     next(([flt["f"].get("fieldOfView", 360.0), flt["f"].get("baseTowerRotationOffset", 0.0), 1.0 if flt["f"].get("ignoreTowerRotation") else 0.0]
+                                           for y in items(af["behaviors"]) if y and y["type"] == "AttackFilterModel"
+                                           for flt in items(y["f"]["filters"]) if flt and flt["type"] == "FilterTargetAngleModel"), None)),
                     "glue_filter": glue_filter, "skip_frozen": skip_frozen, "offscreen": offscreen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
                     "while_fx": next(([prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")) or "", prefab_name((deref(x["f"].get("exitEffectModel")) or {"f": {}})["f"].get("assetId")) or ""] for x in items(af["behaviors"]) if x and x["type"] == "CreateEffectWhileAttackingModel"), None),
                     "fire_without_target": af.get("fireWithoutTarget", False),
@@ -1717,7 +1740,10 @@ def main():
                          # BananaCentralBuffModel: Banana Farms' income x multiplier (global);
                          # CentralMarketBuffModel: Merchantmen's income x multiplier per Central
                          # Market, up to maxStackCount (global).
-                         "BananaCentralBuffModel": "income", "CentralMarketBuffModel": "income"}
+                         "BananaCentralBuffModel": "income", "CentralMarketBuffModel": "income",
+                         # SupportStackingRangeModel (SelfStackingSupportCompounding, Mermonkey 0-0-2+):
+                         # each such tower's MutatorTower multiplies range x (1 + rangeMultiplier).
+                         "SupportStackingRangeModel": "range_x"}
 
         def supports_of(behaviors):
           supports = []
@@ -1737,6 +1763,8 @@ def main():
               base_filter = {"BananaCentralBuffModel": ["BananaFarm"], "CentralMarketBuffModel": ["MonkeyBuccaneer"]}.get(b["type"], [])
               if b["type"] == "DamageSupportModel":
                   add = sf.get("increase", 0.0)
+              if b["type"] == "SupportStackingRangeModel":
+                  mult = sf.get("rangeMultiplier", 0.0)
               if b["type"] == "AbilityCooldownScaleSupportModel":
                   mult = sf.get("abilityCooldownSpeedScale", 1.0)
               if b["type"] == "MonkeyCityIncomeSupportModel":
@@ -1757,8 +1785,10 @@ def main():
                   extra = [("damage_mult", sf.get("damageScale", 1.0), sf.get("damageIncrease", 0))]
               if not kind:
                   continue
-              sets, bases = [], []
+              sets, bases, min_tiers = [], [], [0, 0, 0]
               for x in items(sf.get("filters")):
+                  if x and x["type"] == "FilterInTowerTiersModel":
+                      min_tiers = [x["f"].get("path%dMinTier" % k, 0) for k in (1, 2, 3)]
                   if x and x["type"] == "FilterInSetModel":
                       sets.append(x["f"]["towerSet"])
                   if x and x["type"] == "FilterInBaseTowerIdModel":
@@ -1768,7 +1798,8 @@ def main():
                                "id": sf.get("mutatorId") or sf.get("stackName") or b["type"],
                                "global": bool(sf.get("isGlobal") or sf.get("isGlobalRange")),
                                "radius": sf["customRadius"] if sf.get("isCustomRadius") else None,
-                               "self": bool(sf.get("appliesToOwningTower") or b["type"] == "SupportShinobiTacticsModel"),
+                               "self": bool(sf.get("appliesToOwningTower") or b["type"] in ("SupportShinobiTacticsModel", "SupportStackingRangeModel")),
+                               "min_tiers": min_tiers,
                                "stacks": max(sf.get("maxStacks") or 0, sf.get("stackLimit") or 0, sf.get("maxStackCount") or 0, 1),
                                "sets": sets, "bases": bases, "tier_cap": sf["upgrade"] if b["type"] == "FreeUpgradeSupportModel" else sf.get("tierCap", 5),
                                # BuffIndicatorUi: the icon shown over towers this buffs.

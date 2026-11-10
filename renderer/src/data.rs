@@ -749,6 +749,9 @@ pub struct Support {
     pub bases: Vec<String>,
     #[serde(default = "five")]
     pub tier_cap: u32,
+    /// FilterInTowerTiersModel: the least tier on each path a tower it buffs must have.
+    #[serde(default)]
+    pub min_tiers: [u8; 3],
     /// Buff icon (UiBuffIcons sprite) shown over towers it reaches (showBuffIcon).
     #[serde(default)]
     pub icon: Option<String>,
@@ -909,6 +912,13 @@ pub struct Attack {
     /// FilterOnlyCamoInModel: targets camo bloons only (Shimmer).
     #[serde(default)]
     pub only_camo: bool,
+    /// FilterTargetAngleModel in its filter: [fieldOfView, baseTowerRotationOffset,
+    /// ignoreTowerRotation (0 / 1)].
+    #[serde(default)]
+    pub target_angle: Option<[f32; 3]>,
+    /// RotateToTargetAttackOffsetModel: [offsetX, offsetY, additionalRotation, startRotation].
+    #[serde(default)]
+    pub offset_rot: Option<[f32; 4]>,
     #[serde(default)]
     pub exclude_tags: Vec<String>,
     /// AttackModel.fireWithoutTarget: fires on its own timer, target or not (Glaive Lord's orbit hits).
@@ -1045,6 +1055,10 @@ pub struct Weapon {
     /// WeaponRateMinModel.min: the shortest interval buffs can bring it to.
     #[serde(default)]
     pub rate_min: f32,
+    /// PauseOtherAttacksModel.durationFrames: a shot pauses the tower's other attacks until
+    /// roundTime passes the shot's + this.
+    #[serde(default)]
+    pub pause_others: Option<i64>,
     /// LeakDangerAttackSpeedModel.maxRateIncreasePercent.
     #[serde(default)]
     pub leak_danger: f32,
@@ -1677,6 +1691,10 @@ pub struct Proj {
     pub link_radius: bool,
     #[serde(default)]
     pub link_offset: f32,
+    /// LinkProjectileRadiusToTowerRange also sets this projectile's radius (same id as the
+    /// linked one): the tower's range + this offset.
+    #[serde(default)]
+    pub range_radius: Option<f32>,
     /// InstantModel: hits its target bloon (FilterAllExceptTargetModel) the frame it is fired.
     #[serde(default)]
     pub instant: bool,
@@ -1686,6 +1704,9 @@ pub struct Proj {
     /// InstantModel.dontFollowTarget: placed on its target once only.
     #[serde(default)]
     pub instant_once: bool,
+    /// InstantModel.ignoreTargetZ: Instant.Process sets x and y only, keeping its height.
+    #[serde(default)]
+    pub instant_keep_z: bool,
     /// Effects (prefab under effects/, scale), visual only: CreateEffectOnContactModel at each
     /// hit, CreateEffectOnExhausted / ExhaustFraction when its pierce runs out,
     /// CreateEffectOnExpireModel when it goes.
