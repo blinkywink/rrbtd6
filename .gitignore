@@ -34,3 +34,4 @@ replay_pid*.log
 .claude/settings.local.json
 .claude/STOP_KEEP_GOING
 .claude/keep_going_wait
+website/text_edits.json
