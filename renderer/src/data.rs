@@ -1602,6 +1602,9 @@ pub struct Retarget {
     pub max_bounces: u32,
     pub delay: f32,
     pub expire_if_none: bool,
+    /// Its TravelStrait comes first in the behaviours: a delayed bounce re-aims after the move.
+    #[serde(default)]
+    pub after_travel: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2379,6 +2382,9 @@ pub struct Overclock {
 pub struct Darkshift {
     pub radius: f32,
     pub restrict: bool,
+    /// Darkshift: frames from the activation to the move (0 for Redeploy: at once).
+    #[serde(default)]
+    pub delay: u32,
 }
 
 #[derive(Deserialize, Clone)]

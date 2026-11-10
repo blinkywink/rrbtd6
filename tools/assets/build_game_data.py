@@ -800,8 +800,12 @@ def main():
                     out["state_mods"].append({"states": [rid], "mult": 1.0, "add": x["f"].get("amount", 0.0)})
         if pb.get("RetargetOnContactModel"):
             rf = pb["RetargetOnContactModel"][0]["f"]
+            # (Behaviours Process in model order: a TravelStrait listed before it has moved the
+            # shot this frame when a delayed bounce re-aims it.)
+            kinds = [b["type"] for b in items(f["behaviors"]) if b]
+            after = "TravelStraitModel" in kinds and kinds.index("TravelStraitModel") < kinds.index("RetargetOnContactModel")
             out["retarget"] = {"distance": rf["distance"], "max_bounces": rf["maxBounces"], "delay": rf["delay"],
-                               "expire_if_none": rf.get("expireIfNoTargetFound", True)}
+                               "expire_if_none": rf.get("expireIfNoTargetFound", True), "after_travel": after}
         if pb.get("LightningModel"):
             # HYPOTHESIS P-LIGHTNING: an instant shot that chains to the closest unhit bloon within
             # splitRange every `delay` until its pierce is used (the split into `splits` branches
@@ -1068,7 +1072,11 @@ def main():
             return {"kind": "Single", "count": 1, "secondary": projectile(deref(f["secondaryProjectileModel"]), 1)}
         # RandomArcEmissionModel: SliceSize shots, each turned by up to randomAngle at random.
         if e["type"] == "RandomArcEmissionModel":
-            return {"kind": "Single", "count": f.get("SliceSize", 1), "random_angle": f.get("randomAngle", 0.0)}
+            # RandomArcEmission.Emit (VERIFIED-DECOMP @0x180c49d20) draws two synced doubles,
+            # then GetDirection (@0x180c4a000) per shot: (rotation - angle / 2) + offset +
+            # i x slice + NextDouble x randomAngle - randomAngle / 2.
+            return {"kind": "RandomArc", "count": f.get("SliceSize", 1), "angle": f.get("angle", 0.0),
+                    "offset": f.get("offset", 0.0), "random_angle": f.get("randomAngle", 0.0)}
         # EmissionWithOffsetsModel (Dartling / Sub / Buccaneer barrels...): projectileCount shots
         # from its ThrowMarkerOffsetModels, each shot from the next one (spreadProjectilesAcrossMarkers).
         if e["type"] == "EmissionWithOffsetsModel":
@@ -1594,8 +1602,11 @@ def main():
                     out["darkshift"] = {"radius": 0.0, "restrict": False}
                 # DarkshiftModel (Dark Knight): the tower teleports to a picked spot within radius.
                 if x["type"] == "DarkshiftModel":
+                    # (StartDarkshift @0x180e22bd0: frameToMove = now + towerSpawnDelay frames;
+                    # Process moves it on that frame, EndDarkshift.)
                     out["darkshift"] = {"radius": xf.get("placementZoneAssetRadius", 0.0),
-                                        "restrict": bool(xf.get("restrictToTowerRadius"))}
+                                        "restrict": bool(xf.get("restrictToTowerRadius")),
+                                        "delay": int(round(xf.get("towerSpawnDelay", 0.0) * 60))}
                 # TakeAimModel (Desperado): range x rangeModifier on a picked tower.
                 if x["type"] == "TakeAimModel":
                     out["overclock"] = {"frames": xf.get("lifespanFrames", 0), "rate": 1.0, "village_range": 1.0,

@@ -1598,6 +1598,8 @@ pub struct Tower {
     /// attacks belong to the tower and keep their Weapons between activations (recording
     /// spike_050: the storms' missed-frame double volleys carry on where the last one left off).
     pub temp_missed: HashMap<(String, usize), f32>,
+    /// Darkshift.frameToMove (sim frame) and teleportPos: the tower moves there that frame.
+    pub shift: Option<(u64, [f32; 2])>,
     pub turbo: Option<ActiveTurbo>,
     /// Monkey Fan Club: the boost and frames left.
     pub fan: Option<(crate::data::FanClub, f32)>,
@@ -4223,6 +4225,8 @@ macro_rules! collide_pass {
                 // bloon with the tag (the game attaches it to the bloon for its next pop).
                 let gold = $s.projectiles[$p].spec.cash_on_pop.as_ref().filter(|c| $s.defs[$s.bloons[i].kind].tags.contains(&c.tag)).map(|c| (c.amount as f64, c.effect.clone(), c.lifespan));
                 let tally0 = $s.damage_tally;
+                // (Was it a MOAB-class bloon before this hit?)
+                let hit_moab = $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Moabs");
                 let own_chain = $s.chain_health(i);
                 $s.distribute = ($s.projectiles[$p].spec.distribute, $s.projectiles[$p].spec.distribute_override);
                 let n = $s.damage(i, dmg.round() as i32, &mut $kids);
@@ -4247,7 +4251,11 @@ macro_rules! collide_pass {
                 // isn't valid for pushback (IsBloonValidForPushback: on the
                 // map; its near-the-exit checks aren't done). It turns at once: a first child
                 // that already moved this frame moves at the new speed.
-                if let Some(kb) = $s.projectiles[$p].spec.knockback.clone() {
+                // (Not from the hit that pops a MOAB-class bloon: recording super_004 rt 128, a
+                // Dark Champion dart popping a knocked MOAB leaves its Ceramics unknocked, the
+                // first moving on at full speed that frame. INFERRED: Knockback.Collide's
+                // IsMutatedBy / offTrackCount checks on the degrading object.)
+                if let Some(kb) = $s.projectiles[$p].spec.knockback.clone().filter(|_| !(hit_moab && n > 0)) {
                     let mut valid = None;
                     for kid in std::iter::once(id).chain($kids.iter().copied()) {
                         let Some(j) = $s.bloons.iter().position(|b| b.id == kid) else { continue };
@@ -4602,7 +4610,7 @@ macro_rules! collide_pass {
                     if ((rt.delay * FPS) as f64).round_ties_even() > 0.0 {
                         pr.retarget_at = Some($sim_now);
                     } else {
-                        $s.retarget($p, &rt);
+                        $s.retarget($p, &rt, false);
                     }
                 }
             }
@@ -6989,6 +6997,7 @@ impl Game {
             ability_round: HashMap::new(),
             temp: Vec::new(),
             temp_missed: HashMap::new(),
+            shift: None,
             turbo: None,
             fan: None,
             morph: None,
@@ -8053,6 +8062,7 @@ impl Game {
             ability_round: HashMap::new(),
             temp: Vec::new(),
             temp_missed: HashMap::new(),
+            shift: None,
             turbo: None,
             fan: None,
             morph: None,
@@ -8631,7 +8641,11 @@ impl Game {
                 continue;
             }
             self.towers[t].ability_cd.insert(name.to_string(), a.cooldown * FPS);
-            self.towers[t].pos = p;
+            if ds.delay > 0 {
+                self.towers[t].shift = Some((self.sim_elapsed + ds.delay as u64, p));
+            } else {
+                self.towers[t].pos = p;
+            }
             self.sound(&a.sounds, None);
             return true;
         }
@@ -8821,6 +8835,9 @@ impl Game {
     /// Ability.get_IsActive (VERIFIED-DECOMP @0x180dfb610): one of its behaviours is still on;
     /// for an ActivateAttack, its attacks' lifespan hasn't run out.
     fn ability_active(&self, t: usize, a: &crate::data::Ability) -> bool {
+        if a.darkshift.is_some() && self.towers[t].shift.is_some() {
+            return true;
+        }
         let Some(tr) = self.tier(t) else { return false };
         let s0: usize = tr.abilities.iter().take_while(|o| o.name != a.name).flat_map(|o| o.activate.iter()).flat_map(|x| x.attacks.iter()).map(|at| at.weapons.len()).sum();
         let n: usize = a.activate.iter().flat_map(|x| x.attacks.iter()).map(|at| at.weapons.len()).sum();
@@ -8848,6 +8865,14 @@ impl Game {
     }
 
     fn use_ability_effects(&mut self, t: usize, a: &crate::data::Ability) {
+        // Darkshift.Activate (VERIFIED-DECOMP @0x180e21420) with no point picked: StartDarkshift at
+        // teleportPos (0, 0) (recording super_004: the scripted Activate at 120 sends the Dark
+        // Champion to the origin at 135).
+        if let Some(ds) = a.darkshift.as_ref().filter(|d| d.delay > 0) {
+            if self.towers[t].shift.is_none() {
+                self.towers[t].shift = Some((self.sim_elapsed + ds.delay as u64, [0.0, 0.0]));
+            }
+        }
         // AbilityDamageAll.Activate (VERIFIED-DISASM @0x180df6800), each model in turn: every bloon in
         // the factory list (not children made on the way) whose having one of the tags equals
         // `inclusive` takes Bloon.Damage(damage), distributed with the blocker overridden, for the
@@ -12958,7 +12983,11 @@ impl Game {
                             // (rotateTower off with a throw marker: only the attack turns, the tower's
                             // Rotation stays; recording village_500 rt 40, the ballista's bolt ejects
                             // along -68.17 from a village at 0.)
-                            if !attack.turn_body && attack.marker_z.is_some() {
+                            // (Likewise each arm under RotateToMiddleOfTargets: recording super_040 rt
+                            // 73, both Tech Terror arms eject along their own -68.67 aim, the body at
+                            // -77.22. INFERRED scope: a Wall of Fire or a Paragon turret, also
+                            // rotateTower off, eject along the body; wizard_025, dart_paragon_deg_r40.)
+                            if !attack.turn_body && (attack.marker_z.is_some() || tier.attacks.iter().any(|a| a.face_middle)) {
                                 if tw.ent_rots.len() <= ai {
                                     tw.ent_rots.resize(ai + 1, None);
                                 }
@@ -13229,7 +13258,7 @@ impl Game {
                             // (its Tower.Rotation stays 0; recording bucc_400 W / FM lines).
                             let fighter_rot = tw.air.as_ref().filter(|_| tier.air.as_ref().is_some_and(|x| x.fighter.is_some())).map(|a| a.fp_rot);
                             // (Its release turns the attack once more, to where the Target is now.)
-                            if let (false, Some(_), Some(g)) = (attack.turn_body, attack.marker_z, grot) {
+                            if let (false, true, Some(g)) = (attack.turn_body, attack.marker_z.is_some() || tier.attacks.iter().any(|a| a.face_middle), grot) {
                                 if tw.ent_rots.len() <= ai {
                                     tw.ent_rots.resize(ai + 1, None);
                                 }
@@ -13457,7 +13486,7 @@ impl Game {
                             // RandomArcEmissionModel.randomAngle (the weapon's RandomAngleOffset turns the
                             // shots once they are made: below).
                             let spread = emission.random_angle;
-                            if spread > 0.0 {
+                            if spread > 0.0 && emission.kind != "RandomArc" {
                                 dir += ((self.rand() * 2.0 - 1.0) * spread).to_radians();
                                 grot = None;
                             }
@@ -14372,6 +14401,15 @@ impl Game {
         if only_temp.is_none() {
             for t in 0..self.towers.len() {
                 self.track_sets_init(t);
+                // Darkshift.Process (VERIFIED-DECOMP @0x180e225e0): EndDarkshift on frameToMove,
+                // after that frame's attacks (recording super_004 rt 135: the last dart leaves
+                // from the old spot, the tower is at the new one as the frame ends).
+                if let Some((at, p)) = self.towers[t].shift {
+                    if self.sim_elapsed >= at {
+                        self.towers[t].shift = None;
+                        self.towers[t].pos = p;
+                    }
+                }
             }
         }
     }
@@ -14906,7 +14944,7 @@ impl Game {
     /// 40, nearest segment point first, its first bloon in list order the shot may hit: its point
     /// within distance + 2, or a MOAB by its circles); the shot then flies straight at it
     /// (normalized, at its speed, rotation from the direction), or expires if none and it should.
-    fn retarget(&mut self, p: usize, rt: &crate::data::Retarget) {
+    fn retarget(&mut self, p: usize, rt: &crate::data::Retarget, moved: bool) {
         self.projectiles[p].bounces += 1;
         let pr = &self.projectiles[p];
         // An instant shot is where its Target is this frame (recording sniper_250 rt 1181: the bounce
@@ -14918,6 +14956,9 @@ impl Game {
                 let at = if b.born > pr.born { b.prev } else { b.pos };
                 [at[0] + pr.inst_off[0], at[1] + pr.inst_off[1]]
             }
+            // (After this frame's move when its TravelStrait processes first: recording super_004
+            // rt 139, a Dark Champion dart turns from where it has just flown to.)
+            None if moved => pr.pos,
             None => pr.prev,
         };
         let at = |b: &Bloon| if b.born < pr.born { b.pos } else { b.prev };
@@ -16680,8 +16721,19 @@ impl Game {
             self.bursts.push(Burst { pos: from, radius: spec.radius, fire: spec.link_radius && !ice, ice });
         }
         let n = em.count.max(1);
+        // RandomArcEmission.Emit (VERIFIED-DECOMP @0x180c49d20): two synced NextDoubles (an
+        // offset vector the shots' start doesn't use: recording super_000 rt 14, the dart on
+        // the eject point).
+        if em.kind == "RandomArc" {
+            self.synced_double();
+            self.synced_double();
+        }
         for k in 0..n {
             let (mut a, mut off) = (dir, 0.0f32);
+            // RandomArcEmission.GetDirection (VERIFIED-DECOMP @0x180c4a000): per shot, before it is
+            // made, (rotation - angle / 2) + offset + k x slice + NextDouble x randomAngle -
+            // randomAngle x 0.5 (recording super_000: -70.284256 + 0.1534 x 8 - 4 = -73.0567).
+            let rarc = (em.kind == "RandomArc").then(|| self.synced_double() as f32);
             let mut curvy_drawn = false;
             let mut curvy_inc = false;
             let (mut rnd_off, mut rnd_rot, mut rnd_speed): (Option<[f32; 2]>, Option<f32>, Option<f32>) = (None, None, None);
@@ -16757,6 +16809,10 @@ impl Game {
                     Some((r - em.angle / 2.0) + em.offset + k as f32 * slice)
                 }
                 "Single" | "Arc" | "Parallel" => Some(r),
+                "RandomArc" => {
+                    let (half, slice) = if n > 1 { (em.angle / 2.0, em.angle / (n - 1) as f32) } else { (0.0, 0.0) };
+                    Some((((r - half) + em.offset + k as f32 * slice) + rarc.unwrap_or(0.0) * em.random_angle) - em.random_angle * 0.5)
+                }
                 _ => None,
             })).or(rnd_rot);
             // EmissionArcRotationOffTowerDirection.OnEmit (VERIFIED-DISASM @0x180c38100): the shot's
@@ -17613,14 +17669,14 @@ impl Game {
             let Some(p) = self.projectiles.iter().position(|pr| pr.uid == uid) else { continue };
             let Some(rt) = self.projectiles[p].spec.retarget.clone() else { continue };
             let old = self.projectiles[p].vel;
-            self.retarget(p, &rt);
+            self.retarget(p, &rt, rt.after_travel);
             let pr = &mut self.projectiles[p];
             if pr.frames_left <= 0.0 {
                 // No target: it expires there, before travelling.
                 self.projectiles.remove(p);
                 continue;
             }
-            if pr.vel != old {
+            if pr.vel != old && !rt.after_travel {
                 pr.pos = [pr.prev[0] + pr.vel[0], pr.prev[1] + pr.vel[1]];
             }
         }
