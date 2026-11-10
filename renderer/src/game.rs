@@ -1210,6 +1210,15 @@ pub struct WeaponState {
     necro: f32,
     /// EmissionsPerRoundFilterModel: throws this round.
     pub round_shots: u32,
+    /// EmissionsPerRoundFilter.roundBananas: (start roundTime, roundDuration) per round begun,
+    /// bananasToSpawn, and the roundTime its Process last ran.
+    pub banana: Vec<(i64, i32)>,
+    pub banana_due: u32,
+    /// Come due in the last Process (FilterEmission runs before it, so they go next frame).
+    pub banana_next: u32,
+    pub banana_t: i64,
+    /// RandomPositionBasic's point for the banana waiting to go (drawn as it comes due).
+    pub rand_target: Option<[f32; 2]>,
     /// BurstWeaponBehavior.currentCount: shots left in this burst (Initialise: the model's count).
     pub burst_left: u32,
     /// BurstWeaponBehavior.Process's overrideTarget (Weapon+0xdc) with alwaysEmptyClip: the point
@@ -1264,6 +1273,11 @@ impl WeaponState {
             danger: 0.0,
             necro: 1.0,
             round_shots: 0,
+            banana: Vec::new(),
+            banana_due: 0,
+            banana_next: 0,
+            banana_t: i64::MIN,
+            rand_target: None,
             burst_left: w.burst.as_ref().map_or(0, |b| b.count),
             empty_pt: None,
             brew_to: None,
@@ -2675,6 +2689,40 @@ fn grow_init(b: &mut Bloon, defs: &[crate::data::BloonDef], names: &[String]) {
     }
 }
 
+/// EmissionsPerRoundFilter.Process (VERIFIED-DECOMP @0x180c75cb0), once a roundTime: each round's
+/// `count` bananas come due at (int)(i x duration / (count - 1) + start) (one: start + duration /
+/// 2), each letting one emission through FilterEmission from the next frame (FilterEmission
+/// runs first; recording farm_000: bananas at 2, 961, 1921, 2881).
+fn banana_tick(st: &mut WeaponState, n: u32, rc: i64) {
+    if st.banana_t == rc {
+        return;
+    }
+    st.banana_t = rc;
+    st.banana_due += std::mem::take(&mut st.banana_next);
+    let mut due = 0;
+    st.banana.retain(|&(start, dur)| {
+        if n == 1 {
+            if rc == start + (dur / 2) as i64 {
+                due += 1;
+                return false;
+            }
+            return true;
+        }
+        let step = if n > 1 { dur as f32 / (n as f32 - 1.0) } else { 0.0 };
+        let mut keep = true;
+        for i in 0..n {
+            if rc == (i as f32 * step + start as f32) as i64 {
+                due += 1;
+                if i == n - 1 {
+                    keep = false;
+                }
+            }
+        }
+        keep
+    });
+    st.banana_next += due;
+}
+
 /// Whether bloon tags `tags` match a DamageModifierForTagModel's tag list.
 impl Projectile {
     /// Vector3Boxed.get_Rotation of its direction (game degrees, as `grot`): the direction it
@@ -2998,6 +3046,9 @@ pub struct Game {
     ghost_cell: Option<[f32; 2]>,
     /// TranceTotemSpawner: totems its next Process makes (parent id, spec, spot).
     pending_pets: Vec<(u64, std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2])>,
+    /// This round's EmissionsPerRoundFilter entry (start, duration) and the step it began at, for
+    /// weapons whose state is made after (the game's exist from placement).
+    round_banana: Option<((i64, i32), u64)>,
     /// On a flush frame, the list places from before it: the collision grid is filled in that
     /// order (recording dart_052: a Blue ahead of a Yellow the flush moved in front of it).
     grid_rank_pre: Option<FastMap<u64, u32>>,
@@ -4852,6 +4903,7 @@ impl Game {
             fill_first_id: None,
             ghost_cell: None,
             pending_pets: Vec::new(),
+            round_banana: None,
             grid_rank_pre: None,
             proj_list: Vec::new(),
             proj_obj: Default::default(),
@@ -5288,6 +5340,7 @@ impl Game {
         }
         self.pending.clear();
         self.progressive_difficulty(self.round as i32 + 1);
+        let mut round_duration = 0.0f32;
         let groups = match self.rounds.get(self.round).filter(|_| !self.apopalypse) {
             Some(r) => r.clone(),
             None => self.freeplay_round(self.round as i32 + 1),
@@ -5301,6 +5354,10 @@ impl Game {
             let (step, offset) = if g.count == 1 { (span, span * 0.5) } else { (span / (g.count.max(2) - 1) as f32, 0.0) };
             for i in 0..g.count {
                 let t = (i as f32 * step + start) + offset;
+                // RoundData.roundDuration (Spawner.AddEmissions @0x180f71bf0): the latest time.
+                if round_duration < t {
+                    round_duration = t;
+                }
                 // Spawner.AddEmissions numbers the emissions in list order (emissionIndex).
                 let idx = self.pending.len() as u32;
                 self.pending.push((t.ceil().max(0.0) as u32, k, idx));
@@ -5314,9 +5371,14 @@ impl Game {
         // Weapon.RoundStart (VERIFIED-DISASM @0xc703a0): missedRate = 0 (recording dart_040_club:
         // a Fan Club weapon's fraction gone as round 20 starts).
         for tw in &mut self.towers {
+            let rc = self.round_clock;
+            self.round_banana = Some(((rc + 1, round_duration as i32), self.steps as u64));
             tw.weapons.iter_mut().for_each(|w| {
                 w.round_shots = 0;
                 w.missed = 0.0;
+                // EmissionsPerRoundFilter.RoundStart (VERIFIED-DECOMP @0x180c76150): (roundTime + 1,
+                // (int)Spawner.GetRoundDuration).
+                w.banana.push((rc + 1, round_duration as i32));
             });
         }
         self.logic_round_start(self.start_round as i32);
@@ -11440,6 +11502,11 @@ impl Game {
                             Some(j) => old.swap_remove(j),
                             None => {
                                 let mut st = WeaponState::new(k, w, if w.between_rounds { steps } else { rc });
+                                if let (Some((e, at)), true) = (self.round_banana, w.per_round.is_some()) {
+                                    if self.round_active && self.towers[t].placed_step <= at {
+                                        st.banana.push(e);
+                                    }
+                                }
                                 self.weapon_seq += 1;
                                 st.seq = self.weapon_seq;
                                 st.initial = first;
@@ -11647,10 +11714,17 @@ impl Game {
                 // Fast path: while every weapon stays on cooldown and outside its animation lead
                 // this frame, the attack only counts down (no target search). Not for turning
                 // or stance / paired-gun attacks, which act every frame.
+                // (EmissionsPerRoundFilter.Process runs every frame, cooldown or not.)
+                for (k, w) in attack.weapons.iter().enumerate() {
+                    if let (Some(n), Some(st)) = (w.per_round, self.towers[t].weapons.get_mut(wi + k)) {
+                        banana_tick(st, n, self.round_clock);
+                    }
+                }
                 if attack.turn_rate.is_none() && attack.weapons.iter().all(|w| w.name != "LongWeapon" && w.with_main.is_none()) {
                     let n = attack.weapons.len();
                     let (now_t, rc) = (self.sim_elapsed as i64, self.round_clock);
-                    if attack.weapons.iter().zip(&self.towers[t].weapons[wi..wi + n]).all(|(w, st)| st.anim < 0 && !st.ready(if w.between_rounds { now_t } else { rc })) {
+                    // (A banana weapon finds its point the frame before it is ready: below.)
+                    if attack.weapons.iter().zip(&self.towers[t].weapons[wi..wi + n]).all(|(w, st)| st.anim < 0 && !st.ready(if w.between_rounds { now_t } else { rc }) && !(w.per_round.is_some() && st.ready(rc + 1))) {
                         wi += n;
                         continue;
                     }
@@ -12278,7 +12352,19 @@ impl Game {
                         // NextDouble x 2 pi) radians, the tower's position + (cos, sin) x r (game
                         // frame), drawn again until Map.IsPointOnMap(p, -mapBorder) (recording
                         // sniper_040: Supply Drop's crate lands 38.15 out at 101.6 degrees).
-                        if let Some(border) = attack.random_basic {
+                        // (A banana's point: drawn once, the frame it comes due, and kept till it
+                        // goes; recording farm_000, two draws at 1 for the banana at 2.)
+                        let banana = attack.weapons.first().and_then(|w| w.per_round).filter(|_| self.towers[t].weapons.len() > wi);
+                        if let Some(n) = banana {
+                            banana_tick(&mut self.towers[t].weapons[wi], n, self.round_clock);
+                        }
+                        // (Attack.Process finds it the frame before the weapon is ready: recording
+                        // farm_004, draws at 1, 4, 7 for bananas at 2, 5, 8.)
+                        let rc1 = self.round_clock + 1;
+                        let pending = banana.map(|_| { let st = &self.towers[t].weapons[wi]; (st.rand_target, st.banana_due + st.banana_next > 0 && st.ready(rc1)) });
+                        if let Some((Some(q), _)) = pending {
+                            found = Some((0.0, q, 0));
+                        } else if let (Some(border), true) = (attack.random_basic, pending.is_none_or(|p| p.1)) {
                             for _ in 0..1000 {
                                 let r = (self.synced_double() * (hi - lo) as f64 + lo as f64) as f32;
                                 let a = (self.synced_double() * (std::f32::consts::TAU as f64)) as f32; // (2 pi as a float, widened: VERIFIED-DISASM const @0x183e50188; recording sniper_052)
@@ -12286,6 +12372,9 @@ impl Game {
                                 let q = [pos[0] + ca * r, pos[1] - sa * r];
                                 if on_map(q, -border) {
                                     found = Some((0.0, q, 0));
+                                    if banana.is_some() {
+                                        self.towers[t].weapons[wi].rand_target = Some(q);
+                                    }
                                     break;
                                 }
                             }
@@ -12529,7 +12618,14 @@ impl Game {
                     let now_t = self.sim_elapsed as i64;
                     let clock = if weapon.between_rounds { now_t } else { self.round_clock };
                     let tw = &mut self.towers[t];
-                    let quota_left = weapon.per_round.map_or(true, |n| tw.weapons[w].round_shots < n) && !at_limit;
+                    // EmissionsPerRoundFilter.Process (VERIFIED-DECOMP @0x180c75cb0): each round's
+                    // `count` bananas come due at (int)(i x duration / (count - 1) + start) (one:
+                    // start + duration / 2), each letting one emission through FilterEmission
+                    // (recording farm_000: every 57 frames from 43).
+                    if let Some(n) = weapon.per_round {
+                        banana_tick(&mut tw.weapons[w], n, self.round_clock);
+                    }
+                    let quota_left = weapon.per_round.map_or(true, |_| tw.weapons[w].banana_due > 0) && !at_limit;
                     // Weapon.Process (VERIFIED-DISASM @0xc6f800): without fireBetweenRounds it does
                     // nothing unless Simulation.AreRoundsActive: a Dartling, Mortar or Spike
                     // Factory between rounds with nothing out stays quiet (not in sandbox).
@@ -12635,6 +12731,10 @@ impl Game {
                         st.aim_z0 = aim_z;
                         st.brew_to = brew_pick;
                         st.round_shots += 1;
+                        if weapon.per_round.is_some() {
+                            st.banana_due = st.banana_due.saturating_sub(1);
+                            st.rand_target = None;
+                        }
                         if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM throw rt {} w {} at {:?} id {}", clock, w, p, st.aim_id); }
                     }
                     // (Between rounds Process does nothing, so a throw in progress waits too: recording

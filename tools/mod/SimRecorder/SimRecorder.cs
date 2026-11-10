@@ -67,6 +67,8 @@ public class Scenario
     public List<TowerSpec> towers { get; set; } = new();
     public bool quit { get; set; } = true;
     public bool fast { get; set; } = true;
+    /// A tower the placement UI refuses (CHIMPS: Banana Farm) is made by TowerManager.CreateTower.
+    public bool forcePlace { get; set; } = true;
     /// After this many recorded frames every ability is activated (Ability.Activate(true): cooldown
     /// ignored); -1 never.
     public int ability { get; set; } = -1;
@@ -278,6 +280,14 @@ public class Recorder : MelonMod
                     var model = sim.model.GetTowerFromId(t.id);
                     var ok = sim.GetInputManager(InGame.instance.bridge.GetInputId()).CreateTowerAt(new Il2CppAssets.Scripts.Simulation.SMath.Vector2(t.x, t.y), model, ObjectId.Invalid, false, true, true, false, -1, false, -1);
                     LoggerInstance.Msg($"placed {t.id} at {t.x},{t.y}: {ok}");
+                    // CHIMPS refuses some towers in the UI's placement (Banana Farm: no income);
+                    // the simulation's own TowerManager.CreateTower makes it anyway, as the clone's
+                    // harness does.
+                    if (!ok && Sc.forcePlace)
+                    {
+                        var made = sim.towerManager.CreateTower(model, new Il2CppAssets.Scripts.Simulation.SMath.Vector3(t.x, t.y, 0f), InGame.instance.bridge.GetInputId(), ObjectId.Invalid, ObjectId.Invalid, null, false, false, 0f, false, -1, -1);
+                        LoggerInstance.Msg($"forced {t.id} at {t.x},{t.y}: {made != null}");
+                    }
                 }
                 // Targeting modes, in placement order (the factory's list keeps creation order).
                 var placed = sim.factory.GetFactory<Tower>().up.list;

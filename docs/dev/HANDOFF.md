@@ -119,7 +119,7 @@ Ground rules follow.
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
-spike, super, village. Alchemist 34/34. Druid 34/34 (2026-11-09). Mermonkey 34/34 (2026-11-10).
+spike, super, village. Alchemist 34/34. Druid 34/34 (2026-11-09). Mermonkey 34/34, Banana Farm 25/25 (2026-11-10).
 compare.sh now builds once and runs recordings in parallel (RRBTD6_JOBS, default 12): the whole
 regression takes ~1.5 min. Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -1035,6 +1035,16 @@ seek / closest, which skip carried bloons anyway.)
     order (the process list), not the factory list's order after a flush. Exhaust / expire
     projectiles are made in the creation order of the shots they came from (Exhaust.src; 250 rt
     670: shell 5086 expires before 5098, listed after it, so its blast takes the Black first).
+
+## Banana Farm 25/25 (2026-11-10, DONE; re-recorded with seeds, old ones in pending/farm_old)
+
+- CHIMPS refuses a Banana Farm in InputManager.CreateTowerAt; SimRecorder now makes such a tower
+  with TowerManager.CreateTower (Scenario.forcePlace, default on), as the clone's harness does.
+- EmissionsPerRoundFilter: RoundStart @0x180c76150 (roundTime + 1, RoundData.roundDuration = the
+  latest emission time, Spawner.AddEmissions @0x180f71bf0), Process @0x180c75cb0 every frame:
+  banana i due at (int)(i x duration / (count - 1) + start), FilterEmission first so it goes the
+  next frame. RandomPositionBasic draws its point the frame before the weapon is ready, once per
+  banana. Weapons made after the round began get its entry.
 
 ## Mermonkey 34/34 (2026-11-10, DONE; re-recorded with seeds, old ones in pending/mermonkey_old)
 
