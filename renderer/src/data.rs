@@ -1656,6 +1656,10 @@ pub struct Proj {
     pub distribute: bool,
     #[serde(default)]
     pub distribute_override: bool,
+    /// DistributeToChildrenBloonModifierModel: a hit bloon with one of these tags (any, when
+    /// empty) passes this hit's overkill on to its children.
+    #[serde(default)]
+    pub distribute_set: Option<Vec<String>>,
     /// KnockbackModel: hit bloons go backwards for a while.
     #[serde(default)]
     pub knockback: Option<Knockback>,

@@ -632,6 +632,10 @@ def main():
             # DamageModel.distributeToChildren / overrideDistributeBlocker.
             "distribute": bool(dmg.get("distributeToChildren", True)),
             "distribute_override": bool(dmg.get("overrideDistributeBlocker", False)),
+            # DistributeToChildrenBloonModifier.Collide (VERIFIED-DECOMP @0x180cb9360), pass -1:
+            # a bloon with one of bloonTags (any, with none) gets distributeDamageToChildren for
+            # that layer (Tech Terror's blast carries into a MOAB's Ceramics).
+            "distribute_set": (lambda m: None if m is None else [t for t in (deref(m["f"].get("bloonTags")) or []) if isinstance(t, str)] or ([m["f"]["bloonTag"]] if m["f"].get("bloonTag") else []))((pb.get("DistributeToChildrenBloonModifierModel") or [None])[0]),
             # DamageModel.ignoreImmunityDestroy: false = a hit on a bloon it can't damage destroys it.
             "immune_keep": bool(dmg.get("ignoreImmunityDestroy", False)),
             # Whether it has a DamageModel at all (AddBehaviorToBloon's applyOnlyIfDamaged asks it).

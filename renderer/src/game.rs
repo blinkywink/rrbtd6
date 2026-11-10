@@ -1600,6 +1600,9 @@ pub struct Tower {
     pub temp_missed: HashMap<(String, usize), f32>,
     /// Darkshift.frameToMove (sim frame) and teleportPos: the tower moves there that frame.
     pub shift: Option<(u64, [f32; 2])>,
+    /// An ability attack's weapons' CritMultiplier.nextCritAt by (attack, weapon index): rolled
+    /// with the tower (its ActivateAttack attacks are made then), used when the ability goes on.
+    pub temp_crit: HashMap<(String, usize), u32>,
     pub turbo: Option<ActiveTurbo>,
     /// Monkey Fan Club: the boost and frames left.
     pub fan: Option<(crate::data::FanClub, f32)>,
@@ -3139,6 +3142,8 @@ pub struct Game {
     proj_cursor: usize,
     /// The damage being dealt: (distributeToChildren, overrideDistributeBlocker).
     distribute: (bool, bool),
+    /// DistributeToChildrenSet on the bloon this hit is on: its own layer passes overkill on.
+    dist_set: bool,
     /// The step's phase (process-list order of things made in it): 0 collisions, 1 towers,
     /// 2 movement and later (the Spawner's emissions count as 0: it runs before the towers).
     phase: u8,
@@ -4229,8 +4234,10 @@ macro_rules! collide_pass {
                 let hit_moab = $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Moabs");
                 let own_chain = $s.chain_health(i);
                 $s.distribute = ($s.projectiles[$p].spec.distribute, $s.projectiles[$p].spec.distribute_override);
+                $s.dist_set = $s.projectiles[$p].spec.distribute_set.as_ref().is_some_and(|tags| tags.is_empty() || $s.defs[$s.bloons[i].kind].tags.iter().any(|t| tags.contains(t)));
                 let n = $s.damage(i, dmg.round() as i32, &mut $kids);
                 $s.distribute = (true, false);
+                $s.dist_set = false;
                 // FreezeModel.applyAfterDamage: Projectile.CollideBloon runs the behaviours by
                 // collision pass, the freeze (pass 1) after the damage, on what the hit bloon
                 // is now and (cascadeMutators) the children it made (recording ice_052: a Pink
@@ -5094,6 +5101,7 @@ impl Game {
             pop_in_process: false,
             proj_cursor: usize::MAX,
             distribute: (true, false),
+            dist_set: false,
             next_uid: 0,
             active_rbe: 0.0,
             cash: mode.cash,
@@ -6998,6 +7006,7 @@ impl Game {
             temp: Vec::new(),
             temp_missed: HashMap::new(),
             shift: None,
+            temp_crit: HashMap::new(),
             turbo: None,
             fan: None,
             morph: None,
@@ -8063,6 +8072,7 @@ impl Game {
             temp: Vec::new(),
             temp_missed: HashMap::new(),
             shift: None,
+            temp_crit: HashMap::new(),
             turbo: None,
             fan: None,
             morph: None,
@@ -10639,7 +10649,9 @@ impl Game {
             // boomerang_500: Glaive Lord's orbit, distributeToChildren off, pops a Ceramic into
             // two whole Rainbows).
             let (dist_on, dist_override) = self.distribute;
-            if overflow > 0 && dist_on && (self.defs[kind].distribute_damage_to_children || dist_override) {
+            // (DistributeToChildrenSet, for the hit bloon's own layer only.)
+            let set = self.dist_set && self.pop_depth == 1;
+            if overflow > 0 && dist_on && (self.defs[kind].distribute_damage_to_children || dist_override || set) {
                 popped += self.damage(j, overflow, out_children);
             }
         }
@@ -11710,11 +11722,36 @@ impl Game {
                                 self.weapon_seq += 1;
                                 st.seq = self.weapon_seq;
                                 st.initial = first;
+                                // CritMultiplier.Initialise (VERIFIED-DECOMP @0x180c71590): nextCritAt
+                                // = syncedRandom.Next(lower, upper + 1) as the weapon is made.
+                                if let Some(c) = w.crit.as_ref() {
+                                    let stored = (i >= base_weapons).then(|| {
+                                        let mut c0 = base_weapons;
+                                        extra.iter().find_map(|a| {
+                                            let r = (i < c0 + a.weapons.len()).then(|| (a.model_name.clone(), i - c0));
+                                            c0 += a.weapons.len();
+                                            r
+                                        })
+                                    }).flatten().and_then(|k| self.towers[t].temp_crit.get(&k).copied());
+                                    let n = stored.unwrap_or_else(|| c.lower + (self.synced_double() * (c.upper + 1 - c.lower) as f64) as u32);
+                                    st.crit = (0, n);
+                                }
                                 st
                             }
                         }
                     })
                     .collect();
+                // (The tower's abilities' ActivateAttack attacks are made with it, after its own:
+                // their weapons' CritMultiplier.Initialise rolls come next; recording super_040,
+                // Tech Terror's blast after the two arms.)
+                if first {
+                    let abil: Vec<(String, usize, crate::data::Crit)> = tier.abilities.iter().flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter())
+                        .flat_map(|a| a.weapons.iter().enumerate().filter_map(move |(j, w)| w.crit.clone().map(|c| (a.model_name.clone(), j, c)))).collect();
+                    for (name, j, c) in abil {
+                        let n = c.lower + (self.synced_double() * (c.upper + 1 - c.lower) as f64) as u32;
+                        self.towers[t].temp_crit.insert((name, j), n);
+                    }
+                }
             }
             {
                 let tw = &mut self.towers[t];
@@ -13337,19 +13374,22 @@ impl Game {
                             // (the tier that adds the crit) starts the count; UpdatedModel (later
                             // upgrades) keeps it.
                             // A missed-frame shot (doubleShot) doesn't count but crits with its shot.
+                            // (CritMultiplier.Initialise / GetProjectile, VERIFIED-DECOMP @0x180c71590 /
+                            // 0x180c71010: nextCritAt = syncedRandom.Next(lower, upper + 1), at the
+                            // weapon's making and after each crit; recording super_040, the arms' two
+                            // rolls before the first frame.)
                             let crit = match weapon.crit.as_ref() {
                                 Some(c) => {
-                                    let roll = |r: f32| c.lower + ((r * (c.upper.saturating_sub(c.lower) + 1) as f32) as u32).min(c.upper.saturating_sub(c.lower));
                                     if self.towers[t].weapons[w].crit.1 == 0 {
-                                        let r = self.rand();
-                                        self.towers[t].weapons[w].crit = (0, roll(r).max(1));
+                                        let n = c.lower + (self.synced_double() * (c.upper + 1 - c.lower) as f64) as u32;
+                                        self.towers[t].weapons[w].crit = (0, n);
                                     }
                                     let (cur, next) = self.towers[t].weapons[w].crit;
                                     let (cur, next) = if double {
                                         (cur, next)
                                     } else if cur + 1 > next {
-                                        let r = self.rand();
-                                        (1, roll(r).max(1))
+                                        let n = c.lower + (self.synced_double() * (c.upper + 1 - c.lower) as f64) as u32;
+                                        (1, n)
                                     } else {
                                         (cur + 1, next)
                                     };
@@ -18755,6 +18795,16 @@ mod tests {
             // (Tower.UpdateTargetType: made with no target type, it takes the model's first.)
             if let Some(&m) = g.target_modes(t).first() {
                 g.towers[t].target = m;
+            }
+            // MonkeyTemple.OnTowerCreated -> ActOnSacrifice (VERIFIED-DECOMP @0x180d3e140):
+            // lastSacrificed = now, so CanFire (@0x180d3f010) holds its weapons weaponDelay frames
+            // (recording super_400: the Sun Temple's first shot at rt 224).
+            // (lastSacrificed is Simulation.time as the tower is made: 0 here, before the first
+            // frame; the clone's mute counts from the frame it is placed in, so take that off.)
+            if let Some(d) = g.tier(t).and_then(|x| x.temple.as_ref()).map(|tp| tp.delay) {
+                // (The recording's first frame number is Simulation.time then: F 16 at rt 1.)
+                let made_at = first_time.unwrap_or(1) - frames.first().map_or(1, |f| f.0 as i64);
+                g.towers[t].mute = g.towers[t].mute.max(d * FPS - made_at as f32);
             }
             if let Some(m) = g.tier(t).and_then(|x| x.switch_target.as_deref()).and_then(TargetMode::parse) {
                 g.towers[t].target = m;
