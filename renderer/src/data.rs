@@ -1142,6 +1142,9 @@ pub struct Weapon {
     /// SendToBankModel emission: the cash goes into the tower's bank instead of the map.
     #[serde(default)]
     pub to_bank: bool,
+    /// RandomRotationWeaponBehavior: each shot draws a synced NextDouble as it's made.
+    #[serde(default)]
+    pub random_rot: bool,
     /// BurstWeaponBehaviorModel: each shot is `count` shots, `frames` apart.
     #[serde(default)]
     pub burst: Option<BurstFire>,
@@ -1656,6 +1659,9 @@ pub struct Proj {
     /// AgeModel.lifespan (seconds), when it has one.
     #[serde(default)]
     pub age_lifespan: Option<f32>,
+    /// AgeRandomModel: lifespanFrames drawn in [min, max) frames as the shot is made.
+    #[serde(default)]
+    pub age_random: Option<[i32; 2]>,
     /// CreateEffectProjectileAfterTimeModel with useTargetPosition: its timeFrames.
     #[serde(default)]
     pub effect_after_target: Option<i32>,

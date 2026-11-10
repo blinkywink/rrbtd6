@@ -295,7 +295,7 @@ def main():
         ts = (pb.get("TravelStraitModel") or [{"f": {}}])[0]["f"]
         age = (pb.get("AgeModel") or [{"f": {}}])[0]["f"]
         if not age and pb.get("AgeRandomModel"):
-            # STAND-IN: AgeRandomModel's random lifespan in [min, max] as the middle value.
+            # (Its lifespan is drawn per shot: "age_random"; the middle value is only the display's.)
             ar = pb["AgeRandomModel"][0]["f"]
             age = dict(ar, lifespan=(ar.get("minLifespan", 0.0) + ar.get("maxLifespan", 0.0)) / 2)
         disp = (pb.get("DisplayModel") or [{"f": {}}])[0]["f"]
@@ -642,6 +642,9 @@ def main():
             "random_range": random_range,
             # Its AgeModel's lifespan (Projectile.lifespan for the exhaust duration fraction).
             "age_lifespan": pb["AgeModel"][0]["f"].get("lifespan") if pb.get("AgeModel") else None,
+            # AgeRandom.Initialise (VERIFIED-DECOMP @0x180c85cd0): lifespanFrames =
+            # syncedRandom.Next(minLifespan x 60, maxLifespan x 60) as the shot is made.
+            "age_random": [int(pb["AgeRandomModel"][0]["f"].get("minLifespan", 0.0) * 60), int(pb["AgeRandomModel"][0]["f"].get("maxLifespan", 0.0) * 60)] if pb.get("AgeRandomModel") and not pb.get("AgeModel") else None,
             "effect_after_target": next((int(m["f"]["time"] * 60) for m in pb.get("CreateEffectProjectileAfterTimeModel", []) if m["f"].get("useTargetPosition")), None),
             "display": "#empty" if disp.get("display") in empty_displays else disp.get("display"),
             "tag_mods": [tag_mod(b) for b in pb.get("DamageModifierForTagModel", [])],
@@ -1336,7 +1339,10 @@ def main():
                                                       if x and x["type"] == "OffsetModel"), None),
                                 "fire_sounds": behavior_sounds(items(w["f"].get("behaviors")),
                                                                "CreateSoundOnProjectileCreatedModel", SOUND_KEYS),
-                                "to_bank": (deref(w["f"]["emission"]) or {}).get("type") == "SendToBankModel"})
+                                "to_bank": (deref(w["f"]["emission"]) or {}).get("type") == "SendToBankModel",
+                                # RandomRotationWeaponBehavior.ProjectilesCreated (@0x180c90320): one
+                                # synced NextDouble x 360 per shot (a display rotation).
+                                "random_rot": any(x and x["type"] == "RandomRotationWeaponBehaviorModel" for x in items(w["f"].get("behaviors")))})
             # LinkProjectileRadiusToTowerRangeModel: only its projectileModel (by reference; a
             # model without one links every weapon, as before).
             link_models = [b["f"] for b in items(f["behaviors"])

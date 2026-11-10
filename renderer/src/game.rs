@@ -1594,12 +1594,16 @@ pub struct Tower {
     pub ability_round: HashMap<String, u32>,
     /// Attacks switched on by abilities (ActivateAttackModel), after the tier's own.
     pub temp: Vec<TempAttack>,
+    /// An ability attack's weapons' missedRate by (attack, weapon index): ActivateAttack's
+    /// attacks belong to the tower and keep their Weapons between activations (recording
+    /// spike_050: the storms' missed-frame double volleys carry on where the last one left off).
+    pub temp_missed: HashMap<(String, usize), f32>,
     pub turbo: Option<ActiveTurbo>,
     /// Monkey Fan Club: the boost and frames left.
     pub fan: Option<(crate::data::FanClub, f32)>,
     /// Total Transformation: the tier and model it's turned into, and frames left.
     pub morph: Option<(std::sync::Arc<Tier>, Option<String>, f32)>,
-    /// ActivateAbilityAfterIntervalModel: frames since its ability last went off by itself.
+    /// ActivateAbilityAfterInterval.lastActivatedAt (round time; Initialise sets it far back).
     pub auto_t: f32,
     /// SwitchDisplayModel: model name and frames left.
     pub look: Option<(String, f32)>,
@@ -1707,10 +1711,14 @@ pub struct Tower {
     /// `steps` when it was placed: support mutators reach it (and go out from it) from the next
     /// frame (recording ninja_032: its rt 1 Caltrops are made with 6 pierce, later ones 6.16).
     pub placed_step: u64,
-    /// The support set its TargetTrack points were made under: a change remakes them.
-    pub track_buffs: u64,
-    /// The TargetTrack attack's supplier inputs (centre, range, no MOAB, through walls).
-    pub track_args: Option<([f32; 2], f32, bool, bool)>,
+    /// Per TargetTrack attack (by model name): its own TrackTargetSupplier (Attack.Initialise
+    /// makes one per attack; recording spike_050, Spike Storm's range-2000 list beside the
+    /// tower's own): the supplier inputs, the support set its points were made under, and
+    /// the points, cursor and tiers.
+    pub track_sets: Vec<TrackSet>,
+    /// StartOfRoundRateBuff.OnRoundStartSim's mutator is on (1) or off (0); a round start
+    /// re-adds it, the unique mutator's time refreshed without a model change.
+    pub sor_until: u64,
     /// RBE spent on undead this second (maxRbeSpawnedPerSecond) and the step that second began.
     pub grave_spent: (f32, u64),
     /// NecromancerTargetTrackWithinRange: currentPathIndex, pathIndexToSet (copied over at
@@ -1724,9 +1732,6 @@ pub struct Tower {
     pub necro_emit: Option<(u8, usize)>,
     /// NecromancerEmission.currentDamageBonus: the DamageMutator on the tower (necro_rate_update).
     pub necro_dmg: f32,
-    /// TrackTargetSupplier.targetPathSegments (shuffled) and TargetTrack's cursor into it, with
-    /// the tiers it was made for (a new tier's Attack makes a new list).
-    pub track_supply: Option<(Vec<[f32; 2]>, usize, [u8; 3])>,
     /// The off hand's target mode (TargetLeftHandModel: Robo Monkey's second arm).
     pub left_target: TargetMode,
     /// TargetCamo.prioritiseCamo: the upgrade panel's camo priority toggle is on.
@@ -1756,6 +1761,14 @@ pub struct MtpState {
     pub frames: [f32; 2],
     /// FilterMarkedToPop.lineageToFilter of the marking and the execution attack.
     pub lin: [Vec<u64>; 2],
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TrackSet {
+    pub key: String,
+    pub args: ([f32; 2], f32, bool, bool),
+    pub sig: u64,
+    pub supply: Option<(Vec<[f32; 2]>, usize, [u8; 3])>,
 }
 
 pub struct TempAttack {
@@ -3755,7 +3768,12 @@ macro_rules! collide_pass {
         let exhaust_wait = { let pr = &$s.projectiles[$p]; pr.exhaust_made.1 > 0 && pr.spec.on_contact.iter().any(|c| c.gap > 0.0 && c.gap > ($s.sim_elapsed as f32 - 1.0 - pr.exhaust_made.0) + 1.0) };
         let flying = exhaust_wait || ($s.projectiles[$p].line_spent && $only.is_none()) || $s.projectiles[$p].spec.no_hit
             || ($s.projectiles[$p].spec.no_checker && $only.is_none())
-            || ($s.projectiles[$p].moving > 0.0 && $s.projectiles[$p].spec.arrive.as_ref().is_some_and(|a| a.filter_moving));
+            // (A CreateProjectileOnExhaustPierce without a gap turns canCollideWithBloons back on
+            // in its Process, after ArriveAtTarget's, from the shot's first frame: recording
+            // spike_500 rt 227, a Super Mines pile meets a Black in the air, z 44, and its small
+            // explosion goes off there.)
+            || ($s.projectiles[$p].moving > 0.0 && $s.projectiles[$p].spec.arrive.as_ref().is_some_and(|a| a.filter_moving)
+                && !({ let pr = &$s.projectiles[$p]; pr.age >= 2.0 && pr.spec.on_contact.iter().any(|c| c.max_count > 0 && c.gap <= 0.0 && !c.map_only) }));
         // Broad phase: the bloons in grid cells within reach, in storage order (the order
         // a full scan would meet them in).
         $cand.clear();
@@ -3765,7 +3783,12 @@ macro_rules! collide_pass {
         let checks = {
             let pr = &mut $s.projectiles[$p];
             let f = pr.spec.check_frames;
-            if f > 0 && ($s.sim_elapsed as i64 - pr.check_t as i64) < f as i64 {
+            // (Only while it can collide: recording spike_000 rt 56, a pile's 5-frame timer
+            // starts as it lands, it doesn't run through the throw; recording spike_500 rt 103,
+            // a Super Mines pile, collidable in flight, checks on frames 17 + 5k from its throw at 16.)
+            if flying {
+                false
+            } else if f > 0 && ($s.sim_elapsed as i64 - pr.check_t as i64) < f as i64 {
                 false
             } else {
                 if f > 0 {
@@ -5395,6 +5418,9 @@ impl Game {
         // Weapon.RoundStart (VERIFIED-DISASM @0xc703a0): missedRate = 0 (recording dart_040_club:
         // a Fan Club weapon's fraction gone as round 20 starts).
         for tw in &mut self.towers {
+            // (An ability's resting weapons too: recording spike_050, the second storm's
+            // doubles start afresh after round 40 starts, the third's carry on from the second.)
+            tw.temp_missed.values_mut().for_each(|m| *m = 0.0);
             let rc = self.round_clock;
             self.round_banana = Some(((rc + 1, round_duration as i32), self.steps as u64));
             tw.weapons.iter_mut().for_each(|w| {
@@ -6614,6 +6640,25 @@ impl Game {
         }
     }
 
+    /// TrackTargetSupplier.GeneratePoints for a tower's ability attacks (ActivateAttack's
+    /// attacks are made with the tower and Process from its first frame, firing or not), once:
+    /// recording spike_050, 13 points and the first throw, then Spike Storm's four 128-point lists.
+    fn track_sets_init(&mut self, t: usize) {
+        let Some(tr) = self.tier(t) else { return };
+        let wants = |a: &crate::data::Attack| a.track_target.is_some() && !a.track_closest && !a.track_default;
+        let abil: Vec<crate::data::Attack> = tr.abilities.iter().flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter()).filter(|a| wants(a)).cloned().collect();
+        let pos = self.towers[t].pos;
+        for a in abil.iter() {
+            if self.towers[t].track_sets.iter().any(|x| x.key == a.model_name) {
+                continue;
+            }
+            let no_moab = a.exclude_tags.iter().any(|g| g == "Moabs");
+            self.towers[t].track_sets.push(TrackSet { key: a.model_name.clone(), args: (pos, a.range, no_moab, a.through_walls), ..Default::default() });
+            let k = self.towers[t].track_sets.len() - 1;
+            self.track_supply_refresh_one(t, k);
+        }
+    }
+
     fn random_pos_target(&mut self, t: usize, key: &str, m: crate::data::RandomPos) -> Option<[f32; 2]> {
         let k = self.random_pos_update(t, key, &m);
         if self.towers[t].randpos[k].1.dirty {
@@ -6943,10 +6988,11 @@ impl Game {
             ent_rots: Vec::new(),
             ability_round: HashMap::new(),
             temp: Vec::new(),
+            temp_missed: HashMap::new(),
             turbo: None,
             fan: None,
             morph: None,
-            auto_t: 0.0,
+            auto_t: -1.0e9,
             focus: false,
             look: None,
             overclock: None,
@@ -6980,8 +7026,8 @@ impl Game {
             necro_points: false,
             model_clock: Some((self.sim_elapsed as i64, self.round_clock)),
             placed_step: self.steps as u64,
-            track_buffs: 0,
-            track_args: None,
+            track_sets: Vec::new(),
+            sor_until: 0,
             grave_spent: (0.0, 0),
             necro_cur: 0,
             necro_next: 0,
@@ -6989,7 +7035,6 @@ impl Game {
             necro_seg: None,
             necro_emit: None,
             necro_dmg: 0.0,
-            track_supply: None,
             comanche: (0.0, 0),
             vigilante_at: None,
             vagrant_zone: None,
@@ -8007,10 +8052,11 @@ impl Game {
             ent_rots: Vec::new(),
             ability_round: HashMap::new(),
             temp: Vec::new(),
+            temp_missed: HashMap::new(),
             turbo: None,
             fan: None,
             morph: None,
-            auto_t: 0.0,
+            auto_t: -1.0e9,
             focus: false,
             look: None,
             overclock: None,
@@ -8043,8 +8089,8 @@ impl Game {
             necro_points: false,
             model_clock: Some((self.sim_elapsed as i64, self.round_clock)),
             placed_step: self.steps as u64,
-            track_buffs: 0,
-            track_args: None,
+            track_sets: Vec::new(),
+            sor_until: 0,
             grave_spent: (0.0, 0),
             necro_cur: 0,
             necro_next: 0,
@@ -8052,7 +8098,6 @@ impl Game {
             necro_seg: None,
             necro_emit: None,
             necro_dmg: 0.0,
-            track_supply: None,
             comanche: (0.0, 0),
             vigilante_at: None,
             vagrant_zone: None,
@@ -8712,6 +8757,11 @@ impl Game {
             if a.per_round > 0 && self.towers[t].ability_round.get(name).copied().unwrap_or(0) as i32 >= a.per_round {
                 continue;
             }
+            // IsReady: not while it's active (recording spike_050: Activate(true) at 120 does
+            // nothing, the storm from 2 still going).
+            if self.ability_active(t, &a) {
+                continue;
+            }
             *self.towers[t].ability_round.entry(name.to_string()).or_insert(0) += 1;
             self.towers[t].ability_cd.insert(name.to_string(), a.cooldown * FPS);
             self.use_ability(t, &a);
@@ -8733,21 +8783,48 @@ impl Game {
         }
     }
 
-    /// ActivateAbilityAfterIntervalModel (Carpet of Spikes): during rounds the tower's first
-    /// ability goes off every `interval` seconds by itself (its cooldown untouched).
-    /// HYPOTHESIS P-AUTOABILITY: the timer only runs during rounds and starts at 0.
+    /// ActivateAbilityAfterInterval.Process (VERIFIED-DECOMP @0x180ce2b60, Carpet of Spikes):
+    /// when its ability CanUseAbility and more than intervalFrames have passed since
+    /// lastActivatedAt (far back at first, so it goes off at once), Ability.Activate(true) (no
+    /// cooldown needed or started; IsReady still refuses while it's active or rounds aren't),
+    /// and lastActivatedAt = now either way (recording spike_050: storms at 2, 903, 1804, 2705).
     fn auto_abilities(&mut self) {
-        if !self.round_active {
-            return;
-        }
         for t in 0..self.towers.len() {
             let Some((every, a)) = self.tier(t).and_then(|tr| Some((tr.auto_ability?, tr.abilities.first()?.clone()))) else { continue };
-            self.towers[t].auto_t += 1.0;
-            if self.towers[t].auto_t >= every * FPS {
-                self.towers[t].auto_t = 0.0;
-                self.use_ability(t, &a);
+            // (A tower made this frame processes from the next: recording spike_050, placed at
+            // 1, the first storm at 2.)
+            if a.toggled_off || self.towers[t].placed_step + 1 >= self.steps as u64 {
+                continue;
             }
+            // (Simulation.roundTime (sim + 0x38, the clock AgeRandom's useRoundTime reads), not
+            // the elapsed frames: it holds between rounds.)
+            let now = self.round_clock as f32;
+            if now - self.towers[t].auto_t <= ((every * FPS) as i32) as f32 {
+                continue;
+            }
+            if self.rounds_active() && !self.ability_active(t, &a) {
+                *self.towers[t].ability_round.entry(a.name.clone()).or_insert(0) += 1;
+                let n0 = self.towers[t].temp.len();
+                self.use_ability(t, &a);
+                // (Activated inside the tower's Process, its attacks act this frame and their
+                // lifespan counts from the next: recording spike_050, 41 throws 3 frames apart
+                // for a 2 s storm.)
+                let rc = self.round_clock;
+                for x in &mut self.towers[t].temp[n0..] {
+                    x.counted = Some(rc);
+                }
+            }
+            self.towers[t].auto_t = now;
         }
+    }
+
+    /// Ability.get_IsActive (VERIFIED-DECOMP @0x180dfb610): one of its behaviours is still on;
+    /// for an ActivateAttack, its attacks' lifespan hasn't run out.
+    fn ability_active(&self, t: usize, a: &crate::data::Ability) -> bool {
+        let Some(tr) = self.tier(t) else { return false };
+        let s0: usize = tr.abilities.iter().take_while(|o| o.name != a.name).flat_map(|o| o.activate.iter()).flat_map(|x| x.attacks.iter()).map(|at| at.weapons.len()).sum();
+        let n: usize = a.activate.iter().flat_map(|x| x.attacks.iter()).map(|at| at.weapons.len()).sum();
+        self.towers[t].temp.iter().any(|x| x.slot >= s0 && x.slot < s0 + n && !x.one_shot && !x.once && x.frames_left > 0.0)
     }
 
     /// What using ability `a` of tower `t` does (its cooldown is the caller's business).
@@ -10847,12 +10924,19 @@ impl Game {
     /// by NextDouble x maxOffset - maxOffset x 0.5 in x, then y (recording ninja_002: the
     /// first Caltrops at rt 1).
     /// `base`: the attack's own range (the tower's buffs at the time apply).
-    fn supplied_track_point(&mut self, t: usize, c: [f32; 2], base: f32, off: f32, no_moab: bool, through_walls: bool) -> Option<(f32, [f32; 2], u64)> {
+    fn supplied_track_point(&mut self, t: usize, key: &str, c: [f32; 2], base: f32, off: f32, no_moab: bool, through_walls: bool) -> Option<(f32, [f32; 2], u64)> {
         // (A model update remakes the supplier's points: the tower's support mutators changing,
         // recording ninja_032, a second shuffle at rt 2 once Shinobi Tactics is on.)
-        self.towers[t].track_args = Some((c, base, no_moab, through_walls));
-        self.track_supply_refresh(t);
-        let (pts, cur, _) = self.towers[t].track_supply.as_ref().unwrap();
+        let k = match self.towers[t].track_sets.iter().position(|x| x.key == key) {
+            Some(k) => k,
+            None => {
+                self.towers[t].track_sets.push(TrackSet { key: key.to_string(), ..Default::default() });
+                self.towers[t].track_sets.len() - 1
+            }
+        };
+        self.towers[t].track_sets[k].args = (c, base, no_moab, through_walls);
+        self.track_supply_refresh_one(t, k);
+        let (pts, cur, _) = self.towers[t].track_sets[k].supply.as_ref().unwrap();
         if pts.is_empty() {
             return None;
         }
@@ -10860,30 +10944,57 @@ impl Game {
         let p = pts[i];
         let x = self.synced_double() as f32 * off - off * 0.5;
         let y = self.synced_double() as f32 * off - off * 0.5;
-        if let Some(s) = self.towers[t].track_supply.as_mut() {
+        if let Some(s) = self.towers[t].track_sets[k].supply.as_mut() {
             s.1 = i + 1;
         }
         // (The game's y is ours negated.)
         Some((0.0, [p[0] + x, p[1] - y], 0))
     }
 
+    /// Every TargetTrack supplier of tower `t`, in the order its attacks first used them; a
+    /// supplier whose attack is gone (an ability's attack ending) goes with it.
+    fn track_supply_refresh(&mut self, t: usize) {
+        if self.towers[t].track_sets.is_empty() {
+            return;
+        }
+        // (An ability's attacks are the tower's from the start: their suppliers stay between
+        // activations; recording spike_050, Spike Storm's four lists shuffled once.)
+        let names: Vec<String> = self.tier(t).map(|tr| tr.attacks.iter().chain(tr.abilities.iter().flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter())).map(|a| a.model_name.clone()).collect()).unwrap_or_default();
+        let tw = &mut self.towers[t];
+        let temp: Vec<String> = tw.temp.iter().map(|x| x.attack.model_name.clone()).collect();
+        tw.track_sets.retain(|x| names.contains(&x.key) || temp.contains(&x.key));
+        for k in 0..self.towers[t].track_sets.len() {
+            self.track_supply_refresh_one(t, k);
+        }
+    }
+
     /// TrackTargetSupplier.GeneratePoints when the tower's model is new (placed, upgraded, or its
     /// support mutators changed): the Close-ordered visible segment points, shuffled.
-    fn track_supply_refresh(&mut self, t: usize) {
-        let Some((c, base, no_moab, through_walls)) = self.towers[t].track_args else { return };
+    fn track_supply_refresh_one(&mut self, t: usize, k: usize) {
+        let (c, base, no_moab, through_walls) = self.towers[t].track_sets[k].args;
         // (Under the model's range now: recording ninja_052, Sabotage's range buff gives 18 points.)
         let range = self.buffs.get(t).map_or(base, |b| b.range(base));
         let tiers = self.towers[t].tiers;
         let sig = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
+            // (StartOfRoundRateBuff's mutator going on and off is a model change too: recording
+            // spike_005, a 12-point reshuffle as Carpet of Spikes' 10 s buff ends, rt 724 / 3499.)
+            // (Between rounds it stays as it was: the next round start only refreshes it.)
+            if self.round_active {
+                let on = self.tier(t).and_then(|tr| tr.round_start_rate.as_ref()).is_some_and(|r| (self.round_frame as f32) < r.duration * FPS && r.mult > 0.0);
+                self.towers[t].sor_until = on as u64;
+            }
+            let sor = self.towers[t].sor_until != 0;
+            sor.hash(&mut h);
             if let Some(b) = self.buffs.get(t) {
                 (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_x.to_bits(), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.vig_range.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits()).hash(&mut h);
             }
             h.finish()
         };
-        if self.towers[t].track_supply.as_ref().is_none_or(|s| s.2 != tiers) || self.towers[t].track_buffs != sig {
-            self.towers[t].track_buffs = sig;
+        let set = &self.towers[t].track_sets[k];
+        if set.supply.as_ref().is_none_or(|s| s.2 != tiers) || set.sig != sig {
+            self.towers[t].track_sets[k].sig = sig;
             let mut pts: Vec<[f32; 2]> = self.visible_segments(c, range, no_moab, through_walls).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
             // (The list is the Close one: squared distance from the tower, a stable OrderBy;
             // recording ninja_002: with it the shuffle gives the game's -134.1, -99.1, -113.1,
@@ -10897,8 +11008,8 @@ impl Game {
             }
             // HYPOTHESIS P-TRACKCURSOR: the cursor carries on into the new points (recording
             // ninja_032 rt 216: the second Caltrops go to the remade list's second point).
-            let cur = self.towers[t].track_supply.as_ref().map_or(0, |s| s.1);
-            self.towers[t].track_supply = Some((pts, cur, tiers));
+            let cur = self.towers[t].track_sets[k].supply.as_ref().map_or(0, |s| s.1);
+            self.towers[t].track_sets[k].supply = Some((pts, cur, tiers));
         }
     }
 
@@ -11554,6 +11665,18 @@ impl Game {
                             Some(j) => old.swap_remove(j),
                             None => {
                                 let mut st = WeaponState::new(k, w, if w.between_rounds { steps } else { rc });
+                                if i >= base_weapons {
+                                    let mut c = base_weapons;
+                                    for a in extra.iter() {
+                                        if i < c + a.weapons.len() {
+                                            if let Some(m) = self.towers[t].temp_missed.get(&(a.model_name.clone(), i - c)) {
+                                                st.missed = *m;
+                                            }
+                                            break;
+                                        }
+                                        c += a.weapons.len();
+                                    }
+                                }
                                 if let (Some((e, at)), true) = (self.round_banana, w.per_round.is_some()) {
                                     if self.round_active && self.towers[t].placed_step <= at {
                                         st.banana.push(e);
@@ -12363,7 +12486,7 @@ impl Game {
                                 }
                                 None => None,
                             },
-                            TargetMode::First | TargetMode::Last | TargetMode::Close | TargetMode::Strong | TargetMode::Track if !attack.track_closest && !attack.track_default => self.supplied_track_point(t, pos, attack.range, off, no_moab, attack.through_walls),
+                            TargetMode::First | TargetMode::Last | TargetMode::Close | TargetMode::Strong | TargetMode::Track if !attack.track_closest && !attack.track_default => self.supplied_track_point(t, &attack.model_name, pos, attack.range, off, no_moab, attack.through_walls),
                             _ => self.track_point(pos, range, off),
                         }
                     };
@@ -12802,7 +12925,7 @@ impl Game {
                         let seed = self.freeplay_seed;
                         let d = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
                         if std::env::var_os("RRBTD6_RNG_LOG").is_some() {
-                            eprintln!("RNG {} {d:?}", self.round_clock);
+                            eprintln!("RNG {} {d:?} @{}", self.round_clock, std::panic::Location::caller().line());
                         }
                     }
                     // The Target's factory object, while its bloon lives. (Its cached spot is where
@@ -12890,6 +13013,8 @@ impl Game {
                     // shots its rate leaves (doubleShot).
                     let mut queue = vec![false; spawns];
                     let mut qi = 0;
+                    // RandomRotationWeaponBehavior draws for shots made earlier in this burst.
+                    let mut rot_defer = 0usize;
                     while qi < queue.len() {
                         let double = queue[qi];
                         qi += 1;
@@ -14043,6 +14168,16 @@ impl Game {
                                     pr.typed = typed;
                                 }
                             }
+                            // RandomRotationWeaponBehavior.ProjectilesCreated (VERIFIED-DECOMP
+                            // @0x180c90320): per new shot a synced NextDouble x 360, a display
+                            // rotation (recording spike_000: three draws a throw, the pile's P-line
+                            // rotation still its throw direction).
+                            // (Weapon.Process's missed-frame shots are made in one go and get one
+                            // ProjectilesCreated: recording spike_050, a storm weapon's two spikes
+                            // draw their two AgeRandom lifespans, then their two rotations.)
+                            if weapon.random_rot {
+                                rot_defer += self.projectiles.len() - start;
+                            }
                             // RandomAngleOffset.ProjectilesCreated (VERIFIED-DISASM @0xc8fe40): per
                             // shot, in order, a syncedRandom NextDouble; g = (float)d x (max - min) -
                             // (max - min) x 0.5; its direction turned by g (Vector3Boxed.Rotate), its
@@ -14145,6 +14280,9 @@ impl Game {
                         tw.weapons[w].empty_pt = Some([from[0] + d[0] * r, from[1] + d[1] * r]);
                     }
                     }
+                    for _ in 0..std::mem::take(&mut rot_defer) {
+                        self.synced_double();
+                    }
                 }
             }
             // Zoned<Bloon>.Process (@0x18239f600; addresses from SimRecorder's zone_methods probe), made
@@ -14209,9 +14347,11 @@ impl Game {
                 // throws at 300 too).
                 let done = if x.one_shot { fired || x.once || x.frames_left < -FPS } else if x.now { x.frames_left < 0.0 } else { x.frames_left <= 0.0 };
                 if done {
-                    tw.temp.remove(k);
+                    let gone = tw.temp.remove(k);
                     if tw.weapons.len() >= i0 + n {
-                        tw.weapons.drain(i0..i0 + n);
+                        for (j, st) in tw.weapons.drain(i0..i0 + n).enumerate() {
+                            tw.temp_missed.insert((gone.attack.model_name.clone(), j), st.missed);
+                        }
                     }
                 } else {
                     i0 += n;
@@ -14225,6 +14365,13 @@ impl Game {
                 self.deferred_attack = Some(ai);
                 self.towers_phase(Some(t), cd_speed, early, round_clock, dots, emits, zones, shoves, leak_voice);
                 self.deferred_attack = None;
+            }
+        }
+        // (An ability's TargetTrack attacks run their first Process after the tower's own
+        // attacks: recording spike_050, Spike Storm's four lists shuffled after the first throw.)
+        if only_temp.is_none() {
+            for t in 0..self.towers.len() {
+                self.track_sets_init(t);
             }
         }
     }
@@ -14842,12 +14989,13 @@ impl Game {
         (d * (hi as f64 - lo as f64)) as i32 + lo
     }
 
+    #[track_caller]
     fn synced_double(&mut self) -> f64 {
         let seed = self.freeplay_seed;
         let d = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
         // RRBTD6_RNG_LOG: every draw with its round time, to line up with a recording's R lines.
         if std::env::var_os("RRBTD6_RNG_LOG").is_some() {
-            eprintln!("RNG {} {d:?}", self.round_clock);
+            eprintln!("RNG {} {d:?} @{}", self.round_clock, std::panic::Location::caller().line());
             if std::env::var("RRBTD6_RNG_BT").ok().and_then(|v| v.parse::<i64>().ok()) == Some(self.round_clock) { eprintln!("{}", std::backtrace::Backtrace::force_capture()); }
         }
         d
@@ -16684,6 +16832,10 @@ impl Game {
                 let d = self.synced_double();
                 ((((hi - lo) as f64 * d + lo as f64) / speed as f64) * 60.0 + 0.5) as i32 as f32
             });
+            // AgeRandom.Initialise (VERIFIED-DECOMP @0x180c85cd0): syncedRandom.Next(min, max)
+            // frames (recording spike_050: R r 1080 1320 per Spike Storm spike, between its
+            // target's offsets and its RandomRotation draw).
+            let age_frames = spec.age_random.map(|[lo, hi]| (lo + (self.synced_double() * (hi - lo) as f64) as i32) as f32);
             self.next_uid += 1;
             self.proj_list.push(self.next_uid);
             let obj = self.proj_pool.pop().unwrap_or_else(|| {
@@ -16736,7 +16888,7 @@ impl Game {
                 // AgeModel.set_Lifespan (VERIFIED-DISASM @0x11dd100): lifespanFrames =
                 // (int)Math.Round((double)(lifespan x 60)), half to even (recording dart_051: a
                 // 20.25-frame dart is gone after 20).
-                frames_left: match random_frames {
+                frames_left: match random_frames.or(age_frames) {
                     Some(f) => f,
                     None => {
                         // A TravelStrait lifespan and an AgeModel each end the shot on their own: the
@@ -18537,6 +18689,7 @@ mod tests {
             // (Made at this tier in one go: the base tier's shuffles didn't happen.)
             g.synced = rng_before;
             g.towers[t].randpos.clear();
+            g.towers[t].track_sets.clear();
             g.random_pos_init(t);
             g.spirit_init(t);
             // (The tier's permanent sub-towers, as an upgrade makes them: Lord Phoenix.)
