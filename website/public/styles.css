@@ -197,7 +197,7 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
   padding: 48px 0 64px;
 }
 /* Full-width background: the main-menu island in silhouette (build_hero_silhouette.py), as the sky,
-   the clouds drifting slowly in front of it, and the island over both. The tint keeps the white
+   the clouds in front of it, and the island over both. The tint keeps the white
    text readable; the bottom fades into the page. */
 .hero-media {
   position: absolute;
@@ -211,7 +211,7 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 }
 .hero-media::before, .hero-clouds, .hero-scene { position: absolute; inset: 0; background: center / cover no-repeat; }
 .hero-media::before { content: ""; background-image: url("/hero/sky.webp"); }
-.hero-clouds { background-image: url("/hero/clouds-1920.webp"); animation: clouds-drift 50s ease-in-out infinite alternate; }
+.hero-clouds { background-image: url("/hero/clouds-1920.webp"); }
 .hero-scene { background-image: url("/hero/scene-1920.webp"); }
 @media (max-width: 800px) {
   .hero-clouds { background-image: url("/hero/clouds-1280.webp"); }
@@ -221,18 +221,12 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
   .hero-clouds { background-image: url("/hero/clouds-2560.webp"); }
   .hero-scene { background-image: url("/hero/scene-2560.webp"); }
 }
-@keyframes clouds-drift { from { transform: translateX(-2%); } to { transform: translateX(2%); } }
 /* Parallax: as the hero scrolls away, its layers sink back at different speeds (--depth of their own
    height over the hero's exit), the far sky most and the island least, while the text scrolls
-   normally. `translate`, so the clouds' drift (`transform`) still runs alongside. */
+   normally. */
 @supports (animation-timeline: view()) {
   .hero-media::before { --depth: 45%; animation: hero-sink linear both; animation-timeline: --hero; animation-range: exit; }
-  .hero-clouds {
-    --depth: 34%;
-    animation: clouds-drift 50s ease-in-out infinite alternate, hero-sink linear both;
-    animation-timeline: auto, --hero;
-    animation-range: normal, exit;
-  }
+  .hero-clouds { --depth: 34%; animation: hero-sink linear both; animation-timeline: --hero; animation-range: exit; }
   .hero-scene { --depth: 16%; animation: hero-sink linear both; animation-timeline: --hero; animation-range: exit; }
   @keyframes hero-sink { from { translate: 0 0; } to { translate: 0 var(--depth); } }
 }
