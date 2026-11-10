@@ -758,6 +758,13 @@ pub struct Support {
     /// Seconds an ability's support zone lasts (0 for a tower's own supports).
     #[serde(default)]
     pub lifespan: f32,
+    /// An ability that mutates the towers inside Activate (Call to Arms), not through a zone
+    /// process that reaches them the next frame.
+    #[serde(default)]
+    pub instant: bool,
+    /// RangeSupportModel's MutatorTower: the range buff also lengthens TravelStrait lifespans.
+    #[serde(default)]
+    pub range_life: bool,
 }
 
 /// ParagonTowerModel's purchase effects: [effect, scale] of the investment orb (and its tier-5
@@ -1014,6 +1021,10 @@ pub struct Attack {
     /// RotateToTargetModel.rotateTower: false keeps the tower's facing while it aims.
     #[serde(default = "yes")]
     pub turn_body: bool,
+    /// RotateToTargetModel.useThrowMarkerHeight: it aims from the tower raised by this (its
+    /// weapons' highest ejectZ), not 10.
+    #[serde(default)]
+    pub marker_z: Option<f32>,
     /// RotateToTargetModel.onlyRotateDuringThrow (and rotateOnlyOnThrow) off: turns to its
     /// target every frame it has one.
     #[serde(default)]
@@ -1320,6 +1331,10 @@ pub struct Emission {
     /// ArcEmissionModel.useProjectileRotation.
     #[serde(default)]
     pub proj_rot: bool,
+    /// SingleEmmisionTowardsTarget: the shot flies at its Target from the eject point, not along
+    /// the rotation.
+    #[serde(default)]
+    pub towards: bool,
     /// AcidPoolEmissionModel.alwaysPoolOnCount (0: none).
     #[serde(default)]
     pub pool_every: u32,

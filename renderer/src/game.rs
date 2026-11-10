@@ -1661,6 +1661,9 @@ pub struct Tower {
     pub takedown_throws: Vec<(usize, i64)>,
     /// Per attack (rotateTower off): its RotateToPointer rotation and yVelocity.
     pub aim_rots: Vec<(f32, f32)>,
+    /// Per attack (RotateToTarget with rotateTower off): the attack's own rotation, as its
+    /// throws' ApplyRotation left it; the shots eject along it.
+    pub ent_rots: Vec<Option<f32>>,
     /// Orbit (Glaive Lord): its circling glaives.
     pub orbit: Option<OrbitState>,
     /// Running ability boosts to its projectiles, with frames left.
@@ -2623,8 +2626,14 @@ pub struct Buff {
     pub vig_range: f32,
     /// Range mutators that multiply the model's range (SupportStackingRange's MutatorTower).
     pub range_x: f32,
+    /// RangeSupport's MutatorTower also stretches each attack's first TravelStrait: + the
+    /// model's lifespan x multiplier, or + additive / speedFrames / 60 when multiplier is 0.
+    pub range_life_mult: f32,
+    pub range_life_add: f32,
     pub rate_mult: f32,
     pub pierce_add: f32,
+    /// CallToArmsMutator: every projectile's pierce x this, sub-projectiles too.
+    pub pierce_x: f32,
     /// Shinobi Tactics: (multiplier, stacks); each stack adds (1 - multiplier) x the original
     /// pierce to every projectile.
     pub pierce_pct: Option<(f32, u32)>,
@@ -2660,9 +2669,12 @@ impl Default for Buff {
             radius_mult: 1.0,
             range_mult: 0.0,
             range_x: 1.0,
+            range_life_mult: 0.0,
+            range_life_add: 0.0,
             range_add: 0.0,
             vig_range: 0.0,
             rate_mult: 1.0,
+            pierce_x: 1.0,
             pierce_add: 0.0,
             pierce_pct: None,
             speed_mult: 0.0,
@@ -2783,7 +2795,7 @@ impl Buff {
     /// The projectile as fired under these buffs (None if unchanged). Damage-type support reaches
     /// sub-projectiles too (explosions); pierce and speed only the shot itself.
     fn projectile(&self, p: &Proj) -> Option<Proj> {
-        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
+        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_x == 1.0 && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
             return None;
         }
         let mut q = p.clone();
@@ -2817,6 +2829,18 @@ impl Buff {
                 }
             }
             all(&mut q, self.pierce_all);
+        }
+        if self.pierce_x != 1.0 {
+            fn px(p: &mut Proj, m: f32) {
+                p.pierce *= m;
+                for c in &mut p.on_contact {
+                    px(&mut c.projectile, m);
+                }
+                for e in &mut p.on_exhaust {
+                    px(&mut e.projectile, m);
+                }
+            }
+            px(&mut q, self.pierce_x);
         }
         q.radius *= self.radius_mult;
         if let Some(fc) = &self.fan {
@@ -6916,6 +6940,7 @@ impl Game {
             disp_rot: None,
             takedown_throws: Vec::new(),
             aim_rots: Vec::new(),
+            ent_rots: Vec::new(),
             ability_round: HashMap::new(),
             temp: Vec::new(),
             turbo: None,
@@ -6987,7 +7012,10 @@ impl Game {
         self.sync_pets(t);
         // Point-aiming towers start in their first mode (Dartling: follow the cursor). STAND-IN
         // P-POINTDEFAULT: the set point starts on the track point nearest the tower.
-        if let Some(&m) = self.target_modes(t).first().filter(|m| m.steers()) {
+        // (Tower.UpdateTargetType @0x180c19880: a new tower has no target type yet, so it takes
+        // its model's first TargetTypes entry; recording village_500 rt 211, the ballista
+        // shooting Last, its list's first, at a Ceramic behind the leader.)
+        if let Some(&m) = self.target_modes(t).first() {
             self.towers[t].target = m;
         }
         self.init_point(t);
@@ -7976,6 +8004,7 @@ impl Game {
             disp_rot: None,
             takedown_throws: Vec::new(),
             aim_rots: Vec::new(),
+            ent_rots: Vec::new(),
             ability_round: HashMap::new(),
             temp: Vec::new(),
             turbo: None,
@@ -8533,7 +8562,7 @@ impl Game {
             if let Some(pa) = &a.place_at {
                 self.towers[t].ability_cd.insert(name.to_string(), a.cooldown * FPS);
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
+                let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &pa.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -8894,7 +8923,7 @@ impl Game {
         // doesn't run in reverse).
         if let Some(proj) = &a.track_charge {
             let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-            let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
+            let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
             for k in 0..self.tracks.len() {
                 let reverse = proj.track_travel.as_ref().is_some_and(|x| x.reverse);
                 let d0 = if reverse { self.tracks[k].length() } else { 0.0 };
@@ -8917,7 +8946,7 @@ impl Game {
             let target = self.bloons.iter().filter(|b| on_map(b.pos, 0.0)).max_by(|x, y| x.progress().total_cmp(&y.progress())).map(|b| b.pos);
             if let Some(p) = target {
                 let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
+                let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
                 let start = self.projectiles.len();
                 self.emit(p, 0.0, &single, &lp.projectile, None, tiers, owner);
                 for pr in &mut self.projectiles[start..] {
@@ -9709,7 +9738,7 @@ impl Game {
                 continue;
             }
             let now = self.steps as u64;
-            for sp in tier.supports.iter().chain(src.temp_supports.iter().filter(|x| x.2 + 1 < now && x.1 > -1.0).map(|(sp, _, _)| sp)) {
+            for sp in tier.supports.iter().chain(src.temp_supports.iter().filter(|x| if x.0.instant { x.2 < now && x.1 > 0.0 } else { x.2 + 1 < now && x.1 > -1.0 }).map(|(sp, _, _)| sp)) {
                 if Some(s) == skip && !sp.on_self {
                     continue;
                 }
@@ -9809,11 +9838,29 @@ impl Game {
                 for (sp, n) in sups {
                     let k = n as f32;
                     match sp.kind.as_str() {
+                        // RangeSupport.MutatorTower.Mutate (VERIFIED-DECOMP @0x180d795b0): range +
+                        // the model's range x multiplier (or + additive when it is 0), the same on
+                        // every attack without fixedRange, whose first TravelStrait lifespan grows (range_life)
+                        // by the model's lifespan x multiplier (or additive / speedFrames / 60):
+                        // recording village_000 rt 106, the buffed dart lives 17 frames, not 16.
                         "range" => {
                             b.range_mult += sp.mult * k;
                             b.range_add += sp.add * k;
+                            if !sp.range_life {
+                            } else if sp.mult != 0.0 {
+                                b.range_life_mult += sp.mult * k;
+                            } else {
+                                b.range_life_add += sp.add * k;
+                            }
                         }
                         "rate" => b.rate_mult *= sp.mult.powi(n as i32),
+                        // CallToArmsMutator.Mutate (VERIFIED-DECOMP @0x181274ad0): rate /
+                        // multiplier on every weapon, pierce x multiplier on every projectile
+                        // (recording village_040 rt 120: 57 frames -> 38, the dart's pierce 3).
+                        "cta" => {
+                            b.rate_mult /= sp.mult;
+                            b.pierce_x *= sp.mult;
+                        }
                         "pierce" => b.pierce_add += sp.add * k,
                         // SupportStackingRange.MutatorTower.Mutate (VERIFIED-DECOMP @0x180d91c50):
                         // range x (1 + rangeMultiplier) per stack (SelfStackingSupportCompounding
@@ -10714,7 +10761,12 @@ impl Game {
                 grow_init(b, &self.defs, &self.names);
             }
             let b = &self.bloons[i];
-            if b.frozen() || blocks.iter().any(|(c, r)| (b.pos[0] - c[0]).powi(2) + (b.pos[1] - c[1]).powi(2) <= r * r) {
+            // (The zone's GrowBlock goes on and off as the bloon was at the frame's start: Grow
+            // runs in Bloon.Process after the move, the zone's membership from before it;
+            // recording village_030 rt 2953, a Pink leaving a Grow Blocker regrows 180 frames
+            // after its last frame-start inside, not its last position inside.)
+            let at = if b.prev[0].is_finite() { b.prev } else { b.pos };
+            if b.frozen() || blocks.iter().any(|(c, r)| (at[0] - c[0]).powi(2) + (at[1] - c[1]).powi(2) <= r * r) {
                 continue;
             }
             let b = &mut self.bloons[i];
@@ -10826,7 +10878,7 @@ impl Game {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             if let Some(b) = self.buffs.get(t) {
-                (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.vig_range.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits()).hash(&mut h);
+                (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_x.to_bits(), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.vig_range.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits()).hash(&mut h);
             }
             h.finish()
         };
@@ -11124,7 +11176,7 @@ impl Game {
         if !self.bloons.iter().any(|b| b.id == target) {
             return;
         }
-        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
+        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
         for t in 0..self.towers.len() {
             let Some(proj) = self.tier(t).and_then(|tr| tr.preempt.clone()) else { continue };
             let [ex, ey, ez] = self.tier(t).map_or([0.0; 3], |tr| tr.preempt_offset);
@@ -12778,9 +12830,20 @@ impl Game {
                     if st.anim >= 0 && aim_id != 0 && attack.rotate && !turning && weapon.aim_offset.is_none() && extra_rot == 0.0 && newest == w && in_list {
                         if let Some(b) = self.bloons.iter().find(|b| b.id == aim_id) {
                             let target = [b.pos[0] + aim_off[0], b.pos[1] + aim_off[1]];
-                            let aim_from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
-                            tw.game_rot = Some(RAD2DEG * crt_atan2(target[0] - aim_from[0], -(target[1] - aim_from[1])));
-                            tw.turret_rel = tw.game_rot.unwrap() - tw.base_rot;
+                            let aim_from = [pos[0], pos[1] + attack.marker_z.unwrap_or(DISPLAY_TOWER_HEIGHT) / TAN60];
+                            let r = RAD2DEG * crt_atan2(target[0] - aim_from[0], -(target[1] - aim_from[1]));
+                            // (rotateTower off with a throw marker: only the attack turns, the tower's
+                            // Rotation stays; recording village_500 rt 40, the ballista's bolt ejects
+                            // along -68.17 from a village at 0.)
+                            if !attack.turn_body && attack.marker_z.is_some() {
+                                if tw.ent_rots.len() <= ai {
+                                    tw.ent_rots.resize(ai + 1, None);
+                                }
+                                tw.ent_rots[ai] = Some(r);
+                            } else {
+                                tw.game_rot = Some(r);
+                                tw.turret_rel = r - tw.base_rot;
+                            }
                         }
                     } else if st.anim >= 0 && aim_id == 0 && !ambient && attack.rotate && !turning && weapon.aim_offset.is_none() && extra_rot == 0.0 {
                         // (A point Target too: recording alch_052 rt 1321, the acid-pool throw at a
@@ -12913,7 +12976,7 @@ impl Game {
                             // target from its own position raised 10 in display space (10 / tan 60 down the
                             // map in the game's y, up in the clone's), each frame of the throw; the shot
                             // leaves along that facing.
-                            let aim_from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
+                            let aim_from = [pos[0], pos[1] + attack.marker_z.unwrap_or(DISPLAY_TOWER_HEIGHT) / TAN60];
                             // (An earlier weapon of the attack in its throw has the attack's Target: the
                             // tower faces it, and this release leaves from that facing; recording
                             // druid_300 rt 725, the lightning released while the thorns' throw turns
@@ -13040,6 +13103,13 @@ impl Game {
                             // FireFromAirUnit.EmitPosition: a carrier plane's eject point turns with the plane
                             // (its Tower.Rotation stays 0; recording bucc_400 W / FM lines).
                             let fighter_rot = tw.air.as_ref().filter(|_| tier.air.as_ref().is_some_and(|x| x.fighter.is_some())).map(|a| a.fp_rot);
+                            // (Its release turns the attack once more, to where the Target is now.)
+                            if let (false, Some(_), Some(g)) = (attack.turn_body, attack.marker_z, grot) {
+                                if tw.ent_rots.len() <= ai {
+                                    tw.ent_rots.resize(ai + 1, None);
+                                }
+                                tw.ent_rots[ai] = Some(g);
+                            }
                             let body_rot = if let Some(fr) = fighter_rot {
                                 Some(fr)
                             } else if let Some(tr) = broadside.filter(|_| body_turns) {
@@ -13047,7 +13117,7 @@ impl Game {
                                 tw.turret_rel = tr - tw.base_rot;
                                 Some(tr)
                             } else {
-                                (!body_turns && (target_id == 0 || tw.sub.is_none())).then(|| tw.game_rot.unwrap_or(0.0))
+                                (!body_turns && (target_id == 0 || tw.sub.is_none())).then(|| tw.ent_rots.get(ai).copied().flatten().or(tw.game_rot).unwrap_or(0.0))
                             };
                             // (RotateToTargetAttackOffset turns only its attack: rotateTower off.)
                             if grot.is_some() && body_turns && broadside.is_none() && attack.offset_rot.is_none() {
@@ -13168,6 +13238,20 @@ impl Game {
                                 if add > 0.0 {
                                     q.lifespan += add;
                                 }
+                                buffed = Some(q);
+                            }
+                            if (buff.range_life_mult != 0.0 || buff.range_life_add > 0.0) && !attack.fixed_range && std::ptr::eq(weapon, &attack.weapons[0]) && std::ptr::eq(proj, &weapon.projectile) && proj.speed > 0.0 && proj.lifespan > 0.0 {
+                                let mut q = buffed.take().unwrap_or_else(|| proj.clone());
+                                // (Both kinds add up: recording village_400, a Primary Mentoring
+                                // village's two x0.1 and one +5 make a 0.25 s dart live 19 frames.
+                                // INFERRED: speedFrames before ProjectileSpeedSupport.)
+                                let mut add = proj.lifespan * buff.range_life_mult;
+                                if buff.range_life_add > 0.0 {
+                                    add += buff.range_life_add / (proj.speed * (1.0f32 / 60.0)) * (1.0f32 / 60.0);
+                                }
+                                // (set_Lifespan @0x181202b90 rounds the frames half up.)
+                                let frames = ((q.lifespan + add) * 60.0 + 0.5) as i32;
+                                q.lifespan = frames as f32 / FPS;
                                 buffed = Some(q);
                             }
                             // SupportStackingRange's MutatorTower.Mutate (VERIFIED-DECOMP @0x180d91c50):
@@ -13343,7 +13427,7 @@ impl Game {
                                 // point (recording ice_250: Absolute Zero's pierce-999 pulse with
                                 // the blast, both at z 7).
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
+                                    let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
                                     self.emit(from, dir, &single, sec, None, tiers, owner);
                                 }
                                 self.emit_z = 0.0;
@@ -13464,7 +13548,7 @@ impl Game {
                                 self.emit_target = None;
                                 // MultiEmissionModel: its secondary projectile from the tower too.
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
+                                    let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
                                     self.emit(pos, dir, &single, sec, None, tiers, owner);
                                 }
                                 if ambient {
@@ -15263,7 +15347,7 @@ impl Game {
         let pool = stored.floor() as i64;
         let (min, max_wave) = (nc.min_per_wave as i64, nc.max_per_wave as i64);
         let owner = self.towers[t].id;
-        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
+        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
         // Each undead bloon in turn: its pierce share, its spot on the track (the segment's
         // centre, less Random.Next(maxPathRandomRange) + half of it unless the player chose the
         // segment), then its offset (Vector3.GetOffsetFromRadius) as it is emitted.
@@ -15778,7 +15862,7 @@ impl Game {
                 "destroy_emit" => match &e.projectile {
                     Some(p) => EffectKind::DestroyEmit {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false})),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false})),
                         dont_copy: e.dont_copy,
                     },
                     None => continue,
@@ -15786,7 +15870,7 @@ impl Game {
                 "carry" => match &e.projectile {
                     Some(p) => EffectKind::Carry {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false})),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false})),
                         uids: Vec::new(),
                     },
                     None => continue,
@@ -15801,7 +15885,7 @@ impl Game {
                         ignore: e.ignore_same_frame,
                         skip: e.ignore_same_frame,
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false})),
+                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false})),
                     },
                     None => continue,
                 },
@@ -16538,10 +16622,27 @@ impl Game {
                 }
                 _ => grot,
             };
-            let gdir = grot.map(game_dir);
+            let mut gdir = grot.map(game_dir);
             let mut pos = [from[0] - s * off, from[1] + c * off];
             if let Some(o) = rnd_off {
                 pos = [from[0] + o[0], from[1] + o[1]];
+            }
+            // SingleEmmisionTowardsTarget.GetDirection (VERIFIED-DECOMP @0x180c4d0f0): Target.Position
+            // - the eject point, Vector2.Rotate by offset, Normalized (recording village_500 rt 40:
+            // the ballista's bolt (-0.92831916, 0.37178412), an ulp off the rotation's).
+            if em.towards {
+                if let Some(bp) = self.emit_target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.pos) {
+                    let mut v = [bp[0] - pos[0], -(bp[1] - pos[1])];
+                    if em.offset != 0.0 {
+                        let a = DEG2RAD * -em.offset;
+                        let (sa, ca) = crt_sin_cos(a);
+                        v = [ca * v[0] - sa * v[1], ca * v[1] + sa * v[0]];
+                    }
+                    let m = (v[0] * v[0] + v[1] * v[1]).sqrt();
+                    if m > 1e-5 {
+                        gdir = Some([v[0] / m, -(v[1] / m)]);
+                    }
+                }
             }
             // ParallelEmission.Emit (VERIFIED-DISASM @0xc67930, game frame): side = the direction
             // turned 90 degrees (unless linear), base = side x spreadLength x 0.5 + back x yOffset,
@@ -17065,7 +17166,7 @@ impl Game {
                 self.tick_bloon_effects(i, round_clock, &mut dots, &mut emits);
             }
         }
-        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false};
+        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
         let mut emitted: Vec<(std::ops::Range<usize>, u64)> = Vec::new();
         for (pos, proj, owner, from, layer) in emits {
             let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
@@ -18442,6 +18543,10 @@ mod tests {
             g.sync_pets(t);
             // SwitchTargetSupplierOnUpgrade.Attatched (VERIFIED-DISASM @0x180d9e5b0) runs when the behaviour
             // is attached, so made at the tier it sets the target too (recording sniper_250: Elite).
+            // (Tower.UpdateTargetType: made with no target type, it takes the model's first.)
+            if let Some(&m) = g.target_modes(t).first() {
+                g.towers[t].target = m;
+            }
             if let Some(m) = g.tier(t).and_then(|x| x.switch_target.as_deref()).and_then(TargetMode::parse) {
                 g.towers[t].target = m;
             }

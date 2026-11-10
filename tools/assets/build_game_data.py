@@ -1000,6 +1000,11 @@ def main():
             # ArcEmissionModel.useProjectileRotation: from a projectile, its rotation, not the tower's.
             if e["f"].get("useProjectileRotation"):
                 out["proj_rot"] = True
+            # SingleEmmisionTowardsTarget.GetDirection (VERIFIED-DECOMP @0x180c4d0f0):
+            # (Target.Position - the eject point) turned by offset, normalized.
+            if e["type"] == "SingleEmmisionTowardsTargetModel":
+                out["towards"] = True
+                out["offset"] = e["f"].get("offset", 0.0)
             rd = next((x["f"] for x in items(e["f"].get("behaviors")) if x and x["type"] == "EmissionRotationOffProjectileDirectionModel"), None)
             if rd is not None:
                 out["dir_off"] = [rd.get("startingOffset", 0.0), rd.get("angleInBetween", 0.0), 1.0 if rd.get("alwaysCentre") else 0.0]
@@ -1089,6 +1094,11 @@ def main():
             # RotateToTargetModel.rotateTower = False (Carrier Flagship): it aims but the tower
             # itself keeps its facing.
             turn_body = not any(x and x["type"] == "RotateToTargetModel" and x["f"].get("rotateTower") is False for x in items(af["behaviors"]))
+            # RotateToTarget.ApplyRotation (VERIFIED-DECOMP @0x180dd7930): it aims from the tower
+            # raised in display space by 10, or with useThrowMarkerHeight by its weapons' highest ejectZ.
+            marker_z = None
+            if any(x and x["type"] == "RotateToTargetModel" and x["f"].get("useThrowMarkerHeight") for x in items(af["behaviors"])):
+                marker_z = max([0.0] + [w["f"].get("ejectZ", 0.0) for w in items(af.get("weapons")) if w])
             # RotateToMiddleOfTargetsModel (Robo Monkey / Tech Terror / Anti-Bloon): the body faces
             # the midpoint of all its attacks' targets while each arm aims at its own.
             face_middle = any(x and x["type"] == "RotateToMiddleOfTargetsModel" for x in items(af["behaviors"]))
@@ -1413,7 +1423,7 @@ def main():
                                  # The Prince's own spot on the track and offset (Emit @0xc493b0).
                                  princeRange=em["f"].get("maxPathRandomRange", 0),
                                  princeOffset=em["f"].get("maxPathOffset", 0))
-            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "turn_body": turn_body, "rotate_always": rotate_always, "face_middle": face_middle,
+            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "turn_body": turn_body, "marker_z": marker_z, "rotate_always": rotate_always, "face_middle": face_middle,
                     # AttackModel name: Tower.UpdatedModel keeps the Attack of the same name.
                     "model_name": af.get("_name") or "",
                     "range": af["range"], "camo": camo, "rotate": rotate, "turn_rate": turn_rate,
@@ -1659,7 +1669,7 @@ def main():
                                    "lifespan_mult": xf.get("lifeSpanMultiplier", 1.0),
                                    "immune": xf.get("newImmuneBloonProperties", 0) if xf.get("overrideDamageType") else None}
                 # Timed support zones, in the same shape as the tower's own supports.
-                kind = {"ActivateRateSupportZoneModel": "rate", "CallToArmsModel": "rate",
+                kind = {"ActivateRateSupportZoneModel": "rate", "CallToArmsModel": "cta",
                         "ActivateRangeSupportZoneModel": "range", "ActivatePierceSupportZoneModel": "pierce",
                         "ActivateVisibilitySupportZoneModel": "camo",
                         "ActivateProjectileSpeedSupportZoneModel": "speed",
@@ -1670,9 +1680,9 @@ def main():
                     if x["type"] == "ActivateRateSupportZoneModel":
                         mult = xf.get("rateModifier", 1.0)
                     if x["type"] == "CallToArmsModel":
-                        # STAND-IN: only the attack-speed half (interval / multiplier); the pierce
-                        # multiplier isn't applied.
-                        mult = 1.0 / (xf.get("multiplier") or 1.0)
+                        # CallToArmsMutator.Mutate (VERIFIED-DECOMP @0x181274ad0): every weapon's
+                        # rate / multiplier, every projectile's pierce x multiplier.
+                        mult = xf.get("multiplier") or 1.0
                     if kind == "range":
                         mult, add = xf.get("multiplier", 0.0), xf.get("additive", 0.0)
                     if kind == "pierce":
@@ -1696,11 +1706,17 @@ def main():
                             bases += [s for s in (deref(flt["f"].get("baseIds")) or []) if isinstance(s, str)]
                     rng = xf.get("range") or 0.0
                     glob = bool(xf.get("isGlobal")) or rng >= 999999
-                    use_tower = xf.get("useTowerRange") or rng <= 0 or (x["type"] == "CallToArmsModel" and not xf.get("useRadius"))
+                    use_tower = xf.get("useTowerRange") or rng <= 0
+                    # CallToArms.Activate (VERIFIED-DISASM @0x180e19737): towers within the
+                    # village's range when useRadius, else within float.MaxValue (all of them);
+                    # never the village itself; mutated at once, not from the next frame.
+                    if x["type"] == "CallToArmsModel":
+                        glob, use_tower = not xf.get("useRadius"), bool(xf.get("useRadius"))
                     out["supports"].append({"kind": kind, "mult": mult, "add": add,
                                             "id": xf.get("mutatorId") or x["type"], "global": glob,
                                             "radius": None if glob or use_tower else rng,
-                                            "self": bool(xf.get("canEffectThisTower", xf.get("canAffectThisTower", True))),
+                                            "self": x["type"] != "CallToArmsModel" and bool(xf.get("canEffectThisTower", xf.get("canAffectThisTower", True))),
+                                            "instant": x["type"] == "CallToArmsModel",
                                             "stacks": 1, "sets": sets, "bases": bases, "tier_cap": 5,
                                             "lifespan": xf.get("lifespan", 0.0),
                                             "icon": xf.get("buffIconName") if xf.get("showBuffIcon") else None})
@@ -1713,6 +1729,28 @@ def main():
                 abilities.append(ability(b))
             if b["type"] in ("AttackModel", "AttackAirUnitModel"):
                 attacks.append(parse_attack(b))
+        # Monkeyopolis.Process (VERIFIED-DECOMP @0x180d49350), once: Banana Farms below tier 5 in
+        # range are destroyed and their worth summed; crates = max(worth / valueRequiredForCrate,
+        # 1); its EmissionMutator (Mutate @0x180d48480) sets every EmissionsPerRoundFilter's
+        # count to cratesPerRound and every CashModel's minimum and maximum to (crates x
+        # cashFromCrate + baseIncome) / cratesPerRound.
+        # STAND-IN: no farm is absorbed (worth 0, so 1 crate's worth).
+        mopolis = next((b["f"] for b in items(f["behaviors"]) if b and b["type"] == "MonkeyopolisModel"), None)
+        if mopolis:
+            n = mopolis.get("cratesPerRound", 1) or 1
+            per_crate = (1 * float(mopolis.get("cashFromCrate", 0)) + float(mopolis.get("baseIncome", 0))) / n
+            def mut(o):
+                if isinstance(o, dict):
+                    if "per_round" in o and o["per_round"] is not None and "emission" in o:
+                        o["per_round"] = n
+                    if isinstance(o.get("cash"), dict) and "min" in o["cash"]:
+                        o["cash"]["min"] = o["cash"]["max"] = per_crate
+                    for v in o.values():
+                        mut(v)
+                elif isinstance(o, list):
+                    for v in o:
+                        mut(v)
+            mut(attacks)
         zones = []
         for b in items(f["behaviors"]):
             if b and b["type"] == "SlowBloonsZoneModel":
@@ -1821,6 +1859,9 @@ def main():
                                "global": bool(sf.get("isGlobal") or sf.get("isGlobalRange")),
                                "radius": sf["customRadius"] if sf.get("isCustomRadius") else None,
                                "self": bool(sf.get("appliesToOwningTower") or b["type"] in ("SupportShinobiTacticsModel", "SupportStackingRangeModel")),
+                               # RangeSupport.MutatorTower (@0x180d795b0) stretches TravelStrait
+                               # lifespans too; ability range zones' Mutator (@0x180d79db0) doesn't.
+                               "range_life": b["type"] == "RangeSupportModel",
                                "min_tiers": min_tiers,
                                "stacks": max(sf.get("maxStacks") or 0, sf.get("stackLimit") or 0, sf.get("maxStackCount") or 0, 1),
                                "sets": sets, "bases": bases, "tier_cap": sf["upgrade"] if b["type"] == "FreeUpgradeSupportModel" else sf.get("tierCap", 5),
