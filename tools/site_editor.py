@@ -3,7 +3,8 @@
     python tools/site_editor.py            # then open http://127.0.0.1:4174/
 
 Serves website/public as the site does, with an "Edit text" button on every page. In edit mode,
-click any text and type; "Save" stores each changed piece (page, old text, new text, and the
+click any text and type; each change is saved by itself a moment later (and on leaving the
+page), storing each changed piece (page, old text, new text, and the
 element's old and new HTML) in website/text_edits.json. Nothing on the site changes until those
 edits are applied to the real sources (website/public/*.html, or website/build_docs.py for the
 docs pages), then the file is cleared. Local only: binds 127.0.0.1.
@@ -29,14 +30,14 @@ body.__editing [data-ed]{outline:1px dashed #60a5fa88;cursor:text}
 body.__editing [data-ed]:focus{outline:2px solid #2563eb;background:#2563eb14}
 body.__editing [data-ed].__changed{outline:2px solid #16a34a}
 </style>
-<div id="__ed"><span id="__edmsg" hidden></span><button id="__edsave" hidden>Save</button><button id="__edtoggle" class="off">Edit text</button></div>
+<div id="__ed"><span id="__edmsg" hidden></span><button id="__edsave" hidden>Save now</button><button id="__edtoggle" class="off">Edit text</button></div>
 <script>
 (() => {
   const SKIP = 'script,style,svg,#__ed,noscript';
   const msg = document.getElementById('__edmsg');
   const saveBtn = document.getElementById('__edsave');
   const toggle = document.getElementById('__edtoggle');
-  let on = false, marked = [];
+  let on = false, marked = [], timer = 0;
   const say = (t) => { msg.textContent = t; msg.hidden = !t; };
   // Elements holding text directly (a text node child with letters), innermost first.
   function textElements() {
@@ -59,7 +60,13 @@ body.__editing [data-ed].__changed{outline:2px solid #16a34a}
       el.dataset.ed = '1';
       el.__before = { html: el.innerHTML, text: el.innerText };
       el.contentEditable = 'true';
-      el.addEventListener('input', () => el.classList.toggle('__changed', el.innerHTML !== el.__before.html));
+      el.addEventListener('input', () => {
+        el.classList.toggle('__changed', el.innerHTML !== el.__before.html);
+        // Saved on its own a moment after typing stops, and again on leaving the page.
+        clearTimeout(timer);
+        timer = setTimeout(save, 600);
+        say('Saving...');
+      });
     }
     document.body.classList.add('__editing');
   }
@@ -76,22 +83,31 @@ body.__editing [data-ed].__changed{outline:2px solid #16a34a}
     toggle.textContent = on ? 'Stop editing' : 'Edit text';
     toggle.classList.toggle('off', !on);
     saveBtn.hidden = !on;
-    on ? start() : stop();
+    if (on) start(); else { save(); stop(); }
     say(on ? 'Click any text to change it' : '');
   };
-  saveBtn.onclick = async () => {
-    const changes = marked.filter((el) => el.innerHTML !== el.__before.html).map((el) => ({
-      tag: el.tagName.toLowerCase(),
-      old_text: el.__before.text, new_text: el.innerText,
-      old_html: el.__before.html, new_html: el.innerHTML,
-    }));
-    if (!changes.length) { say('Nothing changed yet'); return; }
-    const r = await fetch('/__save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ page: location.pathname, changes }) });
-    if (!r.ok) { say('Save failed'); return; }
-    for (const el of marked) { el.__before = { html: el.innerHTML, text: el.innerText }; el.classList.remove('__changed'); }
-    say(`Saved ${changes.length} change${changes.length > 1 ? 's' : ''}`);
-  };
+  const pending = () => marked.filter((el) => el.innerHTML !== el.__before.html).map((el) => ({
+    tag: el.tagName.toLowerCase(),
+    old_text: el.__before.text, new_text: el.innerText,
+    old_html: el.__before.html, new_html: el.innerHTML,
+  }));
+  async function save() {
+    clearTimeout(timer);
+    const changes = pending();
+    if (!changes.length) { say('All saved'); return; }
+    try {
+      const r = await fetch('/__save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ page: location.pathname, changes }) });
+      if (!r.ok) throw new Error();
+    } catch (e) { say('NOT SAVED: is the editor server still running?'); return; }
+    for (const el of marked) { if (changes.some((c) => c.new_html === el.innerHTML)) { el.__before = { html: el.innerHTML, text: el.innerText }; el.classList.remove('__changed'); } }
+    say('All saved');
+  }
+  window.addEventListener('pagehide', () => {
+    const changes = pending();
+    if (changes.length) navigator.sendBeacon('/__save', new Blob([JSON.stringify({ page: location.pathname, changes })], { type: 'application/json' }));
+  });
+  saveBtn.onclick = save;
 })();
 </script>
 """
@@ -139,10 +155,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         stamp = datetime.now().isoformat(timespec="seconds")
         for c in data.get("changes", []):
             c = {"page": data.get("page", ""), "saved": stamp, **c}
-            # A later edit of the same text replaces the earlier one.
-            edits = [e for e in edits if not (e["page"] == c["page"] and e["new_html"] == c["old_html"])] + [
-                {**c, "old_html": next((e["old_html"] for e in edits if e["page"] == c["page"] and e["new_html"] == c["old_html"]), c["old_html"]),
-                 "old_text": next((e["old_text"] for e in edits if e["page"] == c["page"] and e["new_html"] == c["old_html"]), c["old_text"])}]
+            # A later edit of the same text replaces the earlier one, keeping the original old text.
+            same = lambda e: e["page"] == c["page"] and c["old_html"] in (e["new_html"], e["old_html"])
+            prev = next((e for e in edits if same(e)), None)
+            if prev:
+                c["old_html"], c["old_text"] = prev["old_html"], prev["old_text"]
+            edits = [e for e in edits if not same(e)] + [c]
         with open(EDITS, "w", encoding="utf-8") as f:
             json.dump(edits, f, indent=1, ensure_ascii=False)
         self.send_response(204)

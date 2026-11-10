@@ -34,7 +34,6 @@ def build(data):
     out = []
     out.append('  <section id="progress" class="block">')
     out.append("    <h2>Progress</h2>")
-    out.append('    <p class="intro">Every tower is checked against recordings of the real game: a recorder mod plays a scenario in BTD6, RustTD6 replays it, and the scenario counts once every bloon and projectile matches frame by frame.</p>')
     out.append('    <div class="progress-total">')
     out.append(f'      <div><span class="pnum">{done}</span><span class="of">of {total}</span><p>recorded scenarios match</p></div>')
     out.append(f'      <div><span class="pnum">{finished}</span><span class="of">of {len(towers)}</span><p>towers fully matched</p></div>')
@@ -60,7 +59,6 @@ def build(data):
     for name, n in data["areas"]:
         out.append(row(name, n, 10, f"{n}/10"))
     out.append("    </ul>")
-    out.append(f'    <p class="aside">Updated {html.escape(data["updated"])}. Towers are matched one at a time; the details live in <a href="https://github.com/blinkywink/rrbtd6/blob/main/docs/dev/TOWERS.md">TOWERS.md</a>.</p>')
     out.append("  </section>")
     return "\n".join(out)
 

@@ -1739,6 +1739,8 @@ pub struct Tower {
     pub necro_dmg: f32,
     /// The off hand's target mode (TargetLeftHandModel: Robo Monkey's second arm).
     pub left_target: TargetMode,
+    /// TargetRightHand.leftHandTarget: the left hand's target as the right hand split them.
+    pub left_hand: Option<(Option<(f32, [f32; 2], u64)>, [f32; 2], Option<u8>)>,
     /// TargetCamo.prioritiseCamo: the upgrade panel's camo priority toggle is on.
     pub camo_prio: bool,
     /// Submerged (TSMThemeMonkeySub's submerge button): the SubmergeModel attack replaces its own.
@@ -7056,7 +7058,10 @@ impl Game {
             comanche: (0.0, 0),
             vigilante_at: None,
             vagrant_zone: None,
-            left_target: TargetMode::First,
+            // (TargetLeftHand.ctor @0x180de7b70: targetType = TargetType.strong; the right hand
+            // TargetType.first. Recording super_050: the off hand on the strongest bloon.)
+            left_target: TargetMode::Strong,
+            left_hand: None,
             camo_prio: false,
             submerged: false,
             air_reverse: false,
@@ -8121,7 +8126,10 @@ impl Game {
             comanche: (0.0, 0),
             vigilante_at: None,
             vagrant_zone: None,
-            left_target: TargetMode::First,
+            // (TargetLeftHand.ctor @0x180de7b70: targetType = TargetType.strong; the right hand
+            // TargetType.first. Recording super_050: the off hand on the strongest bloon.)
+            left_target: TargetMode::Strong,
+            left_hand: None,
             camo_prio: false,
             submerged: false,
             air_reverse: false,
@@ -12017,6 +12025,18 @@ impl Game {
                 // VERIFIED-DISASM @0xdcb4c0, List.Sort), each one's bloons in Path.bloonsList order;
                 // the first that can be targeted (recording dart_000_close: a Blue ahead of a
                 // closer Red on the same segment).
+                // TargetRightHand's <GetTargets>d__9.MoveNext (VERIFIED-DECOMP @0x180df3eb0): the right hand
+                // takes a target for its own type (A) and one for the left hand's (B) from its
+                // suppliers; both must be valid. The left hand gets the other (TargetLeftHand.GetTarget).
+                let hand_split = attack.hand.as_deref() == Some("right") && tier.attacks.iter().any(|a| a.hand.as_deref() == Some("left"));
+                let right_mode = mode;
+                let left_mode = self.towers[t].left_target;
+                let mut hand_b: Option<(Option<(f32, [f32; 2], u64)>, [f32; 2], Option<u8>)> = None;
+                for hand_pass in 0..(1 + hand_split as usize) {
+                let mode = if hand_split && hand_pass == 0 { left_mode } else { right_mode };
+                if hand_pass == 1 {
+                    hand_b = Some((best.take(), std::mem::take(&mut best_off), best_circle.take()));
+                }
                 let mut close_rank: HashMap<(u8, usize), usize> = HashMap::new();
                 if mode == TargetMode::Close {
                     let reach = range + if no_moab { 0.0 } else { 40.0 };
@@ -12345,6 +12365,44 @@ impl Game {
                 // older carried Ceramic), the first the attack accepts (recordings ninja_020 rt 421,
                 // ninja_520 rt 334: a carried bloon is a target when nothing on the segments is;
                 // ninja_420_last: not over one).
+                }
+                if let Some((b, b_off, b_circle)) = hand_b {
+                    match (best, b) {
+                        (Some(a), Some(bb)) => {
+                            // (Game frame: y up.) m = Normalize((A - T) + (B - T)) + T; A stays on
+                            // the right hand when (A.y - T.y)(m.x - T.x) - (m.y - T.y)(A.x - T.x) >= 0.
+                            let tp = self.towers[t].pos;
+                            let (tx, ty) = (tp[0], -tp[1]);
+                            let (ax, ay) = (a.1[0], -a.1[1]);
+                            let (bx, by) = (bb.1[0], -bb.1[1]);
+                            let (sx, sy) = ((ax - tx) + (bx - tx), (ay - ty) + (by - ty));
+                            let m = (sx * sx + sy * sy).sqrt();
+                            let (nx, ny) = if m > 1e-5 { (sx / m, sy / m) } else { (0.0, 0.0) };
+                            let (mx, my) = (tx + nx, ty + ny);
+                            let cross = (ay - ty) * (mx - tx) - (my - ty) * (ax - tx);
+                            if cross >= 0.0 {
+                                self.towers[t].left_hand = Some((Some(bb), b_off, b_circle));
+                            } else {
+                                self.towers[t].left_hand = Some((Some(a), best_off, best_circle));
+                                best = Some(bb);
+                                best_off = b_off;
+                                best_circle = b_circle;
+                            }
+                        }
+                        _ => {
+                            best = None;
+                            self.towers[t].left_hand = Some((None, [0.0; 2], None));
+                        }
+                    }
+                }
+                // (The left hand: what the right hand gave it this frame.)
+                if attack.hand.as_deref() == Some("left") {
+                    if let Some((b, o, c)) = self.towers[t].left_hand.take() {
+                        best = b;
+                        best_off = o;
+                        best_circle = c;
+                    }
+                }
                 if best.is_none() && mode != TargetMode::Point {
                     let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].off_track()) && self.bloons[i].hp > 0).collect();
                     // (Targetting.GetTargets (VERIFIED-DISASM @0x180fdbe70) walks the off-track ones
@@ -13028,7 +13086,11 @@ impl Game {
                                 if tw.ent_rots.len() <= ai {
                                     tw.ent_rots.resize(ai + 1, None);
                                 }
-                                tw.ent_rots[ai] = Some(r);
+                                // (ApplyRotation stores it relative to the tower, rotation - the
+                                // tower's; the eject reads it back on top: recording super_030 rt
+                                // 973, an arm's shot an ulp off otherwise.)
+                                let tr0 = tw.game_rot.unwrap_or(0.0);
+                                tw.ent_rots[ai] = Some(tr0 + (r - tr0));
                             } else {
                                 tw.game_rot = Some(r);
                                 tw.turret_rel = r - tw.base_rot;
@@ -13299,7 +13361,12 @@ impl Game {
                                 if tw.ent_rots.len() <= ai {
                                     tw.ent_rots.resize(ai + 1, None);
                                 }
-                                tw.ent_rots[ai] = Some(g);
+                                let tr0 = tw.game_rot.unwrap_or(0.0);
+                                tw.ent_rots[ai] = Some(tr0 + (g - tr0));
+                                // (The emission reads the transform's rotation too.)
+                                if tier.attacks.iter().any(|a| a.face_middle) {
+                                    grot = Some(tr0 + (g - tr0));
+                                }
                             }
                             let body_rot = if let Some(fr) = fighter_rot {
                                 Some(fr)
@@ -13580,7 +13647,17 @@ impl Game {
                                 Some(r) => {
                                     let a = DEG2RAD * -r;
                                     let (sa, ca) = crt_sin_cos(a);
-                                    let (ox, oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
+                                    let (mut ox, mut oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
+                                    // (An arm turned on its own, rotateTower off: its transform is the
+                                    // tower's child, so the eject turns by its relative rotation, then
+                                    // the tower's. Recording super_030 rt 973: an ulp in x otherwise.)
+                                    if let (false, Some(er), true) = (attack.turn_body, self.towers[t].ent_rots.get(ai).copied().flatten(), tier.attacks.iter().any(|a| a.face_middle)) {
+                                        let tr0 = self.towers[t].game_rot.unwrap_or(0.0);
+                                        let (s1, c1) = crt_sin_cos(DEG2RAD * -(er - tr0));
+                                        let (rx, ry) = (c1 * ex - s1 * ey, c1 * ey + s1 * ex);
+                                        let (s2, c2) = crt_sin_cos(DEG2RAD * -tr0);
+                                        (ox, oy) = (c2 * rx - s2 * ry, c2 * ry + s2 * rx);
+                                    }
                                     // FlipFollowPath.EmitPosition (VERIFIED-DISASM @0xc81b60): thrown
                                     // with the left hand, the base point moves by (0 - 2 ejectX, 0 -
                                     // 2 ejectY) on the model's flipped axes, turned with the tower
