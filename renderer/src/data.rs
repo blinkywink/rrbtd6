@@ -1161,6 +1161,9 @@ pub struct Weapon {
     /// AngleToMapCenterModel: (range, offset) in degrees.
     #[serde(default)]
     pub map_center: Option<[f32; 2]>,
+    /// ResetRateOnInitialiseModel.weaponModel's name: made, it readies the attack's weapons of it.
+    #[serde(default)]
+    pub reset_rate: Option<String>,
     /// SendToBankModel emission: the cash goes into the tower's bank instead of the map.
     #[serde(default)]
     pub to_bank: bool,

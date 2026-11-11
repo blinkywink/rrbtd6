@@ -1280,6 +1280,10 @@ def main():
                 # toward the map's centre + offset, +- range / 2 at random (VERIFIED-DECOMP @0x180c69c90).
                 atmc = next((x["f"] for x in items(w["f"].get("behaviors")) if x and x["type"] == "AngleToMapCenterModel"), None)
                 map_center = [atmc.get("range", 0.0), atmc.get("offset", 0.0)] if atmc else None
+                # ResetRateOnInitialiseModel (VERIFIED-DECOMP Initialise @0x180c90a80): as this weapon
+                # is made, the attack's weapons of that model get lastEmission = int.MinValue.
+                rr = next((x["f"] for x in items(w["f"].get("behaviors")) if x and x["type"] == "ResetRateOnInitialiseModel"), None)
+                reset_rate = ((deref(rr.get("weaponModel")) or {}).get("f", {}).get("_name") or "").removeprefix("WeaponModel_") if rr else None
                 parent_eject = any(x and x["type"] == "UseParentEjectModel" for x in items(w["f"].get("behaviors")))
                 # Broadside guns (Buccaneer): Emission*RotationOff{Tower,Display}*Model fire at the
                 # tower's facing + offsetRotation; FireWhenAlternateWeaponIsReadyModel fires only
@@ -1366,7 +1370,7 @@ def main():
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "LineEffectModel"), None),
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
-                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "parent_eject": parent_eject,
+                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
                                 # the emission is laid out on the tower's rotation, each shot then sent at

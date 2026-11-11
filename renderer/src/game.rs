@@ -2042,6 +2042,8 @@ pub struct AirUnit {
     pub hm_near_next: Vec<u64>,
     /// Simulation time it was made (a heli made this frame doesn't move until the next).
     pub hm_born: u64,
+    /// Simulation time of its last HeliMovement pass.
+    pub hm_step: u64,
 }
 
 impl AirUnit {
@@ -7699,6 +7701,7 @@ impl Game {
                 hm_near: Vec::new(),
                 hm_near_next: Vec::new(),
                 hm_born: self.sim_elapsed,
+                hm_step: u64::MAX,
             });
             // A plane takes a pooled FighterMovement if there is one: its timer as it was, its path
             // point (0, 0) (recording bucc_upgrades_r30 rt 1862: the 5-1-0's second plane with the
@@ -7938,20 +7941,35 @@ impl Game {
             .filter(|&t| self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.heli.is_some()))
             .filter_map(|t| self.towers[t].air.as_ref().map(|a| (t, a.pos)))
             .collect();
+        let now = self.sim_elapsed;
         for &(t, _) in &helis {
+            if self.towers[t].air.as_ref().is_some_and(|a| a.hm_step == now) {
+                continue;
+            }
+            self.move_one_heli(t, &helis);
+        }
+
+    }
+
+    /// One heli's HeliMovement this frame (and its repulsion list after).
+    fn move_one_heli(&mut self, t: usize, helis: &[(usize, [f32; 2])]) {
+        if let Some(a) = self.towers[t].air.as_mut() {
+            a.hm_step = self.sim_elapsed;
+        }
+        let helis = helis.to_vec();
             if let Some(h) = self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.heli.clone()) {
                 {
                     let (now, is_sub) = (self.sim_elapsed, self.towers[t].sub.is_some());
                     let a = self.towers[t].air.as_mut().unwrap();
                     if a.hm_born == now && is_sub {
-                        continue;
+                        return;
                     }
                     a.hm_near = a.hm_near_next.clone();
                 }
                 // (Only when ApplyMovement ran: recording heli_005, the Heli still at rt 1 never
                 // listed the Comanches made on it; heli_025, moving at rt 1, did.)
                 if !self.heli_move(t, &h, &helis) {
-                    continue;
+                    return;
                 }
                 // (HeliEnter / HeliExit: after its move, the others where they are now (moved this
                 // frame or not), in use from the next frame. Recording heli_005: a Comanche drops
@@ -7972,7 +7990,6 @@ impl Game {
                     }
                 }
             }
-        }
     }
 
     fn heli_move(&mut self, t: usize, h: &crate::data::HeliSpec, helis: &[(usize, [f32; 2])]) -> bool {
@@ -10410,6 +10427,7 @@ impl Game {
         let had_necro = self.tier(t).is_some_and(|x| x.attacks.iter().any(|a| a.necro.is_some()));
         let had_switch = self.tier(t).is_some_and(|x| x.switch_target.is_some());
         let had_submerge = self.tier(t).is_some_and(|x| x.submerge.is_some());
+        let had_pursuit = self.tier(t).is_some_and(|x| x.pursuit_distance.is_some());
         let old_weapons: Vec<(String, Vec<String>)> = self.tier(t).map_or(Vec::new(), |x| x.attacks.iter().map(|a| (a.model_name.clone(), a.weapons.iter().map(|w| w.name.clone()).collect())).collect());
         self.cash -= cost;
         self.stats.cash_spent += cost;
@@ -10465,6 +10483,14 @@ impl Game {
         if !had_submerge && self.tier(t).is_some_and(|x| x.submerge.is_some()) {
             self.towers[t].submerged = true;
             self.towers[t].target = TargetMode::Submerge;
+        }
+        // PursuitSetting.Attatched (VERIFIED-DECOMP @0x180dd14a0): a new one sets the target type
+        // Pursuit (recording heli_upgrades_r30 rt 601: the 2-1-0 sets off after the lead bloon).
+        if !had_pursuit && self.tier(t).is_some_and(|x| x.pursuit_distance.is_some()) {
+            self.towers[t].target = TargetMode::Pursuit;
+            if let Some(a) = self.towers[t].air.as_mut() {
+                a.pursuit_last = None;
+            }
         }
         self.init_point(t);
         self.init_air(t);
@@ -11580,7 +11606,10 @@ impl Game {
                 child.pos = pp0;
                 child.prev = pp0;
                 if n > 0 {
-                    child.dist = dist;
+                    // (Spaced behind the parent as any child, from where the wind left it, then
+                    // its own draw: recording heli_250 rt 2412, a carried Pink's three copies at
+                    // 596.33 - 6.675 k - their pushes.)
+                    child.dist = (dist - n as f32 * spacing).max(0.0);
                     copy_draw = parent_wind_model.clone();
                 }
             }
@@ -11633,26 +11662,6 @@ impl Game {
         }
         self.pop_depth -= 1;
         if top {
-            for (cid, w) in std::mem::take(&mut self.wind_copy_draws) {
-                let Some(k) = self.bloons.iter().position(|b| b.id == cid) else { continue };
-                let ck = self.bloons[k].kind;
-                // (distanceMax over 99999: its distanceTraveled; MoveWithWind.Attatched.)
-                let wmax = if w.max > 99999.0 { self.bloons[k].dist } else { w.max };
-                let mut back = (self.synced_double() as f32) * (wmax - w.min) + w.min;
-                if w.tag_scale > 0.0 && w.tags.iter().any(|t| self.defs[ck].tags.contains(t)) {
-                    back *= w.tag_scale;
-                }
-                let r = self.defs[ck].radius;
-                let sd = self.track_ends.get(self.bloons[k].path as usize).and_then(|e| e.0);
-                let child = &mut self.bloons[k];
-                child.wind_seg = Some(child.dist);
-                child.dist -= back;
-                if let Some(sd) = sd {
-                    if child.dist <= sd - r * 1.25 {
-                        child.dist = sd - r * 1.25;
-                    }
-                }
-            }
             self.track_pops(kind, hit_camo, popped);
             // Bloon.Degrade raises OnBloonDegrade once per Damage, with the DamageResult.
             if grave_heard {
@@ -11691,9 +11700,36 @@ impl Game {
                     b.dist = dist;
                     b.pos = pos;
                     b.prev = prev;
+                } else if k > 0 {
+                    // (A carried parent's copies: spaced in the final list, where the wind has
+                    // them; their own draws follow. Recording heli_250 rt 2412: a Zebra's two
+                    // layers at once, four Pinks 6.675 apart from the blown parent's 596.33.)
+                    b.dist = d0;
                 }
                 b.prev_dist = d0;
                 b.track_mult = tm;
+            }
+        }
+        if top {
+            for (cid, w) in std::mem::take(&mut self.wind_copy_draws) {
+                let Some(k) = self.bloons.iter().position(|b| b.id == cid) else { continue };
+                let ck = self.bloons[k].kind;
+                // (distanceMax over 99999: its distanceTraveled; MoveWithWind.Attatched.)
+                let wmax = if w.max > 99999.0 { self.bloons[k].dist } else { w.max };
+                let mut back = (self.synced_double() as f32) * (wmax - w.min) + w.min;
+                if w.tag_scale > 0.0 && w.tags.iter().any(|t| self.defs[ck].tags.contains(t)) {
+                    back *= w.tag_scale;
+                }
+                let r = self.defs[ck].radius;
+                let sd = self.track_ends.get(self.bloons[k].path as usize).and_then(|e| e.0);
+                let child = &mut self.bloons[k];
+                child.wind_seg = Some(child.dist);
+                child.dist -= back;
+                if let Some(sd) = sd {
+                    if child.dist <= sd - r * 1.25 {
+                        child.dist = sd - r * 1.25;
+                    }
+                }
             }
         }
         // The copies' carried projectiles, where the degrade put them.
@@ -12677,6 +12713,7 @@ impl Game {
             if !same {
                 let mut old = std::mem::take(&mut self.towers[t].weapons);
                 let first = old.is_empty();
+                let old_keys: Vec<(String, u32)> = old.iter().map(|o| o.key.clone()).collect();
                 let (steps, rc) = self.towers[t].model_clock.unwrap_or((self.sim_elapsed as i64, self.round_clock));
                 self.towers[t].weapons = all()
                     .enumerate()
@@ -12725,6 +12762,17 @@ impl Game {
                         }
                     })
                     .collect();
+                // ResetRateOnInitialise.Initialise (VERIFIED-DECOMP @0x180c90a80): a new weapon with
+                // it sets lastEmission = int.MinValue on the attack's weapons of that model
+                // (recording heli_upgrades_r30 rt 200: the 1-0-0's second darts ready the first).
+                if !first {
+                    let resets: Vec<String> = all().enumerate().filter(|(i, w)| !old_keys.contains(&key(*i, w))).filter_map(|(_, w)| w.reset_rate.clone()).collect();
+                    for name in resets {
+                        for st in self.towers[t].weapons.iter_mut().filter(|st| st.key.0 == name) {
+                            st.last = NEVER;
+                        }
+                    }
+                }
                 // (The tower's abilities' ActivateAttack attacks are made with it, after its own:
                 // their weapons' CritMultiplier.Initialise rolls come next; recording super_040,
                 // Tech Terror's blast after the two arms.)
@@ -12742,15 +12790,26 @@ impl Game {
                 // (Attack.UpdatedModel keeps the weapons it had and adds the new ones after them:
                 // recording druid_upgrades_r30, Lightning (from 1-0-0) listed before Ball Lightning
                 // and Superstorm though the 5-1-0 model has it last.)
+                // (And the attacks as they were made, an upgrade's new one after the kept: recording
+                // heli_upgrades_r30, the 4-1-0's missiles listed after the 3-1-0's Rotor Blades.)
                 let mut base_slot = vec![0usize; base_weapons];
+                let mut starts = Vec::new();
                 let mut s0 = 0;
                 for a in &tier.attacks {
+                    starts.push(s0);
+                    s0 += a.weapons.len();
+                }
+                let mut order: Vec<usize> = (0..tier.attacks.len()).collect();
+                order.sort_by_key(|&k| tw.attack_born.get(&tier.attacks[k].model_name).copied().unwrap_or(u64::MAX));
+                let mut out0 = 0;
+                for &k in &order {
+                    let (a, s0) = (&tier.attacks[k], starts[k]);
                     let mut idx: Vec<usize> = (s0..s0 + a.weapons.len()).collect();
                     idx.sort_by_key(|&i| tw.weapons.get(i).map_or(0, |w| w.seq));
                     for (r, &i) in idx.iter().enumerate() {
-                        base_slot[i] = s0 + r;
+                        base_slot[i] = out0 + r;
                     }
-                    s0 += a.weapons.len();
+                    out0 += a.weapons.len();
                 }
                 let slots: Vec<usize> = base_slot.into_iter().chain(extra.iter().zip(&extra_slots).flat_map(|(x, &sl)| (0..x.weapons.len()).map(move |k| base_weapons + sl + k))).collect();
                 for (i, st) in tw.weapons.iter_mut().enumerate() {
@@ -12911,6 +12970,18 @@ impl Game {
                         deferred.push((stamp, self.towers[t].id, ai));
                         wi += attack.weapons.len();
                         continue;
+                    }
+                    // (A heli's Attack made after it (an upgrade's new one) acts after its
+                    // HeliMovement: recording heli_upgrades_r30 rt 901, the 3-1-0's Rotor Blades
+                    // from where the heli went that frame.)
+                    let oldest = self.towers[t].attack_born.values().copied().min().unwrap_or(stamp);
+                    if stamp > oldest && only_temp.is_none() && tier.air.as_ref().is_some_and(|x| x.heli.is_some()) && self.towers[t].air.as_ref().is_some_and(|a| a.hm_step != self.sim_elapsed) {
+                        let helis: Vec<(usize, [f32; 2])> = (0..self.towers.len())
+                            .filter(|&o| self.tier(o).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.heli.is_some()))
+                            .filter_map(|o| self.towers[o].air.as_ref().map(|a| (o, a.pos)))
+                            .collect();
+                        self.move_one_heli(t, &helis);
+                        pos = self.attack_pos(t);
                     }
                     self.process_bloons_before(stamp, early, round_clock, dots, emits, zones, shoves, leak_voice);
                     // An Attack made after the plane's PathMovement: the plane moves first.
@@ -13954,6 +14025,45 @@ impl Game {
                     // (sim_elapsed; recordings ninja_040/050/250: Sabotage's weapon at 135 for rt 120).
                     let now_t = self.sim_elapsed as i64;
                     let clock = if weapon.between_rounds { now_t } else { self.round_clock };
+                    // Weapon.Process calls Attack.FindTarget itself when it's ready: a heli's young
+                    // weapon (new at the end of the process list) looks after the bloons and the
+                    // heli have moved (recording heli_upgrades_r30 rt 615: the 2-1-0's new darts take
+                    // a Lead whose segment came into range with those moves).
+                    let young_best = if tier.air.as_ref().is_some_and(|x| x.heli.is_some())
+                        && self.towers[t].weapons.get(w).is_some_and(|st| st.ready(clock) && st.anim < 0)
+                    {
+                        if let Some(ws) = self.towers[t].weapon_born.get(&format!("{}|{}", attack.model_name, weapon.name)).copied() {
+                            if self.towers[t].air.as_ref().is_some_and(|a| a.hm_step != self.sim_elapsed) {
+                                let helis: Vec<(usize, [f32; 2])> = (0..self.towers.len())
+                                    .filter(|&o| self.tier(o).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.heli.is_some()))
+                                    .filter_map(|o| self.towers[o].air.as_ref().map(|a| (o, a.pos)))
+                                    .collect();
+                                self.move_one_heli(t, &helis);
+                                pos = self.attack_pos(t);
+                            }
+                            self.process_bloons_before(ws, early, round_clock, dots, emits, zones, shoves, leak_voice);
+                            let camo = attack.camo || buff.camo;
+                            let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind]));
+                            let r = buff.attack_range(attack);
+                            // (A fresh FindTarget: recording heli_upgrades_r30 rt 1193, the young darts
+                            // turn the heli from -68.39 to -51.62, to a bloon other than the held one.)
+Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|b| b.id == id).map(|b| (0.0f32, b.pos, id))))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    // (Its own search is what it fires on, none included: recording
+                    // heli_upgrades_r30 rt 1638, the MachineGun ready and nothing in range from the
+                    // heli's new spot.)
+                    let best = match young_best {
+                        Some(y) => y,
+                        None => best,
+                    };
+                    if let Some(Some((_, p, _))) = young_best {
+                        self.air_rotate_to(t, 0, buff.attack_range(attack), Some(p));
+                    }
                     let tw = &mut self.towers[t];
                     // EmissionsPerRoundFilter.Process (VERIFIED-DECOMP @0x180c75cb0): each round's
                     // `count` bananas come due at (int)(i x duration / (count - 1) + start) (one:
@@ -14210,6 +14320,17 @@ impl Game {
                         let lost_obj = self.towers[t].weapons[w].aim_obj.filter(|_| lost);
                         let young = self.towers[t].weapon_born.get(&format!("{}|{}", attack.model_name, weapon.name)).copied();
                         if let Some(ws) = young {
+                            // (A heli's own HeliMovement comes before it, and before the bloons:
+                            // recording heli_upgrades_r30 rt 615, the new darts from where the heli
+                            // went that frame.)
+                            if tier.air.as_ref().is_some_and(|x| x.heli.is_some()) && self.towers[t].air.as_ref().is_some_and(|a| a.hm_step != self.sim_elapsed) {
+                                let helis: Vec<(usize, [f32; 2])> = (0..self.towers.len())
+                                    .filter(|&o| self.tier(o).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.heli.is_some()))
+                                    .filter_map(|o| self.towers[o].air.as_ref().map(|a| (o, a.pos)))
+                                    .collect();
+                                self.move_one_heli(t, &helis);
+                                pos = self.attack_pos(t);
+                            }
                             self.process_bloons_before(ws, early, round_clock, dots, emits, zones, shoves, leak_voice);
                         }
                         let (mut target, target_id) = match (locked, best) {
