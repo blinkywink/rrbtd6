@@ -1780,6 +1780,8 @@ pub struct Tower {
     /// Per attack (RotateToTarget with rotateTower off): the attack's own rotation, as its
     /// throws' ApplyRotation left it; the shots eject along it.
     pub ent_rots: Vec<Option<f32>>,
+    /// RotateToMiddleOfTargets: each attack's Target (bloon id) as it last released.
+    pub face_ids: Vec<Option<u64>>,
     /// Orbit (Glaive Lord): its circling glaives.
     pub orbit: Option<OrbitState>,
     /// Running ability boosts to its projectiles, with frames left.
@@ -2133,19 +2135,6 @@ impl Tower {
             let ts: Vec<[f32; 2]> = self.aims.iter().filter_map(|a| a.1).collect();
             let m = [ts.iter().map(|t| t[0]).sum::<f32>() / ts.len() as f32, ts.iter().map(|t| t[1]).sum::<f32>() / ts.len() as f32];
             self.angle = (m[1] - pos[1]).atan2(m[0] - pos[0]);
-            // RotateToMiddleOfTargets.ApplyRotation (VERIFIED-DECOMP @0x180dd5530): the tower's
-            // rotation is Rotation(sum of Normalized(target - tower) over its attacks with one)
-            // (game frame); the arms store theirs relative to it (recording super_032 rt 301: a
-            // 50.86772 body, an arm's shot an ulp off at 0).
-            let mut sum = [0.0f32; 2];
-            for t in &ts {
-                let d = [t[0] - pos[0], -(t[1] - pos[1])];
-                let l = (d[0] * d[0] + d[1] * d[1]).sqrt();
-                if l >= f32::from_bits(1) {
-                    sum = [sum[0] + d[0] / l, sum[1] + d[1] / l];
-                }
-            }
-            self.game_rot = Some(RAD2DEG * crt_atan2(sum[0], sum[1]));
         } else if turn_body {
             self.angle = aim;
         }
@@ -7364,6 +7353,7 @@ impl Game {
             takedown_throws: Vec::new(),
             aim_rots: Vec::new(),
             ent_rots: Vec::new(),
+            face_ids: Vec::new(),
             ability_round: HashMap::new(),
             temp: Vec::new(),
             temp_missed: HashMap::new(),
@@ -8968,6 +8958,7 @@ impl Game {
             takedown_throws: Vec::new(),
             aim_rots: Vec::new(),
             ent_rots: Vec::new(),
+            face_ids: Vec::new(),
             ability_round: HashMap::new(),
             temp: Vec::new(),
             temp_missed: HashMap::new(),
@@ -14615,6 +14606,34 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             if let (false, true, Some(g)) = (attack.turn_body, attack.marker_z.is_some() || tier.attacks.iter().any(|a| a.face_middle), grot) {
                                 if tw.ent_rots.len() <= ai {
                                     tw.ent_rots.resize(ai + 1, None);
+                                }
+                                // RotateToMiddleOfTargets.ApplyRotation (VERIFIED-DECOMP @0x180dd5530),
+                                // in the first hand's attack, a weapon in its throw: the tower's
+                                // rotation = Rotation(sum of Normalized(Target.Position - tower)) over
+                                // the hands with a Target: this hand's new one and the other's as it
+                                // still holds it (it hasn't looked again yet), where they are as the
+                                // frame began; the arms then store theirs relative to it (recording
+                                // super_032 with AT lines: rt 352 / 361 / 364 exact).
+                                if tier.attacks.iter().any(|a| a.face_middle) {
+                                    if tw.face_ids.len() <= ai {
+                                        tw.face_ids.resize(ai + 1, None);
+                                    }
+                                    if target_id != 0 {
+                                        tw.face_ids[ai] = Some(target_id);
+                                    }
+                                    if ai == 0 {
+                                        let mut sum = [0.0f32; 2];
+                                        for id in tw.face_ids.iter().flatten() {
+                                            if let Some(b) = self.bloons.iter().find(|b| b.id == *id) {
+                                                let d = [b.pos[0] - pos[0], -(b.pos[1] - pos[1])];
+                                                let l = (d[0] * d[0] + d[1] * d[1]).sqrt();
+                                                if l >= f32::from_bits(1) {
+                                                    sum = [sum[0] + d[0] / l, sum[1] + d[1] / l];
+                                                }
+                                            }
+                                        }
+                                        tw.game_rot = Some(RAD2DEG * crt_atan2(sum[0], sum[1]));
+                                    }
                                 }
                                 let tr0 = tw.game_rot.unwrap_or(0.0);
                                 tw.ent_rots[ai] = Some(tr0 + (g - tr0));

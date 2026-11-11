@@ -1219,6 +1219,22 @@ static class SimulatePatch
                     for (int q = 0; mb != null && q < mb.Count && fm == null; q++)
                         fm = mb[q]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.FighterMovement>();
                 }
+                // Each Attack's Target as the frame ends: "AT tower attack bloon(-1 none) valid"
+                // (attacks in the tower's behaviour order).
+                try
+                {
+                    int ak = 0;
+                    for (int k = 0; ftb != null && k < ftb.Count; k++)
+                    {
+                        var at = ftb[k]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Attack>();
+                        if (at == null) continue;
+                        var atg = at.target;
+                        var atb = atg._bloon;
+                        w.WriteLine($"AT {t.Id.Id} {ak} {(atb == null ? -1 : atb.Id.Id)} {(atg.IsValid ? 1 : 0)}");
+                        ak++;
+                    }
+                }
+                catch (Exception) { }
                 // Ace-style planes' PathMovement each frame (after it ran): "PM tower x y z rotation
                 // scaleX scaleY scaleZ t onPath takingOff tt ttpf pitch lastBank tpf onTheMove"
                 // (the AirUnit's TransformBehavior; FireFromAirUnit ejects from it).
