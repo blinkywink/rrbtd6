@@ -1831,6 +1831,9 @@ pub struct Tower {
     /// StartOfRoundRateBuff.OnRoundStartSim's mutator is on (1) or off (0); a round start
     /// re-adds it, the unique mutator's time refreshed without a model change.
     pub sor_until: u64,
+    /// Simulation time its auto-activated ability's attacks already ran this frame, ahead of the
+    /// tower's own (ActivateAbilityAfterInterval comes first in its behaviours).
+    pub temp_early: u64,
     /// RBE spent on undead this second (maxRbeSpawnedPerSecond) and the step that second began.
     pub grave_spent: (f32, u64),
     /// NecromancerTargetTrackWithinRange: currentPathIndex, pathIndexToSet (copied over at
@@ -7001,8 +7004,17 @@ impl Game {
         let wants = |a: &crate::data::Attack| a.track_target.is_some() && !a.track_closest && !a.track_default;
         let abil: Vec<crate::data::Attack> = tr.abilities.iter().flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter()).filter(|a| wants(a)).cloned().collect();
         let pos = self.towers[t].pos;
+        let again = self.towers[t].temp_early == self.sim_elapsed;
         for a in abil.iter() {
-            if self.towers[t].track_sets.iter().any(|x| x.key == a.model_name) {
+            if let Some(k) = self.towers[t].track_sets.iter().position(|x| x.key == a.model_name) {
+                if again {
+                    // (Remade, the cursor carried on: P-TRACKCURSOR.)
+                    self.towers[t].track_sets[k].sig = 0;
+                    if let Some(sp) = self.towers[t].track_sets[k].supply.as_mut() {
+                        sp.2 = [9; 3];
+                    }
+                    self.track_supply_refresh_one(t, k);
+                }
                 continue;
             }
             let no_moab = a.exclude_tags.iter().any(|g| g == "Moabs");
@@ -7383,6 +7395,7 @@ impl Game {
             placed_step: self.steps as u64,
             track_sets: Vec::new(),
             sor_until: 0,
+            temp_early: u64::MAX,
             grave_spent: (0.0, 0),
             necro_cur: 0,
             necro_next: 0,
@@ -8985,6 +8998,7 @@ impl Game {
             placed_step: self.steps as u64,
             track_sets: Vec::new(),
             sor_until: 0,
+            temp_early: u64::MAX,
             grave_spent: (0.0, 0),
             necro_cur: 0,
             necro_next: 0,
@@ -9694,7 +9708,12 @@ impl Game {
             let Some((every, a)) = self.tier(t).and_then(|tr| Some((tr.auto_ability?, tr.abilities.first()?.clone()))) else { continue };
             // (A tower made this frame processes from the next: recording spike_050, placed at
             // 1, the first storm at 2.)
-            if a.toggled_off || self.towers[t].placed_step + 1 >= self.steps as u64 {
+            // (Unless StartOfRoundRateBuff's mutator goes on in that frame: the model update
+            // (Tower.UpdatedModel) retargets the attack before this Process, and
+            // ActivateAttack.CanUseAbility (VERIFIED-DECOMP @0x180e029b0, cancelIfNoTargets) wants a
+            // target; recording spike_052, the first storm at rt 1.)
+            let sor_now = self.tier(t).and_then(|tr| tr.round_start_rate.as_ref()).is_some_and(|r| r.mult > 0.0) && self.round_active && self.round_frame == 1;
+            if a.toggled_off || (self.towers[t].placed_step + 1 >= self.steps as u64 && !sor_now) {
                 continue;
             }
             // (Simulation.roundTime (sim + 0x38, the clock AgeRandom's useRoundTime reads), not
@@ -9713,6 +9732,30 @@ impl Game {
                 let rc = self.round_clock;
                 for x in &mut self.towers[t].temp[n0..] {
                     x.counted = Some(rc);
+                }
+                // (On the placement frame it goes off ahead of the tower's own attack, which hasn't
+                // run yet: the ability's attacks (processOnActivate) act now, and their point
+                // lists are made again after the tower's attack (recording spike_052: Spike
+                // Storm's four lists, its twelve shots' draws, the tower's 19-point list, its
+                // shot, then the four lists again).)
+                if sor_now && self.towers[t].placed_step + 1 >= self.steps as u64 {
+                    if self.buffs.len() != self.towers.len() {
+                        self.buffs = self.compute_buffs();
+                    }
+                    // (Activate makes the attacks, each generating its points, before any acts.)
+                    self.track_sets_init(t);
+                    let cd_speed = vec![1.0; self.towers.len()];
+                    let (mut dots, mut emits, mut leak_voice) = (Vec::new(), Vec::new(), false);
+                    let round_clock = self.round_clock;
+                    let p0 = self.projectiles.len();
+                    self.towers_phase(Some(t), &cd_speed, &mut Default::default(), round_clock, &mut dots, &mut emits, &[], &[], &mut leak_voice);
+                    // (Its shots start ageing next frame: recording spike_052, the four rt-1 storm
+                    // spikes last one frame longer than the clone had them, rt 2236 / 2323 / 2382 /
+                    // 2505.)
+                    for pr in &mut self.projectiles[p0..] {
+                        pr.frames_left += 1.0;
+                    }
+                    self.towers[t].temp_early = self.sim_elapsed;
                 }
             }
             self.towers[t].auto_t = now;
@@ -12037,7 +12080,13 @@ impl Game {
                 self.towers[t].sor_until = on as u64;
             }
             let sor = self.towers[t].sor_until != 0;
-            sor.hash(&mut h);
+            // (An ability's attacks don't remake theirs as the mutator comes off, only as it goes
+            // on at a round start (towers_phase): recording spike_052 rt 308, the tower's 19
+            // points shuffled alone.)
+            let ability_set = self.tier(t).is_some_and(|tr| tr.abilities.iter().flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter()).any(|a| a.model_name == self.towers[t].track_sets[k].key));
+            if !ability_set {
+                sor.hash(&mut h);
+            }
             if let Some(b) = self.buffs.get(t) {
                 (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_x.to_bits(), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.vig_range.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits()).hash(&mut h);
             }
@@ -12531,6 +12580,18 @@ impl Game {
                     self.towers[t].target = m;
                 }
             }
+            // (StartOfRoundRateBuff.OnRoundStartSim puts its mutator on again at each round start:
+            // the model update makes the ability's attacks generate their points again (cursor
+            // carried), before the tower's attack acts; recording spike_052 rt 129, Spike Storm's
+            // four lists remade as round 41 starts. The placement frame's is after: auto_abilities.)
+            if only_temp.is_none() && self.round_active && self.round_frame == 1 && self.towers[t].temp_early != self.sim_elapsed
+                && self.tier(t).and_then(|tr| tr.round_start_rate.as_ref()).is_some_and(|r| r.mult > 0.0)
+                && self.towers[t].placed_step + 1 < self.steps as u64
+            {
+                self.towers[t].temp_early = self.sim_elapsed;
+                self.track_sets_init(t);
+                self.towers[t].temp_early = u64::MAX;
+            }
             // (Its TargetTrack attack's Process remakes the points under a new model at once,
             // firing or not.)
             if only_temp.is_none() {
@@ -12952,6 +13013,10 @@ impl Game {
                 // At an activation only the ability's attacks act, those ActivateAttack.Activate
                 // (VERIFIED-DISASM @0xe20900) processes then: processOnActivate or isOneShot
                 // (recording glue_040: Glue Strike, neither, throws on the next frame).
+                if only_temp.is_none() && ai >= tier.attacks.len() && self.towers[t].temp_early == self.sim_elapsed {
+                    wi += attack.weapons.len();
+                    continue;
+                }
                 if only_temp.is_some() && rerun_attack.map_or(ai < tier.attacks.len() || !self.towers[t].temp[ai - tier.attacks.len()].now, |r| r != ai) {
                     wi += attack.weapons.len();
                     continue;
