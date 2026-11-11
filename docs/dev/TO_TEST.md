@@ -118,7 +118,7 @@ Known, low priority: the scarf on Ace 0-3-1 / 1-3-0, Ezili's totem and the Infer
 - [ ] Wizard Summon Phoenix (0-4-0): a phoenix appears and circles the middle of the map for 20 s, shooting fireballs everywhere. The circle's start point and direction are my guess.
 - [ ] Wizard Lord Phoenix (0-5-0): the wizard turns into the phoenix form and stops its own attacks for 20 s, and a big lava phoenix circles the map.
 - [ ] Alchemist Transforming Tonic / Total Transformation: the alchemist turns into the blue monster with more range for 20 s.
-- [ ] Engineer Overclock (0-4-0) / Ultraboost (0-5-0): press the ability, then click another tower. It attacks much faster for 60 s (shorter on tier 4 and 5 towers). Ultraboost also leaves a small permanent speed-up that stacks up to 10 times. Right-click or Esc cancels. No "pick a tower" highlight yet.
+- [ ] Engineer Overclock (0-4-0) / Ultraboost (0-5-0): works between rounds too. Press the ability: "Select a Monkey" slides in at the top, green markers sit on every tower it can boost, the cancel button shows. Click a marked tower: a pulse, then the Overclock buff effect on it while it attacks faster (60 s; shorter on tier 4 and 5 towers). Clicking a tower it can't boost (a Sentry, a paragon...) says "Invalid Target" and keeps waiting; clicking empty ground does nothing. Right-click, Esc or the cancel button cancels. Ultraboost also leaves a small permanent speed-up that stacks up to 10 times.
 - [ ] Desperado Take Aim: press it, then click a tower to give it more range for 15 s.
 - [ ] Wizard portraits and the Guided Magic icon show (they were blank).
 - [ ] Super Monkey Darkshift (Dark Knight / Dark Champion): press it, then click a free spot within a short distance; the monkey teleports there. Too far or blocked spots do nothing.
@@ -197,7 +197,7 @@ Known, low priority: the scarf on Ace 0-3-1 / 1-3-0, Ezili's totem and the Infer
 - [ ] Sentries can't be clicked or sold, and you can place towers on top of them. Clicking near one shouldn't select it or the wrong tower; selecting a tower while sentries expire shouldn't jump to another tower.
 - [ ] Cleansing Foam (x-3-x): foam patches land on the track spot nearest the Engineer. The square "Set Target" button and the red marker appear; set the spot and foam should land there. The targeting arrows still switch First / Last / Close / Strong.
 - [ ] Bloon Trap (x-x-4): a trap lands on the track spot nearest the Engineer and swallows bloons (they vanish, MOABs pass). Only one trap at a time until it's full (500 RBE; XXXL 10,000). A full trap stays put; hover over it to collect the cash (2x the RBE caught, 3x for XXXL). Then a new one is thrown. Is the payout in the right ballpark?
-- [ ] Not done yet (don't report): Overclock / Ultraboost, Sentry Champion explosion on expiry, the full-trap picture.
+- [ ] Not done yet (don't report): Sentry Champion explosion on expiry, the full-trap picture.
 
 ## Window size and performance (Claude, forked session)
 

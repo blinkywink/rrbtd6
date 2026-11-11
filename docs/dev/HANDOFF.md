@@ -168,6 +168,17 @@ Owner's rule: nothing half done. Each fix must look and play exactly like the ga
 the game code / recordings), or it hides problems later.
 - Monkey Village: the fire animation disappears, then reappears (visual).
 - Alchemist: buffs it gives other towers don't show their icon over those towers' heads.
+  PLAN (2026-11-12, read): the icons are Tower.activeBuffs (BuffQuery: buffIndicator, timedMutator, tower,
+  canEventuallyBuff, canCurrentlyBuff, availableBuffCount, unavailableBuffCount), rebuilt by Tower.UpdateBuffs
+  (@0x180c186b0): one per mutator on the tower whose BehaviorMutator has a buffIndicator (+0x40; with
+  onlyShowBuffIfMutated (+0x41) only if WasModelMutated), availableBuffCount from the mutator's vfunc 0x188; then
+  every tower's supporting behaviours (TowerBehaviorBuffModel.GetBuffIndicatorModel, range check vfunc 0x9f8)
+  and AddDiscountZoneBuffs / AddOtherBuffs. BuffIndicatorUi.UpdatePlacedTowerBuffs (@0x180a43b60) groups them by
+  BuffIndicatorModel.FullName (GroupStackableBuffs @0x180a42c00: the copy with the larger maxStackSize kept;
+  a stackable one adds 1 per copy up to maxStackSize, or its unavailable counts) and BuffIcon.Show
+  (@0x180a41020) shows "x" + count unless dontShowX, the inactive image when not canCurrentlyBuff. The clone's
+  Game::buff_icons only sums supports (so one Village's x2): port activeBuffs from the mutators the clone
+  applies (overclock, brews, village...), with BuffIndicatorModel exported per mutator.
 - Monkey Village 3xx / 4xx / 5xx buffs (and MIB) show a stack count (2x) with only one village;
   these buffs don't stack in the game.
 - Monkey Village middle-path ability: no buff icons or animations shown, and it may not actually
@@ -176,7 +187,18 @@ the game code / recordings), or it hides problems later.
   depends on the farms in range, and it absorbs them. Implement exactly. All of the bottom path's
   extra money effects must work exactly.
 - Banana Farm: picking up bananas should play a sound.
-- Engineer: the ability does nothing.
+- Engineer: the ability does nothing. FIXED (2026-11-12): Overclock / Ultraboost (and Take Aim, Darkshift, Mega
+  Mine...) have AbilityModel.canActivateBetweenRounds, which Ability.IsReady (@0x180df9e80) honours; the clone
+  refused every targeted ability between rounds (`Ability::between_rounds`, `Game::ability_ready`). Targets per
+  TapTowerAbilityBehavior.IsBanned (@0x180e5dcb0, `Tier::tap_banned` / `tap_beasts`, the user itself allowed);
+  duration (int)(lifespanFrames x tierBasedDurationMultiplier[min(tier, n-1)], a hero's last). OverclockInput:
+  "Select a Monkey" helper message (GameMessageManager / HintMessage slide, helper_message.rs), the
+  OverclockTowerMarker / TakeAimTowerMarker on every valid tower, a banned tower only shows InvalidTarget and the
+  mode stays, empty ground does nothing; Enter/ExitCustomMode keep and restore the selection and show the cancel
+  button. The pulse (initialEffect) and the buff display (OverclockBuff / UltraBoostBuff / TakeAimBuffedFx) play.
+  OPEN: TakeAim.Activate uses Tower.AddMutatorIncludeSubTowers (@0x180e5cf10): its sub-towers get the range too;
+  the point inputs' (Darkshift, Mega Mine) own GetHelperMessage texts; the buff icon over the tower (BuffManager,
+  buffIconName) as for the Alchemist item below.
 - Sandbox: clicks on its menus still reach the menu behind (the bloon menu overlays the monkey
   purchase menu); nothing behind it should be clickable anywhere (the top area already blocks).
 - Beast Handler: on upgrade, the beast sub-tower (e.g. the T-Rex) jumps around; it should stay where it

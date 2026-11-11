@@ -49,6 +49,7 @@ mod welcome_popup;
 mod coop_mods_popup;
 mod geraldo_shop;
 mod powers_menu;
+mod helper_message;
 mod ui;
 mod uitree;
 mod callouts;
@@ -1012,6 +1013,14 @@ async fn game_main() {
     let mut picking: Option<usize> = None;
     // A tower-targeted ability (Overclock) waiting for the player to click a tower.
     let mut ability_pick: Option<String> = None;
+    // OverclockInput: the helper message shows InvalidTarget after a click on a banned tower.
+    let mut ability_invalid = false;
+    // InputManager.EnterCustomMode / ExitCustomMode: the mode last frame, and the tower that was
+    // selected when it began (customInputSelectedTower, selected again at the exit).
+    let mut pick_was: Option<String> = None;
+    let mut pick_saved: Option<u64> = None;
+    // OverclockInput.targetImages: the selectionObjectPath marker's tag on each tower it may pick.
+    let mut pick_markers: HashMap<u64, u64> = HashMap::new();
     // A Geraldo shop item in hand: the next map click uses it there.
     let mut item_pick: Option<usize> = None;
     // A Power picked in the Powers menu, used on the next map click.
@@ -1985,11 +1994,15 @@ async fn game_main() {
                 item_pick = None;
             }
         } else if let Some(name) = ability_pick.clone().filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
+            // OverclockInput.CursorUp (VERIFIED-DECOMP @0x180aad200): a tower in the valid list
+            // gets it and the mode ends; another tower only sets the helper message to
+            // InvalidTarget and empty ground does nothing: the mode stays.
+            let mut keep = false;
             if let Some(runtime)=&coop_runtime{
                 if let Some(mut action)=runtime.replica.ability(&game,front.coop_slot(),&name){
                     if let rrbtd6_coop::Action::Ability{at,target,..}=&mut action{
                         if game.ability_targets_point(&name){*at=Some(mouse_world);}
-                        else{*target=game.tower_at(mouse_world).map(|t|game.towers[t].id);}
+                        else{*target=game.tower_at(mouse_world).filter(|&t|game.tap_target_valid(t)).map(|t|game.towers[t].id);keep=target.is_none();ability_invalid=keep&&game.tower_at(mouse_world).is_some();}
                         if at.is_some()||target.is_some(){front.coop_input(action);}
                     }
                 }
@@ -1997,13 +2010,20 @@ async fn game_main() {
                 if game.activate_ability_at(&name, mouse_world) {
                     game.stats.abilities += 1;
                 }
-            } else if let Some(t) = game.tower_at(mouse_world) {
-                if game.activate_ability_on(&name, t) {
-                    game.stats.abilities += 1;
+            } else {
+                match game.tower_at(mouse_world) {
+                    Some(t) if game.tap_target_valid(t) => {
+                        if game.activate_ability_on(&name, t) {
+                            game.stats.abilities += 1;
+                        }
+                    }
+                    Some(_) => (keep, ability_invalid) = (true, true),
+                    None => keep = true,
                 }
-                selected = Some(t);
             }
-            ability_pick = None;
+            if !keep {
+                ability_pick = None;
+            }
         } else if let Some(t) = picking.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
             if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Point{tower:game.towers[t].id,at:mouse_world});}else if game.is_necro(t){game.necro_select(t, mouse_world);}else{game.towers[t].point = Some(mouse_world);game.towers[t].point_z = 0.0;}
             picking = None;
@@ -2039,7 +2059,11 @@ async fn game_main() {
             }
             // The RightMenu buttons' onClick runs before InputManager.Update's CursorUp.
             match hud.as_mut().and_then(|h| h.placement_click()) {
-                Some(hud::PlaceClick::Cancel) => placing = None,
+                Some(hud::PlaceClick::Cancel) => {
+                    placing = None;
+                    // (InputManager.CancelClicked in a custom mode: ExitCustomMode.)
+                    ability_pick = None;
+                }
                 Some(hud::PlaceClick::Confirm) => try_place!(),
                 None => {}
             }
@@ -3145,6 +3169,10 @@ async fn game_main() {
                             want.push(fx.clone());
                         }
                     }
+                    // Overclock / Take Aim: the buffDisplayPath while the boost lasts.
+                    if let (Some(_), Some(fx)) = (t.overclock, &t.overclock_fx) {
+                        want.push(fx.clone());
+                    }
                     // Alchemist brews on it: their buff effect plays while they last.
                     for kind in ["berserk", "acid"] {
                         if t.brews.iter().any(|b| b.brew.kind == kind) {
@@ -3163,6 +3191,35 @@ async fn game_main() {
                     let keep = alive.contains(id);
                     if !keep {
                         particles.kill(*id);
+                    }
+                    keep
+                });
+                // OverclockInput.EnterInputMode (@0x180aad4e0): the selectionObjectPath marker on
+                // every tower in the valid list; Update (@0x180aadba0) puts each at its tower every
+                // frame; ExitInputMode removes them.
+                let marker = ability_pick.as_deref().filter(|n| game.ability_targets_tower(n) && !game.ability_targets_point(n)).and_then(|n| game.ability_marker(n));
+                let mut want_marks = std::collections::HashSet::new();
+                if let Some(fx) = &marker {
+                    for (i, t) in game.towers.iter().enumerate() {
+                        if !game.tap_target_valid(i) {
+                            continue;
+                        }
+                        want_marks.insert(t.id);
+                        let at = [t.pos[0], 0.0, t.pos[1]];
+                        if let Some(&tag) = pick_markers.get(&t.id) {
+                            particles.set_pos(tag, at);
+                        } else {
+                            fx_tag += 1;
+                            if particles.spawn_display(fx, at, 1.0, 0.0, true, Some(fx_tag)) {
+                                pick_markers.insert(t.id, fx_tag);
+                            }
+                        }
+                    }
+                }
+                pick_markers.retain(|id, tag| {
+                    let keep = want_marks.contains(id);
+                    if !keep {
+                        particles.kill(*tag);
                     }
                     keep
                 });
@@ -3504,7 +3561,36 @@ async fn game_main() {
             let end_opening = open_menu.is_some_and(|m| matches!(m, menus::Menu::Victory | menus::Menu::Defeat))
                 || ((game.won || game.game_over) && (!end_shown || (reviewing && is_mouse_button_pressed(MouseButton::Left))));
             let mut end_map = end_opening.then(menus::Backdrop::capture_map_blur);
-            h.show_placement_buttons(placing.is_some(), placing.is_some() && !h.menus.drag_and_drop);
+            // EnterCustomMode (VERIFIED-DECOMP @0x180a60e70): the selected tower is kept and
+            // deselected, CancelPurchaseButton.Show, the helper message GetHelperMessage() (no
+            // timeout); ExitCustomMode (@0x180a62650): the message cleared, the kept tower
+            // selected again (if it's still there), CancelPurchaseButton.Hide.
+            if ability_pick != pick_was {
+                match (&pick_was, &ability_pick) {
+                    (None, Some(name)) => {
+                        pick_saved = selected.and_then(|t| game.towers.get(t)).map(|t| t.id);
+                        selected = None;
+                        // OverclockInput.GetHelperMessage: "Select a Monkey" (TapTowerAbilityBehavior.
+                        // GetCustomInputData). HYPOTHESIS P-POINTINPUTMSG: none for the point inputs
+                        // (Darkshift, Mega Mine) until their CustomInput classes are read.
+                        let tap = game.ability_targets_tower(name) && !game.ability_targets_point(name);
+                        let msg = if tap { h.menus.loc.get("Select a Monkey").cloned().unwrap_or_else(|| "Select a Monkey".into()) } else { String::new() };
+                        h.helper.set(&msg, -1.0);
+                    }
+                    (Some(_), None) => {
+                        h.helper.set("", -1.0);
+                        selected = pick_saved.take().and_then(|id| game.towers.iter().position(|t| t.id == id));
+                    }
+                    _ => {}
+                }
+                pick_was = ability_pick.clone();
+            }
+            // OverclockInput.CursorUp on a tower not in the list: SetHelperMessage(InvalidTarget, -1).
+            if std::mem::take(&mut ability_invalid) {
+                let msg = h.menus.loc.get("InvalidTarget").cloned().unwrap_or_else(|| "Invalid Target".into());
+                h.helper.set(&msg, -1.0);
+            }
+            h.show_placement_buttons(placing.is_some() || ability_pick.is_some(), placing.is_some() && !h.menus.drag_and_drop);
             if selected.is_some() || placing.is_some() { selected_removeable = None; }
             h.removeable = selected_removeable.and_then(|i| game.removeable(i)).map(|r| (r.cost, game.cash >= r.cost as f64));
             let mut actions = h.draw(&game, selected, placing, speed, auto_start);

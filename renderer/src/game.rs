@@ -1725,6 +1725,8 @@ pub struct Tower {
     /// Overclock / Take Aim on this tower: (interval multiplier, Village range multiplier, range
     /// multiplier, frames left).
     pub overclock: Option<(f32, f32, f32, f32)>,
+    /// The boost's buffDisplayPath, shown on it while `overclock` lasts.
+    pub overclock_fx: Option<String>,
     /// IncreaseRangeModel: (multiplier, added range, frames left).
     pub range_up: Option<(f32, f32, f32)>,
     /// Ultraboost stacks: (count, interval multiplier and Village range multiplier per stack).
@@ -7358,6 +7360,7 @@ impl Game {
             focus: false,
             look: None,
             overclock: None,
+            overclock_fx: None,
             range_up: None,
             ultra: (0, 1.0, 1.0),
             mute: 0.0,
@@ -8963,6 +8966,7 @@ impl Game {
             focus: false,
             look: None,
             overclock: None,
+            overclock_fx: None,
             range_up: None,
             ultra: (0, 1.0, 1.0),
             mute: 0.0,
@@ -9491,8 +9495,6 @@ impl Game {
         out
     }
 
-    /// Uses one ready `name` ability (the first tower that has it). Abilities only work during
-    /// rounds (AbilityModel.canActivateBetweenRounds is false for the towers here).
     /// The ability is used on a spot the player picks (Darkshift).
     pub fn ability_targets_point(&self, name: &str) -> bool {
         (0..self.towers.len()).any(|t| self.tier(t).is_some_and(|tr| tr.abilities.iter().any(|a| a.name == name && (a.darkshift.is_some() || a.place_at.is_some()))))
@@ -9501,12 +9503,9 @@ impl Game {
     /// Darkshift: the first ready tower with ability `name` that can reach `p` (within the
     /// radius, a valid spot for it) moves there.
     pub fn activate_ability_at(&mut self, name: &str, p: [f32; 2]) -> bool {
-        if !self.rounds_active() {
-            return false;
-        }
         for t in 0..self.towers.len() {
             let Some(a) = self.tier(t).and_then(|tr| tr.abilities.iter().find(|a| a.name == name)).cloned() else { continue };
-            if self.towers[t].ability_cd.get(name).copied().unwrap_or(0.0) > 0.0 {
+            if self.towers[t].ability_cd.get(name).copied().unwrap_or(0.0) > 0.0 || !self.ability_ready(t, &a) {
                 continue;
             }
             // Mega Mine: the projectile appears at the point after `delay` (STAND-IN: any
@@ -9549,34 +9548,85 @@ impl Game {
         false
     }
 
+    /// Ability.IsReady (VERIFIED-DECOMP @0x180df9e80) past the cooldown: under
+    /// maxActivationsPerRound, not active, not a toggled-off one (CanUseAbility), and rounds
+    /// running unless canActivateBetweenRounds (Overclock, Darkshift, Mega Mine, Take Aim...).
+    fn ability_ready(&self, t: usize, a: &crate::data::Ability) -> bool {
+        (a.between_rounds || self.rounds_active())
+            && !a.toggled_off
+            && !(a.per_round > 0 && self.towers[t].ability_round.get(&a.name).copied().unwrap_or(0) as i32 >= a.per_round)
+            && !self.ability_active(t, a)
+    }
+
+    /// The selectionObjectPath marker of tower-targeted ability `name` (OverclockInput's
+    /// targetImages), from the first tower that has it.
+    pub fn ability_marker(&self, name: &str) -> Option<String> {
+        (0..self.towers.len()).find_map(|t| self.tier(t)?.abilities.iter().find(|a| a.name == name)?.overclock.as_ref()?.marker_fx.clone())
+    }
+
     /// The ability is used on a tower the player picks (Overclock).
     pub fn ability_targets_tower(&self, name: &str) -> bool {
         (0..self.towers.len()).any(|t| self.tier(t).is_some_and(|tr| tr.abilities.iter().any(|a| a.name == name && a.overclock.is_some())))
     }
 
-    /// Uses a ready copy of tower-targeted ability `name` on tower `target`. HYPOTHESIS
-    /// P-OCTARGET: any tower but the user itself and sub-towers; the duration uses the target's
-    /// highest upgrade tier.
+    /// TapTowerAbilityBehavior.IsBanned (VERIFIED-DECOMP @0x180e5dcb0) false: a tower
+    /// Overclock / Take Aim may pick (GetCustomInputData @0x180e5d6e0 lists every tower that
+    /// isn't banned, the user itself included). The model checks are `Tier::tap_banned`; a
+    /// Beast Handler of tier 1+ needs an active beast that isn't a Gyrfalcon. (IsSuspended and
+    /// IsSelectionBlocked never hold in the clone.)
+    pub fn tap_target_valid(&self, target: usize) -> bool {
+        let Some(tr) = self.towers.get(target).and_then(|_| self.tier(target)) else { return false };
+        if tr.tap_banned {
+            return false;
+        }
+        if tr.tap_beasts {
+            let id = self.towers[target].id;
+            return self.towers.iter().any(|b| b.sub.as_ref().is_some_and(|s| s.pet && s.parent == id && s.spec.id != "Gyrfalcon"));
+        }
+        true
+    }
+
+    /// Uses a ready copy of tower-targeted ability `name` on tower `target` (Overclock.Activate,
+    /// VERIFIED-DECOMP @0x180e49fb0: lifespanFrames x tierBasedDurationMultiplier[min(tier,
+    /// n - 1)], a hero's the last).
     pub fn activate_ability_on(&mut self, name: &str, target: usize) -> bool {
-        if !self.rounds_active() || target >= self.towers.len() || self.towers[target].sub.is_some() {
+        if !self.tap_target_valid(target) {
             return false;
         }
         for t in 0..self.towers.len() {
-            if t == target {
-                continue;
-            }
             let Some(a) = self.tier(t).and_then(|tr| tr.abilities.iter().find(|a| a.name == name)).cloned() else { continue };
             let Some(oc) = &a.overclock else { continue };
-            if self.towers[t].ability_cd.get(name).copied().unwrap_or(0.0) > 0.0 {
+            if self.towers[t].ability_cd.get(name).copied().unwrap_or(0.0) > 0.0 || !self.ability_ready(t, &a) {
                 continue;
             }
+            *self.towers[t].ability_round.entry(name.to_string()).or_insert(0) += 1;
             self.towers[t].ability_cd.insert(name.to_string(), a.cooldown * FPS);
-            let top = *self.towers[target].tiers.iter().max().unwrap_or(&0) as usize;
+            // (TowerModel.tier, clamped to the list; IsHero: the last.)
+            let last = oc.tier_mult.len().saturating_sub(1);
+            let top = if self.hero_def(self.towers[target].def).is_some() { last } else { (*self.towers[target].tiers.iter().max().unwrap_or(&0) as usize).min(last) };
             let mult = oc.tier_mult.get(top).copied().unwrap_or(1.0);
             let tw = &mut self.towers[target];
-            tw.overclock = Some((oc.rate, oc.village_range, oc.range, oc.frames * mult));
+            tw.overclock = Some((oc.rate, oc.village_range, oc.range, ((oc.frames * mult) as i32) as f32));
+            tw.overclock_fx = oc.buff_fx.clone();
             if let Some(st) = &oc.permanent {
                 tw.ultra = ((tw.ultra.0 + 1).min(st.max_stacks), st.rate, st.village_range);
+            }
+            // Tower.AddMutatorIncludeSubTowers (VERIFIED-DECOMP @0x180c0a1c0): every child tower
+            // (TowerManager.GetChildTowers) without dontAddMutatorsFromParent gets it too
+            // (AddMutatorFromParent), for the same lifespan.
+            if oc.include_subs {
+                let (pid, boost) = (self.towers[target].id, self.towers[target].overclock);
+                for o in self.towers.iter_mut() {
+                    if o.sub.as_ref().is_some_and(|s| s.parent == pid && !s.spec.no_parent_mutators) {
+                        o.overclock = boost;
+                        o.overclock_fx = None;
+                    }
+                }
+            }
+            // (Activate: Simulation.SpawnEffect(initialEffect) at the picked tower.)
+            if let Some(fx) = oc.fx.clone() {
+                let p = self.towers[target].pos;
+                self.place_fx.push((p, fx, oc.fx_scale));
             }
             self.sound(&a.sounds, None);
             return true;
@@ -9646,12 +9696,12 @@ impl Game {
     }
 
     pub fn activate_ability(&mut self, name: &str) -> bool {
-        if !self.rounds_active() {
-            return false;
-        }
         for t in 0..self.towers.len() {
             let Some(a) = self.tier(t).and_then(|tr| tr.abilities.iter().find(|a| a.name == name)).cloned() else { continue };
             if self.towers[t].ability_cd.get(name).copied().unwrap_or(0.0) > 0.0 {
+                continue;
+            }
+            if !a.between_rounds && !self.rounds_active() {
                 continue;
             }
             // (Ability.IsReady, VERIFIED-DISASM @0xdf9e80: Simulation.AreRoundsActive, so any time
@@ -12699,6 +12749,7 @@ impl Game {
                     *f -= 1.0;
                     if *f <= 0.0 {
                         tw.overclock = None;
+                        tw.overclock_fx = None;
                     }
                 }
                 if let Some((_, _, f)) = &mut tw.range_up {
@@ -21036,12 +21087,13 @@ mod beast_tests {
         let e = place_near(&mut g, eng, 300.0);
         let d = place_near(&mut g, dart, 500.0);
         while g.upgrade(e, 1) {}
-        g.start_round();
+        // (canActivateBetweenRounds: no round started yet.)
         g.buffs = g.compute_buffs();
         let before = g.buffs[d].rate_mult;
         let name = g.ability_groups().into_iter().find(|a| g.ability_targets_tower(&a.name)).expect("overclock").name;
         g.towers[e].ability_cd.clear();
-        assert!(!g.activate_ability_on(&name, e), "not on itself");
+        // (IsBanned has no check for the user itself: GetCustomInputData lists it too.)
+        assert!(g.tap_target_valid(e) && g.tap_target_valid(d));
         assert!(g.activate_ability_on(&name, d));
         g.buffs = g.compute_buffs();
         assert!(g.buffs[d].rate_mult < before * 0.7);

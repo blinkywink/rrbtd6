@@ -155,6 +155,8 @@ pub struct Hud {
     pub(crate) geraldo: crate::geraldo_shop::GeraldoShop,
     /// The in-game Powers menu (the shop's PowersButton).
     pub(crate) powers: crate::powers_menu::PowersMenu,
+    /// GameMessageManager's HelperMessage (InputManager.SetHelperMessage).
+    pub(crate) helper: crate::helper_message::HelperMessage,
 }
 
 /// Only released taps on the same tile form a double-click. Scroll/pull cancels it.
@@ -407,6 +409,7 @@ impl Hud {
             coop_mods: crate::coop_mods_popup::ModsPopup::load(&dir),
             coop_mods_choice: None,
             powers: crate::powers_menu::PowersMenu::load(&dir, root),
+            helper: crate::helper_message::HelperMessage::load(&dir),
             mod_ui:crate::mod_ui::ModUi::load(root),
             account_ui:Default::default(),
             coop,
@@ -1612,6 +1615,10 @@ impl Hud {
         // BloonMenu.ShowHideExternal listens to placement-blocking UI, not TSM side.
         self.draw_sandbox(game, full, canvas.y, s, placing.is_some(), &mut out);
         self.draw_powers(game, full, canvas.y, s, l.bottom, &mut out);
+        {
+            let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h: canvas.y, clip: None };
+            self.helper.draw(full, &mut ctx);
+        }
         self.draw_abilities(game, &mut out);
         self.draw_temple(full, canvas.y, s, &mut out);
         self.draw_set_value(full, canvas.y, s, &mut out);

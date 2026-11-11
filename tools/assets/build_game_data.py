@@ -30,6 +30,15 @@ PLAYABLE += HEROES
 # BloonOverlayClass's names in order (Il2Cpp.BloonOverlayClass; Invalid is -1).
 OVERLAY_CLASSES = ['Red', 'Blue', 'Green', 'Yellow', 'Pink', 'White', 'RedRegrow', 'BlueRegrow', 'GreenRegrow', 'YellowRegrow', 'PinkRegrow', 'WhiteRegrow', 'Moab', 'Bfb', 'Zomg', 'Ddt', 'Bad', 'Bloonarius', 'Lych', 'MiniLych', 'Vortex', 'Dreadbloon', 'Blastapopoulos', 'Wild']
 
+# TapTowerAbilityBehavior's static banned base ids (.cctor @0x180e5e170).
+TAP_BANNED = {"EnergisingTotem", "Wizard-LordPhoenix", "Wizard-Phoenix", "TechBot", "TechBotPrime", "Pontoon",
+              "PortableLake", "RareQuincyActionFigure", "GenieBottle", "SacrificialTotem", "TranceTotem", "CreepyIdol",
+              "NaturesWardTotem", "AmbushBot", "Sentry", "SentryBoom", "HotSauceCreature", "UAV", "SentryCold",
+              "SentryCrushing", "SentryEnergy", "SentryParagon", "SentryParagonBlue", "SentryParagonChild",
+              "SentryParagonGreen", "SentryParagonRed", "Spirit-Tower", "BallOfLight-Tower", "BananaFarmer", "Drone",
+              "DungeonStatue", "BuccaneerLesserPlane", "ParagonPowerTotem"}
+
+
 def main():
     root, map_key, root_idx = sys.argv[1], sys.argv[2], int(sys.argv[3])
     objs = {}
@@ -1120,6 +1129,14 @@ def main():
                     "with_tower": bool(f.get("rotateProjectileWithTower", True))}
         return {"kind": "Single", "count": 1}
 
+    def tap_fx(xf):
+        """OverclockModel / TakeAimModel displays: initialEffect (Activate's SpawnEffect on the
+        picked tower), buffDisplayPath (on it while boosted), selectionObjectPath (the marker
+        OverclockInput puts on each tower it may pick)."""
+        ie = (deref(xf.get("initialEffect")) or {"f": {}})["f"]
+        return {"fx": prefab_name(ie.get("assetId")), "fx_scale": ie.get("scale", 1.0),
+                "buff_fx": prefab_name(xf.get("buffDisplayPath")), "marker_fx": prefab_name(xf.get("selectionObjectPath"))}
+
     def tier(tobj):
         f = tobj["f"]
         attacks = []
@@ -1533,6 +1550,9 @@ def main():
                    # activateOnPreLeak (Bomb Blitz), maxActivationsPerRound, resetCooldownOnTierUpgrade.
                    "pre_leak": bool(bf.get("activateOnPreLeak")), "per_round": bf.get("maxActivationsPerRound", 0),
                    "full_start": bool(bf.get("resetCooldownOnTierUpgrade")),
+                   # canActivateBetweenRounds: Ability.IsReady (VERIFIED-DECOMP @0x180df9e80) skips
+                   # its AreRoundsActive check (Overclock, Supply Drop...).
+                   "between_rounds": bool(bf.get("canActivateBetweenRounds")),
                    # ToggleableAbilityBehaviorModel.startsToggledOn false: it starts toggled off
                    # (Sniper 0-4-x's AmmoSwap beside Supply Drop).
                    "toggled_off": any(x and x["type"] == "ToggleableAbilityBehaviorModel" and not x["f"].get("startsToggledOn")
@@ -1594,6 +1614,7 @@ def main():
                                              "village_range": xf.get("villageRangeModifier", 1.0),
                                              "tier_mult": [v for v in (deref(xf.get("tierBasedDurationMultiplier")) or [])
                                                            if isinstance(v, (int, float))]})
+                    out["overclock"].update(tap_fx(xf))
                 # ChangeDamageTypeModel / MutateProjectileOnAbilityModel (Armor Piercing Shells,
                 # Frostbite): for lifespanFrames the tower's projectiles get these immune
                 # properties / +damageIncrease and the added DamageModifierForTagModel.
@@ -1659,7 +1680,10 @@ def main():
                 # TakeAimModel (Desperado): range x rangeModifier on a picked tower.
                 if x["type"] == "TakeAimModel":
                     out["overclock"] = {"frames": xf.get("lifespanFrames", 0), "rate": 1.0, "village_range": 1.0,
-                                        "range": xf.get("rangeModifier", 1.0), "tier_mult": []}
+                                        "range": xf.get("rangeModifier", 1.0), "tier_mult": [], **tap_fx(xf),
+                                        # TakeAim.Activate (VERIFIED-DECOMP @0x180e5cf10): Tower.
+                                        # AddMutatorIncludeSubTowers, its child towers too.
+                                        "include_subs": True}
                 # IncreaseRangeModel (Transforming Tonic): the tower's own range for a while.
                 if x["type"] == "IncreaseRangeModel":
                     out["range_up"] = {"frames": xf.get("lifespanFrames", 0), "mult": xf.get("multiplier", 1.0),
@@ -2176,6 +2200,15 @@ def main():
                 # PursuitSettingModel.pursuitDistance (PursuitSetting.GetPursuitDestination).
                 "pursuit_distance": next((x["f"].get("pursuitDistance", 0.0) for b in items(f["behaviors"]) if b and b["type"] in ("AttackModel", "AttackAirUnitModel")
                                           for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed,
+                # TapTowerAbilityBehavior.IsBanned (VERIFIED-DECOMP @0x180e5dcb0), the model part:
+                # Overclock / Take Aim can't pick a paragon, a Beast Handler pet, an
+                # IgnoreAllMutatorsTowerModel tower, an ignoreTowerForSelection one (IsSelectable), a
+                # power tower (powerName) or a base id in its static list (.cctor @0x180e5e170).
+                # A Beast Handler of tier 1+ needs an active beast other than a Gyrfalcon (runtime).
+                "tap_banned": bool(f.get("isParagon") or f.get("ignoreTowerForSelection") or f.get("powerName")
+                                   or tower_behaviors & {"BeastHandlerPetModel", "IgnoreAllMutatorsTowerModel"}
+                                   or (f.get("baseId") or "") in TAP_BANNED),
+                "tap_beasts": (f.get("baseId") == "BeastHandler" and (f.get("tier") or 0) >= 1),
                 # OverrideCamoDetectionModel (Monkey Sense): FirstUpdate gives the tower and its
                 # sub-towers a camo-detection mutator (Tower.AddMutatorIncludeSubTowers).
                 "detect_camo": any(b and b["type"] == "OverrideCamoDetectionModel" and b["f"].get("detectCamo") for b in items(f["behaviors"])),
@@ -2356,6 +2389,8 @@ def main():
                 "on_destroy": on_destroy,
                 # TowerModel.ignoreTowerForSelection: Phoenixes can't be clicked; Sentries can.
                 "selectable": not f.get("ignoreTowerForSelection", False),
+                # TowerModel.dontAddMutatorsFromParent: AddMutatorIncludeSubTowers skips it.
+                "no_parent_mutators": bool(f.get("dontAddMutatorsFromParent")),
                 # CreateEffectOnPlaceModel / CreateEffectOnExpireModel (mini Sun Avatar): (effect, scale).
                 "place_fx": next(([prefab_name((deref(b["f"].get("effectModel")) or {}).get("f", {}).get("assetId")),
                                    (deref(b["f"].get("effectModel")) or {}).get("f", {}).get("scale", 1.0)]

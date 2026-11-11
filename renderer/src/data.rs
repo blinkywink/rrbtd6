@@ -596,6 +596,12 @@ pub struct Upgrade {
 
 #[derive(Deserialize, Clone)]
 pub struct Tier {
+    /// TapTowerAbilityBehavior.IsBanned's model checks: Overclock / Take Aim can't pick it.
+    #[serde(default)]
+    pub tap_banned: bool,
+    /// A Beast Handler of tier 1+: pickable only with an active beast other than a Gyrfalcon.
+    #[serde(default)]
+    pub tap_beasts: bool,
     /// BeastHandlerLeashModel pets (towerModel / towerModelSecond), as permanent sub-towers.
     #[serde(default)]
     pub pets: Vec<std::sync::Arc<SubTowerSpec>>,
@@ -2043,6 +2049,9 @@ pub struct Ability {
     /// AbilityModel.resetCooldownOnTierUpgrade: it starts on its full cooldown.
     #[serde(default)]
     pub full_start: bool,
+    /// AbilityModel.canActivateBetweenRounds: usable while no round is running.
+    #[serde(default)]
+    pub between_rounds: bool,
     /// A ToggleableAbilityBehavior that starts toggled off: Ability.CanUseAbility is false for it.
     #[serde(default)]
     pub toggled_off: bool,
@@ -2378,6 +2387,9 @@ pub struct AirPattern {
 
 #[derive(Deserialize)]
 pub struct SubTowerSpec {
+    /// TowerModel.dontAddMutatorsFromParent: a parent's AddMutatorIncludeSubTowers skips it.
+    #[serde(default)]
+    pub no_parent_mutators: bool,
     /// TowerModel name ("ShootyTurretTower").
     #[serde(default)]
     pub name: String,
@@ -2445,6 +2457,20 @@ pub struct Overclock {
     pub tier_mult: Vec<f32>,
     #[serde(default)]
     pub permanent: Option<OverclockStack>,
+    /// initialEffect (spawned on the picked tower) and its scale.
+    #[serde(default)]
+    pub fx: Option<String>,
+    #[serde(default = "one")]
+    pub fx_scale: f32,
+    /// buffDisplayPath: shown on the tower while it's boosted.
+    #[serde(default)]
+    pub buff_fx: Option<String>,
+    /// selectionObjectPath: the marker on each tower it may pick.
+    #[serde(default)]
+    pub marker_fx: Option<String>,
+    /// TakeAim: Tower.AddMutatorIncludeSubTowers, the picked tower's child towers get it too.
+    #[serde(default)]
+    pub include_subs: bool,
 }
 
 /// DarkshiftModel: the new spot is within `radius` of the tower (placementZoneAssetRadius) when

@@ -328,7 +328,7 @@ def ingame_ui(c):
     dump, prefabs = "tools/assets/dump_ui_prefab.py", c.out / "ui/prefabs"
     c.parallel("In-game UI", [
         [dump, c.game, prefabs,
-         f"{p}/BossUI-RushUi.prefab", f"{p}/PowersMenu.prefab", f"{p}/MainHudLeftAlign.prefab", f"{p}/MainHudRightAlign.prefab", f"{p}/RightPanel.prefab", f"{p}/TowerSelectionMenu.prefab",
+         f"{p}/BossUI-RushUi.prefab", f"{p}/PowersMenu.prefab", f"{p}/GameMessageManager.prefab", f"{p}/MainHudLeftAlign.prefab", f"{p}/MainHudRightAlign.prefab", f"{p}/RightPanel.prefab", f"{p}/TowerSelectionMenu.prefab",
          f"{p}/TowerSelectionMenuPrefabs/TSMThemeDefault.prefab", "pid:6659321379417877030=TowerPurchaseButton",
          f"{p}/TowerSelectionMenuPrefabs/TSMThemeMortarMonkey.prefab", f"{p}/TowerSelectionMenuPrefabs/TSMThemeSelectPointInput.prefab"],
         [dump, c.game, prefabs, *themes],
@@ -342,6 +342,9 @@ def ingame_ui(c):
         ["tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", "PauseScreenUI"],
         # RightPanel's CancelPurchase animators (placement cancel / Lock & Drop confirm buttons).
         ["tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", f"prefab:{p}/RightPanel.prefab",
+         {"RRBTD6_UI_BUNDLES": "*_monoscripts_*.bundle;asset_references_assets_all_*.bundle"}],
+        # GameMessageManager's Animators (the HelperMessage slide, HintMessage controller).
+        ["tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", f"prefab:{p}/GameMessageManager.prefab",
          {"RRBTD6_UI_BUNDLES": "*_monoscripts_*.bundle;asset_references_assets_all_*.bundle"}],
         # The in-game Powers menu's Animators (its open / close slide).
         ["tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", f"prefab:{p}/PowersMenu.prefab",
@@ -652,7 +655,7 @@ STEP_VERSIONS["startup"] = 5
 # finish 9: remove runtime JSON whitespace while preserving every value token.
 # rounds_maps 2: renderers with a RectTransform are kept. particles 2: override controllers' clips.
 STEP_VERSIONS["rounds_maps"] = 2
-STEP_VERSIONS["particles"] = 3  # 3: Geraldo's buff effects and the Genie's shots.
+STEP_VERSIONS["particles"] = 4  # 3: Geraldo's buff effects and the Genie's shots; 4: Overclock / Take Aim markers.
 # mapset 2: also at ui/mapset.json, where the menus read it.
 STEP_VERSIONS["mapset"] = 2
 # finish 10, tower_models 2 and the other model steps' raises: animated models as skin.bin.
@@ -663,10 +666,10 @@ for _step, _version in (("tower_models", 2), ("extended_towers", 2), ("bloon_mod
 # extended_towers 3: Geraldo's shop item models.
 STEP_VERSIONS["extended_towers"] = 4  # 4: the Genie Bottle's genie (models/air).
 # ingame_ui 2: RightPanel's animators.
-STEP_VERSIONS["ingame_ui"] = 5  # 3: the boss HUD; 4: the Powers menu; 5: its Animators.
+STEP_VERSIONS["ingame_ui"] = 6  # 3: the boss HUD; 4: the Powers menu; 5: its Animators; 6: GameMessageManager.
 # misc_art 3, game_data 3: bloon sprites at their true size (Simple draw mode) with trim, per axis.
 STEP_VERSIONS["misc_art"] = 3
-STEP_VERSIONS["game_data"] = 7  # 4: power_projectiles and power_towers; 5: Desperado's panel toggles, portraits;
+STEP_VERSIONS["game_data"] = 8  # 8: abilities' between_rounds, tap_banned, overclock displays; 4: power_projectiles and power_towers; 5: Desperado's panel toggles, portraits;
 # 6: the lightning flag; 7: bloon overlay classes and effect overlay types.
 # audio 3: the game's own Vorbis as .ogg (fsb_vorbis.py) instead of FLAC decoded by FMOD.
 # audio 4: also the asset library's clips.
