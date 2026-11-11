@@ -651,6 +651,9 @@ pub struct Tier {
     /// The air unit's movement modes (Pointer = Follow Touch, Point = Lock In Place, Pursuit).
     #[serde(default)]
     pub air_modes: Vec<String>,
+    /// PursuitSettingModel.pursuitDistance, when it has the Pursuit mode.
+    #[serde(default)]
+    pub pursuit_distance: Option<f32>,
     pub attacks: Vec<Attack>,
     #[serde(default)]
     pub abilities: Vec<Ability>,
@@ -1939,6 +1942,9 @@ pub struct Proj {
     /// CreateTowerModel.useParentTargetPriority: the sub-tower takes its parent's target type.
     #[serde(default)]
     pub create_parent_target: bool,
+    /// CreateTowerModel.useProjectileRotation (or a typed tower): the tower takes the projectile's rotation.
+    #[serde(default)]
+    pub create_proj_rot: bool,
     #[serde(default)]
     pub eat: Option<Eat>,
     /// ScaleDamageWithTimeModel [baseDamage, scalePerSecond, maxDamage].

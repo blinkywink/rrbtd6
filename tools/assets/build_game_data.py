@@ -985,6 +985,10 @@ def main():
         out["create_at_target"] = any(ct["f"].get("positionAtTarget") for ct in pb.get("CreateTowerModel", []))
         # CreateTowerModel.useParentTargetPriority (+0x3f): Tower.SetTargetType from the emitter.
         out["create_parent_target"] = any(ct["f"].get("useParentTargetPriority") for ct in pb.get("CreateTowerModel", []))
+        # CreateTowerModel.useProjectileRotation: the tower takes the projectile's rotation (an
+        # Engineer's sentry); off (Special Poperations' Marine), it keeps its own. Typed sentries
+        # always did (recordings engineer_*).
+        out["create_proj_rot"] = any(ct["f"].get("useProjectileRotation") for ct in pb.get("CreateTowerModel", [])) or bool(pb.get("CreateTypedTowerModel"))
         # EatBloonModel (Bloon Trap): swallows bloons up to rbeCapacity, then pays out.
         eat = (pb.get("EatBloonModel") or [None])[0]
         out["eat"] = {"capacity": eat["f"]["rbeCapacity"], "cash_mult": eat["f"]["rbeCashMultiplier"]} if eat else None
@@ -2158,7 +2162,10 @@ def main():
         for pj in walk_projs(attacks):
             pj["shinobi_base"] = first_pierce[pj["pid"]]
         return {"name": f["_name"], "tiers": tiers, "range": f["range"], "global": f.get("isGlobalRange", False),
-                "air": air, "submerge": submerge, "air_modes": air_modes, "grapple": grapple, "stance": stance, "damage_speed": damage_speed,
+                "air": air, "submerge": submerge, "air_modes": air_modes,
+                # PursuitSettingModel.pursuitDistance (PursuitSetting.GetPursuitDestination).
+                "pursuit_distance": next((x["f"].get("pursuitDistance", 0.0) for b in items(f["behaviors"]) if b and b["type"] in ("AttackModel", "AttackAirUnitModel")
+                                          for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed,
                 # OverrideCamoDetectionModel (Monkey Sense): FirstUpdate gives the tower and its
                 # sub-towers a camo-detection mutator (Tower.AddMutatorIncludeSubTowers).
                 "detect_camo": any(b and b["type"] == "OverrideCamoDetectionModel" and b["f"].get("detectCamo") for b in items(f["behaviors"])),

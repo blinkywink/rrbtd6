@@ -593,6 +593,111 @@ fn move_towards_angle(current: f32, target: f32, max: f32) -> f32 {
 
 /// Math.LerpAngle (VERIFIED-DISASM @0xea7760): Unity's, Repeat(b - a, 360) taken the short way
 /// round, t clamped to 0..1.
+/// Math.FindIntersectionLineLine (VERIFIED-DISASM @0x180f1f240): segments p1-p2 and p3-p4.
+fn intersect_segments(p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], p4: [f32; 2]) -> Option<[f32; 2]> {
+    let (a, b) = ([p2[0] - p1[0], p2[1] - p1[1]], [p4[0] - p3[0], p4[1] - p3[1]]);
+    let c = [p3[0] - p1[0], p3[1] - p1[1]];
+    let num_u = c[0] * a[1] - a[0] * c[1];
+    let den = b[1] * a[0] - b[0] * a[1];
+    let num_t = c[0] * b[1] - b[0] * c[1];
+    if den > -f32::from_bits(1) && f32::from_bits(1) > den {
+        return None;
+    }
+    let inv = 1.0 / den;
+    let (t, u) = (inv * num_t, inv * num_u);
+    if !(t >= 0.0 && 1.0 >= t && u >= 0.0 && 1.0 >= u) {
+        return None;
+    }
+    Some([t * a[0] + p1[0], t * a[1] + p1[1]])
+}
+
+/// Vector2.AngleBetween (VERIFIED-DISASM @0x180f45550): -(atan2(b) - atan2(a)) in degrees,
+/// wrapped into -180..180.
+fn angle_between(a: [f32; 2], b: [f32; 2]) -> f32 {
+    let mut r = crt_atan2(b[1], b[0]) - crt_atan2(a[1], a[0]);
+    if r > std::f32::consts::PI {
+        r += -std::f32::consts::TAU;
+    } else if -std::f32::consts::PI > r {
+        r += std::f32::consts::TAU;
+    }
+    RAD2DEG * -r
+}
+
+/// Map.WrapLineAroundMapEdge (VERIFIED-DECOMP @0x180f61540), game frame: where the line from
+/// `from` to `to` crosses the bottom, right, top or left world edge (in that order), the rest
+/// of its length carried along that edge the way nearer its direction (WrapLineAroundMapEdgeIntersect
+/// @0x180f613f0).
+fn wrap_line_around_map_edge(from: [f32; 2], to: [f32; 2]) -> Option<[f32; 2]> {
+    let d = [to[0] - from[0], to[1] - from[1]];
+    let l = (d[0] * d[0] + d[1] * d[1]).sqrt();
+    let dir = if l >= f32::from_bits(1) { [d[0] / l, d[1] / l] } else { [0.0; 2] };
+    let (x0, x1, y0, y1) = (-WORLD_X, WORLD_X, -WORLD_Z, WORLD_Z);
+    let (up, down, left, right) = ([0.0f32, 1.0], [0.0f32, -1.0], [-1.0f32, 0.0], [1.0f32, 0.0]);
+    let (hit, a, b) = if let Some(p) = intersect_segments([x0, y0], [x1, y0], from, to) {
+        (p, right, left)
+    } else if let Some(p) = intersect_segments([x1, y1], [x1, y0], from, to) {
+        (p, down, up)
+    } else if let Some(p) = intersect_segments([x0, y1], [x1, y1], from, to) {
+        (p, right, left)
+    } else if let Some(p) = intersect_segments([x0, y1], [x0, y0], from, to) {
+        (p, down, up)
+    } else {
+        return None;
+    };
+    let e = [hit[0] - from[0], hit[1] - from[1]];
+    let gone = (e[0] * e[0] + e[1] * e[1]).sqrt();
+    let way = if angle_between(dir, a) < angle_between(dir, b) { a } else { b };
+    let k = l - gone;
+    Some([hit[0] + way[0] * k, hit[1] + way[1] * k])
+}
+
+/// HeliGroupOffset.CalculateAvailableOffsets (VERIFIED-DISASM @0x18102dbf0), game frame: (0, 0),
+/// then ring r (radius 15 r) from (0, 15 r) round by `step`: 360 / (left + 1) when fewer are left
+/// than (int)(360.01 / min) fit, else min = 2 asin(7.5 / (15 r)) in degrees (90 past 1), up to
+/// 360 - min + 0.01.
+fn heli_group_offsets(n: usize) -> Vec<[f32; 2]> {
+    let mut out: Vec<[f32; 2]> = Vec::new();
+    let (mut ring, mut k) = (0i32, 0i32);
+    while out.len() < n {
+        if ring == 0 {
+            out.push([0.0, 0.0]);
+            ring = 1;
+            k = 0;
+            continue;
+        }
+        let rad = ring as f32 * 15.0;
+        if k == 0 {
+            out.push([0.0, rad]);
+            k = 1;
+            continue;
+        }
+        let mut min = 90.0f32;
+        let q = 7.5 / rad;
+        if q >= 0.0 && 1.0 >= q {
+            min = RAD2DEG * q.asin();
+            min += min;
+        }
+        let left = n as i32 - out.len() as i32;
+        let mut step = if (360.01f32 / min) as i32 > left { 360.0 / (left + 1) as f32 } else { min };
+        step *= k as f32;
+        loop {
+            if out.len() >= n {
+                break;
+            }
+            let ang = k as f32 * step;
+            if ang > 360.0 - min + 0.01 {
+                k = 0;
+                ring += 1;
+                break;
+            }
+            let d = game_dir(ang);
+            out.push([d[0] * rad, -d[1] * rad]);
+            k += 1;
+        }
+    }
+    out
+}
+
 fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
     let d = b - a;
     let mut n = (d - (d / 360.0).floor() * 360.0).clamp(0.0, 360.0);
@@ -1928,6 +2033,15 @@ pub struct AirUnit {
     pub hm_target: Vec<Option<(u64, [f32; 2])>>,
     /// HeliMovement.ApplyMovement has run (its transform's z is 250 from then).
     pub hm_moved: bool,
+    /// PursuitSetting.lastDestination (clone frame), set to the heli's spot as it's switched to.
+    pub pursuit_last: Option<[f32; 2]>,
+    /// HeliMovement.heliPositionsInRepulseRange: the other helis (tower ids) within range when
+    /// the helis had last moved.
+    pub hm_near: Vec<u64>,
+    /// The list as it will be next frame (from where they were as this frame's heli pass began).
+    pub hm_near_next: Vec<u64>,
+    /// Simulation time it was made (a heli made this frame doesn't move until the next).
+    pub hm_born: u64,
 }
 
 impl AirUnit {
@@ -3456,7 +3570,17 @@ pub struct Game {
     pub pointer: Option<[f32; 2]>,
     /// The InputManager's cursor this frame while it's active and not ignored (FollowTouchSetting).
     pub cursor: Option<[f32; 2]>,
+    /// UsePresetTarget's point (the spot the player picked for an ability's tower, as Special
+    /// Poperations' Marine), when given.
+    pub preset_target: Option<[f32; 2]>,
     pub(crate) coop_pointers: HashMap<u64, Option<[f32; 2]>>,
+    /// MoabShoveZone.lastAffectedBloonAt (roundTime) by tower id.
+    shove_last: HashMap<u64, i64>,
+    /// MoabShoveMutator on a bloon (by id): roundTime it lapses, its speed scale, the tower, the
+    /// layer it holds for.
+    shoved: HashMap<u64, (i64, f32, u64, u64)>,
+    /// ComancheDefence helis decided this frame (tower, spot in the game frame), made after the towers.
+    comanche_due: Vec<(usize, [f32; 2])>,
     pub(crate) coop_wallets: Option<rrbtd6_coop::economy::Wallets>,
     /// Co-op: the local player, for what the HUD shows (their Geraldo's shop); never simulation.
     pub(crate) coop_view: Option<u8>,
@@ -5284,7 +5408,11 @@ impl Game {
             synced: None,
             pointer: None,
             cursor: None,
+            preset_target: None,
             coop_pointers: HashMap::new(),
+            shove_last: HashMap::new(),
+            shoved: HashMap::new(),
+            comanche_due: Vec::new(),
             coop_wallets: None,
             coop_view: None,
             coop_areas: None,
@@ -7567,6 +7695,10 @@ impl Game {
                 hm_applied: Vec::new(),
                 hm_target: Vec::new(),
                 hm_moved: false,
+                pursuit_last: None,
+                hm_near: Vec::new(),
+                hm_near_next: Vec::new(),
+                hm_born: self.sim_elapsed,
             });
             // A plane takes a pooled FighterMovement if there is one: its timer as it was, its path
             // point (0, 0) (recording bucc_upgrades_r30 rt 1862: the 5-1-0's second plane with the
@@ -7662,6 +7794,126 @@ impl Game {
     /// (VERIFIED-DECOMP @0x180db8c70) sets to the cursor while it's active, not ignored and on the
     /// map; LockInPlace: the locked spot), and ApplyMovement (VERIFIED-DISASM @0x180d29c30) when the
     /// heli isn't exactly there. Game coordinates (y up) inside; the clone's y is flipped.
+    /// MoabShoveZone.Process (VERIFIED-DECOMP @0x180d3bb00): 30 frames of roundTime after it last
+    /// shoved, BloonManager.GetTarget (First, its range, from the heli) with IsBloonValid
+    /// (@0x180d3b7b0: a MOAB-class bloon passing its filters, not held by another zone's shove,
+    /// the heli not behind it (dot(heading, bloon - heli) <= 0), PercThroughMap >= 0.01) gets the
+    /// MoabShoveMutator for 30 frames of movement and one layer (Bloon.AddMutatorForNumLayers).
+    fn moab_shove_step(&mut self) {
+        for t in 0..self.towers.len() {
+            let Some(sh) = self.tier(t).and_then(|tr| tr.moab_shove.clone()) else { continue };
+            let id = self.towers[t].id;
+            let last = self.shove_last.get(&id).copied().unwrap_or(-999_999_999);
+            if self.round_clock - last < 30 {
+                continue;
+            }
+            let pos = self.towers[t].air.as_ref().map_or(self.towers[t].pos, |a| a.pos);
+            let now = self.round_clock;
+            let valid = |g: &Self, b: &Bloon| {
+                let d = &g.defs[b.kind];
+                if b.hp <= 0 || !d.is_moab || (!sh.camo && b.camo(d)) || (sh.zomg.is_none() && d.tags.iter().any(|x| x == "Zomg")) {
+                    return false;
+                }
+                if g.shoved.get(&b.id).is_some_and(|&(until, _, o, layer)| until > now && layer == b.layer && o != id) {
+                    return false;
+                }
+                let (sn, cs) = crt_sin_cos(DEG2RAD * b.rot);
+                let dv = [b.pos[0] - pos[0], -(b.pos[1] - pos[1])];
+                if sn * dv[0] + cs * dv[1] > 0.0 {
+                    return false;
+                }
+                g.perc_through_map(b) >= 0.01
+            };
+            let Some(bid) = self.first_target_from(pos, sh.range, &valid) else { continue };
+            let Some(b) = self.bloons.iter().find(|b| b.id == bid) else { continue };
+            let d = &self.defs[b.kind];
+            let cap = match d.base_id.as_str() {
+                "Moab" => sh.moab,
+                "Bfb" => sh.bfb,
+                // (Ddt: zomgPushSpeedScaleCap too; with Zomgs filtered out the clone keeps none.)
+                "Zomg" | "Ddt" => sh.zomg.unwrap_or(1.0),
+                _ => 1.0,
+            };
+            // (Bloon.AddMutatorForNumLayers time 31: it moves 30 frames shoved; recording heli_004
+            // rt 99-128, then on at 129.)
+            self.shoved.insert(bid, (now + 30, cap, id, b.layer));
+            self.shove_last.insert(id, now);
+        }
+        let now = self.round_clock;
+        self.shoved.retain(|_, v| v.0 > now);
+    }
+
+    /// BloonManager.GetTarget (VERIFIED-DECOMP @0x180fca9f0) with TargetType First: GetTargets
+    /// (@0x180fcacc0) over PathManager.GetPathSegmentsInRange (range + 40) sorted First, each
+    /// segment's bloons in Path.bloonsList order; on a segment within range + 2 any, else a
+    /// MOAB-class one through a collision circle; then carried ones.
+    fn first_target_from(&self, pos: [f32; 2], range: f32, ok: &dyn Fn(&Self, &Bloon) -> bool) -> Option<u64> {
+        let reach = range + 40.0;
+        let rank = |b: &Bloon| self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);
+        let mut best: Option<(f32, u32, u64)> = None;
+        for (pi, sg) in self.track_segs.iter().enumerate() {
+            for (k, q) in sg.iter().enumerate() {
+                if !self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false) {
+                    continue;
+                }
+                let dd = (q[0] - pos[0]) * (q[0] - pos[0]) + (q[1] - pos[1]) * (q[1] - pos[1]);
+                if dd > reach * reach {
+                    continue;
+                }
+                let near = dd <= (range + 2.0) * (range + 2.0);
+                for b in self.bloons.iter().filter(|b| !b.off_track() && b.path as usize == pi && (b.prev_dist / 7.0).max(0.0) as usize == k) {
+                    let d = &self.defs[b.kind];
+                    let reached = near
+                        || (d.is_moab
+                            && (0..d.circles.len()).any(|ci| {
+                                let o = self.circle_off(b, ci);
+                                let c = [b.pos[0] + o[0] - pos[0], b.pos[1] + o[1] - pos[1]];
+                                c[0] * c[0] + c[1] * c[1] < (range + d.circles[ci][2]) * (range + d.circles[ci][2])
+                            }));
+                    if !reached || !ok(self, b) {
+                        continue;
+                    }
+                    let key = (self.perc_through_map(b), rank(b), b.id);
+                    if best.is_none_or(|x| key.0 > x.0 || (key.0 == x.0 && key.1 < x.1)) {
+                        best = Some(key);
+                    }
+                }
+            }
+        }
+        best.map(|x| x.2)
+    }
+
+    /// PursuitSetting.GetPursuitDestination (VERIFIED-DECOMP @0x180dd1730) of the target
+    /// GetPursuitTarget (@0x180dd1c40) gives: BloonManager.GetTargets First from the heli, range
+    /// 99999, through the attack's filter. `pursuitDistance` + radius / 2 ahead of the bloon along
+    /// its path (Path.DistanceToPoint) while that is on the path, else along Bloon.Heading; off the
+    /// map, Map.WrapLineAroundMapEdge from the bloon. None: keep lastDestination.
+    fn pursuit_destination(&self, t: usize, here: [f32; 2]) -> Option<[f32; 2]> {
+        let tier = self.tier(t)?;
+        let pd = tier.pursuit_distance?;
+        let camo = tier.attacks.first().is_some_and(|a| a.camo) || self.buffs.get(t).is_some_and(|b| b.camo);
+        let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind]));
+        let id = self.first_target_from(here, 99999.0, &ok)?;
+        let b = self.bloons.iter().find(|b| b.id == id)?;
+        let off = self.defs[b.kind].radius * 0.5 + pd;
+        let d = off + b.dist;
+        let tr = &self.tracks[b.path as usize];
+        // (Path.DistanceToPoint: the path itself, not where a bloon there is drawn; recording
+        // heli_200_pursuit rt 2 heads for (-124, -18.9), the path's line 4 above the bloons'.)
+        let p = if d >= 0.0 && tr.length() >= d {
+            tr.pos(d)
+        } else {
+            let h = game_dir(self.path_rot(b.path, b.dist).unwrap_or(0.0));
+            [b.pos[0] + h[0] * off, b.pos[1] + h[1] * off]
+        };
+        if on_map(p, 0.0) {
+            return Some(p);
+        }
+        // (Game frame for the wrap: y up.)
+        let g = |v: [f32; 2]| [v[0], -v[1]];
+        wrap_line_around_map_edge(g(b.pos), g(p)).map(g)
+    }
+
     /// RotateToTargetAirUnit.ApplyRotation (VERIFIED-DECOMP @0x180dd6e00) for attack `ai` (range
     /// `range`) with its target point, if any.
     fn air_rotate_to(&mut self, t: usize, ai: usize, range: f32, tgt: Option<[f32; 2]>) {
@@ -7688,12 +7940,42 @@ impl Game {
             .collect();
         for &(t, _) in &helis {
             if let Some(h) = self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.heli.clone()) {
-                self.heli_move(t, &h, &helis);
+                {
+                    let (now, is_sub) = (self.sim_elapsed, self.towers[t].sub.is_some());
+                    let a = self.towers[t].air.as_mut().unwrap();
+                    if a.hm_born == now && is_sub {
+                        continue;
+                    }
+                    a.hm_near = a.hm_near_next.clone();
+                }
+                // (Only when ApplyMovement ran: recording heli_005, the Heli still at rt 1 never
+                // listed the Comanches made on it; heli_025, moving at rt 1, did.)
+                if !self.heli_move(t, &h, &helis) {
+                    continue;
+                }
+                // (HeliEnter / HeliExit: after its move, the others where they are now (moved this
+                // frame or not), in use from the next frame. Recording heli_005: a Comanche drops
+                // the Heli from its list at rt 33, the Heli drops it at 34.)
+                let range = h.otherHeliRepulsionRange;
+                let p = self.towers[t].air.as_ref().unwrap().pos;
+                let inside: Vec<u64> = helis
+                    .iter()
+                    .filter(|&&(o, _)| o != t)
+                    .filter(|&&(o, _)| self.towers[o].air.as_ref().is_some_and(|a| (a.pos[0] - p[0]) * (a.pos[0] - p[0]) + (a.pos[1] - p[1]) * (a.pos[1] - p[1]) < range * range))
+                    .map(|&(o, _)| self.towers[o].id)
+                    .collect();
+                let a = self.towers[t].air.as_mut().unwrap();
+                a.hm_near_next.retain(|id| inside.contains(id));
+                for id in inside {
+                    if !a.hm_near_next.contains(&id) {
+                        a.hm_near_next.push(id);
+                    }
+                }
             }
         }
     }
 
-    fn heli_move(&mut self, t: usize, h: &crate::data::HeliSpec, helis: &[(usize, [f32; 2])]) {
+    fn heli_move(&mut self, t: usize, h: &crate::data::HeliSpec, helis: &[(usize, [f32; 2])]) -> bool {
         let id = self.towers[t].id;
         let cur = if self.coop_pointers.is_empty() { self.cursor } else { self.coop_pointer(id) };
         let tw = &mut self.towers[t];
@@ -7704,21 +7986,35 @@ impl Game {
         if let Some(c) = cur.filter(|&c| on_map(c, 0.0)) {
             a.touch = c;
         }
-        let goal = match tw.target {
-            TargetMode::Point => tw.point.unwrap_or(tw.pos),
-            // STAND-IN P-HELIPURSUIT: PursuitSetting's path isn't ported; the first bloon.
-            TargetMode::Pursuit => self
-                .bloons
-                .iter()
-                .filter(|b| on_map(b.pos, 0.0))
-                .max_by(|x, y| x.progress().total_cmp(&y.progress()))
-                .map_or(a.pos, |b| b.pos),
-            _ => a.touch,
+        let (here, touch, mode, point, tpos) = (a.pos, a.touch, tw.target, tw.point, tw.pos);
+        // HeliGroupOffset.GetAvailableOffset (VERIFIED-DECOMP @0x18102df90): the helis of the base
+        // tower in this target type, in tower order, each its slot (recording heli_005: the
+        // Heli at (0, 0) and its three Comanches round it at 15).
+        let off = {
+            let group: Vec<usize> = (0..self.towers.len())
+                .filter(|&o| self.towers[o].target == mode && self.towers[o].air.is_some() && self.tier(o).and_then(|tr| tr.air.as_ref()).is_some_and(|x| x.heli.is_some()))
+                .collect();
+            let slot = group.iter().position(|&o| o == t).unwrap_or(0);
+            heli_group_offsets(group.len()).get(slot).copied().unwrap_or([0.0; 2])
         };
+        let goal = match mode {
+            TargetMode::Point => point.unwrap_or(tpos),
+            TargetMode::Pursuit => {
+                let last = self.towers[t].air.as_ref().and_then(|a| a.pursuit_last).unwrap_or(here);
+                let p = self.pursuit_destination(t, here).unwrap_or(last);
+                // (GetPath stores it as lastDestination; + lastGroupOffset (0 for one heli),
+                // GetPointWithinMap.)
+                self.towers[t].air.as_mut().unwrap().pursuit_last = Some(p);
+                let p = [p[0] + off[0], p[1] - off[1]];
+                [p[0].clamp(-WORLD_X, WORLD_X), p[1].clamp(-WORLD_Z, WORLD_Z)]
+            }
+            _ => [touch[0] + off[0], touch[1] - off[1]],
+        };
+        let a = self.towers[t].air.as_mut().unwrap();
         let dest = [goal[0], -goal[1]];
         let pos = [a.pos[0], -a.pos[1]];
         if dest == pos {
-            return;
+            return false;
         }
         const DT: f32 = 1.0 / 60.0;
         let d = [dest[0] - pos[0], dest[1] - pos[1]];
@@ -7736,24 +8032,23 @@ impl Game {
                 cap = (mag - h.slowdownRadiusMin) / (h.slowdownRadiusMax - h.slowdownRadiusMin) * (1.0 - h.minVelocityCapScale) + h.minVelocityCapScale;
             }
             // GetRepulsionVector (VERIFIED-DECOMP @0x180d2b280) over heliPositionsInRepulseRange
-            // (INFERRED P-HELIREPULSE: the other helis now within otherHeliRepulsionRange, in tower
-            // order; HeliEnter / HeliExit keep the game's list): the sum of (range - distance) /
-            // range x force over them, along the normalised sum of (here - them), / their count.
+            // (INFERRED P-HELIREPULSE: HeliEnter / HeliExit as each heli's check after its own move,
+            // used next frame (move_helis); recording heli_005 rt 2-40 reproduced exactly): the sum of (range - distance) / range
+            // x force over them, along the normalised sum of (here - them), / their count.
             let range = h.otherHeliRepulsionRange;
             let (mut sum, mut total, mut n) = ([0.0f32; 2], 0.0f32, 0u32);
+            let near = self.towers[t].air.as_ref().unwrap().hm_near.clone();
             for &(o, q) in helis {
-                if o == t {
+                if o == t || !near.contains(&self.towers[o].id) {
                     continue;
                 }
                 let op = self.towers[o].air.as_ref().map_or(q, |x| x.pos);
                 let op = [op[0], -op[1]];
                 let e = [pos[0] - op[0], pos[1] - op[1]];
                 let dist = (e[0] * e[0] + e[1] * e[1]).sqrt();
-                if dist < range {
-                    total += (range - dist) / range * h.otherHeliRepulsonForce;
-                    sum = [sum[0] + e[0], sum[1] + e[1]];
-                    n += 1;
-                }
+                total += (range - dist) / range * h.otherHeliRepulsonForce;
+                sum = [sum[0] + e[0], sum[1] + e[1]];
+                n += 1;
             }
             if n > 0 {
                 let l = (sum[0] * sum[0] + sum[1] * sum[1]).sqrt();
@@ -7790,6 +8085,7 @@ impl Game {
             a.hm_rot = lerp_angle(a.hm_rot, want, h.rotationSpeed);
         }
         a.angle = (a.hm_rot - 90.0) * DEG2RAD;
+        true
     }
 
     /// GyrfalconPattern (VERIFIED-DISASM Process @0xdc69a0, UpdateTargeting @0xdc93c0,
@@ -13479,7 +13775,12 @@ impl Game {
                 if attack.air_rotate && tier.air.as_ref().is_some_and(|x| x.heli.is_some()) {
                     // (Target.Position: the targeted collision circle of a MOAB-class bloon, recording
                     // heli_032 rt 31: -82.03 at the circle 6.3 ahead of the MOAB.)
+                    // (It turns first to the Target the attack still holds, alive, any range, then
+                    // to a new one the search finds; recording heli_025 rt 2357, a Comanche turned
+                    // to a Red 62 away (range 54.6) the frame its search came up empty.)
                     let found = best.filter(|b| b.2 != 0);
+                    let old = self.towers[t].air.as_ref().and_then(|a| a.hm_target.get(ai).copied().flatten());
+                    let old_at = old.and_then(|(id, off)| self.bloons.iter().find(|b| b.id == id).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
                     let kept = found.and_then(|(_, aim, id)| self.bloons.iter().find(|b| b.id == id).map(|b| (id, [aim[0] - b.pos[0], aim[1] - b.pos[1]])));
                     if let Some(a) = self.towers[t].air.as_mut() {
                         if a.hm_target.len() <= ai {
@@ -13487,7 +13788,10 @@ impl Game {
                         }
                         a.hm_target[ai] = kept;
                     }
-                    self.air_rotate_to(t, ai, range, found.map(|b| b.1));
+                    self.air_rotate_to(t, ai, range, old_at);
+                    if let Some(b) = found {
+                        self.air_rotate_to(t, ai, range, Some(b.1));
+                    }
                 }
                 // RotateToTargetAttackOffset.SetRotation (VERIFIED-DECOMP @0x180ddb500): the attack's
                 // own rotation, Vector2.get_Rotation(Target.Position - GetOrigin) + additionalRotation,
@@ -15506,18 +15810,12 @@ impl Game {
                 }
             }
         }
-        if !shoves.is_empty() {
-            let d = &self.defs[self.bloons[i].kind];
-            let p = self.bloons[i].pos;
-            for (c, sh) in shoves {
-                let rr = sh.range + d.radius;
-                if (sh.camo || !self.bloons[i].camo(d)) && (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) <= rr * rr {
-                    let has = |t: &str| d.tags.iter().any(|x| x == t);
-                    let cap = if has("Moab") { Some(sh.moab) } else if has("Bfb") { Some(sh.bfb) } else if has("Zomg") { sh.zomg } else { None };
-                    if let Some(cap) = cap {
-                        mult = mult.min(cap);
-                    }
-                }
+        // MoabShoveMutator.Mutate (VERIFIED-DECOMP @0x18121ff50): the bloon's speed x its class's
+        // push scale while the mutator lasts, for its layer.
+        let _ = shoves;
+        if let Some(&(until, cap, _, layer)) = self.shoved.get(&self.bloons[i].id) {
+            if until > self.round_clock && layer == self.bloons[i].layer {
+                mult *= cap;
             }
         }
         let b = &mut self.bloons[i];
@@ -16036,59 +16334,110 @@ impl Game {
         self.sfx.push(Sfx { name: names[k].clone(), group });
     }
 
-    /// ComancheDefence.Process: when a bloon gets far along the track, `count` mini Comanches
-    /// fly in from the map edge nearest it for `duration` frames, at most `per_round` times a
-    /// round and `cooldown` frames apart; Comanche Commander's (immediate) are always there.
-    /// HYPOTHESIS P-COMANCHE: "far along" is past 75% of its track; they spawn at the edge
-    /// nearest that bloon and hunt the lead bloon (Pursuit).
+    /// ComancheDefence.Process (VERIFIED-DECOMP @0x180d0bdf0). Not immediate: with activated25 /
+    /// 50 / 75 unset, BloonManager.GetGlobalBest (First, any range, cantTargetCamo unless the tower
+    /// sees camo) at PercThroughMap >= 0.25 / 0.5 / 0.75 calls GetMeDaChoppas (@0x180d0b3c0) for 1
+    /// / 2 / 3 helis: CreateDefenceHeli (@0x180d0a950) until it has that many, each on
+    /// GetPositionOnEdgeOfMapClosestToo (@0x180d0b600) the bloon pushed 50 past the edge, turned to
+    /// Rotation(-spot) and left locked where it was made (recording heli_004 rt 878: a mini at
+    /// (-36.24, -166), rotation 12.31, still there at the end). Process gets the frame's elapsed
+    /// (1) where the retreat and cooldown want roundTime: activationTime + durationFrames <= 1
+    /// never holds, so they never retreat and only OnRoundStarted clears the flags.
+    /// Immediate (Comanche Commander): STAND-IN P-COMANCHE5, reinforcementCount helis made at the
+    /// tower in Pursuit (their HeliGroupOffset and the repulsion between them aren't ported).
     fn comanche_defence(&mut self) {
+        // (Decided in the tower's turn, before the bloons made after it move (recording heli_004
+        // rt 1155: the Zebra at 50.0% as the frame began); made after the towers act.)
+        for (t, spot) in std::mem::take(&mut self.comanche_due) {
+            self.comanche_make(t, spot);
+        }
+    }
+
+    fn comanche_decide(&mut self) {
         for t in 0..self.towers.len() {
             let Some(cm) = self.tier(t).and_then(|tr| tr.comanche.clone()) else { continue };
             let id = self.towers[t].id;
-            let alive = self.towers.iter().filter(|o| o.sub.as_ref().is_some_and(|s| s.parent == id && s.spec.name == cm.tower.name)).count();
-            let tw = &mut self.towers[t];
-            tw.comanche.0 = (tw.comanche.0 - 1.0).max(0.0);
-            let lead = self
-                .bloons
-                .iter()
-                .filter(|b| on_map(b.pos, 0.0))
-                .find(|b| b.dist >= 0.75 * self.tracks[b.path as usize].length())
-                .map(|b| b.pos);
-            let want = if cm.immediate {
-                (alive < cm.count as usize).then(|| self.towers[t].air.as_ref().map_or(self.towers[t].pos, |a| a.pos))
-            } else if alive == 0 && tw.comanche.0 <= 0.0 && tw.comanche.1 < cm.per_round {
-                lead
-            } else {
-                None
-            };
-            let Some(at) = want else { continue };
-            if !cm.immediate {
-                let tw = &mut self.towers[t];
-                tw.comanche = (cm.cooldown, tw.comanche.1 + 1);
-            }
-            let (lo, hi) = self.bounds;
-            let edge = [
-                [lo[0], at[1]],
-                [hi[0], at[1]],
-                [at[0], lo[1]],
-                [at[0], hi[1]],
-            ]
-            .into_iter()
-            .min_by(|a, b| ((a[0] - at[0]).abs() + (a[1] - at[1]).abs()).total_cmp(&((b[0] - at[0]).abs() + (b[1] - at[1]).abs())))
-            .unwrap();
-            let from = if cm.immediate { at } else { edge };
-            let n = if cm.immediate { cm.count as usize - alive } else { cm.count as usize };
-            for k in 0..n {
-                let before = self.towers.len();
-                self.spawn_sub(cm.tower.clone(), [from[0] + k as f32 * 8.0, from[1]], id, false);
-                if self.towers.len() > before {
-                    let s = self.towers.len() - 1;
-                    self.towers[s].target = TargetMode::Pursuit;
-                    if let Some(sub) = self.towers[s].sub.as_mut() {
-                        sub.frames_left = if cm.immediate { f32::INFINITY } else { cm.duration };
-                    }
+            let mine = |g: &Self| g.towers.iter().filter(|o| o.sub.as_ref().is_some_and(|s| s.parent == id && s.spec.name == cm.tower.name)).count();
+            if cm.immediate {
+                // (Process, immediate: reinforcementCount helis made at the tower's position.)
+                let have = mine(self) + self.comanche_due.iter().filter(|x| x.0 == t).count();
+                let at = self.towers[t].pos;
+                for _ in have..cm.count as usize {
+                    self.comanche_due.push((t, [at[0], -at[1]]));
                 }
+                continue;
             }
+            let camo = self.tier(t).is_some_and(|tr| tr.detect_camo) || self.buffs.get(t).is_some_and(|b| b.camo);
+            for (k, at) in [(0u32, 0.25f32), (1, 0.5), (2, 0.75)] {
+                if self.towers[t].comanche.1 & (1 << k) != 0 {
+                    continue;
+                }
+                let best = self
+                    .bloons
+                    .iter()
+                    .filter(|b| b.hp > 0 && !b.off_track() && (camo || !b.camo(&self.defs[b.kind])))
+                    .map(|b| (self.perc_through_map(b), b.pos))
+                    .fold(None::<(f32, [f32; 2])>, |m, x| if m.is_none_or(|m| x.0 > m.0) { Some(x) } else { m });
+                let Some((perc, bp)) = best.filter(|b| at <= b.0) else { continue };
+                let _ = perc;
+                // GetMeDaChoppas(k + 1): made until there are that many.
+                let have = mine(self) + self.comanche_due.iter().filter(|x| x.0 == t).count();
+                for _ in have..k as usize + 1 {
+                    let (gx, gy) = (bp[0], -bp[1]);
+                    let (dl, dr) = ((gx - -WORLD_X).abs(), (gx - WORLD_X).abs());
+                    let (db, dt) = ((gy - -WORLD_Z).abs(), (gy - WORLD_Z).abs());
+                    let mut best_d = dl;
+                    let mut side = 0;
+                    if dr < dl {
+                        best_d = dr;
+                        side = 1;
+                    }
+                    if db < best_d {
+                        best_d = db;
+                        side = 2;
+                    }
+                    let spot = if dt < best_d {
+                        [gx, WORLD_Z + 50.0]
+                    } else {
+                        match side {
+                            0 => [-WORLD_X - 50.0, gy],
+                            1 => [WORLD_X + 50.0, gy],
+                            _ => [gx, -WORLD_Z - 50.0],
+                        }
+                    };
+                    self.comanche_due.push((t, spot));
+                }
+                self.towers[t].comanche.1 |= 1 << k;
+            }
+        }
+    }
+
+    /// CreateDefenceHeli at `spot` (game frame) for tower `t`.
+    fn comanche_make(&mut self, t: usize, spot: [f32; 2]) {
+        let Some(cm) = self.tier(t).and_then(|tr| tr.comanche.clone()) else { return };
+        let id = self.towers[t].id;
+        let before = self.towers.len();
+        self.spawn_sub(cm.tower.clone(), [spot[0], -spot[1]], id, false);
+        if self.towers.len() == before {
+            return;
+        }
+        let s = self.towers.len() - 1;
+        self.init_air(s);
+        let tw = &mut self.towers[s];
+        if cm.immediate {
+            // (Its default target type, FollowTouch, from where it's made.)
+            tw.target = TargetMode::Pointer;
+        } else {
+            tw.target = TargetMode::Point;
+            tw.point = Some([spot[0], -spot[1]]);
+        }
+        if let Some(sub) = tw.sub.as_mut() {
+            sub.frames_left = f32::INFINITY;
+        }
+        if let Some(a) = tw.air.as_mut() {
+            a.pos = [spot[0], -spot[1]];
+            a.touch = a.pos;
+            a.hm_rot = crt_atan2(-spot[0], -spot[1]) * RAD2DEG;
         }
     }
 
@@ -17456,13 +17805,15 @@ impl Game {
                 // CreateTower.Exhausted: positionAtTarget puts it on the projectile's Target
                 // (recording engineer_200: a Sentry on its point (-101.07, -1.13), not the
                 // arrive lerp's float off it).
-                let at = match (pr.spec.create_at_target, pr.arrive_at) {
-                    (true, Some((_, _, tg))) => tg,
+                let at = match (pr.spec.create_at_target, pr.arrive_at, self.preset_target) {
+                    (true, Some((_, _, tg)), _) => tg,
+                    // (UsePresetTarget: the picked point; recording heli_050's Marine.)
+                    (true, None, Some(p)) => p,
                     _ => pr.pos,
                 };
                 // (CreateTypedTower.CreateTower, VERIFIED-DISASM @0xcb0df0, always takes the
                 // emitter's target type: recording engineer_420_close, Close Sentry Experts.)
-                sub = Some((spec, at, pr.owner, pr.grot, pr.spec.create_parent_target || n == 4));
+                sub = Some((spec, at, pr.owner, pr.grot.filter(|_| pr.spec.create_proj_rot), pr.spec.create_parent_target || n == 4));
             }
         (out, sub)
     }
@@ -18193,7 +18544,7 @@ impl Game {
         for (pos, proj, emission, owner, rot, layer, z) in std::mem::take(&mut self.pop_emits) {
             self.emit_pop(pos, &proj, &emission, owner, rot, layer, z);
         }
-        self.comanche_defence();
+        self.comanche_decide();
         self.forget_untouched();
         self.spirit_grow();
         self.spirit_of_the_forest(None);
@@ -18352,7 +18703,11 @@ impl Game {
         // runs after the towers: a plane's weapons fire from where it was last frame, at its last
         // rotation (FireFromAirUnit.EmitPosition / EmitRotation; recording ace_000: the first burst
         // from the tower at rotation 0, rt 102's from rt 101's spot turned by its 6.54).
+        // (ComancheDefence acts in its tower's turn, before its HeliMovement; the helis it makes
+        // act and move from the next frame: recording heli_004, made at 878, first shot 879.)
+        self.comanche_defence();
         self.move_helis();
+        self.moab_shove_step();
         self.fly_patterns();
         // InstantDamageEmission.Process: this frame's instant-damage shots hit their targets now,
         // before the bloons move. INFERRED: after every tower has acted (the game's emission
@@ -19679,6 +20034,8 @@ mod tests {
         // SimRecorder IN lines: the InputManager's cursor in that frame while active and not
         // ignored (FollowTouchSetting reads it).
         let mut cursors: Vec<Option<[f32; 2]>> = Vec::new();
+        // Each tower id's first W line: (frame index, its position), for UsePresetTarget below.
+        let mut first_w: Vec<(u64, usize, [f32; 2])> = Vec::new();
         // Per frame: Path.bloonsList as (type, distance), when recorded.
         let mut lists: Vec<Option<Vec<(String, u32)>>> = Vec::new();
         let mut ids: std::collections::HashMap<u64, (String, u32)> = Default::default();
@@ -19743,6 +20100,10 @@ mod tests {
                 }
                 Some("IN") if !frames.is_empty() && f[3] == "1" && f[4] == "0" => {
                     *cursors.last_mut().unwrap() = Some([f[1].parse().unwrap(), -f[2].parse::<f32>().unwrap()]);
+                }
+                Some("W") if !frames.is_empty() && f.len() >= 10 && !first_w.iter().any(|x| x.0.to_string() == f[1]) => {
+                    first_w.push((f[1].parse().unwrap(), frames.len() - 1, [f[8].parse().unwrap(), -f[9].parse::<f32>().unwrap()]));
+                    frames.last_mut().unwrap().2.push((f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap()));
                 }
                 Some("W") if !frames.is_empty() => frames.last_mut().unwrap().2.push((f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap())),
                 _ => {}
@@ -19895,6 +20256,9 @@ mod tests {
             // SimRecorder activates after its `ability`-th frame and before writing that frame's
             // lines: after stepping the frame at index ability - 1.
             if ability_at == Some(fi + 1) {
+                // (UsePresetTarget's point, the player's pick: where the first tower made within 10
+                // frames after the abilities stands; recording heli_050's Marine.)
+                g.preset_target = first_w.iter().find(|x| x.1 > fi && x.1 <= fi + 10).map(|x| x.2);
                 // Ability.Activate(true) neither needs nor starts the cooldown (VERIFIED-DISASM
                 // @0x180df7e20: IsReady(true), cooldown set only when false): keep what each had.
                 let saved: Vec<_> = g.towers.iter().map(|tw| tw.ability_cd.clone()).collect();
