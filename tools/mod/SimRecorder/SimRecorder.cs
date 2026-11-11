@@ -74,6 +74,9 @@ public class Scenario
     public int ability { get; set; } = -1;
     /// Recorded frames [first, last] to log the bloon grid's buckets for (GB lines).
     public int[] gridlog { get; set; }
+    /// GameModel.randomSeed to start the simulation with (Simulation.Initialise seeds syncedRandom
+    /// from it), to replay a recording's game; -1 leaves the game's own.
+    public long seed { get; set; } = -1;
     /// Effect capture (<name>.fx): every rendered frame while fx_from <= recorded frames <= fx_to,
     /// the camera and each active particle system (with its particles), sprite and TextMeshPro
     /// text whose hierarchy path contains one of fx_filter (all when empty). Use with fast false.
@@ -1570,6 +1573,18 @@ static class EliteSortPatch
     {
         if (Recorder.Out == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
         try { Recorder.Out.WriteLine($"ES {(__0 == null ? -1 : __0.Id.Id)} {Recorder.F(__result)}"); } catch (Exception) { }
+    }
+}
+
+// Scenario seed: Simulation.Initialise(GameModel, bool) reads GameModel.randomSeed (+0x88) for its
+// BufferedRandoms (VERIFIED-DECOMP @0x180b48de0).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Simulation), "Initialise")]
+static class SeedPatch
+{
+    static void Prefix(Il2CppAssets.Scripts.Models.GameModel __0)
+    {
+        if (Recorder.Sc == null || Recorder.Sc.seed < 0 || __0 == null) return;
+        try { __0.randomSeed = (int)Recorder.Sc.seed; } catch (Exception) { }
     }
 }
 

@@ -1,1 +1,1 @@
-{"name": "super_420_strong", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "SuperMonkey-420", "x": -112.815414, "y": -30.9, "target": "Strong"}], "ability": 120, "cash": 10000000}
+{"name": "super_420_strong", "map": "Tutorial", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "SuperMonkey-420", "x": -112.815414, "y": -30.9, "target": "Strong"}], "ability": 120, "cash": 10000000, "seed": 10389269}
