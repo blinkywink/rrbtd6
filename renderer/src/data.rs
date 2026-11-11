@@ -596,6 +596,12 @@ pub struct Upgrade {
 
 #[derive(Deserialize, Clone)]
 pub struct Tier {
+    /// MonkeyopolisModel: absorbs the farms in range once (Game::monkeyopolis_absorb).
+    #[serde(default)]
+    pub mopolis: Option<Mopolis>,
+    /// MonkeyopolisUpgradeCostModel: that path's next tier costs per farm in range, blocked with none.
+    #[serde(default)]
+    pub mopolis_cost: Option<MopolisCost>,
     /// TapTowerAbilityBehavior.IsBanned's model checks: Overclock / Take Aim can't pick it.
     #[serde(default)]
     pub tap_banned: bool,
@@ -764,6 +770,11 @@ pub struct Support {
     /// Buff icon (UiBuffIcons sprite) shown over towers it reaches (showBuffIcon).
     #[serde(default)]
     pub icon: Option<String>,
+    /// Its BuffIndicatorModel's buffName (buffLocsName) and maxStackSize.
+    #[serde(default)]
+    pub buff_name: String,
+    #[serde(default)]
+    pub buff_max: i32,
     /// Seconds an ability's support zone lasts (0 for a tower's own supports).
     #[serde(default)]
     pub lifespan: f32,
@@ -1486,6 +1497,11 @@ pub struct TagMod {
 /// AddBerserkerBrewToProjectileModel).
 #[derive(Deserialize, Clone)]
 pub struct Brew {
+    /// Its mutator's BuffIndicatorModel: iconName, buffName (not stackable).
+    #[serde(default)]
+    pub buff_icon: Option<String>,
+    #[serde(default)]
+    pub buff_name: String,
     /// "acid" (extra damage by tag) or "berserk" (damage, pierce, rate and range).
     pub kind: String,
     pub id: String,
@@ -2471,6 +2487,11 @@ pub struct Overclock {
     /// TakeAim: Tower.AddMutatorIncludeSubTowers, the picked tower's child towers get it too.
     #[serde(default)]
     pub include_subs: bool,
+    /// Its mutator's BuffIndicatorModel: iconName and buffName (not stackable).
+    #[serde(default)]
+    pub buff_icon: Option<String>,
+    #[serde(default)]
+    pub buff_name: String,
 }
 
 /// DarkshiftModel: the new spot is within `radius` of the tower (placementZoneAssetRadius) when
@@ -2947,4 +2968,26 @@ pub struct UnstableDmg {
     pub boss_moab: f32,
     #[serde(default)]
     pub moab: f32,
+}
+
+/// MonkeyopolisModel.
+#[derive(Deserialize, Clone)]
+pub struct Mopolis {
+    pub filter: String,
+    /// valueRequiredForCrate.
+    pub value: i32,
+    /// cashFromCrate.
+    pub crate_cash: f32,
+    /// baseIncome.
+    pub base: i32,
+    /// cratesPerRound.
+    pub crates: i32,
+}
+
+/// MonkeyopolisUpgradeCostModel.
+#[derive(Deserialize, Clone)]
+pub struct MopolisCost {
+    pub path: usize,
+    pub per_farm: f32,
+    pub filter: String,
 }

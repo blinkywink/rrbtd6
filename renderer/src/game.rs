@@ -1727,6 +1727,11 @@ pub struct Tower {
     pub overclock: Option<(f32, f32, f32, f32)>,
     /// The boost's buffDisplayPath, shown on it while `overclock` lasts.
     pub overclock_fx: Option<String>,
+    /// The boost mutator's buff icon (iconName, buffName) while `overclock` lasts.
+    pub overclock_icon: Option<(String, String)>,
+    /// Monkeyopolis.activated, and its EmissionMutator's cash per crate (totalCashPerCrate).
+    pub mopolis_done: bool,
+    pub mopolis_cash: Option<f32>,
     /// IncreaseRangeModel: (multiplier, added range, frames left).
     pub range_up: Option<(f32, f32, f32)>,
     /// Ultraboost stacks: (count, interval multiplier and Village range multiplier per stack).
@@ -4561,9 +4566,12 @@ macro_rules! collide_pass {
                     $s.towers[ti].damage += self_tally_dealt;
                     $s.stats.pops += n;
                     $s.stats.damage += self_tally_dealt;
-                    // Monkey Town (CashIncreaseModel): pop cash x multiplier.
-                    let m = $s.buffs.get(ti).map_or(1.0, |b| b.cash_mult as f64);
-                    $s.earn(n as f64 * (m - 1.0));
+                    // Monkey Town's CashIncrease (OnBloonDamaged @0x180d05d80) puts a BloonWorthMutator
+                    // (@0x180d03a30: DistributeCashModel multiplier + (m - 1)) on a bloon its tower
+                    // degraded; it is not dontRemoveOnBloonDegrade, so it is gone before the bloon's
+                    // next DistributeCash.PostDegrade reads the model: no pop pays more (recording
+                    // village_003, F cash: Dart 816 pops Black 752 at rt 2804, its next pop at 2989
+                    // by Dart 923 pays $1; every pop in the run pays $1, as without the Village).
                 }
             }
             // WindModel (Distraction): Wind.Collide runs after the DamageModel (recording
@@ -7361,6 +7369,9 @@ impl Game {
             look: None,
             overclock: None,
             overclock_fx: None,
+            overclock_icon: None,
+            mopolis_done: false,
+            mopolis_cash: None,
             range_up: None,
             ultra: (0, 1.0, 1.0),
             mute: 0.0,
@@ -8967,6 +8978,9 @@ impl Game {
             look: None,
             overclock: None,
             overclock_fx: None,
+            overclock_icon: None,
+            mopolis_done: false,
+            mopolis_cash: None,
             range_up: None,
             ultra: (0, 1.0, 1.0),
             mute: 0.0,
@@ -9608,6 +9622,7 @@ impl Game {
             let tw = &mut self.towers[target];
             tw.overclock = Some((oc.rate, oc.village_range, oc.range, ((oc.frames * mult) as i32) as f32));
             tw.overclock_fx = oc.buff_fx.clone();
+            tw.overclock_icon = oc.buff_icon.clone().map(|i| (i, oc.buff_name.clone()));
             if let Some(st) = &oc.permanent {
                 tw.ultra = ((tw.ultra.0 + 1).min(st.max_stacks), st.rate, st.village_range);
             }
@@ -9620,6 +9635,7 @@ impl Game {
                     if o.sub.as_ref().is_some_and(|s| s.parent == pid && !s.spec.no_parent_mutators) {
                         o.overclock = boost;
                         o.overclock_fx = None;
+                        o.overclock_icon = None;
                     }
                 }
             }
@@ -10234,6 +10250,60 @@ impl Game {
     }
 
     /// Next upgrade on `path`: Some((name, cost)) if one exists and crosspathing allows it.
+    /// TowerManager.GetTowersInRange (VERIFIED-DECOMP <GetTowersInRange>d__31.MoveNext
+    /// @0x180c31d90: squared centre distance < range^2, in tower order) filtered as Monkeyopolis /
+    /// MonkeyopolisUpgradeCost do: baseId `filter`, TowerModel.tier below 5, the same owner (one
+    /// player in the clone), not the tower itself.
+    fn mopolis_farms(&self, t: usize, filter: &str, range: f32) -> Vec<usize> {
+        let p = self.towers[t].pos;
+        (0..self.towers.len())
+            .filter(|&o| o != t && self.towers[o].sub.is_none() && self.towers[o].paragon.is_none())
+            .filter(|&o| self.tower_defs[self.towers[o].def].0 == filter && self.towers[o].tiers.iter().all(|&x| x < 5))
+            .filter(|&o| {
+                let q = self.towers[o].pos;
+                (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) < range * range
+            })
+            .collect()
+    }
+
+    /// Monkeyopolis.Process (VERIFIED-DECOMP @0x180d49350), until activated: every farm in
+    /// max(rangeBeforeUpgrade, range) is destroyed (Simulation.DestroyTower: no refund), its worth
+    /// (int) added to the total and to this tower's; crates = max(total / valueRequiredForCrate,
+    /// 1); the EmissionMutator's cash per crate = (crates x cashFromCrate + baseIncome) /
+    /// cratesPerRound. Returns the destroyed towers' ids (removed after the tower phase).
+    fn monkeyopolis_absorb(&mut self, t: usize) -> Vec<u64> {
+        let Some(m) = self.tier(t).and_then(|tr| tr.mopolis.clone()) else { return Vec::new() };
+        if self.towers[t].mopolis_done {
+            return Vec::new();
+        }
+        let range = self.range(t);
+        let farms = self.mopolis_farms(t, &m.filter, range);
+        let mut total: i32 = 0;
+        let mut gone = Vec::new();
+        for &o in &farms {
+            let w = self.towers[o].invested as f32 as i32;
+            total += w;
+            self.towers[t].invested += w as f64;
+            gone.push(self.towers[o].id);
+        }
+        let crates = (total / m.value.max(1)).max(1);
+        let per = (crates as f32 * m.crate_cash + m.base as f32) / m.crates.max(1) as f32;
+        let tw = &mut self.towers[t];
+        tw.mopolis_cash = Some(per);
+        tw.mopolis_done = true;
+        gone
+    }
+
+    /// Tower.IsUpgradeBlocked's reason (GetUpgradeBlockId) for the next tier of `path`:
+    /// "MonkeyVillageRequirement" when MonkeyopolisUpgradeCost blocks it (no farm in range).
+    pub fn upgrade_block_id(&self, t: usize, path: usize) -> Option<&'static str> {
+        if self.towers[t].sub.is_some() || self.towers[t].paragon.is_some() || path >= 3 || self.towers[t].tiers[path] >= 5 {
+            return None;
+        }
+        let mc = self.tier(t)?.mopolis_cost.clone().filter(|mc| mc.path == path)?;
+        self.mopolis_farms(t, &mc.filter, self.range(t)).is_empty().then_some("MonkeyVillageRequirement")
+    }
+
     pub fn next_upgrade(&self, t: usize, path: usize) -> Option<(String, f64)> {
         // A Paragon has no more upgrades; a sub-tower has none.
         if self.towers[t].paragon.is_some() || self.towers[t].sub.is_some() {
@@ -10294,6 +10364,17 @@ impl Game {
             return Some((lvl.name.clone(), (((lvl.xp - tw.xp) * h.cost_per_xp).max(11.0)) as f64));
         }
         let d = self.discount(tw.def, tw.pos, Some(t), next[path] as u32);
+        // MonkeyopolisUpgradeCost (IsUpgradeBlocked @0x180d48d60, GetUpgradeCost @0x180d489a0): on
+        // its path the upgrade needs a farm in range and costs costPerFarm per farm, in place of
+        // the model's cost (TowerManager.GetTowerUpgradeCost: behaviours before the discounts).
+        if let Some(mc) = self.tier(t).and_then(|tr| tr.mopolis_cost.clone()).filter(|mc| mc.path == path) {
+            let n = self.mopolis_farms(t, &mc.filter, self.range(t)).len();
+            if n == 0 {
+                return None;
+            }
+            let name = tt.upgrades.iter().find(|u| u.path == path && u.tier == cur)?.name.clone();
+            return Some((name, game_cost(n as f64 * mc.per_farm as f64, self.cost_mult, d)));
+        }
         tt.upgrades.iter().find(|u| u.path == path && u.tier == cur).map(|u| (u.name.clone(), game_cost(u.cost, self.cost_mult, d)))
     }
 
@@ -10968,24 +11049,53 @@ impl Game {
             .collect()
     }
 
-    /// Buff icons over tower `t` (BuffIndicatorUi): each reaching support with a buff icon,
-    /// with how many of it stack (shown as "x2" ...). Sorted by icon name for a stable layout.
+    /// Buff icons over tower `t`: Tower.activeBuffs (Tower.UpdateBuffs @0x180c186b0, one per
+    /// mutator whose BehaviorMutator has a BuffIndicatorModel) grouped as
+    /// BuffIndicatorUi.GroupStackableBuffs (@0x180a42c00) does: one icon per FullName
+    /// (iconName + buffName), the larger maxStackSize kept; a stackable one (maxStackSize > 1,
+    /// BuffIndicatorModel.ctor @0x181118650) counts each copy up to it, shown "x" + n by
+    /// BuffIcon.Show (@0x180a41020); a non-stackable one shows no count (0 here). The supports'
+    /// mutators: one per mutatorId (isUnique), its copies for a stacking one; then Overclock's.
+    /// HYPOTHESIS P-BUFFORDER: icons sorted by name (the game keeps the mutator list's order).
     pub fn buff_icons(&self, t: usize) -> Vec<(String, u32)> {
-        let mut v: Vec<(String, u32)> = self
+        let mut queries: Vec<(String, String, i32, u32)> = self
             .supports_at(self.towers[t].def, self.towers[t].pos, Some(t))
             .into_iter()
-            .filter_map(|(sp, n)| Some((sp.icon?, n)))
+            .filter_map(|(sp, n)| Some((sp.icon?, sp.buff_name, sp.buff_max, n)))
             .collect();
-        v.sort();
-        v.dedup_by(|a, b| {
-            if a.0 == b.0 {
-                b.1 += a.1;
-                true
-            } else {
-                false
+        queries.sort();
+        // Alchemist brews on it (their mutators' indicators).
+        for b in &self.towers[t].brews {
+            if let Some(icon) = &b.brew.buff_icon {
+                queries.push((icon.clone(), b.brew.buff_name.clone(), 0, 1));
             }
-        });
-        v
+        }
+        if let (Some(_), Some((icon, name))) = (self.towers[t].overclock, &self.towers[t].overclock_icon) {
+            queries.push((icon.clone(), name.clone(), 0, 1));
+        }
+        // (FullName, icon, kept maxStackSize, count)
+        let mut groups: Vec<(String, String, i32, u32)> = Vec::new();
+        for (icon, name, max, copies) in queries {
+            let full = format!("{icon}{name}");
+            let k = match groups.iter().position(|g| g.0 == full) {
+                Some(k) => {
+                    if groups[k].2 < max {
+                        groups[k].2 = max;
+                    }
+                    k
+                }
+                None => {
+                    groups.push((full, icon, max, 0));
+                    groups.len() - 1
+                }
+            };
+            if max > 1 {
+                for _ in 0..copies {
+                    groups[k].3 = (groups[k].3 + 1).min(groups[k].2.max(0) as u32);
+                }
+            }
+        }
+        groups.into_iter().map(|g| (g.1, g.3)).collect()
     }
 
     fn compute_buffs(&self) -> Vec<Buff> {
@@ -12614,7 +12724,16 @@ impl Game {
             }
         }
         let mut deferred: Vec<(u64, u64, usize)> = Vec::new();
+        // Towers Monkeyopolis destroyed this phase: they don't process, and go after it.
+        let mut absorbed: Vec<u64> = Vec::new();
         for t in only_temp.map_or_else(|| (0..self.towers.len()).collect::<Vec<_>>(), |t| vec![t]) {
+            if absorbed.contains(&self.towers[t].id) {
+                continue;
+            }
+            if only_temp.is_none() && self.towers[t].sub.is_none() {
+                let gone = self.monkeyopolis_absorb(t);
+                absorbed.extend(gone);
+            }
             // (A pet is made in its handler's Process: its own start with the next frame; recording
             // beast_upgrades_r30, a pet upgraded in at rt 400 aims at rt 402.)
             if self.towers[t].sub.as_ref().is_some_and(|s| s.pet && s.age < 2.0) {
@@ -12750,6 +12869,7 @@ impl Game {
                     if *f <= 0.0 {
                         tw.overclock = None;
                         tw.overclock_fx = None;
+                        tw.overclock_icon = None;
                     }
                 }
                 if let Some((_, _, f)) = &mut tw.range_up {
@@ -15903,6 +16023,22 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 }
             }
         }
+        // (Simulation.DestroyTower for Monkeyopolis's farms: gone, no refund; their sub-towers
+        // with them.)
+        if !absorbed.is_empty() {
+            // (Each removal in order for the caller's indices: the later towers shift down.)
+            let mut i = 0;
+            while i < self.towers.len() {
+                let o = &self.towers[i];
+                if absorbed.contains(&o.id) || o.sub.as_ref().is_some_and(|s| absorbed.contains(&s.parent)) {
+                    self.towers.remove(i);
+                    self.removed.push((i, usize::MAX));
+                } else {
+                    i += 1;
+                }
+            }
+            self.buffs = self.compute_buffs();
+        }
         deferred.sort();
         for (_, id, ai) in deferred {
             if let Some(t) = self.towers.iter().position(|o| o.id == id) {
@@ -18504,7 +18640,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             let (value,cash_base) = match &spec.cash {
                 Some(cm) => {
                     let inc = self.towers.iter().position(|t| t.id == owner).and_then(|ti| self.buffs.get(ti)).map_or(1.0, |b| b.income_mult);
-                    let base=cash_value(cm,self.rand());(base*inc as f64,base)
+                    // (Monkeyopolis's EmissionMutator: its CashModels' minimum and maximum.)
+                    let mut cm = cm.clone();
+                    if let Some(v) = self.towers.iter().find(|t| t.id == owner).and_then(|t| t.mopolis_cash) {
+                        cm.min = v;
+                        cm.max = v;
+                    }
+                    let base=cash_value(&cm,self.rand());(base*inc as f64,base)
                 }
                 None => (0.0,0.0),
             };
@@ -20536,6 +20678,11 @@ mod tests {
                 g.step();
                 guard += 1;
             }
+            // RRBTD6_REC_CASH: the clone's cash each recorded frame (DBGAIM so --one keeps it), to
+            // set against the F lines' cash.
+            if std::env::var_os("RRBTD6_REC_CASH").is_some() {
+                eprintln!("DBGAIM CASH {} {:.3}", rt, g.cash);
+            }
             // SimRecorder activates after its `ability`-th frame and before writing that frame's
             // lines: after stepping the frame at index ability - 1.
             if ability_at == Some(fi + 1) {
@@ -21098,6 +21245,70 @@ mod beast_tests {
         g.buffs = g.compute_buffs();
         assert!(g.buffs[d].rate_mult < before * 0.7);
         assert_eq!(g.towers[d].ultra.0, 1, "Ultraboost stack");
+    }
+
+    /// BuffIndicatorUi.GroupStackableBuffs: a 3-0-0 Village's three Primary Training supports share
+    /// one FullName and none of its buffs is stackable, so two Villages still show one icon each
+    /// with no count.
+    #[test]
+    fn village_buff_icons_dont_stack() {
+        let mut g = game();
+        let v = g.tower_defs.iter().position(|(n, _)| n == "MonkeyVillage").unwrap();
+        let dart = g.tower_defs.iter().position(|(n, _)| n == "DartMonkey").unwrap();
+        let d = place_near(&mut g, dart, 300.0);
+        let v1 = place_near(&mut g, v, 300.0);
+        let v2 = place_near(&mut g, v, 300.0);
+        for t in [v1, v2] {
+            for _ in 0..3 {
+                assert!(g.upgrade(t, 0));
+            }
+        }
+        for _ in 0..3 {
+            g.step();
+        }
+        let icons = g.buff_icons(d);
+        assert!(!icons.is_empty(), "{icons:?}");
+        assert!(icons.iter().all(|(_, n)| *n == 0), "{icons:?}");
+        let names: std::collections::HashSet<&String> = icons.iter().map(|(i, _)| i).collect();
+        assert_eq!(names.len(), icons.len(), "{icons:?}");
+    }
+
+    /// MonkeyopolisUpgradeCost / Monkeyopolis: 0-0-5 needs a Banana Farm in range, costs
+    /// costPerFarm per farm, and absorbs them for crate cash.
+    #[test]
+    fn monkeyopolis_needs_and_absorbs_farms() {
+        let mut g = game();
+        g.cash = 1e7;
+        let v = g.tower_defs.iter().position(|(n, _)| n == "MonkeyVillage").unwrap();
+        let farm = g.tower_defs.iter().position(|(n, _)| n == "BananaFarm").unwrap();
+        let t = place_near(&mut g, v, 300.0);
+        for _ in 0..4 {
+            assert!(g.upgrade(t, 2));
+        }
+        assert!(g.next_upgrade(t, 2).is_none(), "blocked without a farm");
+        let (pos, r) = (g.towers[t].pos, g.range(t));
+        let mut farms = 0;
+        for k in 0..16 {
+            let a = k as f32 * std::f32::consts::TAU / 16.0;
+            let p = [pos[0] + a.cos() * (r - 2.0), pos[1] + a.sin() * (r - 2.0)];
+            if farms < 2 && g.can_place(farm, p) && g.place(farm, p) {
+                farms += 1;
+            }
+        }
+        assert_eq!(farms, 2);
+        let (_, cost) = g.next_upgrade(t, 2).expect("two farms in range");
+        assert_eq!(cost, game_cost(10000.0, g.cost_mult, g.discount(g.towers[t].def, pos, Some(t), 5)));
+        let worth: f64 = g.towers.iter().filter(|o| o.def == farm).map(|o| o.invested as f32 as i32 as f64).sum();
+        let id = g.towers[t].id;
+        assert!(g.upgrade(t, 2));
+        g.start_round();
+        for _ in 0..3 {
+            g.step();
+        }
+        assert!(g.towers.iter().all(|o| o.def != farm), "farms absorbed");
+        let tw = g.towers.iter().find(|o| o.id == id).unwrap();
+        let crates = ((worth as i32) / 2000).max(1);
+        assert_eq!(tw.mopolis_cash, Some((crates as f32 * 200.0 + 1000.0) / 10.0));
     }
 
     #[test]

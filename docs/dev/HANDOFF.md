@@ -168,6 +168,11 @@ Owner's rule: nothing half done. Each fix must look and play exactly like the ga
 the game code / recordings), or it hides problems later.
 - Monkey Village: the fire animation disappears, then reappears (visual).
 - Alchemist: buffs it gives other towers don't show their icon over those towers' heads.
+  FIXED (2026-11-12): brews and Overclock add their mutators' indicators (AddAcidicMixture /
+  AddBerserkerBrewToProjectileModel and OverclockModel ctors: buffLocsName / buffIconName, not stackable).
+  OPEN: icon order (the game's mutator-list order, P-BUFFORDER), the inactive icons of towers that could buff
+  (canEventuallyBuff, UpdateBuffs' second loop), Ultraboost's permanent stack icon (OverclockPermanentModel
+  reads its indicator from its behaviours), roundsRemaining text for timed ones.
   PLAN (2026-11-12, read): the icons are Tower.activeBuffs (BuffQuery: buffIndicator, timedMutator, tower,
   canEventuallyBuff, canCurrentlyBuff, availableBuffCount, unavailableBuffCount), rebuilt by Tower.UpdateBuffs
   (@0x180c186b0): one per mutator on the tower whose BehaviorMutator has a buffIndicator (+0x40; with
@@ -181,12 +186,41 @@ the game code / recordings), or it hides problems later.
   applies (overclock, brews, village...), with BuffIndicatorModel exported per mutator.
 - Monkey Village 3xx / 4xx / 5xx buffs (and MIB) show a stack count (2x) with only one village;
   these buffs don't stack in the game.
+  FIXED (2026-11-12): Game::buff_icons groups as BuffIndicatorUi.GroupStackableBuffs: one icon per FullName
+  (iconName + buffName), counted only when stackable (maxStackSize > 1, BuffIndicatorModel.ctor
+  @0x181118650), "x" + n from BuffIcon.Show; the Village's three Primary Training supports share one icon and
+  maxStackSize 0, so no count. Supports export buff_name / buff_max.
 - Monkey Village middle-path ability: no buff icons or animations shown, and it may not actually
   raise attack speed as the game does.
 - Monkey Village bottom path: the 5th tier must only be buyable with a Banana Farm in range; its cost
   depends on the farms in range, and it absorbs them. Implement exactly. All of the bottom path's
   extra money effects must work exactly.
+  DONE (2026-11-12): MonkeyopolisUpgradeCost (IsUpgradeBlocked @0x180d48d60, GetUpgradeCost @0x180d489a0):
+  on its path the 0-0-5 needs a same-owner Banana Farm below tier 5 in range (squared distance < range^2,
+  GetTowersInRange <..>d__31.MoveNext @0x180c31d90) and costs costPerFarm (5000) per farm in place of the
+  model's cost, before the discounts; the button shows MonkeyVillageRequirement ("Requires Banana Farm",
+  UpgradeButton.UpdateSpecialLockUI @0x180b9bca0). Monkeyopolis.Process (@0x180d49350), in the tower's
+  turn: every such farm in max(rangeBeforeUpgrade, range) is destroyed without refund, its (int) worth added
+  to the village's; crates = max(total / 2000, 1); crate cash (crates x 200 + 1000) / 10 (EmissionMutator).
+  OPEN: the bottom path's other money effects (Monkey Commerce discount, Monkey Town / City income) are
+  still to check one by one. FOUND: Monkey Town's CashIncrease (OnBloonDamaged @0x180d05d80) puts its
+  mutator on every bloon the buffed tower damages (Bloon vtable +0x2a8 AddMutator, while it has health);
+  the clone instead pays the buffed tower's own pops x multiplier (game.rs "Monkey Town (CashIncreaseModel)").
+  RESOLVED (2026-11-12): the mutator (BloonWorthMutator @0x180d03a30: DistributeCashModel multiplier + (m-1))
+  isn't dontRemoveOnBloonDegrade, so it is gone before the next DistributeCash.PostDegrade (@0x180fea0e0:
+  cash x incomeMultForRound x multiplier + additive, x sim modifier) reads the model: recording village_003's
+  F cash, every pop pays $1 (Dart 816 degrades Black 752 at rt 2804, its next pop at 2989 pays $1). The clone
+  no longer pays Monkey Town's tower pops x1.5. Tool: RRBTD6_REC_CASH=1 with --one prints the clone's cash per
+  recorded frame (DBGAIM CASH rt cash) to set against the F lines; village_002 / 003 / 004 / 005 match except
+  the round-end bonus the harness doesn't pay. CHIMPS has no Village income (crates, Monkey City), so those
+  need a non-CHIMPS recording to check.
 - Banana Farm: picking up bananas should play a sound.
+  CHECKED (2026-11-12): the game plays none. A pickup sound only comes from CreateSoundOnPickupModel (54 in the
+  model data, on Collectables), and no Banana Farm cash projectile has one; Pickup.Process (@0x180ccf400) only
+  calls the projectile's Pickup, Cash.Pickup (@0x180c99510) adds cash and CreateTextEffect (CashUp), and neither
+  Simulation.AddCash, CashDisplay, nor the Banana / BananaCrate / CashUp prefabs (no AudioSource or sound
+  script) play anything. The clone already plays CreateSoundOnPickupModel where it exists (pickup_sounds).
+  If the owner hears one in the real game, record it (SimRecorder) to find its source.
 - Engineer: the ability does nothing. FIXED (2026-11-12): Overclock / Ultraboost (and Take Aim, Darkshift, Mega
   Mine...) have AbilityModel.canActivateBetweenRounds, which Ability.IsReady (@0x180df9e80) honours; the clone
   refused every targeted ability between rounds (`Ability::between_rounds`, `Game::ability_ready`). Targets per

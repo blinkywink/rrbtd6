@@ -281,7 +281,10 @@ def main():
                     "rate": 0.0 if acid else bf.get("rateUp", 0.0), "range": 0.0 if acid else bf.get("rangeUp", 0.0),
                     "tag_mods": [tag_mod(m) for m in items(deref(bf.get("projBehaviors"))) if m and m["type"] == "DamageModifierForTagModel"]
                     if acid else [],
-                    "ignore": ignore}
+                    "ignore": ignore,
+                    # .ctor (@0x1811b8720 / @0x1811bbd20): BuffIndicatorModel(buffLocsName,
+                    # buffIconName), maxStackSize 0, on the brew's mutator.
+                    "buff_icon": bf.get("buffIconName") or None, "buff_name": bf.get("buffLocsName") or ""}
         return None
 
     # LinkProjectileRadiusToTowerRange.OnRangeChanged (VERIFIED-DISASM @0xd34730): the linked
@@ -1135,7 +1138,10 @@ def main():
         OverclockInput puts on each tower it may pick)."""
         ie = (deref(xf.get("initialEffect")) or {"f": {}})["f"]
         return {"fx": prefab_name(ie.get("assetId")), "fx_scale": ie.get("scale", 1.0),
-                "buff_fx": prefab_name(xf.get("buffDisplayPath")), "marker_fx": prefab_name(xf.get("selectionObjectPath"))}
+                "buff_fx": prefab_name(xf.get("buffDisplayPath")), "marker_fx": prefab_name(xf.get("selectionObjectPath")),
+                # OverclockModel.ctor (@0x18128d1a0): BuffIndicatorModel(buffLocsName, buffIconName),
+                # maxStackSize 0 (not stackable).
+                "buff_icon": xf.get("buffIconName") or None, "buff_name": xf.get("buffLocsName") or ""}
 
     def tier(tobj):
         f = tobj["f"]
@@ -1809,7 +1815,8 @@ def main():
                                             "instant": x["type"] == "CallToArmsModel",
                                             "stacks": 1, "sets": sets, "bases": bases, "tier_cap": 5,
                                             "lifespan": xf.get("lifespan", 0.0),
-                                            "icon": xf.get("buffIconName") if xf.get("showBuffIcon") else None})
+                                            "icon": xf.get("buffIconName") if xf.get("showBuffIcon") else None,
+                                            "buff_name": xf.get("buffLocsName") or "", "buff_max": xf.get("maxStackSize") or 0})
             return out
 
         for b in items(f["behaviors"]):
@@ -1823,12 +1830,16 @@ def main():
         # range are destroyed and their worth summed; crates = max(worth / valueRequiredForCrate,
         # 1); its EmissionMutator (Mutate @0x180d48480) sets every EmissionsPerRoundFilter's
         # count to cratesPerRound and every CashModel's minimum and maximum to (crates x
-        # cashFromCrate + baseIncome) / cratesPerRound.
-        # STAND-IN: no farm is absorbed (worth 0, so 1 crate's worth).
+        # cashFromCrate + baseIncome) / cratesPerRound. The count is fixed here; the cash is set at
+        # run time (Game::monkeyopolis_absorb), 1 crate's worth until then.
         mopolis = next((b["f"] for b in items(f["behaviors"]) if b and b["type"] == "MonkeyopolisModel"), None)
+        mopolis_out = None
         if mopolis:
             n = mopolis.get("cratesPerRound", 1) or 1
             per_crate = (1 * float(mopolis.get("cashFromCrate", 0)) + float(mopolis.get("baseIncome", 0))) / n
+            mopolis_out = {"filter": mopolis.get("filterTower") or "", "value": int(mopolis.get("valueRequiredForCrate", 1) or 1),
+                           "crate_cash": float(mopolis.get("cashFromCrate", 0)), "base": int(mopolis.get("baseIncome", 0)),
+                           "crates": int(n)}
             def mut(o):
                 if isinstance(o, dict):
                     if "per_round" in o and o["per_round"] is not None and "emission" in o:
@@ -1841,6 +1852,12 @@ def main():
                     for v in o:
                         mut(v)
             mut(attacks)
+        # MonkeyopolisUpgradeCostModel: MonkeyopolisUpgradeCost.GetUpgradeCost (@0x180d489a0) /
+        # IsUpgradeBlocked (@0x180d48d60) on `path`: the same owner's towerFilter towers below tier 5
+        # in range (squared distance < range^2) x costPerFarm; blocked with none.
+        mcost = next((b["f"] for b in items(f["behaviors"]) if b and b["type"] == "MonkeyopolisUpgradeCostModel"), None)
+        mopolis_cost = {"path": int(mcost.get("path", 0)), "per_farm": float(mcost.get("costPerFarm", 0)),
+                        "filter": mcost.get("towerFilter") or ""} if mcost else None
         zones = []
         for b in items(f["behaviors"]):
             if b and b["type"] == "SlowBloonsZoneModel":
@@ -1956,7 +1973,10 @@ def main():
                                "stacks": max(sf.get("maxStacks") or 0, sf.get("stackLimit") or 0, sf.get("maxStackCount") or 0, 1),
                                "sets": sets, "bases": bases, "tier_cap": sf["upgrade"] if b["type"] == "FreeUpgradeSupportModel" else sf.get("tierCap", 5),
                                # BuffIndicatorUi: the icon shown over towers this buffs.
-                               "icon": sf.get("buffIconName") if sf.get("showBuffIcon") else None})
+                               "icon": sf.get("buffIconName") if sf.get("showBuffIcon") else None,
+                               # SupportModel's BuffIndicatorModel (.ctor @0x181249bb0): buffName,
+                               # maxStackSize (stackable when over 1); FullName = icon + name.
+                               "buff_name": sf.get("buffLocsName") or "", "buff_max": sf.get("maxStackSize") or 0})
               for k2, m2, a2 in extra:
                   supports.append(dict(supports[-1], kind=k2, mult=m2, add=a2, id=supports[-1]["id"] + "_" + k2))
           return supports
@@ -2199,7 +2219,7 @@ def main():
                 "air": air, "submerge": submerge, "air_modes": air_modes,
                 # PursuitSettingModel.pursuitDistance (PursuitSetting.GetPursuitDestination).
                 "pursuit_distance": next((x["f"].get("pursuitDistance", 0.0) for b in items(f["behaviors"]) if b and b["type"] in ("AttackModel", "AttackAirUnitModel")
-                                          for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed,
+                                          for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed, "mopolis": mopolis_out, "mopolis_cost": mopolis_cost,
                 # TapTowerAbilityBehavior.IsBanned (VERIFIED-DECOMP @0x180e5dcb0), the model part:
                 # Overclock / Take Aim can't pick a paragon, a Beast Handler pet, an
                 # IgnoreAllMutatorsTowerModel tower, an ignoreTowerForSelection one (IsSelectable), a

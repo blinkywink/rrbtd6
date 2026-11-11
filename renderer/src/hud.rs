@@ -676,7 +676,8 @@ impl Hud {
             if let Some(sp) = self.sprites.get(icon) {
                 draw_texture_ex(&sp.tex, x, y, WHITE, DrawTextureParams { dest_size: Some(vec2(cell, cell)), ..Default::default() });
             }
-            if *n > 1 {
+            // BuffIcon.Show: "x" + the count (none for a non-stackable buff, 0 here).
+            if *n > 0 {
                 self.fonts.draw("Btd6FontTitleSDF", &TextBox { gradient: None,
                     text: &format!("x{n}"),
                     rect: Rect::new(x, y - 11.7 * s, cell, 132.1 * s),
@@ -1413,9 +1414,13 @@ impl Hud {
 
                 let next = game.next_upgrade(t, path);
                 let afford = next.as_ref().is_some_and(|(_, c)| game.cash >= *c);
+                // UpgradeButton.UpdateSpecialLockUI (@0x180b9bca0): an upgrade a behaviour blocks
+                // shows its blockId's image (MonkeyVillageRequirement: "Requires Banana Farm") on the
+                // inactive background, with no name, cost, icon or locked text.
+                let block = game.upgrade_block_id(t, path);
                 // Only an unused path that can't be started is "Path Closed"; a started path that
                 // the crosspath rule caps (2-3-0's top path) shows "Max Upgrades", as in the game.
-                let maxed = cur >= 5 || (cur > 0 && next.is_none());
+                let maxed = block.is_none() && (cur >= 5 || (cur > 0 && next.is_none()));
                 let n = format!("{u}/NextUpgrade");
                 self.tsm.set_active(&n, maxed || next.is_some());
                 self.tsm.set_active(&format!("{u}/ClosedPath"), !maxed && next.is_none());
@@ -1424,6 +1429,11 @@ impl Hud {
                 self.tsm.set_active(&format!("{n}/Cost"), next.is_some());
                 self.tsm.set_active(&format!("{n}/LockedText"), maxed);
                 self.tsm.set_text(&format!("{n}/LockedText"), "Max Upgrades");
+                self.tsm.set_active(&format!("{n}/MonkeyVillageRequirement"), block == Some("MonkeyVillageRequirement"));
+                if block.is_some() {
+                    self.tsm.set_active(&n, true);
+                    self.tsm.set_active(&format!("{u}/ClosedPath"), false);
+                }
                 if let Some((nm, c)) = &next {
                     // Paragon icons are named after the Paragon ("Apex Plasma Master").
                     let paragon_icon = pdef.as_ref().filter(|p| p.name == *nm && !p.icon.is_empty()).map(|p| p.icon.clone());

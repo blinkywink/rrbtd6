@@ -560,3 +560,6 @@ claimed from the single final capture (concurrent asset work affects timings).
 
 ### Indexed clip sampling (2026-10-29)
 - The next Steam setup attempt includes faster streamed-key lookup, precomputed clip binding offsets and scalar dense-sampling bounds. Twelve-model sample improved another 15%, with 91 identical files; full clean installation duration remains unmeasured.
+
+- [ ] Monkey Village 0-0-5 (Monkey-Opolis): with no Banana Farm in the Village's range the upgrade shows "Requires Banana Farm" and can't be bought. With farms in range it costs $5,000 per farm (before discounts). Buying it removes those farms (no refund) and its crates pay more the more the farms were worth.
+- [ ] Monkey Village buff icons: two Villages near a tower show each buff icon once, with no "x2".
