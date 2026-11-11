@@ -1185,7 +1185,22 @@ static class SimulatePatch
         });
         Part("weapons", () =>
         {
+            // The player's InputManager cursor (FollowTouchSetting.Process reads it each frame:
+            // cursorLocation while cursorActive and not ignoreCursor): "IN x y active ignore index".
             var ts = sim.factory.GetFactory<Tower>().up.list;
+            // (By the first tower's owner, as FollowTouchSetting.Process asks.)
+            for (int j = 0; j < ts.Count; j++)
+            {
+                var t0 = ts[j];
+                if (t0 == null || t0.IsDestroyed) continue;
+                if (sim.InputManagerExists(t0.owner))
+                {
+                    var im = sim.GetInputManager(t0.owner);
+                    if (im != null)
+                        w.WriteLine($"IN {Recorder.F(im.cursorLocation.x)} {Recorder.F(im.cursorLocation.y)} {(im.cursorActive ? 1 : 0)} {(im.ignoreCursor ? 1 : 0)} {t0.owner}");
+                }
+                break;
+            }
             for (int j = 0; j < ts.Count; j++)
             {
                 var t = ts[j];
@@ -1216,6 +1231,21 @@ static class SimulatePatch
                         var p = tr.position; var sc = tr.scale;
                         w.WriteLine($"PM {t.Id.Id} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(p.Z)} {Recorder.F(tr.rotation.value)} {Recorder.F(sc.X)} {Recorder.F(sc.Y)} {Recorder.F(sc.Z)} {Recorder.F(pm.t)} {(pm.onPath ? 1 : 0)} {(pm.takingOff ? 1 : 0)} {Recorder.F(pm.tt)} {Recorder.F(pm.ttpf)} {Recorder.F(pm.pitch)} {Recorder.F(pm.lastBank)} {Recorder.F(pm.tpf)} {(pm.onTheMove ? 1 : 0)}");
                     }
+                }
+                // Helis' HeliMovement each frame (after it ran): "HM tower x y z rotation velX velY
+                // groupOffX groupOffY pathIndex" (heliTransformBehavior; its attacks shoot from it).
+                for (int k = 0; ftb != null && k < ftb.Count; k++)
+                {
+                    var hm = ftb[k]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.HeliMovement>();
+                    var au = ftb[k]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.AirUnit>();
+                    var mb = au?.modelBehaviors;
+                    for (int q = 0; hm == null && mb != null && q < mb.Count; q++)
+                        hm = mb[q]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.HeliMovement>();
+                    var tr = hm?.heliTransformBehavior;
+                    if (hm == null || tr == null) continue;
+                    var p = tr.position;
+                    w.WriteLine($"HM {t.Id.Id} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(p.Z)} {Recorder.F(tr.rotation.value)} {Recorder.F(hm.currentVelocity.x)} {Recorder.F(hm.currentVelocity.y)} {Recorder.F(hm.lastGroupOffset.x)} {Recorder.F(hm.lastGroupOffset.y)} {hm.pathIndex}");
+                    break;
                 }
                 if (fm != null)
                     w.WriteLine($"FM {t.Id.Id} {Recorder.F(fm.transformPosition.x)} {Recorder.F(fm.transformPosition.y)} {Recorder.F(fm.rotation.x)} {Recorder.F(fm.rotation.y)} {Recorder.F(fm.targetPosition.x)} {Recorder.F(fm.targetPosition.y)} {fm.timer} {(fm.flyoverEngaged ? 1 : 0)}");

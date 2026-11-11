@@ -1029,6 +1029,13 @@ pub struct Attack {
     /// target every frame it has one.
     #[serde(default)]
     pub rotate_always: bool,
+    /// RotateToTargetAirUnitModel: while it has a target the air unit faces it.
+    #[serde(default)]
+    pub air_rotate: bool,
+    /// TargetFirst / Last / StrongAirUnitModel: BloonManager.GetTarget from the air unit, through
+    /// Targetting.GetTargets (a MOAB at its centre, never a circle).
+    #[serde(default)]
+    pub air_target: bool,
     /// RotateToMiddleOfTargetsModel: the body faces the midpoint of every attack's target.
     #[serde(default)]
     pub face_middle: bool,
@@ -1148,6 +1155,9 @@ pub struct Weapon {
     /// UseParentEjectModel: shots leave from the tower's first Attack's first Weapon's eject.
     #[serde(default)]
     pub parent_eject: bool,
+    /// AngleToMapCenterModel: (range, offset) in degrees.
+    #[serde(default)]
+    pub map_center: Option<[f32; 2]>,
     /// SendToBankModel emission: the cash goes into the tower's bank instead of the map.
     #[serde(default)]
     pub to_bank: bool,
@@ -2271,6 +2281,23 @@ pub struct Grapple {
     pub penalty: std::collections::HashMap<String, u32>,
 }
 
+/// HeliMovementModel: what HeliMovement.ApplyMovement, UpdateRotation and GetRepulsionVector read.
+#[derive(Deserialize, Clone)]
+#[allow(non_snake_case)]
+pub struct HeliSpec {
+    pub maxSpeed: f32,
+    pub rotationSpeed: f32,
+    pub strafeDistanceSquared: f32,
+    pub otherHeliRepulsionRange: f32,
+    pub movementForceStart: f32,
+    pub movementForceEnd: f32,
+    pub otherHeliRepulsonForce: f32,
+    pub slowdownRadiusMax: f32,
+    pub slowdownRadiusMin: f32,
+    pub slowdownRadiusMinSquared: f32,
+    pub minVelocityCapScale: f32,
+}
+
 #[derive(Deserialize, Clone)]
 pub struct AirSpec {
     /// Prefab name under `models/air/`.
@@ -2293,6 +2320,9 @@ pub struct AirSpec {
     /// distanceOfFlyover (Aircraft Carrier planes).
     #[serde(default)]
     pub fighter: Option<[f32; 4]>,
+    /// HeliMovementModel (a Heli); None for the other air units.
+    #[serde(default)]
+    pub heli: Option<HeliSpec>,
     /// PathMovementModel.rotation: degrees per second it can turn while rejoining its path.
     #[serde(default = "full_turn")]
     pub turn: f32,

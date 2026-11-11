@@ -1247,8 +1247,11 @@ def main():
                                 # The crit shot's own display (displayModel).
                                 "display": (deref(x["f"].get("displayModel")) or {}).get("f", {}).get("display")}
                     if x and x["type"] == "AlternateProjectileModel":
+                        # AlternateProjectile.GetEmission (VERIFIED-DECOMP @0x180c69170): its own
+                        # emissionModel only when it has one; else the weapon's (the Sun Temple
+                        # plane's bombs go at their target: recording super_400 rt 252).
                         alternate = {"interval": x["f"]["interval"], "projectile": projectile(deref(x["f"]["projectile"])),
-                                     "emission": emission(deref(x["f"].get("emissionModel")))}
+                                     "emission": emission(deref(x["f"].get("emissionModel")) or deref(w["f"].get("emission")))}
                     if x and x["type"] == "RandomAngleOffsetModel":
                         spread = max(abs(x["f"].get("minOffset", 0)), abs(x["f"].get("maxOffset", 0)))
                 # LimitProjectileModel (Bloon Trap): at most `limit` live traps that aren't full.
@@ -1269,6 +1272,10 @@ def main():
                 over_track = any(x and x["type"] == "CheckAirUnitOverTrackModel" for x in items(w["f"].get("behaviors")))
                 # FireFromAirUnitModel: the shot's eject point is the air unit's (EmitPosition).
                 from_air = any(x and x["type"] == "FireFromAirUnitModel" for x in items(w["f"].get("behaviors")))
+                # AngleToMapCenterModel (Support Chinook crates): ProjectilesCreated turns each shot
+                # toward the map's centre + offset, +- range / 2 at random (VERIFIED-DECOMP @0x180c69c90).
+                atmc = next((x["f"] for x in items(w["f"].get("behaviors")) if x and x["type"] == "AngleToMapCenterModel"), None)
+                map_center = [atmc.get("range", 0.0), atmc.get("offset", 0.0)] if atmc else None
                 parent_eject = any(x and x["type"] == "UseParentEjectModel" for x in items(w["f"].get("behaviors")))
                 # Broadside guns (Buccaneer): Emission*RotationOff{Tower,Display}*Model fire at the
                 # tower's facing + offsetRotation; FireWhenAlternateWeaponIsReadyModel fires only
@@ -1355,7 +1362,7 @@ def main():
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "LineEffectModel"), None),
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
-                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "over_track": over_track, "from_air": from_air, "parent_eject": parent_eject,
+                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "parent_eject": parent_eject,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
                                 # the emission is laid out on the tower's rotation, each shot then sent at
@@ -1465,7 +1472,7 @@ def main():
                                  # The Prince's own spot on the track and offset (Emit @0xc493b0).
                                  princeRange=em["f"].get("maxPathRandomRange", 0),
                                  princeOffset=em["f"].get("maxPathOffset", 0))
-            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "turn_body": turn_body, "marker_z": marker_z, "rotate_always": rotate_always, "face_middle": face_middle,
+            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "turn_body": turn_body, "marker_z": marker_z, "rotate_always": rotate_always, "air_rotate": any(x and x["type"] == "RotateToTargetAirUnitModel" for x in items(af["behaviors"])), "air_target": any(x and x["type"] in ("TargetFirstAirUnitModel", "TargetLastAirUnitModel", "TargetStrongAirUnitModel") for x in items(af["behaviors"])), "face_middle": face_middle,
                     # AttackModel name: Tower.UpdatedModel keeps the Attack of the same name.
                     "model_name": af.get("_name") or "",
                     "range": af["range"], "camo": camo, "rotate": rotate, "turn_rate": turn_rate,
@@ -1940,7 +1947,13 @@ def main():
                                        fm.get("distanceOfFlyover", 75.0)]}
                 elif hm:
                     air = {"display": prefab_name(b["f"].get("display")), "speed": hm["maxSpeed"],
-                           "accel": hm["movementForceStart"], "slowdown": hm["slowdownRadiusMax"]}
+                           "accel": hm["movementForceStart"], "slowdown": hm["slowdownRadiusMax"],
+                           # HeliMovement.ApplyMovement / UpdateRotation / GetRepulsionVector
+                           # (VERIFIED-DISASM @0x180d29c30, @0x180d2d460, @0x180d2b280).
+                           "heli": {k: hm.get(k, 0.0) for k in ("maxSpeed", "rotationSpeed", "strafeDistanceSquared",
+                                    "otherHeliRepulsionRange", "movementForceStart", "movementForceEnd",
+                                    "otherHeliRepulsonForce", "slowdownRadiusMax", "slowdownRadiusMin",
+                                    "slowdownRadiusMinSquared", "minVelocityCapScale")}}
                 elif pm:
                     air = {"display": prefab_name(b["f"].get("display")), "speed": pm["speed"],
                            "catch_up": pm.get("catchUpSpeed", 1.0), "patterns": [],

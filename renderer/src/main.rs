@@ -1934,6 +1934,8 @@ async fn game_main() {
             view.to_world(vec2(mx, my))
         };
         let in_map = preview.is_some()||(render3d::map_frame(vw,vh).contains(vec2(mx,my)) && !Hud::layout().shop.contains(vec2(mx,my)) && Hud::layout().map.contains(vec2(mx,my)) && !hud.as_ref().is_some_and(|h| h.blocks(vec2(mx, my))));
+        // (InputManager.cursorActive: the cursor's over the map; FollowTouchSetting reads it.)
+        game.cursor = None;
         if in_map && mouse_world[0] < 1e8 {
             if coop_runtime.is_some(){
                 if get_time()-coop_mouse_at>=0.1{
@@ -1941,7 +1943,7 @@ async fn game_main() {
                     if placing.is_none(){front.coop_input(rrbtd6_coop::Action::Collect{at:mouse_world});}
                     coop_mouse_at=get_time();
                 }
-            }else{game.pointer = Some(mouse_world);}
+            }else{game.pointer = Some(mouse_world);game.cursor = Some(mouse_world);}
         }
         picking = picking.filter(|&t| t < game.towers.len() && placing.is_none());
         if picking.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right)) {

@@ -1652,8 +1652,10 @@ pub struct Tower {
     pub weapon_born: HashMap<String, u64>,
     /// RotateToPointer.yVelocity (SmoothDampAngle's).
     pub turn_vel: f32,
-    /// SubTowerFilter.createdProjectiles: the pooled objects of the spawner's projectiles.
-    pub spawn_objs: Vec<u32>,
+    /// SubTowerFilter.createdProjectiles: the pooled objects of the spawner's projectiles, per
+    /// weapon (each weapon's filter keeps its own list: recording super_500, the True Sun God's
+    /// second plane spawner isn't held by the first's projectile).
+    pub spawn_objs: Vec<(usize, u32)>,
     /// Upgraded since it was placed: FilterTargetAngleFilter.UpdatedModel gathered every filter of
     /// the tower into each one's filterTargetAngleFilterBehaviors (Initialise only the ones made
     /// before it).
@@ -1915,6 +1917,25 @@ pub struct AirUnit {
     pub pm_before: Vec<String>,
     /// Simulation.time of its last PathMovement move.
     pub pm_moved: u64,
+    /// HeliMovement: the heli transform's rotation (game degrees) and FollowTouchSetting's
+    /// currentPosition (set to the heli's spot as it's attached, then the cursor while the cursor
+    /// is on the map).
+    pub hm_rot: f32,
+    pub touch: [f32; 2],
+    /// RotateToTargetAirUnit.appliedRotation and its attack's range, by attack index.
+    pub hm_applied: Vec<(bool, f32)>,
+    /// Each attack's kept target (bloon id, aim offset from its centre) for RotateToTargetAirUnit.
+    pub hm_target: Vec<Option<(u64, [f32; 2])>>,
+    /// HeliMovement.ApplyMovement has run (its transform's z is 250 from then).
+    pub hm_moved: bool,
+}
+
+impl AirUnit {
+    /// FireFromAirUnit.EmitRotation: the AirUnit transform's rotation (a Heli's or a
+    /// PathMovement plane's; game degrees).
+    fn air_rot(&self) -> f32 {
+        if self.hm_moved || self.hm_rot != 0.0 { self.hm_rot } else { self.pm_rot }
+    }
 }
 
 const PM_NONE: i32 = -1;
@@ -3102,6 +3123,8 @@ pub struct Game {
     emit_z: f32,
     /// The Target an emission is given, when it is a bloon (see `emit_height`).
     emit_target: Option<u64>,
+    /// The throw's Target.Position (clone frame): where a target that died in the throw was.
+    emit_aim: Option<[f32; 2]>,
     /// In InstantDamageEmission.Process's collision pass (after the towers act).
     in_instant: bool,
     /// Path.bloonsList per path: bloon ids and whether they're still alive, in the game's order
@@ -3431,6 +3454,8 @@ pub struct Game {
     /// The cursor on the map, for TargetPointerModel attacks. Kept when the cursor leaves the
     /// map (DartlingMaintainLastPosModel).
     pub pointer: Option<[f32; 2]>,
+    /// The InputManager's cursor this frame while it's active and not ignored (FollowTouchSetting).
+    pub cursor: Option<[f32; 2]>,
     pub(crate) coop_pointers: HashMap<u64, Option<[f32; 2]>>,
     pub(crate) coop_wallets: Option<rrbtd6_coop::economy::Wallets>,
     /// Co-op: the local player, for what the HUD shows (their Geraldo's shop); never simulation.
@@ -4432,7 +4457,11 @@ macro_rules! collide_pass {
                 // recording ninja_030, no roll for the Leads until rt 2582.)
                 let roll = (valid && !immune && (w.moabs || !is_moab)).then(|| $s.synced_double());
                 if roll.is_some_and(|r| r <= w.chance as f64) {
-                    let mut back = ($s.synced_double() as f32) * (w.max - w.min) + w.min;
+                    // MoveWithWind.Attatched (VERIFIED-DECOMP @0x180ffec70): a distanceMax over
+                    // 99999 is the bloon's distanceTraveled (recordings super_400 / super_500: a
+                    // MOAB at 260.47 blown 54.31 back, not to the entrance).
+                    let wmax = if w.max > 99999.0 { $s.bloons[i].dist } else { w.max };
+                    let mut back = ($s.synced_double() as f32) * (wmax - w.min) + w.min;
                     if w.tag_scale > 0.0 && w.tags.iter().any(|t| $s.defs[$s.bloons[i].kind].tags.contains(t)) {
                         back *= w.tag_scale;
                     }
@@ -4467,7 +4496,8 @@ macro_rules! collide_pass {
                     let mut seen = std::collections::HashSet::new();
                     for kid in $kids.clone().into_iter().filter(|&k| k != id && seen.insert(k)) {
                         if let Some(k) = $s.bloons.iter().position(|b| b.id == kid) {
-                            let mut back = ($s.synced_double() as f32) * (w.max - w.min) + w.min;
+                            let wmax = if w.max > 99999.0 { $s.bloons[k].dist } else { w.max };
+                            let mut back = ($s.synced_double() as f32) * (wmax - w.min) + w.min;
                             if w.tag_scale > 0.0 && w.tags.iter().any(|t| $s.defs[$s.bloons[k].kind].tags.contains(t)) {
                                 back *= w.tag_scale;
                             }
@@ -5028,6 +5058,7 @@ impl Game {
             emit_dir_rot: None,
             emit_z: 0.0,
             emit_target: None,
+            emit_aim: None,
             in_instant: false,
             path_lists: Vec::new(),
             path_rank: Default::default(),
@@ -5252,6 +5283,7 @@ impl Game {
             sfx_rng: 0x2545_F491_4F6C_DD1D,
             synced: None,
             pointer: None,
+            cursor: None,
             coop_pointers: HashMap::new(),
             coop_wallets: None,
             coop_view: None,
@@ -7530,6 +7562,11 @@ impl Game {
                 pm_cur: PM_NONE,
                 pm_before: before,
                 pm_moved: u64::MAX,
+                hm_rot: 0.0,
+                touch: tw.pos,
+                hm_applied: Vec::new(),
+                hm_target: Vec::new(),
+                hm_moved: false,
             });
             // A plane takes a pooled FighterMovement if there is one: its timer as it was, its path
             // point (0, 0) (recording bucc_upgrades_r30 rt 1862: the 5-1-0's second plane with the
@@ -7568,6 +7605,10 @@ impl Game {
                 continue;
             }
             if spec.fighter.is_some() {
+                continue;
+            }
+            // (Helis move after their attacks: move_helis.)
+            if spec.heli.is_some() {
                 continue;
             }
             let tw = &mut self.towers[t];
@@ -7614,6 +7655,141 @@ impl Game {
                 a.angle = a.vel[1].atan2(a.vel[0]);
             }
         }
+    }
+
+    /// HeliMovement.Process (VERIFIED-DECOMP @0x180d2c950): the destination by the current path
+    /// supplier (FollowTouch: FollowTouchSetting.currentPosition, which FollowTouchSetting.Process
+    /// (VERIFIED-DECOMP @0x180db8c70) sets to the cursor while it's active, not ignored and on the
+    /// map; LockInPlace: the locked spot), and ApplyMovement (VERIFIED-DISASM @0x180d29c30) when the
+    /// heli isn't exactly there. Game coordinates (y up) inside; the clone's y is flipped.
+    /// RotateToTargetAirUnit.ApplyRotation (VERIFIED-DECOMP @0x180dd6e00) for attack `ai` (range
+    /// `range`) with its target point, if any.
+    fn air_rotate_to(&mut self, t: usize, ai: usize, range: f32, tgt: Option<[f32; 2]>) {
+        let Some(a) = self.towers[t].air.as_mut() else { return };
+        if a.hm_applied.len() <= ai {
+            a.hm_applied.resize(ai + 1, (false, 0.0));
+        }
+        let blocked = a.hm_applied.iter().enumerate().any(|(j, &(on, r))| j != ai && on && r <= range);
+        a.hm_applied[ai] = (false, range);
+        if let (Some(q), false) = (tgt, blocked) {
+            a.hm_applied[ai].0 = true;
+            a.hm_rot = RAD2DEG * crt_atan2(q[0] - a.pos[0], -(q[1] - a.pos[1]));
+            a.angle = (a.hm_rot - 90.0) * DEG2RAD;
+        }
+    }
+
+    /// HeliMovement runs in its tower's processing after the attacks (recording heli_000: the
+    /// first frame with a target turns it from where it was before moving, and FollowTouch has
+    /// read the cursor before the first move).
+    fn move_helis(&mut self) {
+        let helis: Vec<(usize, [f32; 2])> = (0..self.towers.len())
+            .filter(|&t| self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.heli.is_some()))
+            .filter_map(|t| self.towers[t].air.as_ref().map(|a| (t, a.pos)))
+            .collect();
+        for &(t, _) in &helis {
+            if let Some(h) = self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.heli.clone()) {
+                self.heli_move(t, &h, &helis);
+            }
+        }
+    }
+
+    fn heli_move(&mut self, t: usize, h: &crate::data::HeliSpec, helis: &[(usize, [f32; 2])]) {
+        let id = self.towers[t].id;
+        let cur = if self.coop_pointers.is_empty() { self.cursor } else { self.coop_pointer(id) };
+        let tw = &mut self.towers[t];
+        if tw.target == TargetMode::Point && tw.point.is_none() {
+            tw.point = tw.air.as_ref().map(|a| a.pos);
+        }
+        let a = tw.air.as_mut().unwrap();
+        if let Some(c) = cur.filter(|&c| on_map(c, 0.0)) {
+            a.touch = c;
+        }
+        let goal = match tw.target {
+            TargetMode::Point => tw.point.unwrap_or(tw.pos),
+            // STAND-IN P-HELIPURSUIT: PursuitSetting's path isn't ported; the first bloon.
+            TargetMode::Pursuit => self
+                .bloons
+                .iter()
+                .filter(|b| on_map(b.pos, 0.0))
+                .max_by(|x, y| x.progress().total_cmp(&y.progress()))
+                .map_or(a.pos, |b| b.pos),
+            _ => a.touch,
+        };
+        let dest = [goal[0], -goal[1]];
+        let pos = [a.pos[0], -a.pos[1]];
+        if dest == pos {
+            return;
+        }
+        const DT: f32 = 1.0 / 60.0;
+        let d = [dest[0] - pos[0], dest[1] - pos[1]];
+        let sq = d[0] * d[0] + d[1] * d[1];
+        let mag = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        // Vector2.Normalize: zero below float.Epsilon.
+        let dir = if mag >= f32::from_bits(1) { [d[0] / mag, d[1] / mag] } else { [0.0; 2] };
+        let mut vel = [a.vel[0], -a.vel[1]];
+        let speed = (vel[0] * vel[0] + vel[1] * vel[1]).sqrt();
+        if sq > h.slowdownRadiusMinSquared {
+            let s = (1.0 - speed / h.movementForceEnd) * h.movementForceStart;
+            let mut acc = [dir[0] * s + 0.0, dir[1] * s + 0.0];
+            let mut cap = 1.0f32;
+            if h.slowdownRadiusMax > mag {
+                cap = (mag - h.slowdownRadiusMin) / (h.slowdownRadiusMax - h.slowdownRadiusMin) * (1.0 - h.minVelocityCapScale) + h.minVelocityCapScale;
+            }
+            // GetRepulsionVector (VERIFIED-DECOMP @0x180d2b280) over heliPositionsInRepulseRange
+            // (INFERRED P-HELIREPULSE: the other helis now within otherHeliRepulsionRange, in tower
+            // order; HeliEnter / HeliExit keep the game's list): the sum of (range - distance) /
+            // range x force over them, along the normalised sum of (here - them), / their count.
+            let range = h.otherHeliRepulsionRange;
+            let (mut sum, mut total, mut n) = ([0.0f32; 2], 0.0f32, 0u32);
+            for &(o, q) in helis {
+                if o == t {
+                    continue;
+                }
+                let op = self.towers[o].air.as_ref().map_or(q, |x| x.pos);
+                let op = [op[0], -op[1]];
+                let e = [pos[0] - op[0], pos[1] - op[1]];
+                let dist = (e[0] * e[0] + e[1] * e[1]).sqrt();
+                if dist < range {
+                    total += (range - dist) / range * h.otherHeliRepulsonForce;
+                    sum = [sum[0] + e[0], sum[1] + e[1]];
+                    n += 1;
+                }
+            }
+            if n > 0 {
+                let l = (sum[0] * sum[0] + sum[1] * sum[1]).sqrt();
+                if sum[0] * sum[0] + sum[1] * sum[1] != 0.0 {
+                    let u = if l >= f32::from_bits(1) { [sum[0] / l, sum[1] / l] } else { [0.0; 2] };
+                    let k = total / n as f32;
+                    acc = [acc[0] + u[0] * k, acc[1] + u[1] * k];
+                }
+            }
+            vel = [vel[0] + acc[0] * DT, vel[1] + acc[1] * DT];
+            let lim = cap * h.maxSpeed;
+            let m = (vel[0] * vel[0] + vel[1] * vel[1]).sqrt();
+            if m > lim {
+                let k = lim / m;
+                vel = [vel[0] * k, vel[1] * k];
+            }
+        } else {
+            vel = [0.0; 2];
+        }
+        let mut np = [pos[0] + vel[0] * DT, pos[1] + vel[1] * DT];
+        // Map.GetPointWithinMap (VERIFIED-DECOMP @0x180f5a0c0), border 0.
+        np[0] = np[0].clamp(-WORLD_X, WORLD_X);
+        np[1] = np[1].clamp(-WORLD_Z, WORLD_Z);
+        let a = self.towers[t].air.as_mut().unwrap();
+        a.hm_moved = true;
+        a.vel = [vel[0], -vel[1]];
+        a.pos = [np[0], -np[1]];
+        // UpdateRotation (VERIFIED-DECOMP @0x180d2d460): no turn within strafeDistance of the
+        // destination or while a RotateToTargetAirUnit has applied; else LerpAngle
+        // toward Vector2.get_Rotation (atan2(x, y) in degrees) of the direction it set off in.
+        let e = [np[0] - dest[0], np[1] - dest[1]];
+        if !(e[0] * e[0] + e[1] * e[1] < h.strafeDistanceSquared) && !a.hm_applied.iter().any(|x| x.0) {
+            let want = crt_atan2(dir[0], dir[1]) * RAD2DEG;
+            a.hm_rot = lerp_angle(a.hm_rot, want, h.rotationSpeed);
+        }
+        a.angle = (a.hm_rot - 90.0) * DEG2RAD;
     }
 
     /// GyrfalconPattern (VERIFIED-DISASM Process @0xdc69a0, UpdateTargeting @0xdc93c0,
@@ -8165,6 +8341,7 @@ impl Game {
         self.emit_rot = Some(r);
         self.emit_z = 250.0;
         self.emit_target = None;
+        self.emit_aim = None;
         self.emit(from, (r - 90.0) * DEG2RAD, &emission, &proj, crit, tiers, owner);
         self.emit_rot = None;
         self.emit_z = 0.0;
@@ -10974,6 +11151,11 @@ impl Game {
                     // boomerang_400: a Black's Pink moves before a later glaive aims at it).
                     ch.born = parent_born;
                     ch.cseq = parent_cseq;
+                }
+                // A carried parent's children are made at its Position, z included, and carried
+                // on from there (recording super_probe/super_400 rt 229: a blown MOAB's four
+                // Ceramics all at z 120; not when it wasn't carried: druid_500 rt 138).
+                if n == 0 || parent_wind.is_some() {
                     ch.height = parent_height;
                 }
                 let j = self.bloons.len() - 1;
@@ -11158,7 +11340,9 @@ impl Game {
             for (cid, w) in std::mem::take(&mut self.wind_copy_draws) {
                 let Some(k) = self.bloons.iter().position(|b| b.id == cid) else { continue };
                 let ck = self.bloons[k].kind;
-                let mut back = (self.synced_double() as f32) * (w.max - w.min) + w.min;
+                // (distanceMax over 99999: its distanceTraveled; MoveWithWind.Attatched.)
+                let wmax = if w.max > 99999.0 { self.bloons[k].dist } else { w.max };
+                let mut back = (self.synced_double() as f32) * (wmax - w.min) + w.min;
                 if w.tag_scale > 0.0 && w.tags.iter().any(|t| self.defs[ck].tags.contains(t)) {
                     back *= w.tag_scale;
                 }
@@ -12469,11 +12653,21 @@ impl Game {
                         banana_tick(st, n, self.round_clock);
                     }
                 }
+                // (A heli's RotateToTargetAirUnit attack still faces the target it kept, where that
+                // is now: recordings heli_500 rt 152, the darts' attack on cooldown turning the heli
+                // before the missiles leave; heli_400 rt 388, no new target until a weapon's ready.)
+                let air_turn = attack.air_rotate && tier.air.as_ref().is_some_and(|x| x.heli.is_some());
                 if attack.turn_rate.is_none() && attack.weapons.iter().all(|w| w.name != "LongWeapon" && w.with_main.is_none()) {
                     let n = attack.weapons.len();
                     let (now_t, rc) = (self.sim_elapsed as i64, self.round_clock);
                     // (A banana weapon finds its point the frame before it is ready: below.)
                     if attack.weapons.iter().zip(&self.towers[t].weapons[wi..wi + n]).all(|(w, st)| st.anim < 0 && !st.ready(if w.between_rounds { now_t } else { rc }) && !(w.per_round.is_some() && st.ready(rc + 1))) {
+                        if air_turn {
+                            let kept = self.towers[t].air.as_ref().and_then(|a| a.hm_target.get(ai).copied().flatten());
+                            let tgt = kept.and_then(|(id, off)| self.bloons.iter().find(|b| b.id == id).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
+                            let r_att = buff.attack_range(attack);
+                            self.air_rotate_to(t, ai, r_att, tgt);
+                        }
                         wi += n;
                         continue;
                     }
@@ -12724,7 +12918,10 @@ impl Game {
                     // reached by a collision circle (CanHitMoab) becomes Target(bloon), its centre; only
                     // GetTarget (First / Last / Close / Strong) keeps the circle (recording sniper_250: an Elite shot on
                     // a MOAB at its centre, sniper_032's First 6.3 ahead).
-                    if mode == TargetMode::Elite {
+                    // (TargetFirst / Last / StrongAirUnit.GetTarget (VERIFIED-DECOMP @0x180de26e0):
+                    // BloonManager.GetTarget -> GetTargets (@0x180fcacc0) -> Targetting.GetTargets
+                    // the same; recording heli_400 rt 86, the missiles' turn at the MOAB's centre.)
+                    if mode == TargetMode::Elite || attack.air_target {
                         aim_at = b.pos;
                         aim_off = [0.0; 2];
                         aim_circle = None;
@@ -12964,6 +13161,12 @@ impl Game {
                         // Blue 56.9 from a range-50 Ninja is taken at rt 334, one 77.2 away at 307 isn't).
                         let rr = range + d.radius;
                         if (b.pos[0] - pos[0]).powi(2) + (b.pos[1] - pos[1]).powi(2) > rr * rr {
+                            continue;
+                        }
+                        // AttackMinimumRange.FilterTarget (VERIFIED-DISASM @0x180dac2f0) is in the
+                        // attack's filter: a carried bloon too (recording super_500 rt 290: a MOAB
+                        // blown back 71 from the temple isn't a missile target).
+                        if attack.min_range > 0.0 && (b.pos[0] - pos[0]).powi(2) + (b.pos[1] - pos[1]).powi(2) < attack.min_range * attack.min_range {
                             continue;
                         }
                         if !attack.through_walls && !self.line_clear(pos, 0.0, b.pos) {
@@ -13268,6 +13471,24 @@ impl Game {
                         }
                     }
                 }
+                // RotateToTargetAirUnit.ApplyRotation (VERIFIED-DECOMP @0x180dd6e00): with a target, unless
+                // another such behaviour already applied with a range no greater than its attack's,
+                // the air unit turns to Vector2.get_Rotation(Target.Position - its position), the
+                // bloon where it was and the heli before it moves this frame (recording heli_000 rt
+                // 14: -84.26471); appliedRotation then stops HeliMovement.UpdateRotation.
+                if attack.air_rotate && tier.air.as_ref().is_some_and(|x| x.heli.is_some()) {
+                    // (Target.Position: the targeted collision circle of a MOAB-class bloon, recording
+                    // heli_032 rt 31: -82.03 at the circle 6.3 ahead of the MOAB.)
+                    let found = best.filter(|b| b.2 != 0);
+                    let kept = found.and_then(|(_, aim, id)| self.bloons.iter().find(|b| b.id == id).map(|b| (id, [aim[0] - b.pos[0], aim[1] - b.pos[1]])));
+                    if let Some(a) = self.towers[t].air.as_mut() {
+                        if a.hm_target.len() <= ai {
+                            a.hm_target.resize(ai + 1, None);
+                        }
+                        a.hm_target[ai] = kept;
+                    }
+                    self.air_rotate_to(t, ai, range, found.map(|b| b.1));
+                }
                 // RotateToTargetAttackOffset.SetRotation (VERIFIED-DECOMP @0x180ddb500): the attack's
                 // own rotation, Vector2.get_Rotation(Target.Position - GetOrigin) + additionalRotation,
                 // GetOrigin (@0x180ddaf70) its spot (the tower + offsetX / offsetY, the tower's
@@ -13388,9 +13609,9 @@ impl Game {
                             // bucc_500 rt 161, the plane's radial dart, the third plane at 162.)
                             let mut held: FastSet<u32> = self.projectiles.iter().filter_map(|p| self.proj_obj.get(&p.uid).copied()).collect();
                             held.extend(self.proj_objs_start.iter().copied());
-                            self.towers[t].spawn_objs.retain(|o| held.contains(o));
+                            self.towers[t].spawn_objs.retain(|(_, o)| held.contains(o));
                         }
-                        subs_full = live + self.towers[t].spawn_objs.len() >= m.max as usize;
+                        subs_full = live + self.towers[t].spawn_objs.iter().filter(|(k, _)| *k == wi).count() >= m.max as usize;
                     }
                     // CheckAirUnitOverTrack.FilterEmission (VERIFIED-DECOMP @0x180c6df80; futureTime
                     // unused): PathManager.GetPathSegmentsInRange (@0x180f6ba10) round the plane's 2D
@@ -13789,7 +14010,7 @@ impl Game {
                             if let Some(fr) = tw.air.as_ref().filter(|_| tier.air.as_ref().is_some_and(|x| x.fighter.is_some()) && attack.fighter.is_some()).map(|a| a.fp_rot) {
                                 grot = Some(fr);
                                 dir = (fr - 90.0) * DEG2RAD;
-                            } else if let Some(pr) = tw.air.as_ref().filter(|_| tier.air.as_ref().is_some_and(|x| !x.patterns.is_empty()) && weapon.from_air && weapon.emission.kind != "Arc").map(|a| a.pm_rot) {
+                            } else if let Some(pr) = tw.air.as_ref().filter(|_| tier.air.as_ref().is_some_and(|x| !x.patterns.is_empty() || x.heli.is_some()) && weapon.from_air && weapon.emission.kind != "Arc").map(|a| a.air_rot()) {
                                 // FireFromAirUnit.EmitRotation (VERIFIED-DECOMP @0x180c77a30): an Ace's shots
                                 // leave along its AirUnit rotation (recording ace_400 rt 32: the Dart Storm
                                 // missiles start along 90).
@@ -13883,6 +14104,8 @@ impl Game {
                             let fighter_rot = tw.air.as_ref().and_then(|a| match tier.air.as_ref() {
                                 Some(x) if x.fighter.is_some() => Some(a.fp_rot),
                                 Some(x) if !x.patterns.is_empty() => Some(a.pm_rot),
+                                // (A Heli's FireFromAirUnit: its heliTransformBehavior rotation.)
+                                Some(x) if x.heli.is_some() => Some(a.hm_rot),
                                 _ => None,
                             });
                             // (Its release turns the attack once more, to where the Target is now.)
@@ -14033,7 +14256,12 @@ impl Game {
                                 }
                                 buffed = Some(q);
                             }
-                            if (buff.range_life_mult != 0.0 || buff.range_life_add > 0.0) && !attack.fixed_range && std::ptr::eq(weapon, &attack.weapons[0]) && std::ptr::eq(proj, &weapon.projectile) && proj.speed > 0.0 && proj.lifespan > 0.0 {
+                            // (The attack's first TravelStraitModel descendant: with an
+                            // AlternateProjectile on its first weapon, the alternate's; recording
+                            // super_probe/super_500 rt 370 / 398: the True Sun God planes' darts keep
+                            // 53 frames under TrueTempleRange, their bombs go 100 -> 120.)
+                            let life_proj: &crate::data::Proj = weapon.alternate.as_ref().filter(|a| a.projectile.speed > 0.0 && a.projectile.lifespan > 0.0).map_or(&weapon.projectile, |a| &a.projectile);
+                            if (buff.range_life_mult != 0.0 || buff.range_life_add > 0.0) && !attack.fixed_range && std::ptr::eq(weapon, &attack.weapons[0]) && std::ptr::eq(proj, life_proj) && proj.speed > 0.0 && proj.lifespan > 0.0 {
                                 let mut q = buffed.take().unwrap_or_else(|| proj.clone());
                                 // (Both kinds add up: recording village_400, a Primary Mentoring
                                 // village's two x0.1 and one +5 make a 0.25 s dart live 19 frames.
@@ -14176,7 +14404,7 @@ impl Game {
                             // Weapon.GetEjectPosition (VERIFIED-DECOMP @0x180c4f390): onto the tower's
                             // position unless an EmitPosition behaviour (FireFromAirUnit) gives the air
                             // unit's (recording ace_040 rt 120: Ground Zero's bomb at the tower).
-                            let pos = if tier.air.as_ref().is_some_and(|x| !x.patterns.is_empty()) && !weapon.from_air { self.towers[t].pos } else { pos };
+                            let pos = if tier.air.as_ref().is_some_and(|x| !x.patterns.is_empty() || x.heli.is_some()) && !weapon.from_air { self.towers[t].pos } else { pos };
                             // (A UseParentEject weapon's eject turns with the parent Weapon's transform.)
                             // (rotateTower off: the first Attack's own stored rotation.)
                             let parent_rot = if weapon.parent_eject { Some(self.towers[t].ent_rots.first().copied().flatten().or(self.towers[t].game_rot).unwrap_or(0.0)) } else { None };
@@ -14226,6 +14454,7 @@ impl Game {
                                 // ejectZ / tan 60 below the tower.)
                                 self.emit_z = ez + self.shot_base_z(t, weapon.from_air);
                                 self.emit_target = (target_id != 0).then_some(target_id);
+                                self.emit_aim = Some(target);
                                 self.emit(from, dir, emission, &spec, crit, tiers, owner);
                                 // EjectEffectModel: the muzzle effect at the eject point (visual).
                                 for (fx, k) in &weapon.eject_fx {
@@ -14240,6 +14469,7 @@ impl Game {
                                 }
                                 self.emit_z = 0.0;
                                 self.emit_target = None;
+                                self.emit_aim = None;
                             } else {
                                 let bursts = self.bursts.len();
                                 // A seeking shot from a tower that doesn't turn leaves towards its
@@ -14256,7 +14486,7 @@ impl Game {
                                 // bucc_400 rt 31, the missile leaves straight up.)
                                 let fighter = tier.air.as_ref().is_some_and(|x| x.fighter.is_some());
                                 // (Nor an Ace's: along its AirUnit rotation; recording ace_400 rt 32.)
-                                let ace = tier.air.as_ref().is_some_and(|x| !x.patterns.is_empty()) && weapon.from_air;
+                                let ace = tier.air.as_ref().is_some_and(|x| !x.patterns.is_empty() || x.heli.is_some()) && weapon.from_air;
                                 // (Nor a SingleEmmisionTowardsTarget's: its GetDirection is (target - eject)
                                 // turned by its offset; recording super_probe/super_400 rt 229, the Sun
                                 // Temple's Arcane Blasts 40 / 80 / 120 either side.)
@@ -14275,7 +14505,7 @@ impl Game {
                                 } else if ace && emission.kind == "Arc" {
                                     // (An Ace's the same, round its AirUnit rotation: recording ace_400 rt 133,
                                     // the 16-dart burst at multiples of 22.5 exactly.)
-                                    Some(if emission.air_rot { self.towers[t].air.as_ref().map_or(0.0, |a| a.pm_rot) } else { 0.0 })
+                                    Some(if emission.air_rot { self.towers[t].air.as_ref().map_or(0.0, |a| a.air_rot()) } else { 0.0 })
                                 } else {
                                     grot
                                 };
@@ -14288,6 +14518,7 @@ impl Game {
                                 self.emit_rot = if disp { Some(self.towers[t].game_rot.unwrap_or(0.0)) } else { grot };
                                 self.emit_z = ez + self.shot_base_z(t, weapon.from_air);
                                 self.emit_target = (target_id != 0).then_some(target_id);
+                                self.emit_aim = Some(target);
                                 let s0 = self.projectiles.len();
                                 if let Some(bf) = weapon.burst.as_ref().filter(|b| b.over_time && b.air) {
                                     // EmissionOverTime.Emit: currCount = count, lastEmit = 0,
@@ -14387,9 +14618,36 @@ impl Game {
                                         }
                                     }
                                 }
+                                // AngleToMapCenter.ProjectilesCreated (VERIFIED-DECOMP @0x180c69c90): each
+                                // shot's direction Vector3Boxed.Rotate-d (and its rotation added to) by
+                                // Rotation(-position) + range x (Range(0, 1000) / 1000 - 0.5) + offset
+                                // (recording heli_040 rt 120: the crates at 160.47 / 115.47, to the centre +-22.5).
+                                if let Some([range, offset]) = weapon.map_center {
+                                    for k in s0..self.projectiles.len() {
+                                        let p = self.projectiles[k].pos;
+                                        let rot = crt_atan2(-p[0], p[1]) * RAD2DEG;
+                                        let r = self.synced_range(0, 1000);
+                                        let ang = (r as f32 * range) / 1000.0 + -range * 0.5 + rot + offset;
+                                        let pr = &mut self.projectiles[k];
+                                        let sf = (pr.vel[0] * pr.vel[0] + pr.vel[1] * pr.vel[1]).sqrt();
+                                        // (INFERRED P-CRATEROT: from rotation 0, not the heli's, these
+                                        // targetless crates; recording heli_040 rt 120, D 0.33422363 -0.9424938.)
+                                        let _ = sf;
+                                        let d = [0.0f32, 1.0];
+                                        let (sn, cs) = crt_sin_cos(DEG2RAD * -ang);
+                                        let nd = [cs * d[0] - sn * d[1], cs * d[1] + sn * d[0]];
+                                        if pr.dir.is_some() {
+                                            pr.dir = Some(nd);
+                                        }
+                                        let spd = pr.spec.speed * FRAME_TIME;
+                                        pr.vel = [nd[0] * spd, -nd[1] * spd];
+                                        pr.grot = Some(ang);
+                                    }
+                                }
                                 self.emit_rot = None;
                                 self.emit_z = 0.0;
                                 self.emit_target = None;
+                                self.emit_aim = None;
                                 // MultiEmissionModel: its secondary projectile from the tower too.
                                 if let Some(sec) = &emission.secondary {
                                     let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
@@ -14557,7 +14815,7 @@ impl Game {
                             // SubTowerFilter.ProjectilesCreated: the spawner's projectiles' objects.
                             if weapon.max_subs.is_some() {
                                 let objs: Vec<u32> = self.projectiles[start..].iter().filter_map(|pr| self.proj_obj.get(&pr.uid).copied()).collect();
-                                self.towers[t].spawn_objs.extend(objs);
+                                self.towers[t].spawn_objs.extend(objs.into_iter().map(|o| (w, o)));
                             }
                             // HYPOTHESIS P-OVERTIME: EmissionOverTimeModel repeats the shot count-1 more
                             // times, `frames` apart, at the same target. Only instant shots are
@@ -14568,10 +14826,12 @@ impl Game {
                                     self.emit_rot = grot;
                                     self.emit_z = ez + self.shot_base_z(t, weapon.from_air);
                                 self.emit_target = (target_id != 0).then_some(target_id);
+                                self.emit_aim = Some(target);
                                     self.emit(from, dir, emission, proj, crit, tiers, owner);
                                     self.emit_rot = None;
                                     self.emit_z = 0.0;
                                     self.emit_target = None;
+                                    self.emit_aim = None;
                                     if proj.instant || emission.kind == "AtTarget" || emission.kind == "InstantDamage" {
                                         for pr in &mut self.projectiles[s0..] {
                                             pr.target = (target_id != 0).then_some(target_id);
@@ -15285,7 +15545,9 @@ impl Game {
             // (BloonModel.speedFrames: the model as its mutators made it, so a freeze holds a
             // carried bloon still; recording druid_400 rt 2220, a Black a Ball Lightning froze sits
             // at -107.5 while those blown with it move.)
-            let sf = speed_frames(b.model_speed(&self.defs[b.kind], b.frozen_speed(&self.defs[b.kind], self.defs[b.kind].speed)));
+            // (Not a Knockback's: recording super_502 rt 289, a MOAB knocked back at 287 is carried
+            // at its full 0.5208 a frame.)
+            let sf = speed_frames(b.frozen_speed(&self.defs[b.kind], self.defs[b.kind].speed));
             let to = self.tracks[b.path as usize].bloon_pos(b.dist);
             // In 3D (VERIFIED-DECOMP @0x180ffeeb0): to the path point whose z
             // Path.DistanceToPointInfoBloon (@0x180f6e030) makes 180 for isBoss, 120 for isMoab,
@@ -15679,6 +15941,29 @@ impl Game {
                     let sf = pr.spec.speed * FRAME_TIME;
                     pr.vel = [nx * sf, ny * sf];
                     pr.grot = Some(RAD2DEG * crt_atan2(nx, -ny));
+                    // A FollowPath shot: Retarget sets its Direction and Rotation, and the path is
+                    // laid from its start point turned the new way (FollowPath.ProcessFrame reads
+                    // the rotation); the game retargets in the collision pass (or RetargetOnContact's
+                    // Process, listed before FollowPath) before the frame's path move, which the
+                    // clone has made already: it is placed again (recording super_420_close rt
+                    // 231: a Sun Temple glaive re-laid along 69.61).
+                    if let Some(path) = pr.spec.path.clone() {
+                        pr.dir = Some([nx, -ny]);
+                        {
+                            let [lx, ly] = along(&path.points, pr.path_d).0;
+                            let lx = if pr.mirror { -lx } else { lx };
+                            let r = pr.grot.unwrap();
+                            let (sa, ca) = crt_sin_cos(DEG2RAD * -r);
+                            let gx = -lx;
+                            let (ox, oy) = (ca * gx - sa * ly, ca * ly + sa * gx);
+                            let mut np = [pr.origin[0] + ox, pr.origin[1] - oy];
+                            if path.straight > 0.0 {
+                                let sf = path.straight * FRAME_TIME;
+                                np = [np[0] + nx * sf, np[1] - (-ny) * sf];
+                            }
+                            pr.pos = np;
+                        }
+                    }
                 }
             }
             None if rt.expire_if_none => pr.frames_left = 0.0,
@@ -16015,6 +16300,11 @@ impl Game {
     fn shot_base_z(&self, t: usize, from_air: bool) -> f32 {
         if from_air && self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| !a.patterns.is_empty()) {
             return self.towers[t].air.as_ref().map_or(0.0, |a| if a.pm_cur != PM_NONE { 250.0 } else { 0.0 });
+        }
+        // (A Heli's: its transform's, 250 from the start; recording heli_032, z 250 before it
+        // ever moves, and heli_500's machine-gun rounds at 250.5 flying over the blockers.)
+        if from_air && self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.heli.is_some()) {
+            return 250.0;
         }
         self.tower_height(t)
     }
@@ -17198,6 +17488,7 @@ impl Game {
             self.emit_dir_rot = Some(dir_rot);
             self.emit(pos, dir, &ex.emission, &ex.projectile, None, tiers, owner); // P-EXHAUST
             self.emit_target = None;
+            self.emit_aim = None;
             self.emit_dir_rot = None;
             self.emit_rot = None;
             self.emit_z = 0.0;
@@ -17536,7 +17827,9 @@ impl Game {
             // - the eject point, Vector2.Rotate by offset, Normalized (recording village_500 rt 40:
             // the ballista's bolt (-0.92831916, 0.37178412), an ulp off the rotation's).
             if em.towards {
-                if let Some(bp) = self.emit_target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.pos) {
+                // (A target that died in the throw: Target.Position, the spot cached as it started;
+                // recording super_400 rt 273, a Sun Temple glaive along -67.23.)
+                if let Some(bp) = self.emit_target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.pos).or(self.emit_aim) {
                     let mut v = [bp[0] - pos[0], -(bp[1] - pos[1])];
                     if em.offset != 0.0 {
                         let a = DEG2RAD * -em.offset;
@@ -17660,13 +17953,21 @@ impl Game {
                         // A TravelStrait lifespan and an AgeModel each end the shot on their own: the
                         // shorter wins (recording tack_520: Inferno Ring's meteors, TravelStrait 99999 s,
                         // Age 20 s, gone after 1200 frames).
-                        let life = match spec.age_lifespan.filter(|a| *a > 0.0) { Some(a) => spec.lifespan.min(a), None => spec.lifespan };
-                        // (An Instant shot with neither has no lifespan: it stays till its target goes,
-                        // destroyIfInvalid, or its pierce does; recording desperado_050 rt 105, the mark
-                        // shot on its bloon.)
-                        let life = if (spec.instant || spec.fall.is_some()) && life <= 0.0 { f32::INFINITY } else { life };
-                        let f = life * FPS;
-                        if f.is_finite() { (f as f64).round_ties_even() as f32 } else { f }
+                        // (TravelStraitModel.set_Lifespan, VERIFIED-DECOMP @0x181202b90: lifespanFrames =
+                        // (int)(lifespan x 60 + 0.5), half up; recording super_400 rt 322, a 0.875 s plane
+                        // shot moving 53 frames. The AgeModel's rounds half to even.)
+                        let ts_frames = |l: f32| ((l * FPS + 0.5) as i32) as f32;
+                        let age_frames = |a: f32| ((a * FPS) as f64).round_ties_even() as f32;
+                        let f = match spec.age_lifespan.filter(|a| *a > 0.0) {
+                            Some(a) if spec.lifespan > 0.0 => ts_frames(spec.lifespan).min(age_frames(a)),
+                            Some(a) => age_frames(a),
+                            // (An Instant shot with neither has no lifespan: it stays till its target goes,
+                            // destroyIfInvalid, or its pierce does; recording desperado_050 rt 105, the mark
+                            // shot on its bloon.)
+                            None if (spec.instant || spec.fall.is_some()) && spec.lifespan <= 0.0 => f32::INFINITY,
+                            None => ts_frames(spec.lifespan),
+                        };
+                        f
                     }
                 },
                 // Projectile.Initialise (VERIFIED-DISASM @0xcac15d): ProjectileModel
@@ -18051,6 +18352,7 @@ impl Game {
         // runs after the towers: a plane's weapons fire from where it was last frame, at its last
         // rotation (FireFromAirUnit.EmitPosition / EmitRotation; recording ace_000: the first burst
         // from the tower at rotation 0, rt 102's from rt 101's spot turned by its 6.54).
+        self.move_helis();
         self.fly_patterns();
         // InstantDamageEmission.Process: this frame's instant-damage shots hit their targets now,
         // before the bloons move. INFERRED: after every tower has acted (the game's emission
@@ -19372,6 +19674,11 @@ mod tests {
         let mut places: Vec<Vec<(u8, u32, u32)>> = Vec::new();
         // SimRecorder PM lines (PathMovement planes' AirUnit transform): compared as kind 2.
         let mut has_pm = false;
+        // SimRecorder HM lines (helis' heliTransformBehavior): compared as kind 2 too.
+        let mut has_hm = false;
+        // SimRecorder IN lines: the InputManager's cursor in that frame while active and not
+        // ignored (FollowTouchSetting reads it).
+        let mut cursors: Vec<Option<[f32; 2]>> = Vec::new();
         // Per frame: Path.bloonsList as (type, distance), when recorded.
         let mut lists: Vec<Option<Vec<(String, u32)>>> = Vec::new();
         let mut ids: std::collections::HashMap<u64, (String, u32)> = Default::default();
@@ -19414,6 +19721,7 @@ mod tests {
                     frames.push((f[2].parse().unwrap(), Vec::new(), Vec::new()));
                     places.push(Vec::new());
                     lists.push(None);
+                    cursors.push(None);
                     ids.clear();
                 }
                 Some("B") if !frames.is_empty() => {
@@ -19428,6 +19736,13 @@ mod tests {
                 Some("PM") if !frames.is_empty() => {
                     has_pm = true;
                     places.last_mut().unwrap().push((2, bits(f[2].parse().unwrap()), bits(f[3].parse().unwrap())));
+                }
+                Some("HM") if !frames.is_empty() => {
+                    has_hm = true;
+                    places.last_mut().unwrap().push((2, bits(f[2].parse().unwrap()), bits(f[3].parse().unwrap())));
+                }
+                Some("IN") if !frames.is_empty() && f[3] == "1" && f[4] == "0" => {
+                    *cursors.last_mut().unwrap() = Some([f[1].parse().unwrap(), -f[2].parse::<f32>().unwrap()]);
                 }
                 Some("W") if !frames.is_empty() => frames.last_mut().unwrap().2.push((f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap())),
                 _ => {}
@@ -19561,6 +19876,7 @@ mod tests {
                 }
             }
             let mut guard = 0;
+            g.cursor = cursors[fi];
             // Frame by frame on the game's own count (roundTime repeats on the frame between
             // rounds, which the next round starts at the end of: Simulation.Simulate,
             // BossBloonManager.AutoStartNextRound).
@@ -19661,7 +19977,7 @@ mod tests {
             }
             let mut pg = places[fi].clone();
             let mut pc: Vec<(u8, u32, u32)> = g.bloons.iter().map(|b| (0, bits(b.pos[0]), bits(-b.pos[1]))).chain(g.projectiles.iter().map(|p| (1, bits(p.pos[0]), bits(-p.pos[1])))).chain(g.towers.iter().flat_map(|t| t.orbit.iter().flat_map(|o| o.glaives.iter())).map(|p| (1, bits(p[0]), bits(-p[1])))).chain(g.hooks.iter().map(|h| (1, bits(h.pos[0]), bits(-h.pos[1]))))
-                .chain((0..g.towers.len()).filter(|&i| has_pm && g.tier(i).and_then(|tr| tr.air.as_ref()).is_some_and(|a| !a.patterns.is_empty()))
+                .chain((0..g.towers.len()).filter(|&i| g.tier(i).and_then(|tr| tr.air.as_ref()).is_some_and(|a| (has_pm && !a.patterns.is_empty()) || (has_hm && a.heli.is_some())))
                     .filter_map(|i| g.towers[i].air.as_ref().map(|a| (2, bits(a.pos[0]), bits(-a.pos[1])))))
                 .collect();
             pg.sort();
