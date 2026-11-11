@@ -2133,6 +2133,19 @@ impl Tower {
             let ts: Vec<[f32; 2]> = self.aims.iter().filter_map(|a| a.1).collect();
             let m = [ts.iter().map(|t| t[0]).sum::<f32>() / ts.len() as f32, ts.iter().map(|t| t[1]).sum::<f32>() / ts.len() as f32];
             self.angle = (m[1] - pos[1]).atan2(m[0] - pos[0]);
+            // RotateToMiddleOfTargets.ApplyRotation (VERIFIED-DECOMP @0x180dd5530): the tower's
+            // rotation is Rotation(sum of Normalized(target - tower) over its attacks with one)
+            // (game frame); the arms store theirs relative to it (recording super_032 rt 301: a
+            // 50.86772 body, an arm's shot an ulp off at 0).
+            let mut sum = [0.0f32; 2];
+            for t in &ts {
+                let d = [t[0] - pos[0], -(t[1] - pos[1])];
+                let l = (d[0] * d[0] + d[1] * d[1]).sqrt();
+                if l >= f32::from_bits(1) {
+                    sum = [sum[0] + d[0] / l, sum[1] + d[1] / l];
+                }
+            }
+            self.game_rot = Some(RAD2DEG * crt_atan2(sum[0], sum[1]));
         } else if turn_body {
             self.angle = aim;
         }
