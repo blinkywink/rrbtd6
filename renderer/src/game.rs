@@ -1849,6 +1849,23 @@ pub struct GyrState {
     pub stamp: u64,
 }
 
+/// EmissionOverTime (VERIFIED-DECOMP Emit @0x180c3a5b0, Process @0x180c3a920): what a throw
+/// stored, emitted one shot per Process while currCount lasts.
+pub struct OverTime {
+    left: u32,
+    last: i64,
+    frames: i64,
+    delay: i64,
+    started: i64,
+    done: bool,
+    made: i64,
+    emission: Emission,
+    proj: Proj,
+    crit: Option<f32>,
+    tiers: [u8; 3],
+    owner: u64,
+}
+
 pub struct AirUnit {
     pub pos: [f32; 2],
     pub vel: [f32; 2],
@@ -1883,7 +1900,25 @@ pub struct AirUnit {
     pub fp_search: i64,
     /// When it was made, as Bloon.born (its place in the process list).
     pub fp_born: u64,
+    /// PathMovement (game units): the path parameter t (0..1) and its step per frame (tpf),
+    /// takingOff, the take-off animation's step (ttpf), the AirUnit transform's rotation (game
+    /// degrees) and the current path supplier (PM_NONE, PM_TAKEOFF or a pattern index).
+    pub pm_t: f32,
+    pub pm_tpf: f32,
+    pub pm_takeoff: bool,
+    pub pm_ttpf: f32,
+    pub pm_rot: f32,
+    pub pm_cur: i32,
+    /// The Attacks (by model name) made before its PathMovement, which fire before it moves; an
+    /// Attack an upgrade adds comes after it in the process list (recording
+    /// ace_upgrades_r30: 1-1-0's new pineapple drops from where the plane is after its move).
+    pub pm_before: Vec<String>,
+    /// Simulation.time of its last PathMovement move.
+    pub pm_moved: u64,
 }
+
+const PM_NONE: i32 = -1;
+const PM_TAKEOFF: i32 = -2;
 
 /// A point on flight pattern `mode` round `c` at parameter `th`. STAND-IN P-ACEPATH: Circle and
 /// Centered are ellipses with the pattern's radii; FigureEight (vertical) and Infinite
@@ -2297,6 +2332,11 @@ impl HitSet {
 
 #[derive(Clone)]
 pub struct Projectile {
+    /// AdoraTrackTarget: (currentVelocity, accelerating, movementDirection (game frame),
+    /// lastTargetSearchElapsed).
+    pub adora: Option<(f32, bool, [f32; 2], i64)>,
+    /// FallToGround: (speed, groundHeight) from SetStartPosition.
+    pub fall: Option<(f32, f32)>,
     /// ScaleProjectileOverTime.timePassed (frames) and the model radius it scales.
     pub scale_t: f32,
     pub radius0: f32,
@@ -3106,6 +3146,8 @@ pub struct Game {
     proj_objs: u32,
     /// The objects live projectiles held as the frame began (only kept while a spawner needs it).
     proj_objs_start: FastSet<u32>,
+    /// EmissionOverTime on an air unit's attack, per (tower id, weapon index): its shots left.
+    over_time: std::collections::BTreeMap<(u64, usize), OverTime>,
     /// Pooled FighterMovement behaviours: a gone plane's path timer (`fm_pending` until the next
     /// flush), taken back by the next plane made (the last flushed first).
     fm_pending: Vec<i32>,
@@ -3461,7 +3503,9 @@ macro_rules! collide_pass {
                 // HYPOTHESIS P-PATH: the path is rotated so its +y points along the throw
                 // (at the target), unscaled, starting at the eject point; mirrored when the
                 // tower throws with its other hand (FlipFollowPath).
-                pr.path_d += path.speed / FPS;
+                // (speed x (1/60), its speedFrames: recording super_probe/super_400 rt 229, a glaive
+                // 1 ulp off in y with speed / 60.)
+                pr.path_d += path.speed * FRAME_TIME;
                 // FollowPath.ProcessFrame (VERIFIED-DISASM @0xcdc450): with an easePath the
                 // distance runs along it, and the point is the path's at path length x (ease
                 // point's x / FindPathMax: the largest x, from 0); either way it ends once
@@ -3492,6 +3536,17 @@ macro_rules! collide_pass {
                 };
                 pr.vel = [next[0] - pr.pos[0], next[1] - pr.pos[1]];
                 pr.pos = next;
+                // FollowPath.ProcessFrame sets the position from its start point every frame; a
+                // TravelStrait after it in the behaviour list then moves it one step along its
+                // direction (recording super_probe/super_400 rt 229: a Sun Temple glaive 8.26 out
+                // after one frame, 4.17 along the path + 4.17 along 61.77).
+                if path.straight > 0.0 {
+                    let sf = path.straight * FRAME_TIME;
+                    let d = pr.dir.or_else(|| pr.grot.map(|g| { let v = game_dir(g); [v[0], -v[1]] }));
+                    if let Some(d) = d {
+                        pr.pos = [pr.pos[0] + d[0] * sf, pr.pos[1] - d[1] * sf];
+                    }
+                }
                 if end && path.destroy_at_end {
                     pr.frames_left = 0.0;
                 }
@@ -3599,6 +3654,21 @@ macro_rules! collide_pass {
             // travel behaviour; recording dart_500: the Ultra-Juggernaut expires at x -150.4).
             if pr.spec.expire_at_edge && !on_map(pr.pos, 0.0) {
                 pr.frames_left = 0.0;
+            }
+            // FallToGround.Process (VERIFIED-DECOMP @0x180cbcd50): z - speed / 60; at or below the
+            // ground it lands there, or with expireOnContact expires where it was (recording
+            // ace_030 rt 200: the pineapple's blast at z 2.0001).
+            if let Some((speed, ground)) = pr.fall {
+                let nz = pr.z - speed * (1.0f32 / 60.0);
+                if nz <= ground {
+                    if pr.spec.fall.is_some_and(|f| f.2) {
+                        pr.frames_left = 0.0;
+                    } else {
+                        pr.z = ground;
+                    }
+                } else {
+                    pr.z = nz;
+                }
             }
             // ClearHitBloons.Process (VERIFIED-DISASM @0xcbb310): lastClear starts at the
             // creation time; once lastClear + intervalFrames (Math.Round(interval x 60)) <= now
@@ -4525,6 +4595,11 @@ macro_rules! collide_pass {
             // (`track_targets`).
             if pr.seek == Some(id) {
                 pr.seek_t = 0;
+                // AdoraTrackTarget.Collide (VERIFIED-DECOMP @0x180c84860) likewise
+                // (recording ace_003 rt 2634: a dart takes 2372 the frame after hitting 2364).
+                if let Some(a) = pr.adora.as_mut() {
+                    a.3 = 0;
+                }
             }
             pr.pierce -= pr.spec.pierce_cost;
             // (CollideExtraPierceReduction with a bloonTag: more on such bloons.)
@@ -4974,6 +5049,7 @@ impl Game {
             proj_pool: Vec::new(),
             proj_objs: 0,
             proj_objs_start: Default::default(),
+            over_time: Default::default(),
             fm_pending: Vec::new(),
             lt_shared: Default::default(),
             spirit_in: Default::default(),
@@ -6393,6 +6469,103 @@ impl Game {
         }
     }
 
+    /// AdoraTrackTarget (VERIFIED-DECOMP Process @0x180c84eb0, UpdateVelocity @0x180c85730,
+    /// UpdateRotation @0x180c85340), run after the shot's TravelStrait move: a target that is gone,
+    /// filtered out (Projectile.FilterBloon) or behind a blocker is dropped; more than 4 elapsed
+    /// frames after the last search, with none, BloonManager.GetTarget (TargetType Close, range
+    /// 99999, its filter); then accelerating below accelerateInAngle off the target (or without
+    /// one), decelerating past startDeceleratingIfAngleGreaterThan, the velocity +- acceleration
+    /// within the *Frames (/ 60) speeds, the movementDirection turned by AngleBetween clamped to
+    /// +- rotation (the shot's direction and rotation follow it, so TravelStrait goes that way
+    /// too), the position + movementDirection x velocity, and it expires at lifespanFrames
+    /// (OnEmit: velocity maximumSpeedFrames, the shot's direction; recording ace_003 rt 2, 3 +
+    /// 5.833 a frame).
+    fn adora_step(&mut self, p: usize) {
+        let Some(sp) = self.projectiles[p].spec.adora.clone() else { return };
+        let f = |v: f32| v * FRAME_TIME;
+        let now = self.sim_elapsed as i64;
+        let synth = crate::data::Seek { distance: 99999.0, turn_rate: 0.0, max_angle: 360.0, new_targets: true, lifetime: false, constantly: false, within: None };
+        {
+            let pr = &mut self.projectiles[p];
+            if pr.adora.is_none() {
+                // (lastTargetSearchElapsed starts at its creation: recording ace_003, a dart made at
+                // rt 1 flies straight until its first search at 6.)
+                pr.adora = Some((f(sp.max), false, pr.dir.unwrap_or([0.0, 1.0]), (pr.born / 4) as i64));
+            }
+        }
+        let keep = {
+            let pr = &self.projectiles[p];
+            pr.seek.filter(|&id| self.bloons.iter().find(|b| b.id == id).is_some_and(|b| self.seek_valid(pr, &synth, b, None)))
+        };
+        self.projectiles[p].seek = keep;
+        let (_, _, _, last) = self.projectiles[p].adora.unwrap();
+        if 4 < now - last {
+            self.projectiles[p].adora.as_mut().unwrap().3 = now;
+            if self.projectiles[p].seek.is_none() {
+                let pick = self.seek_pick(&self.projectiles[p], &synth, None, 0.0);
+                self.projectiles[p].seek = pick.map(|x| x.0);
+            }
+        }
+        // (A bloon made after the shot hasn't moved yet when it processes: its previous spot;
+        // recording ace_003 rt 2657, a dart turning for a newer Pink.)
+        let born = self.projectiles[p].born;
+        let q = self.projectiles[p].seek.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| if b.born > born { b.prev } else { b.pos });
+        let pr = &mut self.projectiles[p];
+        let (mut vel, mut acc, mut dir, last) = pr.adora.unwrap();
+        // Vector2.AngleBetween (VERIFIED-DECOMP @0x180f45550): -(atan2(b) - atan2(a)), wrapped,
+        // in degrees.
+        let angle_between = |a: [f32; 2], b: [f32; 2]| {
+            let mut d = crt_atan2(b[1], b[0]) - crt_atan2(a[1], a[0]);
+            if std::f32::consts::PI < d {
+                d += -std::f32::consts::TAU;
+            } else if d < -std::f32::consts::PI {
+                d += std::f32::consts::TAU;
+            }
+            RAD2DEG * -d
+        };
+        let to = q.map(|q| [q[0] - pr.pos[0], -(q[1] - pr.pos[1])]);
+        match to {
+            None => acc = true,
+            Some(t) => {
+                let a = angle_between(dir, t).abs();
+                if a < sp.accel_in {
+                    acc = true;
+                } else if sp.decel_gt <= a && a != sp.decel_gt {
+                    acc = false;
+                }
+            }
+        }
+        vel = if acc { f(sp.accel) + vel } else { vel - f(sp.accel) };
+        if vel < f(sp.min) {
+            vel = f(sp.min);
+        } else if f(sp.max) < vel {
+            vel = f(sp.max);
+        }
+        if let Some(t) = to {
+            let a = angle_between(dir, t);
+            let mut c = -sp.rotation;
+            if c <= a {
+                c = a;
+                if sp.rotation < a {
+                    c = sp.rotation;
+                }
+            }
+            // Vector2.Rotate (by -c degrees).
+            let (sn, cs) = crt_sin_cos(DEG2RAD * -c);
+            dir = [cs * dir[0] - sn * dir[1], cs * dir[1] + sn * dir[0]];
+            pr.dir = Some(dir);
+            let sf = if pr.speed_pf > 0.0 { pr.speed_pf } else { pr.spec.speed * FRAME_TIME };
+            pr.vel = [dir[0] * sf, -dir[1] * sf];
+            pr.grot = Some(RAD2DEG * crt_atan2(dir[0], dir[1]));
+        }
+        let step = [dir[0] * vel, dir[1] * vel];
+        pr.pos = [pr.pos[0] + step[0], -((-pr.pos[1]) + step[1])];
+        pr.adora = Some((vel, acc, dir, last));
+        if (sp.lifespan * 60.0) as i64 <= pr.age as i64 + 1 {
+            pr.frames_left = 0.0;
+        }
+    }
+
     /// TrackTarget.GetNewTarget's range: `distance`, or with useLifetimeAsDistance the way it has
     /// left to fly ((lifespanFrames - age) / lifespanFrames x lifespanFrames x speedFrames).
     /// `ahead`: frames of the frame's age not counted in `pr.age` yet (the age counts the frame
@@ -7323,6 +7496,7 @@ impl Game {
     /// Launches tower `t`'s air unit from its pad if its tier has one.
     fn init_air(&mut self, t: usize) {
         if self.towers[t].air.is_none() && self.tier(t).is_some_and(|tr| tr.air.is_some()) {
+            let before: Vec<String> = self.tier(t).map(|tr| tr.attacks.iter().map(|a| a.model_name.clone()).collect()).unwrap_or_default();
             let tw = &mut self.towers[t];
             tw.air = Some(AirUnit {
                 pos: tw.pos,
@@ -7348,6 +7522,14 @@ impl Game {
                 fp_bloon: None,
                 fp_search: i64::MIN / 2,
                 fp_born: self.sim_elapsed * 4 + 3,
+                pm_t: 0.0,
+                pm_tpf: 0.0,
+                pm_takeoff: true,
+                pm_ttpf: 0.0,
+                pm_rot: 0.0,
+                pm_cur: PM_NONE,
+                pm_before: before,
+                pm_moved: u64::MAX,
             });
             // A plane takes a pooled FighterMovement if there is one: its timer as it was, its path
             // point (0, 0) (recording bucc_upgrades_r30 rt 1862: the 5-1-0's second plane with the
@@ -7381,8 +7563,8 @@ impl Game {
             if self.tier(t).is_some_and(|tr| tr.grapple.is_some()) {
                 continue;
             }
+            // (PathMovement planes move after the towers: fly_patterns.)
             if !spec.patterns.is_empty() {
-                self.fly_pattern(t, &spec);
                 continue;
             }
             if spec.fighter.is_some() {
@@ -7948,69 +8130,266 @@ impl Game {
         }
     }
 
-    /// PathMovement.Process (VERIFIED-DISASM @0xd777c0): the path parameter advances at
-    /// speed / path length a frame. Off its path (just made, or the mode changed) the plane turns
-    /// toward its path point at most `rotation` degrees a second and flies forward at speed x
-    /// catchUpSpeed; it rejoins once the point is within one such step and under 25 degrees
-    /// off its nose. On the path it sits on the point, facing the way it moved. Bank: eases
-    /// (LerpAngle 0.07) toward the turn x bankRotationMul x bankRotation, capped at
-    /// bankRotation. Take-off (TakeOffAnimation @0xd78870): over takeOffAnimTime, with
-    /// x = tt^exponent, scale = takeOffScale + (1 - takeOffScale)(sin((x - 1/4)pi) + 1)/2 and
-    /// pitch = takeOffPitch (sin((x - 1/4)2pi) + 1)/2. STAND-IN P-ACEPATH: the pattern shapes;
-    /// P-TAKEOFF: the height climbs over takeOffTime as 1 - (1 - s)^takeOffExponent.
-    fn fly_pattern(&mut self, t: usize, spec: &crate::data::AirSpec) {
-        let centre = [(self.bounds.0[0] + self.bounds.1[0]) / 2.0, (self.bounds.0[1] + self.bounds.1[1]) / 2.0];
-        let tw = &mut self.towers[t];
-        let pat = spec.patterns.iter().find(|p| TargetMode::parse(&p.mode) == Some(tw.target)).unwrap_or(&spec.patterns[0]);
-        let mode = TargetMode::parse(&pat.mode).unwrap_or(TargetMode::Circle);
-        let c = if mode == TargetMode::Centered { *tw.point.get_or_insert(centre) } else { tw.pos };
-        let a = tw.air.as_mut().unwrap();
-        let dt = 1.0 / FPS;
-        let p0 = pattern_point(mode, pat.rx, pat.ry, c, a.phase);
-        let p1 = pattern_point(mode, pat.rx, pat.ry, c, a.phase + 1e-3);
-        let dl = (p1[0] - p0[0]).hypot(p1[1] - p0[1]) / 1e-3;
-        // TSMThemeMonkeyAce's reverse button flies the pattern the other way round.
-        let step = spec.speed * dt / dl.max(1e-3);
-        a.phase = (a.phase + if tw.air_reverse { -step } else { step }).rem_euclid(std::f32::consts::TAU);
-        let goal = pattern_point(mode, pat.rx, pat.ry, c, a.phase);
-        let d = [goal[0] - a.pos[0], goal[1] - a.pos[1]];
-        let want = d[1].atan2(d[0]).to_degrees();
-        let rot = a.angle.to_degrees();
-        let old = a.pos;
-        let new_rot = if a.on_path {
-            a.pos = goal;
-            if d[0].hypot(d[1]) > 1e-4 { want } else { rot }
-        } else {
-            let max = spec.turn * dt;
-            let r = rot + angle_diff(want.to_radians(), rot.to_radians()).to_degrees().clamp(-max, max);
-            let step = spec.speed * spec.catch_up.max(1.0) * dt;
-            let (s, co) = r.to_radians().sin_cos();
-            a.pos = [a.pos[0] + co * step, a.pos[1] + s * step];
-            if step * step >= d[0] * d[0] + d[1] * d[1] && angle_diff(want.to_radians(), r.to_radians()).to_degrees().abs() < 25.0 {
-                a.on_path = true;
+    /// EmissionOverTime.Process (VERIFIED-DECOMP @0x180c3a920): after the initial delay, one
+    /// shot every timeFrames while currCount lasts, in Simulation.time (recording ace_250: a throw
+    /// on the frame round 40 starts, its next shots 10 elapsed frames on). On an air unit's attack the eject point is the
+    /// air unit's position (z 250; recording ace_030 rt 79: the pineapple where the plane was),
+    /// toward TargetInFrontOfAirUnit (@0x180de4fa0: the position + Normalize((0, 1) turned by its
+    /// rotation) x 10).
+    fn over_time_step(&mut self, t: usize, wi: usize) {
+        let now = self.sim_elapsed as i64;
+        let key = (self.towers[t].id, wi);
+        let Some(o) = self.over_time.get_mut(&key) else { return };
+        if !(o.left > 0 && (o.delay <= now - o.started || o.done)) {
+            if o.left == 0 {
+                self.over_time.remove(&key);
             }
-            r
-        };
-        let goal_bank = (angle_diff(new_rot.to_radians(), rot.to_radians()).to_degrees() * spec.bank_mul * spec.bank).clamp(-spec.bank, spec.bank);
-        a.bank += angle_diff(goal_bank.to_radians(), a.bank.to_radians()).to_degrees() * 0.07;
-        a.angle = new_rot.to_radians();
-        a.vel = [(a.pos[0] - old[0]) * FPS, (a.pos[1] - old[1]) * FPS];
-        a.age += dt;
-        if let Some(to) = &spec.takeoff {
-            if to.anim > 0.0 && a.tt < 1.0 {
-                a.tt = (a.tt + dt / to.anim).min(1.0);
-                let pi = std::f32::consts::PI;
-                let x = a.tt.powf(to.scale_exp);
-                a.scale = (((x - 0.25) * pi).sin() + 1.0) * 0.5 * (1.0 - to.scale) + to.scale;
-                let y = a.tt.powf(to.pitch_exp);
-                a.pitch = (((y - 0.25) * 2.0 * pi).sin() + 1.0) * 0.5 * to.pitch;
-            }
-            if to.time > 0.0 {
-                let s = (a.age / to.time).min(1.0);
-                a.height = 40.0 * (1.0 - (1.0 - s).powf(to.exp.max(1.0)));
+            return;
+        }
+        o.started = now;
+        o.done = true;
+        if o.frames > now - o.last {
+            return;
+        }
+        o.last = now;
+        o.left -= 1;
+        let (emission, proj, crit, tiers, owner) = (o.emission.clone(), o.proj.clone(), o.crit, o.tiers, o.owner);
+        let Some(a) = self.towers[t].air.as_ref() else { return };
+        let (from, rot) = (a.pos, a.pm_rot);
+        // Vector2.Rotate of (0, 1) by the rotation, Vector3.Normalize, x 10.
+        let (s, c) = crt_sin_cos(DEG2RAD * -rot);
+        let v = [c * 0.0 - s * 1.0, c * 1.0 + s * 0.0];
+        let m = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        let v = if m > 1e-5 { [v[0] / m * 10.0, v[1] / m * 10.0] } else { [0.0, 0.0] };
+        let r = RAD2DEG * crt_atan2(v[0], v[1]);
+        self.emit_rot = Some(r);
+        self.emit_z = 250.0;
+        self.emit_target = None;
+        self.emit(from, (r - 90.0) * DEG2RAD, &emission, &proj, crit, tiers, owner);
+        self.emit_rot = None;
+        self.emit_z = 0.0;
+    }
+
+    fn fly_patterns(&mut self) {
+        for t in 0..self.towers.len() {
+            let Some(spec) = self.tier(t).and_then(|tr| tr.air.clone()) else { continue };
+            if !spec.patterns.is_empty() && self.towers[t].air.as_ref().is_some_and(|a| a.pm_moved != self.sim_elapsed) && !self.tier(t).is_some_and(|tr| tr.grapple.is_some()) {
+                self.fly_pattern(t, &spec);
             }
         }
-        tw.angle = a.angle;
+    }
+
+    /// PathMovement.Process (VERIFIED-DECOMP @0x180d58bd0), in game units (y up). FindCurrSupplier
+    /// (@0x180d583f0): while takingOff the TakeOffPath (@0x180d5f100: (speed x 0.5 x takeOffTime, 0)
+    /// x t^takeOffExponent from the tower, tpf = (1/60) / takeOffTime, ttpf = (1/60) /
+    /// takeOffAnimTime, on its path at once); after it (t wraps past 1), the pattern named by the
+    /// tower's target type, off its path, tpf = speed / pattern length x (1/60). t steps by tpf (back
+    /// when the pattern is reversed). The goal is the tower position (UseTowerPosition) plus the
+    /// pattern's point at t. On its path the plane sits on the goal facing the way it moved
+    /// (Vector2.Rotation = atan2(x, y)); off it, it turns by DeltaAngle toward the goal, at most
+    /// rotation / 60 a frame, flies up x catchUpSpeed x speed / 60 along that heading, truncates
+    /// its position (TruncateVector2) and heading to 3 places, and rejoins once the goal was
+    /// within that step and less than 25 degrees off. Bank: LerpAngle(lastBank, CapAngle180(turn) x
+    /// bankRotationMul x bankRotation clamped to +-bankRotation, 0.07). TakeOffAnimation
+    /// (@0x180d59c80): tt += ttpf to 1; scale = takeOffScale + (1 - takeOffScale)(sin((tt^scaleExp -
+    /// 1/4)pi) + 1)/2, pitch = takeOffPitch (sin(2(tt^pitchExp - 1/4)pi) + 1)/2 (display only).
+    /// The transform's z is always 250.
+    fn fly_pattern(&mut self, t: usize, spec: &crate::data::AirSpec) {
+        const DT: f32 = 1.0 / 60.0;
+        let trunc3 = |v: f32| (((v * 1000.0) as f64).trunc() / 1000.0f32 as f64) as f32;
+        // Math.PointOnCircleCircumference / PointOnElipseCircumference (@0x180f20770 /
+        // @0x180f207e0): (cos x w, sin x h) of the angle in degrees.
+        let on_circle = |deg: f32, w: f32, h: f32| {
+            let (s, c) = crt_sin_cos(deg * DEG2RAD);
+            [c * w, s * h]
+        };
+        // Math.DeltaAngle (@0x180f1ed80) and CapAngle180 (@0x180f1ec70).
+        let delta_angle = |a: f32, b: f32| {
+            let d = b - a;
+            let mut n = (d - (d / 360.0).floor() * 360.0).clamp(0.0, 360.0);
+            if n > 180.0 {
+                n -= 360.0;
+            }
+            n
+        };
+        let cap180 = |mut x: f32| {
+            while x < -180.0 {
+                x += 360.0;
+            }
+            while x >= 180.0 {
+                x -= 360.0;
+            }
+            x
+        };
+        let rotation_of = |v: [f32; 2]| RAD2DEG * crt_atan2(v[0], v[1]);
+        let pi = std::f32::consts::PI;
+        // (The Attacks the tower has when its plane first moves came before its PathMovement; a
+        // tower made at its tier has them all.)
+        if self.towers[t].air.as_ref().is_some_and(|a| a.pm_moved == u64::MAX) {
+            let names: Vec<String> = self.tier(t).map(|tr| tr.attacks.iter().map(|a| a.model_name.clone()).collect()).unwrap_or_default();
+            self.towers[t].air.as_mut().unwrap().pm_before = names;
+        }
+        let tw = &mut self.towers[t];
+        let target = tw.target;
+        let (tpos, point, reversed) = ([tw.pos[0], -tw.pos[1]], tw.point.map(|p| [p[0], -p[1]]), tw.air_reverse);
+        let a = tw.air.as_mut().unwrap();
+        a.pm_moved = self.sim_elapsed;
+        let len = |p: &crate::data::AirPattern| match TargetMode::parse(&p.mode) {
+            // CirclePattern.GetPathLength (@0x180db4880): radius x 2pi; FigureEightPattern
+            // (@0x180db7950) twice that; CenterElipsePattern (@0x180db2b60): sqrt((w^2 + h^2) x
+            // 0.5) x 2pi.
+            Some(TargetMode::FigureEight) | Some(TargetMode::Infinite) => {
+                let l = p.rx * std::f32::consts::TAU;
+                l + l
+            }
+            Some(TargetMode::Centered) => ((p.ry * p.ry + p.rx * p.rx) * 0.5).sqrt() * std::f32::consts::TAU,
+            _ => p.rx * std::f32::consts::TAU,
+        };
+        let find_curr = |a: &mut AirUnit| {
+            // (A sub-tower's plane, whose target type names no pattern, flies its only one: the
+            // Sun Temple's circle; recording super_probe/super_400 PM lines.)
+            let want = spec.patterns.iter().position(|p| TargetMode::parse(&p.mode) == Some(target)).or((!spec.patterns.is_empty()).then_some(0));
+            if a.pm_cur >= 0 && Some(a.pm_cur as usize) == want {
+                return;
+            }
+            if a.pm_takeoff {
+                if a.pm_cur == PM_NONE {
+                    a.on_path = true;
+                    a.pm_cur = PM_TAKEOFF;
+                    if let Some(to) = &spec.takeoff {
+                        a.pm_tpf = DT / to.time;
+                        a.pm_ttpf = DT / to.anim;
+                    }
+                }
+                return;
+            }
+            if let Some(i) = want {
+                a.on_path = false;
+                a.pm_cur = i as i32;
+                a.pm_tpf = (spec.speed / len(&spec.patterns[i])) * DT;
+            }
+        };
+        find_curr(a);
+        if a.pm_cur == PM_NONE {
+            return;
+        }
+        let back = a.pm_cur >= 0 && reversed;
+        if !back {
+            a.pm_t += a.pm_tpf;
+            if a.pm_t >= 1.0 {
+                a.pm_t -= 1.0;
+                if a.pm_takeoff {
+                    a.pm_takeoff = false;
+                    find_curr(a);
+                }
+            }
+        } else {
+            a.pm_t -= a.pm_tpf;
+            if a.pm_t <= 0.0 {
+                a.pm_t += 1.0;
+                if a.pm_takeoff {
+                    a.pm_takeoff = false;
+                    find_curr(a);
+                }
+            }
+        }
+        if let Some(to) = spec.takeoff.as_ref().filter(|to| to.anim != 0.0 && a.tt < 1.0) {
+            a.tt += a.pm_ttpf;
+            if a.tt >= 1.0 {
+                a.tt = 1.0;
+            }
+            let x = a.tt.powf(to.scale_exp);
+            a.scale = ((crt_sin_cos((x - 0.25) * pi).0 + 1.0) * 0.5 * (1.0 - to.scale)) + to.scale;
+            let y = a.tt.powf(to.pitch_exp);
+            a.pitch = (crt_sin_cos(((y - 0.25) + (y - 0.25)) * pi).0 + 1.0) * 0.5 * to.pitch;
+        }
+        let pat = usize::try_from(a.pm_cur).ok().map(|i| &spec.patterns[i]);
+        let tt = a.pm_t;
+        let rel = match pat {
+            None => {
+                let to = spec.takeoff.as_ref();
+                let l = spec.speed * 0.5 * to.map_or(0.0, |x| x.time);
+                let f = tt.powf(to.map_or(1.0, |x| x.exp));
+                [l * f, 0.0 * f]
+            }
+            Some(p) => match TargetMode::parse(&p.mode) {
+                Some(TargetMode::Centered) => {
+                    let q = on_circle(if p.reverse { -360.0 } else { 360.0 } * tt, p.rx, p.ry);
+                    let c = point.unwrap_or([0.0, 0.0]);
+                    [q[0] + c[0], q[1] + c[1]]
+                }
+                // FigureEightPattern.GetPathPosition (@0x180db7a40).
+                Some(m @ (TargetMode::FigureEight | TargetMode::Infinite)) => {
+                    let mut q = if tt < 0.5 {
+                        let q = on_circle(tt * 360.0 + tt * 360.0 + 180.0, p.rx, p.rx);
+                        [q[0] + p.rx, q[1]]
+                    } else {
+                        let q = on_circle(tt * -360.0 + tt * -360.0, p.rx, p.rx);
+                        [q[0] - p.rx, q[1]]
+                    };
+                    if m == TargetMode::Infinite {
+                        // Vector2.Rotate(90) (@0x180f45cf0): by -90 degrees.
+                        let (s, c) = crt_sin_cos(DEG2RAD * -90.0);
+                        q = [c * q[0] - s * q[1], c * q[1] + s * q[0]];
+                    }
+                    [trunc3(q[0]), trunc3(q[1])]
+                }
+                // CirclePattern.GetPathPosition (@0x180db48b0): truncated to 3 places.
+                _ => {
+                    let q = on_circle(if p.reverse { -360.0 } else { 360.0 } * tt, p.rx, p.rx);
+                    [trunc3(q[0]), trunc3(q[1])]
+                }
+            },
+        };
+        let base = if pat.is_some_and(|p| !p.use_tower) { [0.0, 0.0] } else { tpos };
+        let goal = [base[0] + rel[0], base[1] + rel[1]];
+        let old = [a.pos[0], -a.pos[1]];
+        let bank_to = |turn: f32| {
+            let mut b = cap180(turn) * spec.bank_mul * spec.bank;
+            if spec.bank <= b {
+                b = spec.bank;
+            }
+            if b <= -spec.bank {
+                b = -spec.bank;
+            }
+            b
+        };
+        let d = [goal[0] - old[0], goal[1] - old[1]];
+        if a.on_path {
+            let h = rotation_of(d);
+            a.bank = lerp_angle(a.bank, bank_to(h - a.pm_rot), 0.07);
+            a.pos = [goal[0], -goal[1]];
+            a.pm_rot = h;
+        } else {
+            let mut turn = delta_angle(a.pm_rot, rotation_of(d));
+            let (hi, lo) = (spec.turn * DT, -spec.turn * DT);
+            if hi <= turn {
+                turn = hi;
+            }
+            if turn <= lo {
+                turn = lo;
+            }
+            let nh = turn + a.pm_rot;
+            let (s, c) = crt_sin_cos(DEG2RAD * -nh);
+            let dir = [c * 0.0 - s * 1.0, c * 1.0 + s * 0.0];
+            let k = spec.catch_up * spec.speed;
+            let step = [dir[0] * k * DT, dir[1] * k * DT];
+            let np = [old[0] + step[0], old[1] + step[1]];
+            a.bank = lerp_angle(a.bank, bank_to(nh - a.pm_rot), 0.07);
+            let np = [trunc3(np[0]), trunc3(np[1])];
+            let rot = (((nh * 1000.0) as f64).trunc() / 1000.0) as f32;
+            a.pos = [np[0], -np[1]];
+            a.pm_rot = rot;
+            let sq = d[0] * d[0] + d[1] * d[1];
+            if !(k * DT * k * DT < sq) && delta_angle(rot, rotation_of(d)).abs() < 25.0 {
+                a.on_path = true;
+            }
+        }
+        a.vel = [(a.pos[0] - old[0]) * FPS, (a.pos[1] + old[1]) * FPS];
+        a.angle = (a.pm_rot - 90.0) * DEG2RAD;
+        a.height = 40.0;
+        let ang = a.angle;
+        tw.angle = ang;
     }
 
     /// A sub-tower (sentry) made by tower `parent` at `p`. It counts as the parent's tower type
@@ -9616,6 +9995,17 @@ impl Game {
         }
         self.init_point(t);
         self.init_air(t);
+        // The upgrade remakes the AirUnit's PathMovement (Copy @0x180d58200: t, lastBank, onPath,
+        // takingOff, pitch and the transform carried over); its path supplier is picked again,
+        // off its path (FindCurrSupplier), so its first move after is a catch-up step (recording
+        // ace_upgrades_r30 rt 201: truncated to 3 places, back on the path the frame after).
+        if self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| !a.patterns.is_empty()) {
+            if let Some(a) = self.towers[t].air.as_mut() {
+                if !a.pm_takeoff && a.pm_cur >= 0 {
+                    a.pm_cur = PM_NONE;
+                }
+            }
+        }
         self.sync_abilities(t);
         self.sync_pets(t);
         // Carrier planes of a model the new tier doesn't make go (recording bucc_upgrades_r30 rt
@@ -9715,9 +10105,20 @@ impl Game {
                 self.towers[t].show = Some((clip.into(), 0.0));
                 let gone: Vec<u64> = gone.into_iter().map(|(i, _)| i).collect();
                 self.towers.retain(|o| !gone.contains(&o.id) && !o.sub.as_ref().is_some_and(|s| gone.contains(&s.parent)));
+                // ActOnSacrifice (VERIFIED-DECOMP @0x180d3e140) also runs each mutator's
+                // TowerMutator.EvaluateConditional (@0x180c2f1a0): a mutator (an attack, a reload /
+                // speed / size step) whose own CheckTempleUnderLevel fails (that set's worth >= cost, or the set not sacrificed)
+                // isn't added. A temple made at its tier (SetTempleSacrificeValuesFromModel) never
+                // evaluates them: see temple_created.
                 for g in &tp.groups {
                     if worth.get(&g.set).copied().unwrap_or(0.0) >= g.cost as f64 {
-                        groups.push(g.clone());
+                        let mut live = g.clone();
+                        // A failed mutator never reaches mutatorsToApply (nor its insert order).
+                        live.muts.retain(|m| match m.u {
+                            Some((set, cost)) => worth.get(&set).is_some_and(|&w| (w as f32) < (cost as i32) as f32),
+                            None => true,
+                        });
+                        groups.push(live);
                     }
                 }
             }
@@ -9730,52 +10131,141 @@ impl Game {
         }
     }
 
+    /// A temple tower made at its tier (not upgraded into): MonkeyTemple.OnTowerCreated /
+    /// OnInstaPlacement (VERIFIED-DECOMP @0x180d405c0 / @0x180d3fb40) sacrifices nothing and
+    /// presets the worth instead. templeTowers = {Primary 1, Military 2, Magic 4: 40001
+    /// (@0x183e501d4), Support 8: 0}, applied to the 4xx model's tier-one groups
+    /// (GameModel.GetTower(baseId, 4, path 2, path 3)); at tier 5 trueTempleTowers =
+    /// {1, 2, 4, 8: 40001} on the 5xx model's tier-two groups.
+    /// SetTempleSacrificeValuesFromModel (@0x180d42d60) applies a group when its set is in the
+    /// selected towers and worth >= (int)cost.
+    fn temple_created(&mut self, t: usize) {
+        const PRESET: f32 = 40001.0;
+        let (id, def, tiers) = (self.towers[t].id, self.towers[t].def, self.towers[t].tiers);
+        let Some(tt) = self.tower_tiers[def].as_ref() else { return };
+        let Some(base) = tt.tiers.get(&self.towers[t].tier_key()).cloned() else { return };
+        if base.temple.is_none() {
+            return;
+        }
+        let mut groups: Vec<crate::data::TempleGroup> = Vec::new();
+        let four = format!("4{}{}", tiers[1], tiers[2]);
+        if let Some(tp) = tt.tiers.get(&four).and_then(|x| x.temple.as_ref()) {
+            let worth = |set: u32| match set { 1 | 2 | 4 => Some(PRESET), 8 => Some(0.0), _ => None };
+            groups.extend(tp.groups.iter().filter(|g| !g.two && worth(g.set).is_some_and(|w| w >= (g.cost as i32) as f32)).cloned());
+        }
+        if tiers[0] == 5 {
+            if let Some(tp) = &base.temple {
+                groups.extend(tp.groups.iter().filter(|g| g.two && [1, 2, 4, 8].contains(&g.set) && PRESET >= (g.cost as i32) as f32).cloned());
+            }
+        }
+        let tier = std::sync::Arc::new(Self::temple_tier(&base, &groups));
+        if let Some(tw) = self.towers.iter_mut().find(|o| o.id == id) {
+            tw.temple = Some((groups, tier));
+        }
+    }
+
     /// `base` with the temple groups' mutators: their attacks and supports added, then every
     /// attack's damage / pierce / projectile speed and size / range changed. HYPOTHESIS
     /// P-TEMPLESTAT: ReloadTimeTowerMutator scales the interval by (1 - multiplier), each
     /// group's on top of the others (all mutation ids differ, so all stack).
     fn temple_tier(base: &Tier, groups: &[crate::data::TempleGroup]) -> Tier {
-        let mut t = base.clone();
-        let (mut dmg, mut pierce, mut speed, mut size, mut range, mut reload, mut wind) = (0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
-        for g in groups {
-            t.attacks.extend(g.attacks.iter().map(|(_, a)| a.clone()));
-            t.supports.extend(g.supports.iter().cloned());
-            t.round_cash += g.round_cash as f64;
-            dmg += g.damage;
-            pierce += g.pierce;
-            speed += g.speed;
-            size += g.size;
-            range += g.range;
-            reload *= 1.0 - g.reload;
-            wind += g.wind;
+        use crate::data::TempleMut;
+        // MonkeyTemple (SetTempleSacrificeValuesFromModel @0x180d42d60, ActOnSacrifice
+        // @0x180d3e140) inserts each applied group's mutators, in model order, into
+        // mutatorsToApply with a sorted insert (@0x181ffcdb0: binary search @0x18014ca90 by
+        // MonkeyTemple.SortMutators @0x180d43130, highest BehaviorMutator.priority first; an equal
+        // priority at the probed midpoint goes before it), then mutates the model in that order
+        // (OnTowerCreated @0x180d405c0: BehaviorMutator.MutateFromCache). So ReloadTime / Damage /
+        // ProjectileSpeed / Pierce / ProjectileSize / WindChance (20) change only the temple's own
+        // attacks, AddAttackTowerMutator (5) appends the sacrifice attacks in the scrambled order
+        // equal priorities get (the probe recording's weapon order: missiles v2, v1, plane, storms,
+        // arcane v3 / v2 / v1, missiles v3, glaives v3, blades, glaives v2 / v1; their weapons fire
+        // at the models' raw rates), and RangeTowerMutator (1) runs last, over all of them.
+        type Slot<'a> = (&'a TempleMut, Option<&'a crate::data::Attack>);
+        fn slot(l: &[Slot], lo: usize, hi: usize, p: u8) -> usize {
+            let half = (hi - lo) / 2;
+            let at = l[lo + half].0.p;
+            if at > p {
+                if half == 0 { hi } else { slot(l, lo + half, hi, p) }
+            } else if at == p {
+                lo + half
+            } else if half == 0 {
+                lo
+            } else {
+                slot(l, lo, lo + half, p)
+            }
         }
-        fn proj(p: &mut Proj, dmg: f32, pierce: f32, speed: f32, size: f32, wind: f32) {
-            if p.damage > 0.0 {
-                p.damage += dmg;
+        let mut order: Vec<Slot> = Vec::new();
+        for g in groups {
+            for m in &g.muts {
+                let i = if order.is_empty() { 0 } else { slot(&order, 0, order.len(), m.p) };
+                order.insert(i, (m, usize::try_from(m.a).ok().and_then(|a| g.attacks.get(a)).map(|(_, x)| x)));
             }
-            // HYPOTHESIS P-TEMPLEWIND: WindChanceTowerMutator raises the chance of the WindModels
-            // already on its projectiles (the temple's main blast carries one at chance 0).
-            if let Some(w) = p.wind.as_mut() {
-                w.chance = (w.chance + wind).min(1.0);
-            }
-            p.pierce += pierce;
-            p.speed *= 1.0 + speed;
-            p.radius *= 1.0 + size;
+        }
+        fn proj(p: &mut Proj, f: &dyn Fn(&mut Proj)) {
+            f(p);
             for c in &mut p.on_contact {
-                proj(&mut c.projectile, dmg, pierce, speed, size, wind);
+                proj(&mut c.projectile, f);
             }
             for c in &mut p.on_exhaust {
-                proj(&mut c.projectile, dmg, pierce, speed, size, wind);
+                proj(&mut c.projectile, f);
             }
         }
-        t.range += range;
-        for a in &mut t.attacks {
-            if a.range < 1e5 {
-                a.range += range;
+        fn each(t: &mut Tier, f: &dyn Fn(&mut Proj)) {
+            for a in &mut t.attacks {
+                for w in &mut a.weapons {
+                    proj(&mut w.projectile, f);
+                }
             }
-            for w in &mut a.weapons {
-                w.rate *= reload;
-                proj(&mut w.projectile, dmg, pierce, speed, size, wind);
+        }
+        let mut t = base.clone();
+        for (m, attack) in order {
+            let v = m.v;
+            match m.k.as_str() {
+                "AddAttack" => t.attacks.extend(attack.cloned()),
+                "AddBehaviorTo" => {
+                    t.supports.extend(m.supports.iter().cloned());
+                    t.round_cash += m.round_cash as f64;
+                }
+                // ReloadTimeTowerMutator.Mutator.Mutate (VERIFIED-DECOMP @0x180c225f0):
+                // rate - rate x multiplier.
+                "ReloadTime" => {
+                    for a in &mut t.attacks {
+                        for w in &mut a.weapons {
+                            w.rate -= w.rate * v;
+                        }
+                    }
+                }
+                "Damage" => each(&mut t, &|p| {
+                    if p.damage > 0.0 {
+                        p.damage += v;
+                    }
+                }),
+                // PierceTowerMutator (VERIFIED-DECOMP @0x180c22180): pierce + (float)(int)pierce.
+                "Pierce" => each(&mut t, &|p| p.pierce += (v as i32) as f32),
+                // ProjectileSpeedTowerMutator (VERIFIED-DECOMP @0x180c22830): speed x m + speed,
+                // one mutator after another (recording super_400: 1.12 x 1.24 x 1.36).
+                "ProjectileSpeed" => each(&mut t, &|p| p.speed += p.speed * v),
+                // ProjectileSizeTowerMutator (VERIFIED-DECOMP @0x180c21e70): radius x m + radius.
+                "ProjectileSize" => each(&mut t, &|p| p.radius += p.radius * v),
+                // HYPOTHESIS P-TEMPLEWIND: WindChanceTowerMutator raises the chance of the
+                // WindModels already on its projectiles (the temple's main blast carries one at 0).
+                "WindChance" => each(&mut t, &|p| {
+                    if let Some(w) = p.wind.as_mut() {
+                        w.chance = (w.chance + v).min(1.0);
+                    }
+                }),
+                // RangeTowerMutator (VERIFIED-DECOMP @0x180c22a70): the tower's and its attacks'
+                // range + rangeIncrease.
+                "Range" => {
+                    t.range += v;
+                    for a in &mut t.attacks {
+                        if a.range < 1e5 {
+                            a.range += v;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         t
@@ -11529,6 +12019,12 @@ impl Game {
             // firing or not.)
             if only_temp.is_none() {
                 self.track_supply_refresh(t);
+                let id = self.towers[t].id;
+                let now = self.sim_elapsed as i64;
+                let due: Vec<usize> = self.over_time.iter().filter(|(k, o)| k.0 == id && o.made != now).map(|(k, _)| k.1).collect();
+                for wi in due {
+                    self.over_time_step(t, wi);
+                }
             }
             let buff = self.buffs[t].clone();
             // ParagonTower.Finish (@0xd6f480): when the sacrifice ends it sets the tower's and its
@@ -11783,7 +12279,7 @@ impl Game {
             }
             let model_changed = self.towers[t].model_clock.is_some();
             self.towers[t].model_clock = None;
-            let pos = self.attack_pos(t);
+            let mut pos = self.attack_pos(t);
             // TargetTrackOrDefaultAcidPool: its points (in-range track segments, nearest the tower
             // first, shuffled with syncedRandom.Next(i, n)) are made again when the model changes,
             // a range change included, throwing or not (recording alch_052: the transformation at 121
@@ -11937,6 +12433,14 @@ impl Game {
                         continue;
                     }
                     self.process_bloons_before(stamp, early, round_clock, dots, emits, zones, shoves, leak_voice);
+                    // An Attack made after the plane's PathMovement: the plane moves first.
+                    if let Some(spec) = tier.air.as_ref().filter(|a| !a.patterns.is_empty()) {
+                        if self.towers[t].air.as_ref().is_some_and(|a| a.pm_moved != u64::MAX && a.pm_moved != self.sim_elapsed && !a.pm_before.contains(&attack.model_name)) && only_temp.is_none() {
+                            let spec = spec.clone();
+                            self.fly_pattern(t, &spec);
+                            pos = self.attack_pos(t);
+                        }
+                    }
                 }
                 let fresh_attack = self.towers[t].paragon.is_some() && self.sim_elapsed < self.towers[t].paragon_active_at
                     && !self.towers[t].paragon_kept.contains(&attack.model_name);
@@ -12888,7 +13392,20 @@ impl Game {
                         }
                         subs_full = live + self.towers[t].spawn_objs.len() >= m.max as usize;
                     }
-                    let at_limit = at_limit || subs_full
+                    // CheckAirUnitOverTrack.FilterEmission (VERIFIED-DECOMP @0x180c6df80; futureTime
+                    // unused): PathManager.GetPathSegmentsInRange (@0x180f6ba10) round the plane's 2D
+                    // position, range 5 (Path.IsSegmentInRange @0x180f6fa50: a targetable segment whose
+                    // point is under range^2 away) must find one.
+                    let off_track = weapon.over_track && {
+                        let p = self.attack_pos(t);
+                        !self.track_segs.iter().enumerate().any(|(pi, sg)| {
+                            sg.iter().enumerate().any(|(k, q)| {
+                                self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false)
+                                    && (q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]) < 5.0 * 5.0
+                            })
+                        })
+                    };
+                    let at_limit = at_limit || subs_full || off_track
                         // JungleVineLimitProjectile.FilterEmission (VERIFIED-DECOMP @0x180c7b880): a shot
                         // needs a limiter slot whose until-time is at or before roundTime.
                         || (weapon.vine_limit.is_some() && self.towers[t].weapons.get(wi).is_some_and(|st| !st.vine_until.is_empty() && !st.vine_until.iter().any(|&u| u <= self.round_clock)));
@@ -13272,6 +13789,12 @@ impl Game {
                             if let Some(fr) = tw.air.as_ref().filter(|_| tier.air.as_ref().is_some_and(|x| x.fighter.is_some()) && attack.fighter.is_some()).map(|a| a.fp_rot) {
                                 grot = Some(fr);
                                 dir = (fr - 90.0) * DEG2RAD;
+                            } else if let Some(pr) = tw.air.as_ref().filter(|_| tier.air.as_ref().is_some_and(|x| !x.patterns.is_empty()) && weapon.from_air && weapon.emission.kind != "Arc").map(|a| a.pm_rot) {
+                                // FireFromAirUnit.EmitRotation (VERIFIED-DECOMP @0x180c77a30): an Ace's shots
+                                // leave along its AirUnit rotation (recording ace_400 rt 32: the Dart Storm
+                                // missiles start along 90).
+                                grot = Some(pr);
+                                dir = (pr - 90.0) * DEG2RAD;
                             } else if tier.air.as_ref().is_some_and(|x| x.fighter.is_some()) && weapon.emission.kind != "Arc" {
                                 // (The plane tower's own Rotation stays 0: W lines.)
                                 let r0 = 0.0;
@@ -13355,7 +13878,13 @@ impl Game {
                             // (recording engineer_100: a Sentry's dart from its gun turned to -58.45).
                             // FireFromAirUnit.EmitPosition: a carrier plane's eject point turns with the plane
                             // (its Tower.Rotation stays 0; recording bucc_400 W / FM lines).
-                            let fighter_rot = tw.air.as_ref().filter(|_| tier.air.as_ref().is_some_and(|x| x.fighter.is_some())).map(|a| a.fp_rot);
+                            // (An Ace-style PathMovement plane's too: its AirUnit rotation, last frame's;
+                            // recording ace_000 rt 102.)
+                            let fighter_rot = tw.air.as_ref().and_then(|a| match tier.air.as_ref() {
+                                Some(x) if x.fighter.is_some() => Some(a.fp_rot),
+                                Some(x) if !x.patterns.is_empty() => Some(a.pm_rot),
+                                _ => None,
+                            });
                             // (Its release turns the attack once more, to where the Target is now.)
                             if let (false, true, Some(g)) = (attack.turn_body, attack.marker_z.is_some() || tier.attacks.iter().any(|a| a.face_middle), grot) {
                                 if tw.ent_rots.len() <= ai {
@@ -13486,7 +14015,10 @@ impl Game {
                             // ejecting from the fan club's point.
                             let fan_emission = buff.fan.as_ref().filter(|_| emission.kind == "Arc").map(|_| crate::data::Emission { count: 1, ..emission.clone() });
                             let emission = fan_emission.as_ref().unwrap_or(emission);
-                            let weapon_eject = buff.fan.as_ref().map_or(weapon.eject, |fc| fc.eject);
+                            // UseParentEject.EmitPosition (VERIFIED-DECOMP @0x180c978e0): the tower's
+                            // first Attack's first Weapon's eject point (recording super_probe/super_400
+                            // rt 228: the Sun Temple's Arcane Blasts from the main blast's, z 21.58).
+                            let weapon_eject = if weapon.parent_eject { tier.attacks.first().and_then(|a| a.weapons.first()).map_or(weapon.eject, |w| w.eject) } else { buff.fan.as_ref().map_or(weapon.eject, |fc| fc.eject) };
                             let mut buffed = buff.projectile(proj);
                             // VigilanteMutator.Mutate (VERIFIED-DISASM @0x18124f180): on an attack without
                             // fixedRange, its first TravelStrait's lifespan + loseLifeRangeBuff /
@@ -13641,24 +14173,29 @@ impl Game {
                             // so its x mirrors), then Vector3.AddDisplaySpaceHeight moves it ejectZ / tan 60 down
                             // the game's map (up the clone's).
                             // The offset is built whole, then added to the tower's position.
-                            let from = match grot.map(|r| body_rot.unwrap_or(r)) {
+                            // Weapon.GetEjectPosition (VERIFIED-DECOMP @0x180c4f390): onto the tower's
+                            // position unless an EmitPosition behaviour (FireFromAirUnit) gives the air
+                            // unit's (recording ace_040 rt 120: Ground Zero's bomb at the tower).
+                            let pos = if tier.air.as_ref().is_some_and(|x| !x.patterns.is_empty()) && !weapon.from_air { self.towers[t].pos } else { pos };
+                            // (A UseParentEject weapon's eject turns with the parent Weapon's transform.)
+                            // (rotateTower off: the first Attack's own stored rotation.)
+                            let parent_rot = if weapon.parent_eject { Some(self.towers[t].ent_rots.first().copied().flatten().or(self.towers[t].game_rot).unwrap_or(0.0)) } else { None };
+                            let from = match parent_rot.or(grot.or(fighter_rot).map(|r| body_rot.unwrap_or(r))) {
                                 // Weapon.GetEjectPosition: Vector2.Rotate by -rotation, AddDisplaySpaceHeight
                                 // (y - z / tan 60), then onto the tower's position.
                                 Some(r) => {
                                     let a = DEG2RAD * -r;
                                     let (sa, ca) = crt_sin_cos(a);
                                     let (mut ox, mut oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
-                                    // (An arm turned on its own, rotateTower off: its transform is the
-                                    // tower's child, so the eject turns by its relative rotation, then
-                                    // the tower's. Recording super_030 rt 973: an ulp in x otherwise.)
+                                    // (An arm turned on its own, rotateTower off: GetEjectPosition
+                                    // (VERIFIED-DECOMP @0x180c4f390) makes ONE Vector2.Rotate by the
+                                    // rotation its transform chain holds, the arm's stored rotation
+                                    // (tower + (arm - tower), as ApplyRotation keeps it relative), not
+                                    // two composed turns. Recording super_030 rt 973.)
                                     if let (false, Some(er), true) = (attack.turn_body, self.towers[t].ent_rots.get(ai).copied().flatten(), tier.attacks.iter().any(|a| a.face_middle)) {
-                                        let tr0 = self.towers[t].game_rot.unwrap_or(0.0);
-                                        let (s1, c1) = crt_sin_cos(DEG2RAD * -(er - tr0));
-                                        let (rx, ry) = (c1 * ex - s1 * ey, c1 * ey + s1 * ex);
-                                        let (s2, c2) = crt_sin_cos(DEG2RAD * -tr0);
-                                        (ox, oy) = (c2 * rx - s2 * ry, c2 * ry + s2 * rx);
-                                    }
-                                    // FlipFollowPath.EmitPosition (VERIFIED-DISASM @0xc81b60): thrown
+                                        let (s1, c1) = crt_sin_cos(DEG2RAD * -er);
+                                        (ox, oy) = (c1 * ex - s1 * ey, c1 * ey + s1 * ex);
+                                    }                                    // FlipFollowPath.EmitPosition (VERIFIED-DISASM @0xc81b60): thrown
                                     // with the left hand, the base point moves by (0 - 2 ejectX, 0 -
                                     // 2 ejectY) on the model's flipped axes, turned with the tower
                                     // (recording boomerang_000_left: the throw starts 6.94 across).
@@ -13687,7 +14224,7 @@ impl Game {
                                 spec.radius = range + proj.link_offset;
                                 // (From the eject point too: recording tack_400, the ring sits
                                 // ejectZ / tan 60 below the tower.)
-                                self.emit_z = ez + self.tower_height(t);
+                                self.emit_z = ez + self.shot_base_z(t, weapon.from_air);
                                 self.emit_target = (target_id != 0).then_some(target_id);
                                 self.emit(from, dir, emission, &spec, crit, tiers, owner);
                                 // EjectEffectModel: the muzzle effect at the eject point (visual).
@@ -13718,7 +14255,12 @@ impl Game {
                                 // (Not from a carrier plane: FireFromAirUnit fires along the plane; recording
                                 // bucc_400 rt 31, the missile leaves straight up.)
                                 let fighter = tier.air.as_ref().is_some_and(|x| x.fighter.is_some());
-                                let seek_launch = bloon_from.is_none() && proj.seek.is_some() && !attack.rotate && target_id != 0 && !fighter;
+                                // (Nor an Ace's: along its AirUnit rotation; recording ace_400 rt 32.)
+                                let ace = tier.air.as_ref().is_some_and(|x| !x.patterns.is_empty()) && weapon.from_air;
+                                // (Nor a SingleEmmisionTowardsTarget's: its GetDirection is (target - eject)
+                                // turned by its offset; recording super_probe/super_400 rt 229, the Sun
+                                // Temple's Arcane Blasts 40 / 80 / 120 either side.)
+                                let seek_launch = bloon_from.is_none() && proj.seek.is_some() && !attack.rotate && target_id != 0 && !fighter && !ace && !emission.towards;
                                 let grot = if let (Some(f), Some(b)) = (bloon_from, bloon_at) {
                                     let r = RAD2DEG * crt_atan2(b[0] - f[0], -(b[1] - f[1]));
                                     dir = (r - 90.0) * DEG2RAD;
@@ -13730,6 +14272,10 @@ impl Game {
                                     // turned with the plane; recording bucc_400 rt 147-148. With it, round the
                                     // plane's rotation: recording bucc_420_close rt 138, -113.97 +- 45.)
                                     Some(if emission.air_rot { self.towers[t].air.as_ref().map_or(0.0, |a| a.fp_rot) } else { 0.0 })
+                                } else if ace && emission.kind == "Arc" {
+                                    // (An Ace's the same, round its AirUnit rotation: recording ace_400 rt 133,
+                                    // the 16-dart burst at multiples of 22.5 exactly.)
+                                    Some(if emission.air_rot { self.towers[t].air.as_ref().map_or(0.0, |a| a.pm_rot) } else { 0.0 })
                                 } else {
                                     grot
                                 };
@@ -13740,10 +14286,35 @@ impl Game {
                                 // bucc_upgrades_r30 rt 1306: 3 apart across x, flying at -151.11).
                                 let disp = !weapon.disp_rot && emission.kind == "Parallel" && !body_turns && attack.weapons.iter().any(|w| w.disp_rot);
                                 self.emit_rot = if disp { Some(self.towers[t].game_rot.unwrap_or(0.0)) } else { grot };
-                                self.emit_z = ez + self.tower_height(t);
+                                self.emit_z = ez + self.shot_base_z(t, weapon.from_air);
                                 self.emit_target = (target_id != 0).then_some(target_id);
                                 let s0 = self.projectiles.len();
-                                self.emit(from, dir, emission, proj, crit, tiers, owner);
+                                if let Some(bf) = weapon.burst.as_ref().filter(|b| b.over_time && b.air) {
+                                    // EmissionOverTime.Emit: currCount = count, lastEmit = 0,
+                                    // timeFrames = (int)(timeBetween x 60), the initial delay's start
+                                    // once; its Process emits in this frame too.
+                                    let now = self.sim_elapsed as i64;
+                                    let key = (self.towers[t].id, wi);
+                                    let started = self.over_time.get(&key).map_or(0, |o| o.started);
+                                    let (started, done) = if started < 1 { (now, false) } else { (started, self.over_time.get(&key).is_some_and(|o| o.done)) };
+                                    self.over_time.insert(key, OverTime {
+                                        left: bf.count,
+                                        last: 0,
+                                        frames: bf.frames as i64,
+                                        delay: bf.delay as i64,
+                                        started,
+                                        done,
+                                        made: now,
+                                        emission: emission.clone(),
+                                        proj: proj.clone(),
+                                        crit,
+                                        tiers,
+                                        owner,
+                                    });
+                                    self.over_time_step(t, wi);
+                                } else {
+                                    self.emit(from, dir, emission, proj, crit, tiers, owner);
+                                }
                                 if let (true, Some(g)) = (disp, grot) {
                                     let gd = game_dir(g);
                                     for pr in &mut self.projectiles[s0..] {
@@ -13755,7 +14326,9 @@ impl Game {
                                 }
                                 // Weapon-level ThrowMarkerOffsets on a carrier plane: shot k of the throw
                                 // from marker k (recording bucc_400 rt 110: the twin darts 5 apart).
-                                if let (true, Some(fr), true) = (fighter, self.towers[t].air.as_ref().map(|a| a.fp_rot), emission.markers.len() > 1) {
+                                // (An Ace's too, turned with its AirUnit rotation: recording ace_400 rt 31, the
+                                // two Operation: Dart Storm shots 26 apart.)
+                                if let (true, Some(fr), true) = (fighter || fighter_rot.is_some(), if fighter { self.towers[t].air.as_ref().map(|a| a.fp_rot) } else { fighter_rot }, emission.markers.len() > 1) {
                                     let n = emission.markers.len();
                                     let base = (self.towers[t].weapons[w].emits as usize).saturating_sub(1) % n;
                                     let (sa, ca) = crt_sin_cos(DEG2RAD * -fr);
@@ -13989,11 +14562,11 @@ impl Game {
                             // HYPOTHESIS P-OVERTIME: EmissionOverTimeModel repeats the shot count-1 more
                             // times, `frames` apart, at the same target. Only instant shots are
                             // delayed; travelling ones leave together.
-                            if let Some(bf) = weapon.burst.as_ref().filter(|b| b.over_time && b.count > 1) {
+                            if let Some(bf) = weapon.burst.as_ref().filter(|b| b.over_time && !b.air && b.count > 1) {
                                 for k in 1..bf.count {
                                     let s0 = self.projectiles.len();
                                     self.emit_rot = grot;
-                                    self.emit_z = ez + self.tower_height(t);
+                                    self.emit_z = ez + self.shot_base_z(t, weapon.from_air);
                                 self.emit_target = (target_id != 0).then_some(target_id);
                                     self.emit(from, dir, emission, proj, crit, tiers, owner);
                                     self.emit_rot = None;
@@ -14236,7 +14809,7 @@ impl Game {
                                     None => self.tracers.push((from, to)),
                                 }
                             }
-                            if proj.seek.is_some() && !ambient {
+                            if (proj.seek.is_some() || proj.adora.is_some()) && !ambient {
                                 for pr in &mut self.projectiles[start..] {
                                     // (A throw whose target died keeps that Target, invalid, until its first
                                     // look 5 frames on: recording sub_001, a dart flies straight past a live Red.)
@@ -15433,6 +16006,17 @@ impl Game {
             **s = *t;
         }
         off
+    }
+
+    /// The z a weapon's shots start from before its ejectZ: a FireFromAirUnit weapon's is its
+    /// PathMovement plane's (EmitPosition: the AirUnit transform, 0 until its first Process
+    /// sets 250; recordings ace_000 / ace_004: -3.6 on the first frame, 246.4 after), else the
+    /// tower's.
+    fn shot_base_z(&self, t: usize, from_air: bool) -> f32 {
+        if from_air && self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| !a.patterns.is_empty()) {
+            return self.towers[t].air.as_ref().map_or(0.0, |a| if a.pm_cur != PM_NONE { 250.0 } else { 0.0 });
+        }
+        self.tower_height(t)
     }
 
     fn tower_height(&self, t: usize) -> f32 {
@@ -17023,7 +17607,16 @@ impl Game {
                 curvy_inc = (self.synced_double() * 2147483647.0).round() as i64 % 2 == 0;
             }
             self.create_seq += 1;
+            // FallToGround.SetStartPosition (VERIFIED-DECOMP @0x180cbce30): groundHeight =
+            // Map.GetTerrainHeight (0 here: no area heights) + groundOffset + 2, speed = (z -
+            // (groundOffset + 2)) / timeToTake.
+            let fall = spec.fall.map(|(time, off, _)| {
+                let o = off + 2.0;
+                ((self.emit_height() - o) / time, 0.0 + o)
+            });
             self.projectiles.push(Projectile {
+                adora: None,
+                fall,
                 scale_t: 0.0,
                 radius0: spec.radius,
                 uid: self.next_uid,
@@ -17071,7 +17664,7 @@ impl Game {
                         // (An Instant shot with neither has no lifespan: it stays till its target goes,
                         // destroyIfInvalid, or its pierce does; recording desperado_050 rt 105, the mark
                         // shot on its bloon.)
-                        let life = if spec.instant && life <= 0.0 { f32::INFINITY } else { life };
+                        let life = if (spec.instant || spec.fall.is_some()) && life <= 0.0 { f32::INFINITY } else { life };
                         let f = life * FPS;
                         if f.is_finite() { (f as f64).round_ties_even() as f32 } else { f }
                     }
@@ -17454,6 +18047,11 @@ impl Game {
         self.compute_danger();
         self.grave_zones();
         self.towers_phase(None, &cd_speed, &mut early, round_clock, &mut dots, &mut emits, &zones, &shoves, &mut leak_voice);
+        // PathMovement (registered on the simulation's own process list in its ctor, @0x180d59f80)
+        // runs after the towers: a plane's weapons fire from where it was last frame, at its last
+        // rotation (FireFromAirUnit.EmitPosition / EmitRotation; recording ace_000: the first burst
+        // from the tower at rotation 0, rt 102's from rt 101's spot turned by its 6.54).
+        self.fly_patterns();
         // InstantDamageEmission.Process: this frame's instant-damage shots hit their targets now,
         // before the bloons move. INFERRED: after every tower has acted (the game's emission
         // processes after its own weapon; the same unless two towers shoot one bloon that frame).
@@ -17759,6 +18357,12 @@ impl Game {
             }
         } else {
             self.track_targets(None);
+            // AdoraTrackTarget.Process, after the bloons have moved (the process list has them
+            // first: recording ace_003 rt 27, a dart turns for its Lead's new spot).
+            let ad: Vec<usize> = (0..self.projectiles.len()).filter(|&p| self.projectiles[p].spec.adora.is_some() && self.projectiles[p].born < self.sim_elapsed * 4).collect();
+            for p in ad {
+                self.adora_step(p);
+            }
             // (Still in process-list order: recording druid_502 rt 1569, Superstorm 1205's ball
             // spawn draws before Ball Lightning 2252's bolt.)
             let mut ivs: Vec<u64> = self.projectiles.iter().filter(|pr| pr.spec.on_interval.is_some()).map(|pr| pr.uid).collect();
@@ -18766,6 +19370,8 @@ mod tests {
         let mut frames: Vec<(i64, Vec<(String, f32)>, Vec<(u64, usize, i64)>)> = Vec::new();
         // Per frame: positions of bloons (0) and projectiles (1), in the game's frame.
         let mut places: Vec<Vec<(u8, u32, u32)>> = Vec::new();
+        // SimRecorder PM lines (PathMovement planes' AirUnit transform): compared as kind 2.
+        let mut has_pm = false;
         // Per frame: Path.bloonsList as (type, distance), when recorded.
         let mut lists: Vec<Option<Vec<(String, u32)>>> = Vec::new();
         let mut ids: std::collections::HashMap<u64, (String, u32)> = Default::default();
@@ -18819,6 +19425,10 @@ mod tests {
                     *lists.last_mut().unwrap() = Some(f[2..].iter().filter_map(|x| ids.get(&x.parse::<u64>().unwrap()).cloned()).collect());
                 }
                 Some("P") if !frames.is_empty() => places.last_mut().unwrap().push((1, bits(f[2].parse().unwrap()), bits(f[3].parse().unwrap()))),
+                Some("PM") if !frames.is_empty() => {
+                    has_pm = true;
+                    places.last_mut().unwrap().push((2, bits(f[2].parse().unwrap()), bits(f[3].parse().unwrap())));
+                }
                 Some("W") if !frames.is_empty() => frames.last_mut().unwrap().2.push((f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap())),
                 _ => {}
             }
@@ -18878,6 +19488,9 @@ mod tests {
             // (recording super_400: the Sun Temple's first shot at rt 224).
             // (lastSacrificed is Simulation.time as the tower is made: 0 here, before the first
             // frame; the clone's mute counts from the frame it is placed in, so take that off.)
+            // A tower made at a temple tier presets its sacrifice worth (OnTowerCreated, see
+            // temple_created) instead of consuming towers in range.
+            g.temple_created(t);
             if let Some(d) = g.tier(t).and_then(|x| x.temple.as_ref()).map(|tp| tp.delay) {
                 // (The recording's first frame number is Simulation.time then: F 16 at rt 1.)
                 let made_at = first_time.unwrap_or(1) - frames.first().map_or(1, |f| f.0 as i64);
@@ -19047,7 +19660,10 @@ mod tests {
                 }
             }
             let mut pg = places[fi].clone();
-            let mut pc: Vec<(u8, u32, u32)> = g.bloons.iter().map(|b| (0, bits(b.pos[0]), bits(-b.pos[1]))).chain(g.projectiles.iter().map(|p| (1, bits(p.pos[0]), bits(-p.pos[1])))).chain(g.towers.iter().flat_map(|t| t.orbit.iter().flat_map(|o| o.glaives.iter())).map(|p| (1, bits(p[0]), bits(-p[1])))).chain(g.hooks.iter().map(|h| (1, bits(h.pos[0]), bits(-h.pos[1])))).collect();
+            let mut pc: Vec<(u8, u32, u32)> = g.bloons.iter().map(|b| (0, bits(b.pos[0]), bits(-b.pos[1]))).chain(g.projectiles.iter().map(|p| (1, bits(p.pos[0]), bits(-p.pos[1])))).chain(g.towers.iter().flat_map(|t| t.orbit.iter().flat_map(|o| o.glaives.iter())).map(|p| (1, bits(p[0]), bits(-p[1])))).chain(g.hooks.iter().map(|h| (1, bits(h.pos[0]), bits(-h.pos[1]))))
+                .chain((0..g.towers.len()).filter(|&i| has_pm && g.tier(i).and_then(|tr| tr.air.as_ref()).is_some_and(|a| !a.patterns.is_empty()))
+                    .filter_map(|i| g.towers[i].air.as_ref().map(|a| (2, bits(a.pos[0]), bits(-a.pos[1])))))
+                .collect();
             pg.sort();
             pc.sort();
             if pg != pc {
@@ -19130,7 +19746,7 @@ mod tests {
       clone {:?}", a, b);
         }
         if let Some((rt, a, b)) = &first_place {
-            let show = |v: &Vec<(u8, u32, u32)>, o: &Vec<(u8, u32, u32)>| v.iter().filter(|x| !o.contains(x)).map(|&(k, x, y)| (if k == 0 { "bloon" } else { "proj" }, f32::from_bits(x), f32::from_bits(y))).collect::<Vec<_>>();
+            let show = |v: &Vec<(u8, u32, u32)>, o: &Vec<(u8, u32, u32)>| v.iter().filter(|x| !o.contains(x)).map(|&(k, x, y)| (match k { 0 => "bloon", 1 => "proj", _ => "plane" }, f32::from_bits(x), f32::from_bits(y))).collect::<Vec<_>>();
             eprintln!("    first position difference at roundTime {rt}: only in game {:?}, only in clone {:?}", show(a, b), show(b, a));
         }
         // The end screens' player stats after the replay (compare a recording's end-screen text).

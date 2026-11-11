@@ -1139,6 +1139,15 @@ pub struct Weapon {
     /// JungleVineLimitProjectileModel: [limit, delayInFrames].
     #[serde(default)]
     pub vine_limit: Option<[i64; 2]>,
+    /// CheckAirUnitOverTrackModel: only while the plane is over the track.
+    #[serde(default)]
+    pub over_track: bool,
+    /// FireFromAirUnitModel: ejected from the air unit (else from the tower itself).
+    #[serde(default)]
+    pub from_air: bool,
+    /// UseParentEjectModel: shots leave from the tower's first Attack's first Weapon's eject.
+    #[serde(default)]
+    pub parent_eject: bool,
     /// SendToBankModel emission: the cash goes into the tower's bank instead of the map.
     #[serde(default)]
     pub to_bank: bool,
@@ -1319,6 +1328,12 @@ pub struct BurstFire {
     /// BurstWeaponBehaviorModel.alwaysEmptyClip: a partly used clip fires on ahead when ready.
     #[serde(default)]
     pub always_empty: bool,
+    /// EmissionOverTimeModel.initialFireDelay x 60.
+    #[serde(default)]
+    pub delay: f32,
+    /// On an AttackAirUnitModel: each shot leaves from the air unit (EmissionOverTime.Process).
+    #[serde(default)]
+    pub air: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1922,6 +1937,12 @@ pub struct Proj {
     /// ScaleProjectileOverTimeModel [baseScale, maxScale, scalePerSecond].
     #[serde(default)]
     pub scale_over_time: Option<[f32; 3]>,
+    /// FallToGroundModel: (timeToTake, groundOffset, expireOnContact).
+    #[serde(default)]
+    pub fall: Option<(f32, f32, bool)>,
+    /// AdoraTrackTargetModel (Neva-Miss darts).
+    #[serde(default)]
+    pub adora: Option<AdoraSpec>,
     /// FilterAllExceptTargetModel: hits only its target bloon.
     #[serde(default)]
     pub only_target: bool,
@@ -2303,10 +2324,17 @@ pub struct TakeOff {
 
 #[derive(Deserialize, Clone)]
 pub struct AirPattern {
-    /// Circle, FigureEight, Infinite or Centered.
+    /// Circle, FigureEight, Infinite (FigureEightPatternModel.rotated) or Centered.
     pub mode: String,
     pub rx: f32,
     pub ry: f32,
+    /// CirclePatternModel / CenterElipsePatternModel.reverse: round the other way.
+    #[serde(default)]
+    pub reverse: bool,
+    /// PathSupplier.UseTowerPosition: the path is round the tower (FigureEightPatternModel's
+    /// useTowerPosition; CenterElipsePattern: no, round its selected point).
+    #[serde(default = "yes")]
+    pub use_tower: bool,
 }
 
 #[derive(Deserialize)]
@@ -2466,31 +2494,33 @@ pub struct TempleGroup {
     /// AddAttackTowerMutatorModel: (attack family, attack).
     #[serde(default)]
     pub attacks: Vec<(String, Attack)>,
-    /// AddBehaviorToTowerMutatorModel support zones.
+    /// Every mutator, in model order (see Game::temple_tier).
+    #[serde(default)]
+    pub muts: Vec<TempleMut>,
+}
+
+/// One TowerMutatorModel of a temple group.
+#[derive(Deserialize, Clone)]
+pub struct TempleMut {
+    /// BehaviorMutator.priority (Reload / Damage / Speed / Pierce / Size / Wind 20,
+    /// AddBehavior 10, AddAttack 5, Range 1).
+    pub p: u8,
+    /// AddAttack: index into the group's `attacks`; else -1.
+    pub a: i32,
+    /// The model type without "TowerMutatorModel" (AddAttack, ReloadTime, ProjectileSpeed, ...).
+    pub k: String,
+    /// damage / pierce / speedModifier / sizeModifier / rangeIncrease / multiplier / windChance.
+    #[serde(default)]
+    pub v: f32,
+    /// conditionalId CheckTempleUnderLevelModel (tower set, cost): applied on a sacrifice only
+    /// while the temple holds that set with worth < cost (VERIFIED-DECOMP @0x180c1ce10).
+    #[serde(default)]
+    pub u: Option<(u32, f32)>,
+    /// AddBehaviorToTowerMutatorModel support zones / PerRoundCashBonusTowerModel.cashPerRound.
     #[serde(default)]
     pub supports: Vec<Support>,
-    /// AddBehaviorToTowerMutatorModel PerRoundCashBonusTowerModel.cashPerRound.
     #[serde(default)]
     pub round_cash: f32,
-    /// DamageTowerMutatorModel.damage, PierceTowerMutatorModel.pierce.
-    #[serde(default)]
-    pub damage: f32,
-    #[serde(default)]
-    pub pierce: f32,
-    /// ProjectileSpeedTowerMutatorModel.speedModifier, ProjectileSizeTowerMutatorModel.sizeModifier.
-    #[serde(default)]
-    pub speed: f32,
-    #[serde(default)]
-    pub size: f32,
-    /// RangeTowerMutatorModel.rangeIncrease.
-    #[serde(default)]
-    pub range: f32,
-    /// ReloadTimeTowerMutatorModel.multiplier.
-    #[serde(default)]
-    pub reload: f32,
-    /// WindChanceTowerMutatorModel.windChance: added to the chance of its WindModels.
-    #[serde(default)]
-    pub wind: f32,
 }
 
 /// DamageModifierWrath.GetDamageAdditive (VERIFIED-DISASM @0xcd45f0): + active bloons' total
@@ -2561,6 +2591,19 @@ pub struct Seek {
     pub constantly: bool,    /// TrackTargetWithinTimeModel.timeInFrames: the clamped turn is divided by this / elapsed.
     #[serde(default)]
     pub within: Option<f32>,
+}
+
+/// AdoraTrackTargetModel: rotation (degrees a frame), speeds / acceleration (units a second),
+/// the angles that switch accelerating, lifespan (seconds).
+#[derive(Deserialize, Clone)]
+pub struct AdoraSpec {
+    pub rotation: f32,
+    pub min: f32,
+    pub max: f32,
+    pub accel: f32,
+    pub accel_in: f32,
+    pub decel_gt: f32,
+    pub lifespan: f32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2761,6 +2804,9 @@ pub struct FollowPath {
     pub speed: f32,
     #[serde(default = "yes")]
     pub destroy_at_end: bool,
+    /// A TravelStraitModel's speed beside it (0: none): see the path move.
+    #[serde(default)]
+    pub straight: f32,
 }
 
 #[derive(Deserialize, Clone)]

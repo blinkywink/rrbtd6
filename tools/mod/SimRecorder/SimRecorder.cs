@@ -137,6 +137,7 @@ public class Recorder : MelonMod
     internal static StreamWriter Out;
     internal static StreamWriter FxOut;
     static readonly HashSet<int> shotTaken = new();
+    internal static readonly HashSet<string> weaponNamed = new();
     internal static int Recorded;
     static int phase, wait;
     static string dir;
@@ -1200,6 +1201,22 @@ static class SimulatePatch
                     for (int q = 0; mb != null && q < mb.Count && fm == null; q++)
                         fm = mb[q]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.FighterMovement>();
                 }
+                // Ace-style planes' PathMovement each frame (after it ran): "PM tower x y z rotation
+                // scaleX scaleY scaleZ t onPath takingOff tt ttpf pitch lastBank tpf onTheMove"
+                // (the AirUnit's TransformBehavior; FireFromAirUnit ejects from it).
+                for (int k = 0; ftb != null && k < ftb.Count; k++)
+                {
+                    var au = ftb[k]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.AirUnit>();
+                    var mb = au?.modelBehaviors;
+                    for (int q = 0; mb != null && q < mb.Count; q++)
+                    {
+                        var pm = mb[q]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.PathMovement>();
+                        var tr = au.transform;
+                        if (pm == null || tr == null) continue;
+                        var p = tr.position; var sc = tr.scale;
+                        w.WriteLine($"PM {t.Id.Id} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(p.Z)} {Recorder.F(tr.rotation.value)} {Recorder.F(sc.X)} {Recorder.F(sc.Y)} {Recorder.F(sc.Z)} {Recorder.F(pm.t)} {(pm.onPath ? 1 : 0)} {(pm.takingOff ? 1 : 0)} {Recorder.F(pm.tt)} {Recorder.F(pm.ttpf)} {Recorder.F(pm.pitch)} {Recorder.F(pm.lastBank)} {Recorder.F(pm.tpf)} {(pm.onTheMove ? 1 : 0)}");
+                    }
+                }
                 if (fm != null)
                     w.WriteLine($"FM {t.Id.Id} {Recorder.F(fm.transformPosition.x)} {Recorder.F(fm.transformPosition.y)} {Recorder.F(fm.rotation.x)} {Recorder.F(fm.rotation.y)} {Recorder.F(fm.targetPosition.x)} {Recorder.F(fm.targetPosition.y)} {fm.timer} {(fm.flyoverEngaged ? 1 : 0)}");
                 int i = 0;
@@ -1209,6 +1226,10 @@ static class SimulatePatch
                     var wp = l[k]?.TryCast<Weapon>();
                     if (wp == null) continue;
                     w.WriteLine($"W {t.Id.Id} {i++} {wp.lastEmission} {wp.animationStartedAt} {wp.rateFrames} {Recorder.F(wp.missedRate)} {Recorder.F(t.Rotation)} {Recorder.F(t.Position.X)} {Recorder.F(t.Position.Y)}");
+                    // WN tower index weapon attack: each weapon slot's model names, once (maps the W
+                    // indices to models, e.g. the Sun Temple's mutator-added attacks).
+                    if (Recorder.weaponNamed.Add($"{t.Id.Id}:{i - 1}:{wp.weaponModel?.name}"))
+                        w.WriteLine($"WN {t.Id.Id} {i - 1} {wp.weaponModel?.name ?? "-"} {wp.mainAttack?.attackModel?.name ?? "-"}");
                     // FilterTargetAngleFilter's inputs each frame: "FA tower weapon displayRotation towerZ
                     // timeOfLastTargetUpdate lastFireResult" (FilterEmission @0x180c76350 reads
                     // display.node.rotation and the 3D angle from Tower.Position to Bloon.Position).

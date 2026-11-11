@@ -599,7 +599,13 @@ def main():
                     # FollowPathModel.easePath: walked instead; its x over its largest x picks the
                     # fraction of the path (Kylie Boomerang: out and back).
                     "ease": [[q[0], q[1]] for q in deref(fp["easePath"])] if deref(fp.get("easePath")) else None}
-            ts = {"speed": fp["speed"]}
+            # With a TravelStraitModel too (the Sun Temple's glaives), each frame's path point
+            # gets one TravelStrait step along the direction on top, and its lifespan holds.
+            if ts:
+                path["straight"] = ts.get("speed", 0.0)
+                ts = {"speed": fp["speed"], "lifespan": ts.get("lifespan", 0.0)}
+            else:
+                ts = {"speed": fp["speed"]}
         arrive = None
         if pb.get("ArriveAtTargetModel"):
             af = pb["ArriveAtTargetModel"][0]["f"]
@@ -734,7 +740,15 @@ def main():
                                "lifetime": bool(tf.get("useLifetimeAsDistance")),
                                "constantly": bool(tf.get("constantlyAquireNewTarget")),
                                "within": tf.get("timeInFrames") if k == "TrackTargetWithinTimeModel" else None}
-        if hero_track and "seek" not in out:
+        # AdoraTrackTargetModel: its own homing (AdoraTrackTarget, ported), on top of TravelStrait.
+        if pb.get("AdoraTrackTargetModel"):
+            af = pb["AdoraTrackTargetModel"][0]["f"]
+            out["adora"] = {"rotation": af.get("rotation", 0.0), "min": af.get("minimumSpeed", 0.0),
+                            "max": af.get("maximumSpeed", 0.0), "accel": af.get("acceleration", 0.0),
+                            "accel_in": af.get("accelerateInAngle", 0.0),
+                            "decel_gt": af.get("startDeceleratingIfAngleGreaterThan", 0.0),
+                            "lifespan": af.get("lifespan", 0.0)}
+        if hero_track and "seek" not in out and not pb.get("AdoraTrackTargetModel"):
             out["seek"] = {"distance": 9999.0, "turn_rate": hero_track.get("rotation", 9.0) * 60.0,
                            "max_angle": 360.0, "new_targets": True}
         if pb.get("WindModel"):
@@ -777,6 +791,10 @@ def main():
                                    # disableRotateWithPathDirection (the Necromancer's undead): it keeps the
                                    # rotation it was made with instead of turning along the track.
                                    "fixed_rotation": bool(tf.get("disableRotateWithPathDirection"))}
+        # FallToGroundModel (Monkey Ace pineapples): [timeToTake, groundOffset, expireOnContact].
+        if pb.get("FallToGroundModel"):
+            ff = pb["FallToGroundModel"][0]["f"]
+            out["fall"] = [ff.get("timeToTake", 1.0), ff.get("groundOffset", 0.0), bool(ff.get("expireOnContact"))]
         # ScaleProjectileOverTimeModel: [baseScale, maxScale, scalePerSecond]; the collision radius
         # is scale x the model's radius.
         if pb.get("ScaleProjectileOverTimeModel"):
@@ -1217,7 +1235,8 @@ def main():
                 # STAND-IN P-OVERTIME: initialFireDelay isn't modelled.
                 eot = deref(w["f"].get("emission"))
                 if eot and eot["type"] == "EmissionOverTimeModel":
-                    burst = {"count": eot["f"].get("count", 1), "frames": eot["f"].get("timeBetween", 0.0) * 60.0, "over_time": True}
+                    burst = {"count": eot["f"].get("count", 1), "frames": eot["f"].get("timeBetween", 0.0) * 60.0, "over_time": True,
+                             "delay": eot["f"].get("initialFireDelay", 0.0) * 60.0, "air": b["type"] == "AttackAirUnitModel"}
                 for x in items(w["f"].get("behaviors")):
                     if x and x["type"] == "BurstWeaponBehaviorModel":
                         burst = {"count": x["f"]["count"], "frames": x["f"].get("intervalFrames", 0), "always_empty": bool(x["f"].get("alwaysEmptyClip"))}
@@ -1246,6 +1265,11 @@ def main():
                 # @0x180c7b790): `limit` slots of until-times; a shot needs one at or before roundTime.
                 vl = next((x["f"] for x in items(w["f"].get("behaviors")) if x and x["type"] == "JungleVineLimitProjectileModel"), None)
                 vine_limit = [vl.get("limit", 0), vl.get("delayInFrames", 0)] if vl else None
+                # CheckAirUnitOverTrackModel: fires only with the plane over the track.
+                over_track = any(x and x["type"] == "CheckAirUnitOverTrackModel" for x in items(w["f"].get("behaviors")))
+                # FireFromAirUnitModel: the shot's eject point is the air unit's (EmitPosition).
+                from_air = any(x and x["type"] == "FireFromAirUnitModel" for x in items(w["f"].get("behaviors")))
+                parent_eject = any(x and x["type"] == "UseParentEjectModel" for x in items(w["f"].get("behaviors")))
                 # Broadside guns (Buccaneer): Emission*RotationOff{Tower,Display}*Model fire at the
                 # tower's facing + offsetRotation; FireWhenAlternateWeaponIsReadyModel fires only
                 # with the main gun; FilterTargetAngleFilterModel needs a bloon in its arc.
@@ -1331,7 +1355,7 @@ def main():
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "LineEffectModel"), None),
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
-                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit,
+                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "over_track": over_track, "from_air": from_air, "parent_eject": parent_eject,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
                                 # the emission is laid out on the tower's rotation, each shot then sent at
@@ -1943,20 +1967,27 @@ def main():
                              "PursuitSettingModel": "Pursuit"}.get(x["type"]) if x else None
                         if m and m not in air_modes:
                             air_modes.append(m)
-                        if "patterns" not in air or not x or not x["f"].get("isSelectable"):
+                        if "patterns" not in air or not x:
                             continue
+                        # (A pattern the player can't pick still flies its tower: the Sun Temple's
+                        # plane circles; recording super_probe/super_400 PM lines.)
+                        selectable = bool(x["f"].get("isSelectable"))
                         xf = x["f"]
                         p = None
                         if x["type"] == "CirclePatternModel":
-                            p = {"mode": "Circle", "rx": xf["radius"], "ry": xf["radius"]}
+                            p = {"mode": "Circle", "rx": xf["radius"], "ry": xf["radius"],
+                                 "reverse": bool(xf.get("reverse"))}
                         elif x["type"] == "FigureEightPatternModel":
                             p = {"mode": "Infinite" if xf.get("rotated") else "FigureEight",
-                                 "rx": xf["radius"], "ry": xf["radius"]}
+                                 "rx": xf["radius"], "ry": xf["radius"],
+                                 "use_tower": bool(xf.get("useTowerPosition", True))}
                         elif x["type"] == "CenterElipsePatternModel":
-                            p = {"mode": "Centered", "rx": xf["widthRadius"], "ry": xf["heightRadius"]}
-                        if p and p["mode"] not in air_modes:
+                            p = {"mode": "Centered", "rx": xf["widthRadius"], "ry": xf["heightRadius"],
+                                 "reverse": bool(xf.get("reverse")), "use_tower": False}
+                        if p and p["mode"] not in air_modes and p["mode"] not in [q["mode"] for q in air["patterns"]]:
                             air["patterns"].append(p)
-                            air_modes.append(p["mode"])
+                            if selectable:
+                                air_modes.append(p["mode"])
         # BeastHandlerLeashModel: the pet(s) this tier leashes (towerModel / towerModelSecond),
         # spawned as permanent sub-towers inside the handler's range (HYPOTHESIS P-PET).
         pets = []
@@ -2046,36 +2077,40 @@ def main():
             if not (temple is not None and b and b["type"].startswith("TempleTowerMutatorGroupTier")):
                 continue
             g = {"set": b["f"]["towerSet"], "cost": b["f"]["cost"], "two": b["type"].endswith("TwoModel"),
-                 "attacks": [], "supports": [], "round_cash": 0.0, "damage": 0.0, "pierce": 0.0, "speed": 0.0,
-                 "size": 0.0, "range": 0.0, "reload": 0.0, "wind": 0.0}
+                 "attacks": [], "muts": []}
             for m in items(b["f"]["mutators"]):
                 if not m:
                     continue
                 mf = m["f"]
+                # Each mutator on its own (MonkeyTemple applies them one by one, in priority
+                # order, and evaluates each one's conditionalId on a sacrifice): its
+                # BehaviorMutator.priority (each Initialise's BaseMutator ctor, VERIFIED-DECOMP, e.g.
+                # AddAttackTowerMutator.Initialise @0x180c1c1f0: 5), kind, value, the attack it adds
+                # (index into `attacks`, else -1) and its CheckTempleUnderLevel.
+                MUT_VALUE = {"DamageTowerMutatorModel": "damage", "PierceTowerMutatorModel": "pierce",
+                             "ProjectileSpeedTowerMutatorModel": "speedModifier",
+                             "ProjectileSizeTowerMutatorModel": "sizeModifier", "RangeTowerMutatorModel": "rangeIncrease",
+                             "ReloadTimeTowerMutatorModel": "multiplier", "WindChanceTowerMutatorModel": "windChance"}
+                mc = deref(mf.get("conditionalId"))
+                mu = {"p": {"AddAttackTowerMutatorModel": 5, "AddBehaviorToTowerMutatorModel": 10,
+                            "RangeTowerMutatorModel": 1}.get(m["type"], 20),
+                      "a": len(g["attacks"]) if m["type"] == "AddAttackTowerMutatorModel"
+                      and deref(mf.get("attackModel")) else -1,
+                      "k": m["type"].removesuffix("TowerMutatorModel"),
+                      "v": mf.get(MUT_VALUE.get(m["type"], ""), 0.0) or 0.0,
+                      "u": [mc["f"]["towerSet"], mc["f"]["cost"]] if mc and mc["type"] == "CheckTempleUnderLevelModel" else None,
+                      "supports": [], "round_cash": 0.0}
+                if m["type"] == "AddBehaviorToTowerMutatorModel":
+                    bs = [x for x in items(mf.get("behaviors")) if x]
+                    mu["supports"] = supports_of(bs)
+                    mu["round_cash"] = sum(x["f"].get("cashPerRound", 0.0) for x in bs if x["type"] == "PerRoundCashBonusTowerModel")
+                g["muts"].append(mu)
                 if m["type"] == "AddAttackTowerMutatorModel" and deref(mf.get("attackModel")):
                     am = deref(mf["attackModel"])
                     # The attack's family: its name without the version (TrueGoldenGlaivesV2 ->
-                    # TrueGoldenGlaives); a later version replaces an earlier one.
+                    # TrueGoldenGlaives).
                     fam = re.sub(r"V\d+$", "", (am["f"].get("_name") or "").removeprefix("AttackModel_").rstrip("_"))
                     g["attacks"].append([fam, parse_attack(am)])
-                elif m["type"] == "AddBehaviorToTowerMutatorModel":
-                    bs = [x for x in items(mf.get("behaviors")) if x]
-                    g["supports"] += supports_of(bs)
-                    g["round_cash"] += sum(x["f"].get("cashPerRound", 0.0) for x in bs if x["type"] == "PerRoundCashBonusTowerModel")
-                elif m["type"] == "DamageTowerMutatorModel":
-                    g["damage"] += mf.get("damage", 0.0)
-                elif m["type"] == "PierceTowerMutatorModel":
-                    g["pierce"] += mf.get("pierce", 0.0)
-                elif m["type"] == "ProjectileSpeedTowerMutatorModel":
-                    g["speed"] += mf.get("speedModifier", 0.0)
-                elif m["type"] == "ProjectileSizeTowerMutatorModel":
-                    g["size"] += mf.get("sizeModifier", 0.0)
-                elif m["type"] == "RangeTowerMutatorModel":
-                    g["range"] += mf.get("rangeIncrease", 0.0)
-                elif m["type"] == "ReloadTimeTowerMutatorModel":
-                    g["reload"] += mf.get("multiplier", 0.0)
-                elif m["type"] == "WindChanceTowerMutatorModel":
-                    g["wind"] += mf.get("windChance", 0.0)
             temple["groups"].append(g)
         submerge = None
         for b in items(tobj["f"]["behaviors"]):
