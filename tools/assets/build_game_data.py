@@ -760,7 +760,13 @@ def main():
                            # MoveWithWind: the bloon is carried at speedFrames x this to its spot.
                            "speed_mult": wf.get("speedMultiplier", 1.0),
                            "tag_filter": [t for t in items(wf.get("tagFilter")) if isinstance(t, str)],
-                           "tag_inclusive": bool(wf.get("tagInclusive", False))}
+                           "tag_inclusive": bool(wf.get("tagInclusive", False)),
+                           # Projectile.CollideBloon runs the behaviours in projectileBehaviorsOrderedByPass
+                           # (VERIFIED-DECOMP @0x180c8b970): a WindModel listed before the DamageModel (same
+                           # pass) rolls before the damage (the Super Monkey's chance-0 blasts).
+                           "first": (lambda tl: "DamageModel" in tl and tl.index("WindModel") < tl.index("DamageModel")
+                                     and (pb["WindModel"][0]["f"].get("collisionPass", 0) <= pb["DamageModel"][0]["f"].get("collisionPass", 0)))(
+                                         [b["type"] for b in items(f["behaviors"]) if b])}
         # Skywarden: WindlashModel blows bloons back distanceMin..Max (like WindModel);
         # ChilledModel slows non-MOABs to `multiplier` for slowDuration. STAND-IN P-SKYSTATES:
         # the stages, vacuum pull, shrapnel and Galvanized / Heat states aren't modelled.

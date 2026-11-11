@@ -4393,6 +4393,14 @@ macro_rules! collide_pass {
                 }
                 $s.pre_damage_effects(i, $p, dmg);
             }
+            // Projectile.CollideBloon runs the behaviours in order (VERIFIED-DECOMP
+            // @0x180c8b970): a WindModel listed before the DamageModel (the Super Monkey's
+            // chance-0 blasts) rolls on the bloon before the hit (recording super_upgrades_r30
+            // rstack: the roll of 4287's hit that pops Red 4150).
+            let pre_roll = $s.projectiles[$p].spec.wind.clone().filter(|w| w.first).and_then(|w| {
+                let is_moab = $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Moabs");
+                ($s.wind_valid(i, &w) && !immune && (w.moabs || !is_moab)).then(|| $s.synced_double())
+            });
             if !immune {
                 let spec = &$s.projectiles[$p].spec;
                 let cleanse = spec.decamo || spec.cleanse_regrow || spec.cleanse_fortified || spec.cleanse_lead;
@@ -4568,25 +4576,9 @@ macro_rules! collide_pass {
                 // IsBloonValidForPushback (@0xfb4240: on the map, past spawnDist - radius
                 // x 1.25); tagFilter: skip when (a tag with presence == tagInclusive) ==
                 // tagInclusive.
-                let b = &$s.bloons[i];
-                let d = &$s.defs[b.kind];
-                let vd = b.dist;
-                let behind = $s.track_ends.get(b.path as usize).and_then(|e| e.0).is_some_and(|sd| vd < sd - d.radius * 1.25);
-                let filtered = !w.tag_filter.is_empty() && w.tag_filter.iter().any(|t| d.tags.contains(t) == w.tag_inclusive) == w.tag_inclusive;
-                // (… nor within 10 past the path's first on-map segment: recording ninja_010,
-                // the game's first wind roll is on rt 49's hit, not the entering bloon's on 15.)
-                // (Path.segments: the first whose point is on the map, its centre.)
-                let pi = b.path as usize;
-                let first = $s.track_segs.get(pi).and_then(|sg| sg.iter().position(|&q| on_map(q, 0.0))).and_then(|k| $s.seg_span(pi, k)).map(|x| x.0);
-                let entering = first.is_some_and(|f| vd < f + 10.0);
-                // (isDestroyed: a bloon this hit popped outright is still listed here at 0 hp.)
-                // (MoveWithWind.Attatched / OnDestroy (VERIFIED-DISASM @0xffec70 / @0xffee80) keep
-                // offTrackCount: a carried bloon, even one blown back earlier this frame, isn't
-                // rolled for; recording ninja_320 rt 2005.)
-                let valid = b.hp > 0 && b.wind.is_none() && on_map(b.pos, 0.0) && !behind && !filtered && !entering;
-                // (Not after an immune hit: the shot bounces off before its collide behaviours;
-                // recording ninja_030, no roll for the Leads until rt 2582.)
-                let roll = (valid && !immune && (w.moabs || !is_moab)).then(|| $s.synced_double());
+                let valid = $s.wind_valid(i, &w);
+                // (A WindModel listed before the DamageModel rolled before the damage.)
+                let roll = if w.first { pre_roll } else { (valid && !immune && (w.moabs || !is_moab)).then(|| $s.synced_double()) };
                 if roll.is_some_and(|r| r <= w.chance as f64) {
                     // MoveWithWind.Attatched (VERIFIED-DECOMP @0x180ffec70): a distanceMax over
                     // 99999 is the bloon's distanceTraveled (recordings super_400 / super_500: a
@@ -16519,6 +16511,28 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     fn synced_range(&mut self, lo: i32, hi: i32) -> i32 {
         let d = self.synced_double();
         (d * (hi as f64 - lo as f64)) as i32 + lo
+    }
+
+    /// Wind.Collide's checks on the hit bloon (see the collide macro).
+    fn wind_valid(&self, i: usize, w: &crate::data::Wind) -> bool {
+        let b = &self.bloons[i];
+        let d = &self.defs[b.kind];
+        let vd = b.dist;
+        let behind = self.track_ends.get(b.path as usize).and_then(|e| e.0).is_some_and(|sd| vd < sd - d.radius * 1.25);
+        let filtered = !w.tag_filter.is_empty() && w.tag_filter.iter().any(|t| d.tags.contains(t) == w.tag_inclusive) == w.tag_inclusive;
+        // (… nor within 10 past the path's first on-map segment: recording ninja_010,
+        // the game's first wind roll is on rt 49's hit, not the entering bloon's on 15.)
+        // (Path.segments: the first whose point is on the map, its centre.)
+        let pi = b.path as usize;
+        let first = self.track_segs.get(pi).and_then(|sg| sg.iter().position(|&q| on_map(q, 0.0))).and_then(|k| self.seg_span(pi, k)).map(|x| x.0);
+        let entering = first.is_some_and(|f| vd < f + 10.0);
+        // (isDestroyed: a bloon this hit popped outright is still listed here at 0 hp.)
+        // (MoveWithWind.Attatched / OnDestroy (VERIFIED-DISASM @0xffec70 / @0xffee80) keep
+        // offTrackCount: a carried bloon, even one blown back earlier this frame, isn't
+        // rolled for; recording ninja_320 rt 2005.)
+        // (Not after an immune hit: the shot bounces off before its collide behaviours;
+        // recording ninja_030, no roll for the Leads until rt 2582; the callers check it.)
+        b.hp > 0 && b.wind.is_none() && on_map(b.pos, 0.0) && !behind && !filtered && !entering
     }
 
     #[track_caller]

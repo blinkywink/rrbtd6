@@ -77,6 +77,9 @@ public class Scenario
     /// GameModel.randomSeed to start the simulation with (Simulation.Initialise seeds syncedRandom
     /// from it), to replay a recording's game; -1 leaves the game's own.
     public long seed { get; set; } = -1;
+    /// Recorded frames [first, last] whose synced NextDouble draws (R d lines) also list their
+    /// native callers (GameAssembly RVAs + 0x180000000).
+    public int[] rstack { get; set; }
     /// Effect capture (<name>.fx): every rendered frame while fx_from <= recorded frames <= fx_to,
     /// the camera and each active particle system (with its particles), sprite and TextMeshPro
     /// text whose hierarchy path contains one of fx_filter (all when empty). Use with fast false.
@@ -1404,8 +1407,10 @@ static class SyncedNextDoublePatch
 {
     static void Postfix(Il2CppNinjaKiwi.Common.BufferedRandom __instance, double __result)
     {
-        if (SyncedRandomLog.IsSynced(__instance))
-            Recorder.Out.WriteLine($"R d {__result.ToString("R", CultureInfo.InvariantCulture)}");
+        if (!SyncedRandomLog.IsSynced(__instance)) return;
+        var rs = Recorder.Sc?.rstack;
+        var extra = rs != null && Recorder.Recorded >= rs[0] && Recorder.Recorded <= rs[1] ? " @" + HitStack.Callers() : "";
+        Recorder.Out.WriteLine($"R d {__result.ToString("R", CultureInfo.InvariantCulture)}{extra}");
     }
 }
 

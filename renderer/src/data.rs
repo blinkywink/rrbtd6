@@ -2647,6 +2647,9 @@ pub struct AdoraSpec {
 
 #[derive(Deserialize, Clone)]
 pub struct Wind {
+    /// Listed before the DamageModel: it rolls before the damage.
+    #[serde(default)]
+    pub first: bool,
     pub min: f32,
     pub max: f32,
     pub chance: f32,
