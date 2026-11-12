@@ -9129,14 +9129,54 @@ impl Game {
         if pets.is_empty() && !had {
             return;
         }
-        // Pets are spawned after their handler, so removing them never shifts `t`.
-        for i in (0..self.towers.len()).rev() {
-            if self.towers[i].sub.as_ref().is_some_and(|s| s.pet && s.parent == id) {
-                self.towers.remove(i);
-                self.removed.push((i, usize::MAX));
+        // BeastHandlerLeash.UpdatedModel (VERIFIED-DECOMP @0x180d02300): a leashed pet stays the
+        // same tower (its spot, id and place in the process list) and Mutable.UpdateRootModel
+        // gives it the new tier's pet model; the two slots swap when a pet's baseId is the other
+        // slot's. Only a slot with no pet yet gets one made (ProcessLeashedTower).
+        let old: Vec<usize> = (0..self.towers.len()).filter(|&i| self.towers[i].sub.as_ref().is_some_and(|s| s.pet && s.parent == id)).collect();
+        let mut used = vec![false; old.len()];
+        let mut assign: Vec<Option<usize>> = Vec::new();
+        for pet in &pets {
+            let k = (0..old.len()).find(|&k| !used[k] && self.towers[old[k]].sub.as_ref().is_some_and(|s| s.spec.id == pet.id))
+                .or_else(|| (0..old.len()).find(|&k| !used[k] && pet.name != "TranceTotem"));
+            if let Some(k) = k {
+                used[k] = true;
+            }
+            assign.push(k);
+        }
+        // Pets with no slot left go (pets are spawned after their handler: `t` doesn't shift).
+        for k in (0..old.len()).rev() {
+            if !used[k] {
+                self.towers.remove(old[k]);
+                self.removed.push((old[k], usize::MAX));
             }
         }
-        for pet in pets {
+        let kept: Vec<(usize, u64)> = (0..old.len()).filter(|&k| used[k]).map(|k| (k, self.towers.get(old[k]).map_or(0, |o| o.id))).collect();
+        let mut fresh = Vec::new();
+        for (pet, k) in pets.into_iter().zip(assign) {
+            let Some(k) = k else {
+                fresh.push(pet);
+                continue;
+            };
+            let oid = kept.iter().find(|x| x.0 == k).map(|x| x.1).unwrap_or(0);
+            let Some(oi) = self.towers.iter().position(|o| o.id == oid) else { continue };
+            let (pos, age, born) = (self.towers[oi].pos, self.towers[oi].sub.as_ref().map_or(0.0, |s| s.age), self.towers[oi].sub.as_ref().map_or(0, |s| s.born));
+            let (fx0, sfx0, n0) = (self.place_fx.len(), self.sfx.len(), self.towers.len());
+            self.spawn_sub(pet, pos, id, true);
+            // (No placement: drop what making it queued.)
+            self.place_fx.truncate(fx0);
+            self.sfx.truncate(sfx0);
+            if self.towers.len() == n0 + 1 {
+                let mut nt = self.towers.pop().unwrap();
+                nt.id = oid;
+                if let Some(s) = nt.sub.as_mut() {
+                    s.age = age;
+                    s.born = born;
+                }
+                self.towers[oi] = nt;
+            }
+        }
+        for pet in fresh {
             // BeastHandlerLeash.ProcessLeashedTower (VERIFIED-DISASM @0xcffd80): the pet is made at
             // its spawner attack's Target, a RandomPosition (recording beast_010: at (-61.9, -54.22)).
             let spawner = self.tier(t).and_then(|x| x.attacks.iter().find(|a| a.model_name.contains("PetSpawnerAttack") && a.model_name.contains(pet.name.as_str())).and_then(|a| a.random_pos.map(|m| (a.model_name.clone(), m))));
@@ -21311,6 +21351,31 @@ mod beast_tests {
         assert_eq!(tw.mopolis_cash, Some((crates as f32 * 200.0 + 1000.0) / 10.0));
     }
 
+    /// A Beast Handler's pet keeps its spot when the handler upgrades (owner report: it jumped).
+    #[test]
+    fn beast_pet_stays_on_upgrade() {
+        let mut g = game();
+        g.cash = 1e7;
+        let bh = g.tower_defs.iter().position(|(n, _)| n == "BeastHandler").unwrap();
+        let t = place_near(&mut g, bh, 300.0);
+        let id = g.towers[t].id;
+        assert!(g.upgrade(t, 1));
+        g.start_round();
+        for _ in 0..5 {
+            g.step();
+        }
+        let pet = |g: &Game| g.towers.iter().find(|o| o.sub.as_ref().is_some_and(|s| s.pet && s.parent == id)).map(|o| o.pos);
+        let p0 = pet(&g).expect("pet");
+        for _ in 0..3 {
+            let t = g.towers.iter().position(|o| o.id == id).unwrap();
+            assert!(g.upgrade(t, 1));
+            for _ in 0..5 {
+                g.step();
+            }
+            assert_eq!(pet(&g), Some(p0));
+        }
+    }
+
     #[test]
     fn supply_drop_gives_cash() {
         let mut g = game();
@@ -21362,6 +21427,13 @@ mod beast_tests {
             })
             .expect("a free spot");
         assert!(g.activate_ability_at(&name, spot));
+        // (Darkshift.Process: the tower moves towerSpawnDelay frames after the activation.)
+        for _ in 0..120 {
+            if g.towers[t].pos == spot {
+                break;
+            }
+            g.step();
+        }
         assert_eq!(g.towers[t].pos, spot);
     }
 

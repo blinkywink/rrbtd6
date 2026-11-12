@@ -787,6 +787,12 @@ impl Hud {
     pub fn draw(&mut self, game: &Game, mut selected: Option<usize>, placing: Option<usize>, speed: u32, auto_start: bool) -> Vec<Action> {
         self.mod_ui.sync(game);
         crate::uitree::block_input(self.mod_ui.modal());
+        // The sandbox bloon menu and the open Powers menu sit over the shop: what's under them
+        // takes no clicks (their own buttons are handled after, unblocked).
+        let m0: Vec2 = mouse_position().into();
+        if self.sandbox_blocks(m0) || self.powers.covers(m0) {
+            crate::uitree::block_input(true);
+        }
         let mut out = Vec::new();
         // The UIRect (render3d::layout) in canvas units, y up: the HUD trees lay out inside it.
         let l = Self::layout();
@@ -1623,6 +1629,7 @@ impl Hud {
         draw_tree(&mut self.shop, full, &mut ctx);
         self.draw_geraldo(game, selected, full, canvas.y, SHOP_W, s, &mut out);
         // BloonMenu.ShowHideExternal listens to placement-blocking UI, not TSM side.
+        crate::uitree::block_input(self.mod_ui.modal());
         self.draw_sandbox(game, full, canvas.y, s, placing.is_some(), &mut out);
         self.draw_powers(game, full, canvas.y, s, l.bottom, &mut out);
         {

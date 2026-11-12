@@ -167,6 +167,10 @@ TOWERS.md has the longer per-tower notes.
 Owner's rule: nothing half done. Each fix must look and play exactly like the game (verify against
 the game code / recordings), or it hides problems later.
 - Monkey Village: the fire animation disappears, then reappears (visual).
+  FIXED (2026-11-12): its VillageFire system (looping, max 1 particle, lifetime 1 s, 1 a second) went out for
+  a cycle: particles.rs emitted before ageing the live particles, so the replacement was refused by the
+  dying one at max 1 (and its count dropped). Emission now comes after the update, as in Unity. Not checked
+  on screen; a test needs a GL context (EffectDef loads textures).
 - Alchemist: buffs it gives other towers don't show their icon over those towers' heads.
   FIXED (2026-11-12): brews and Overclock add their mutators' indicators (AddAcidicMixture /
   AddBerserkerBrewToProjectileModel and OverclockModel ctors: buffLocsName / buffIconName, not stackable).
@@ -235,8 +239,15 @@ the game code / recordings), or it hides problems later.
   buffIconName) as for the Alchemist item below.
 - Sandbox: clicks on its menus still reach the menu behind (the bloon menu overlays the monkey
   purchase menu); nothing behind it should be clickable anywhere (the top area already blocks).
+  FIXED (2026-11-12): while the cursor is over the open sandbox bloon menu or the Powers menu, Hud::draw sets
+  uitree::block_input for everything handled before them (shop buttons, Go, TSM, Geraldo shop); map input was
+  already blocked (Hud::blocks). Not checked on screen.
 - Beast Handler: on upgrade, the beast sub-tower (e.g. the T-Rex) jumps around; it should stay where it
   was and upgrade in place. Each beast's target location must be settable exactly as in the game.
+  FIXED (2026-11-12): BeastHandlerLeash.UpdatedModel (@0x180d02300) keeps the leashed pet (same tower: spot,
+  id, process order) and UpdateRootModel gives it the new pet model, slots swapped by baseId; only an empty
+  slot gets a new pet. sync_pets now rebuilds a kept pet in place (test beast_pet_stays_on_upgrade).
+  OPEN: setting each beast's target location exactly as in the game (BeastHandlerLeash custom input).
 - Missing textures / animations, e.g. the Wizard and Ice Monkey paragons turning wrongly: fix them as
   they're found.
 

@@ -1228,59 +1228,6 @@ impl Instance {
             let local_t = self.age * sys.speed - st.delay;
             let dur = sys.duration.max(1e-3);
             let emitting = !self.stopped && local_t >= 0.0 && (sys.looping || local_t < dur) && !self.def.is_sub[si];
-            // Emission.
-            if let (Some(em), true) = (&sys.emission, emitting) {
-                let t = if sys.looping { local_t % dur } else { local_t };
-                let nt = (t / dur).clamp(0.0, 1.0);
-                st.emit_acc += em.rate.at(nt, rng.next()) * dt;
-                let mut n = st.emit_acc.floor() as u32;
-                st.emit_acc -= n as f32;
-                for (bi, b) in em.bursts.iter().enumerate() {
-                    let cycles = if b.cycles == 0 { u32::MAX } else { b.cycles };
-                    while st.bursts_fired[bi] < cycles && local_t >= b.time + st.bursts_fired[bi] as f32 * b.interval.max(1e-3) {
-                        st.bursts_fired[bi] += 1;
-                        if rng.next() <= b.probability {
-                            n += b.count.at(nt, rng.next()).round().max(0.0) as u32;
-                        }
-                    }
-                }
-                for _ in 0..n {
-                    if st.parts.len() as u32 >= sys.init.max {
-                        break;
-                    }
-                    let r = [rng.next(), rng.next(), rng.next(), rng.next(), rng.next(), rng.next(), rng.next(), rng.next()];
-                    let (p, d) = emit_shape(sys.shape.as_ref(), rng);
-                    let speed = sys.init.speed.at(nt, r[0]);
-                    let size = sys.init.size.at(nt, r[1]);
-                    let size_y = if sys.init.size3d { sys.init.size_y.at(nt, r[1]) } else { size };
-                    // World-space particles start from the node's transform now (an animator
-                    // may have moved it); local-space ones follow it when drawn.
-                    let (mut pos, mut vel, mut k) = (sd.pos + sd.rot * (p * sd.scale), sd.rot * d * speed, 1.0);
-                    if let (1, Some((c, f))) = (sys.space, cw) {
-                        pos = c.transform_point3(pos);
-                        vel = c.transform_vector3(vel).normalize_or_zero() * vel.length();
-                        k = f;
-                    }
-                    // Particles live in the display's frame (its rotation applied); gravity and
-                    // world-space modules stay in Unity's world axes.
-                    let (pos, vel) = (rr * pos, rr * vel);
-                    st.parts.push(Particle {
-                        origin: if sys.space == 1 { self.at } else { Vec3::ZERO },
-                        pos,
-                        vel,
-                        age: 0.0,
-                        life: sys.init.lifetime.at(nt, r[2]).max(1e-3),
-                        size: vec2(size, size_y) * sd.size_scale * k,
-                        rot: sys.init.rotation.at(nt, r[3]),
-                        color: sys.init.color.at(nt, r[4]),
-                        r,
-                        sub_acc: [0.0; 2],
-                        sub_fired: [0; 2],
-                        tvel: Vec3::ZERO,
-                        rot3: if sys.init.rotation3d { vec2(sys.init.rotation_x.at(nt, r[6]), sys.init.rotation_y.at(nt, r[7])) } else { Vec2::ZERO },
-                    });
-                }
-            }
             // Particles.
             let g = vec3(0.0, -9.81, 0.0);
             let subs = &self.def.subs[si];
@@ -1385,6 +1332,61 @@ impl Instance {
                 }
                 true
             });
+            // Emission, after the live particles are updated and the dead ones gone (Unity's
+            // order: a looping max-1 system's replacement isn't refused by the particle it
+            // replaces; the Village fire blinked out for a cycle).
+            if let (Some(em), true) = (&sys.emission, emitting) {
+                let t = if sys.looping { local_t % dur } else { local_t };
+                let nt = (t / dur).clamp(0.0, 1.0);
+                st.emit_acc += em.rate.at(nt, rng.next()) * dt;
+                let mut n = st.emit_acc.floor() as u32;
+                st.emit_acc -= n as f32;
+                for (bi, b) in em.bursts.iter().enumerate() {
+                    let cycles = if b.cycles == 0 { u32::MAX } else { b.cycles };
+                    while st.bursts_fired[bi] < cycles && local_t >= b.time + st.bursts_fired[bi] as f32 * b.interval.max(1e-3) {
+                        st.bursts_fired[bi] += 1;
+                        if rng.next() <= b.probability {
+                            n += b.count.at(nt, rng.next()).round().max(0.0) as u32;
+                        }
+                    }
+                }
+                for _ in 0..n {
+                    if st.parts.len() as u32 >= sys.init.max {
+                        break;
+                    }
+                    let r = [rng.next(), rng.next(), rng.next(), rng.next(), rng.next(), rng.next(), rng.next(), rng.next()];
+                    let (p, d) = emit_shape(sys.shape.as_ref(), rng);
+                    let speed = sys.init.speed.at(nt, r[0]);
+                    let size = sys.init.size.at(nt, r[1]);
+                    let size_y = if sys.init.size3d { sys.init.size_y.at(nt, r[1]) } else { size };
+                    // World-space particles start from the node's transform now (an animator
+                    // may have moved it); local-space ones follow it when drawn.
+                    let (mut pos, mut vel, mut k) = (sd.pos + sd.rot * (p * sd.scale), sd.rot * d * speed, 1.0);
+                    if let (1, Some((c, f))) = (sys.space, cw) {
+                        pos = c.transform_point3(pos);
+                        vel = c.transform_vector3(vel).normalize_or_zero() * vel.length();
+                        k = f;
+                    }
+                    // Particles live in the display's frame (its rotation applied); gravity and
+                    // world-space modules stay in Unity's world axes.
+                    let (pos, vel) = (rr * pos, rr * vel);
+                    st.parts.push(Particle {
+                        origin: if sys.space == 1 { self.at } else { Vec3::ZERO },
+                        pos,
+                        vel,
+                        age: 0.0,
+                        life: sys.init.lifetime.at(nt, r[2]).max(1e-3),
+                        size: vec2(size, size_y) * sd.size_scale * k,
+                        rot: sys.init.rotation.at(nt, r[3]),
+                        color: sys.init.color.at(nt, r[4]),
+                        r,
+                        sub_acc: [0.0; 2],
+                        sub_fired: [0; 2],
+                        tvel: Vec3::ZERO,
+                        rot3: if sys.init.rotation3d { vec2(sys.init.rotation_x.at(nt, r[6]), sys.init.rotation_y.at(nt, r[7])) } else { Vec2::ZERO },
+                    });
+                }
+            }
             if !st.parts.is_empty() || (local_t < dur || sys.looping) {
                 alive = true;
             }
@@ -2007,3 +2009,4 @@ impl Particles {
         idx.clear();
     }
 }
+
