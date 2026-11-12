@@ -719,6 +719,15 @@ def main():
             "on_exhaust": [],
             "on_contact": [],
             "instant": bool(pb.get("InstantModel")),
+            # SpawnZombieOnBloonDestroyedModel (Collide @0x180cdfb80, before the damage): a hit that will
+            # destroy the bloon takes graveyardManaCost from the paragon's graveyard and emits
+            # zombieProjectile at the bloon (singleEmissionModel).
+            "zombie": next(({"cost": int(z["f"].get("graveyardManaCost", 0)), "projectile": projectile(deref(z["f"]["zombieProjectile"])),
+                             "emission": emission(deref(z["f"].get("singleEmissionModel")))}
+                            for z in pb.get("SpawnZombieOnBloonDestroyedModel", []) if deref(z["f"].get("zombieProjectile"))), None),
+            # DestroyProjectileIfTowerDestroyedModel: Process (@0x180cb8430) destroys it once its
+            # emitting tower is gone.
+            "tower_bound": bool(pb.get("DestroyProjectileIfTowerDestroyedModel")),
             # Effects (visual only): CreateEffectOnContactModel at each hit, CreateEffectOnExhausted /
             # ExhaustFraction when its pierce runs out, CreateEffectOnExpireModel when it goes.
             "contact_fx": fx_list(items(f["behaviors"]), "CreateEffectOnContactModel"),
@@ -1399,7 +1408,7 @@ def main():
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "LineEffectModel"), None),
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
-                                "alternate": alternate, "spread": spread, "per_round": per_round, "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
+                                "alternate": alternate, "spread": spread, "per_round": per_round, "mana": next((int(x["f"].get("graveyardManaChange", 0)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "MagusPerfectusGraveyardModel"), 0), "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
                                 # the emission is laid out on the tower's rotation, each shot then sent at
@@ -1832,6 +1841,23 @@ def main():
         # count to cratesPerRound and every CashModel's minimum and maximum to (crates x
         # cashFromCrate + baseIncome) / cratesPerRound. The count is fixed here; the cash is set at
         # run time (Game::monkeyopolis_absorb), 1 crate's worth until then.
+        # MagusPerfectusGraveyardStateManagerModel: maxManaStoredInGraveyard and the attack lists of
+        # its states (attackManagerStates: Consuming 0, Generating 1, DrainingOverTime 2).
+        magus = None
+        mgm = next((b["f"] for b in items(f["behaviors"]) if b and b["type"] == "MagusPerfectusGraveyardStateManagerModel"), None)
+        if mgm:
+            order = {"Consuming": 0, "Generating": 1, "DrainingOverTime": 2}
+            states = [[], [], []]
+            ams = mgm.get("attackManagerStates")
+            ams = values.get(ams["$ref"]) if isinstance(ams, dict) and "$ref" in ams else ams
+            for e in (ams or {}).get("items", []):
+                if isinstance(e, list) and len(e) == 2 and e[0] in order:
+                    lst = values.get(e[1]) if isinstance(e[1], int) else e[1]
+                    states[order[e[0]]] = [x for x in (lst or []) if isinstance(x, str)]
+            # (UpdateGraveyardFillThreshold @0x180d37d30: at AvailableMana / max >= rateBonusThreshold the
+            # paragon gets RateSupportMutator(rateMultplierAmount), @0x18121bc70.)
+            magus = {"max": int(mgm.get("maxManaStoredInGraveyard", 0)), "states": states,
+                     "rate_threshold": mgm.get("rateBonusThreshold", 0.0), "rate_mult": mgm.get("rateMultplierAmount", 1.0)}
         mopolis = next((b["f"] for b in items(f["behaviors"]) if b and b["type"] == "MonkeyopolisModel"), None)
         mopolis_out = None
         if mopolis:
@@ -2062,6 +2088,7 @@ def main():
         # BeastHandlerLeashModel: the pet(s) this tier leashes (towerModel / towerModelSecond),
         # spawned as permanent sub-towers inside the handler's range (HYPOTHESIS P-PET).
         pets = []
+        paragon_towers = []
         for b in items(tobj["f"]["behaviors"]):
             # TowerCreateTowerModel (Corvus's Spirit, Lord Phoenix's PermaPhoenix): a permanent
             # sub-tower that exists while the tower does, kept like pets.
@@ -2069,6 +2096,13 @@ def main():
                 sp = sub_tower(deref(b["f"].get("towerModel")), None)
                 if sp:
                     pets.append(sp)
+            # TowerCreateParagonTowerModel (Magus Perfectus's Dark Phoenix): one tower, made once the
+            # paragon is active (Process @0x180da3fe0), towerModels[min(degree / 20, 4)]
+            # (GetParagonTowerModelTier @0x180da3cf0); not a pet (made at run time).
+            if b and b["type"] == "TowerCreateParagonTowerModel":
+                # (isAirBasedTower: CreateTower at z 250, the constant @0x183e4fed8.)
+                air_based = bool(b["f"].get("isAirBasedTower"))
+                paragon_towers.extend(dict(sp, air_based=air_based) for sp in (sub_tower(deref(m), None) for m in items(b["f"].get("towerModels"))) if sp)
             # TranceTotemSpawnerModel (Mermonkey x-x-4+): its TranceTotem sub-tower, on the
             # Mermonkey's spot while no target point is set (Process @0x180dbc4a0), kept like pets.
             if b and b["type"] == "TranceTotemSpawnerModel":
@@ -2219,7 +2253,7 @@ def main():
                 "air": air, "submerge": submerge, "air_modes": air_modes,
                 # PursuitSettingModel.pursuitDistance (PursuitSetting.GetPursuitDestination).
                 "pursuit_distance": next((x["f"].get("pursuitDistance", 0.0) for b in items(f["behaviors"]) if b and b["type"] in ("AttackModel", "AttackAirUnitModel")
-                                          for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed, "mopolis": mopolis_out, "mopolis_cost": mopolis_cost,
+                                          for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed, "magus": magus, "paragon_towers": paragon_towers, "mopolis": mopolis_out, "mopolis_cost": mopolis_cost,
                 # TapTowerAbilityBehavior.IsBanned (VERIFIED-DECOMP @0x180e5dcb0), the model part:
                 # Overclock / Take Aim can't pick a paragon, a Beast Handler pet, an
                 # IgnoreAllMutatorsTowerModel tower, an ignoreTowerForSelection one (IsSelectable), a
@@ -2419,7 +2453,7 @@ def main():
                                     (deref(b["f"].get("effectModel")) or {}).get("f", {}).get("scale", 1.0)]
                                    for b in bs if b["type"].endswith("CreateEffectOnExpireModel")), None),
                 # OrbitingTowerModel (Adora's Ball of Light, Dark Phoenix): circles its parent.
-                "orbit_tower": next(({"radius": b["f"].get("radius", 0.0), "rate": b["f"].get("rotationDegreesPerFrame", 0.0)}
+                "orbit_tower": next(({"radius": b["f"].get("radius", 0.0), "rate": b["f"].get("rotationDegreesPerFrame", 0.0), "offset": b["f"].get("offset", 0.0)}
                                      for b in bs if b["type"] == "OrbitingTowerModel"), None),
                 # PathMovementFromScreenCenterModel (Phoenix): circles the screen centre at `speed`,
                 # radius from its attack's PathMovementFromScreenCenterPatternModel.

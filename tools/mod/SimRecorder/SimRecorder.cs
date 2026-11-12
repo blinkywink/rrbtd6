@@ -1254,6 +1254,14 @@ static class SimulatePatch
                         w.WriteLine($"PM {t.Id.Id} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(p.Z)} {Recorder.F(tr.rotation.value)} {Recorder.F(sc.X)} {Recorder.F(sc.Y)} {Recorder.F(sc.Z)} {Recorder.F(pm.t)} {(pm.onPath ? 1 : 0)} {(pm.takingOff ? 1 : 0)} {Recorder.F(pm.tt)} {Recorder.F(pm.ttpf)} {Recorder.F(pm.pitch)} {Recorder.F(pm.lastBank)} {Recorder.F(pm.tpf)} {(pm.onTheMove ? 1 : 0)}");
                     }
                 }
+                // Magus Perfectus's graveyard each frame: "MG tower state availableMana"
+                // (MagusPerfectusGraveyardStateManager.graveyardManaState, AvailableMana).
+                for (int k = 0; ftb != null && k < ftb.Count; k++)
+                {
+                    var mg = ftb[k]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.MagusPerfectusGraveyardStateManager>();
+                    if (mg == null) continue;
+                    try { w.WriteLine($"MG {t.Id.Id} {mg.graveyardManaState} {mg.AvailableMana}"); } catch (Exception) { }
+                }
                 // Helis' HeliMovement each frame (after it ran): "HM tower x y z rotation velX velY
                 // groupOffX groupOffY pathIndex" (heliTransformBehavior; its attacks shoot from it).
                 for (int k = 0; ftb != null && k < ftb.Count; k++)
@@ -1697,7 +1705,28 @@ static class CollideBloonsPatch
                 IntPtr src = System.Runtime.InteropServices.Marshal.ReadIntPtr(obj + 0x30);
                 if (src != IntPtr.Zero) l = new Il2CppSystem.Collections.Generic.List<Il2CppAssets.Scripts.Simulation.Bloons.Bloon>(src);
                 skip = System.Runtime.InteropServices.Marshal.ReadInt32(obj + 0x3c);
-                if (src != IntPtr.Zero) sb.Append(" src ").Append(System.Runtime.InteropServices.Marshal.PtrToStringAnsi(Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_name(Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(src))));
+                string cls = src == IntPtr.Zero ? "" : System.Runtime.InteropServices.Marshal.PtrToStringAnsi(Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_name(Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(src)));
+                if (src != IntPtr.Zero) sb.Append(" src ").Append(cls);
+                // An OrderedEnumerable (OrderBy over GetInLine): enumerate it as CollideBloons will
+                // (a fresh grid query and sort, nothing kept): "id:x,y" per bloon, before the skip.
+                if (cls.StartsWith("OrderedEnumerable"))
+                {
+                    l = null;
+                    var en = new Il2CppSystem.Collections.Generic.IEnumerable<Il2CppAssets.Scripts.Simulation.Bloons.Bloon>(src).GetEnumerator();
+                    var it = en.Cast<Il2CppSystem.Collections.IEnumerator>();
+                    var ids = new StringBuilder();
+                    int guard = 0;
+                    while (it.MoveNext() && guard++ < 256)
+                    {
+                        var b = en.Current;
+                        if (b == null) { ids.Append(" -1"); continue; }
+                        var pos = b.Position;
+                        ids.Append(' ').Append(b.Id.Id).Append(':').Append(Recorder.F(pos.X)).Append(',').Append(Recorder.F(pos.Y));
+                    }
+                    sb.Append(" skip ").Append(System.Runtime.InteropServices.Marshal.ReadInt32(obj + 0x3c)).Append(" list").Append(ids);
+                    Recorder.Out.WriteLine(sb.ToString());
+                    return;
+                }
             }
             sb.Append(" skip ").Append(skip);
             if (l == null) sb.Append(" ?");

@@ -1753,6 +1753,15 @@ pub struct Tower {
     pub paragon: Option<(u32, std::sync::Arc<Tier>)>,
     /// ParagonTower.activeAt (Simulation.time): its attacks stay paused until after it.
     pub paragon_active_at: u64,
+    /// TowerCreateParagonTower.towerAdded.
+    pub paragon_tower_made: bool,
+    /// MagusPerfectusGraveyardStateManager: graveyardManaState (3 at Initialise), the paragon's
+    /// necro graveyard pool (its mana) and the attacks SyncAttacksToGraveyardState paused.
+    pub magus_state: u8,
+    pub magus_pool: f32,
+    /// The graveyard's RateSupportMutator is on (UpdateGraveyardFillThreshold).
+    pub magus_rate: bool,
+    pub paused_attacks: Vec<String>,
     /// The first frame it is a Paragon: its attacks still act that frame (the pause starts after).
     pub paragon_first: u64,
     /// The attack model names it had before it became a Paragon (those Attacks carry on).
@@ -2101,6 +2110,9 @@ pub struct SubTower {
     pub z: f32,
     /// The round time it was made at (Tower +0x17c, TowerExpire.Process's start).
     pub born: i64,
+    /// OrbitingTower: Processes so far, and currentDirection (game frame; Vector2.up at Initialise).
+    pub orbit_turns: u32,
+    pub orbit_dir: [f32; 2],
 }
 
 #[derive(Clone)]
@@ -2568,6 +2580,9 @@ pub struct Projectile {
     exhaust_made: (f32, u32),
     /// TravelStraitSlowdown: (speedFrames now, distanceTraveled).
     slow: (f32, f32),
+    /// TravelStraitSlowdown's slowdownSpeedFrames / minimumSpeedFrames: 0 for a model loaded from
+    /// the game's file (its .ctor never ran), set for one the paragon cloned at run time.
+    slow_frames: (f32, f32),
     /// TravelCurvy: (angleMin / angleMax once its first Process sets them, incrementing).
     curvy: Option<(Option<(f32, f32)>, bool)>,
     grot: Option<f32>,
@@ -3606,6 +3621,8 @@ pub struct Game {
     /// indices it holds: (index, where the tower now at that index came from; usize::MAX when
     /// the later ones shifted down instead).
     pub removed: Vec<(usize, usize)>,
+    /// Towers a Paragon purchase sacrificed: removed (with their sub-towers) at the end of the next step.
+    sacrificed: Vec<u64>,
     /// Typed sub-towers made so far (they take turns).
     typed_made: usize,
 }
@@ -3759,7 +3776,10 @@ macro_rules! collide_pass {
                     // it; the distance adds up and it expires at maxDistance. Both *Frames fields
                     // aren't serialized and stay 0 (the model's .ctor doesn't run on load): each
                     // pellet keeps its speed (recording dartling_003, 421 steps 8.119 throughout).
-                    let mut sf = pr.slow.0;
+                    let mut sf = pr.slow.0 - pr.slow_frames.0;
+                    if sf < pr.slow_frames.1 {
+                        sf = pr.slow_frames.1;
+                    }
                     if sf <= 0.0 {
                         sf = 0.0;
                     }
@@ -3810,6 +3830,11 @@ macro_rules! collide_pass {
             // waits 36 frames.)
             if (!pr.spec.round_time || $s.round_active) && $only.is_none() {
                 pr.frames_left -= 1.0;
+            }
+            // DestroyProjectileIfTowerDestroyed.Process (VERIFIED-DECOMP @0x180cb8430): its tower gone,
+            // it is destroyed (recording wizard_paragon_r40 rt 62: the sacrificed 0-5-0's shot 587).
+            if pr.spec.tower_bound && $only.is_none() && !$s.towers.iter().any(|t| t.id == pr.owner) {
+                pr.frames_left = 0.0;
             }
             pr.age += 1.0;
             // ExpireProjectileAtScreenEdge.Process (VERIFIED-DISASM @0xcdaf10): Map.IsPointOnMap
@@ -4408,6 +4433,42 @@ macro_rules! collide_pass {
                 let is_moab = $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Moabs");
                 ($s.wind_valid(i, &w) && !immune && (w.moabs || !is_moab)).then(|| $s.synced_double())
             });
+            // SpawnZombieOnBloonDestroyed.Collide (VERIFIED-DECOMP @0x180cdfb80; listed before the
+            // DamageModel): a hit that will destroy the bloon (Bloon.WillDestroyBloon) takes
+            // graveyardManaCost from its paragon's graveyard (ConsumeMana; short of it, the state
+            // goes to Generating and nothing is made) and emits zombieProjectile at the bloon, its
+            // Target (recording wizard_paragon_r40 rt 210: Spike 979 destroys 972, zombie 1001 there).
+            if let Some(z) = $s.projectiles[$p].spec.zombie.clone().filter(|_| !immune) {
+                let owner = $s.projectiles[$p].owner;
+                if $s.bird_will_destroy(i, dmg) {
+                    if let Some(o) = $s.towers.iter().position(|t| t.id == owner).and_then(|t| $s.magus_owner(t)) {
+                        if let Some(m) = $s.tier(o).and_then(|tr| tr.magus.clone()) {
+                            if $s.towers[o].magus_pool >= z.cost as f32 {
+                                $s.towers[o].magus_pool -= z.cost as f32;
+                                let (bp, bpath, bdist) = ($s.bloons[i].pos, $s.bloons[i].path, $s.bloons[i].dist);
+                                let tiers = $s.towers[o].tiers;
+                                let start = $s.projectiles.len();
+                                $s.emit_target = Some(id);
+                                $s.emit(bp, 0.0, &z.emission, &z.projectile, None, tiers, owner);
+                                $s.emit_target = None;
+                                for pr in &mut $s.projectiles[start..] {
+                                    pr.pos = bp;
+                                    pr.vel = [0.0; 2];
+                                    pr.on_track = Some((bpath, bdist));
+                                    // (No random offset: TravelAlongPath's own move puts it at the
+                                    // track's display height; recording rt 211, -22.9 -> -18.9.)
+                                    pr.track_off = [0.0; 2];
+                                    if let Some(tt) = &z.projectile.track_travel {
+                                        pr.frames_left = (tt.lifespan * FPS).round();
+                                    }
+                                }
+                            } else {
+                                $s.magus_switch(o, 1, &m);
+                            }
+                        }
+                    }
+                }
+            }
             if !immune {
                 let spec = &$s.projectiles[$p].spec;
                 let cleanse = spec.decamo || spec.cleanse_regrow || spec.cleanse_fortified || spec.cleanse_lead;
@@ -5427,6 +5488,7 @@ impl Game {
             coop_areas: None,
             item_buyers: std::collections::BTreeMap::new(),
             removed: Vec::new(),
+            sacrificed: Vec::new(),
             typed_made: 0,
             rng: 0x9E37_79B9_7F4A_7C15,
             next_id: 1,
@@ -7387,6 +7449,11 @@ impl Game {
             boosts: Vec::new(),
             paragon: None,
             paragon_active_at: 0,
+            paragon_tower_made: false,
+            magus_state: 3,
+            magus_pool: 0.0,
+            magus_rate: false,
+            paused_attacks: Vec::new(),
             paragon_first: 0,
             paragon_kept: Vec::new(),
             attack_born: HashMap::new(),
@@ -8952,7 +9019,7 @@ impl Game {
             brews: Vec::new(),
             acid_pts: None,
             acid_splashes: 0,
-            sub: Some(SubTower { frames_left: if spec.lifespan > 0.0 { spec.lifespan * FPS } else { f32::INFINITY }, age: 0.0, rounds_left: spec.rounds, pet, spec, parent, path_index: None, z: 250.0, born: self.round_clock }),
+            sub: Some(SubTower { frames_left: if spec.lifespan > 0.0 { spec.lifespan * FPS } else { f32::INFINITY }, age: 0.0, rounds_left: spec.rounds, pet, spec, parent, path_index: None, z: 250.0, born: self.round_clock, orbit_turns: 0, orbit_dir: [0.0, 1.0] }),
             air: None,
             ability_cd: HashMap::new(),
             turn_vel: 0.0,
@@ -8996,6 +9063,11 @@ impl Game {
             boosts: Vec::new(),
             paragon: None,
             paragon_active_at: 0,
+            paragon_tower_made: false,
+            magus_state: 3,
+            magus_pool: 0.0,
+            magus_rate: false,
+            paused_attacks: Vec::new(),
             paragon_first: 0,
             paragon_kept: Vec::new(),
             attack_born: HashMap::new(),
@@ -9276,32 +9348,36 @@ impl Game {
             tw.angle = (rot - 90.0).to_radians();
             tw.pos = next;
         }
-        // OrbitingTowerModel: round the parent, siblings of one kind spread evenly.
-        // HYPOTHESIS P-ORBITTOWER: counter-clockwise from angle 0 when made.
+        // OrbitingTower.Process (VERIFIED-DECOMP @0x180d4f790): Initialise sets currentDirection to
+        // Vector2.up; each Process turns it by rotationDegreesPerFrame, then the tower stands at the
+        // parent's position + offset + currentDirection x radius (recording wizard_paragon_r40: the
+        // Dark Phoenix at (1.047, 49.99) from the paragon on its first Process, 60 sin 1, 60 cos 1 - 10;
+        // offset on the game's y). Every orbiter starts at up.
         let parents: HashMap<u64, [f32; 2]> = self.towers.iter().map(|t| (t.id, t.pos)).collect();
-        let mut seen: HashMap<(u64, *const crate::data::SubTowerSpec), u32> = HashMap::new();
-        let counts = {
-            let mut c: HashMap<(u64, *const crate::data::SubTowerSpec), u32> = HashMap::new();
-            for tw in &self.towers {
-                if let Some(s) = tw.sub.as_ref().filter(|s| s.spec.orbit_tower.is_some()) {
-                    *c.entry((s.parent, std::sync::Arc::as_ptr(&s.spec))).or_default() += 1;
-                }
-            }
-            c
-        };
         for tw in &mut self.towers {
-            let Some(s) = &tw.sub else { continue };
-            let Some(ob) = &s.spec.orbit_tower else { continue };
+            let Some(s) = &mut tw.sub else { continue };
+            let Some(ob) = s.spec.orbit_tower.clone() else { continue };
             let Some(&c) = parents.get(&s.parent) else { continue };
-            let key = (s.parent, std::sync::Arc::as_ptr(&s.spec));
-            let k = seen.entry(key).or_default();
-            let n = counts.get(&key).copied().unwrap_or(1).max(1);
-            let age = s.age;
-            let a = (age * ob.rate).to_radians() + *k as f32 * std::f32::consts::TAU / n as f32;
-            *k += 1;
-            let next = [c[0] + ob.radius * a.cos(), c[1] + ob.radius * a.sin()];
-            tw.angle = a + std::f32::consts::FRAC_PI_2;
-            tw.pos = next;
+            // (Made this frame: its first Process is the next.)
+            if s.age < 1.0 {
+                continue;
+            }
+            s.orbit_turns += 1;
+            // Vector2.Rotate (VERIFIED-DISASM @0xf64800) on currentDirection, game frame, in place.
+            let a = DEG2RAD * -ob.rate;
+            let (sa, ca) = crt_sin_cos(a);
+            let v = s.orbit_dir;
+            s.orbit_dir = [ca * v[0] - sa * v[1], ca * v[1] + sa * v[0]];
+            // (parent + offset) + currentDirection x radius, in the game frame (y up).
+            let base = [c[0] + 0.0, -c[1] + ob.offset];
+            let g = [base[0] + s.orbit_dir[0] * ob.radius, base[1] + s.orbit_dir[1] * ob.radius];
+            tw.pos = [g[0], -g[1]];
+            // (Not ignoreRotation: its rotation is 90 + the turned angle; recording W rotation 91, 92 ...)
+            // (Vector2.Rotation of currentDirection + 90 (@0x180d4f790's tail): the turned vector's
+            // rounding shows, recording 115.99999 for 26 turns.)
+            let rot = RAD2DEG * crt_atan2(s.orbit_dir[0], s.orbit_dir[1]) + 90.0;
+            tw.game_rot = Some(rot);
+            tw.angle = (rot - 90.0) * DEG2RAD;
         }
     }
 
@@ -10306,6 +10382,29 @@ impl Game {
             .collect()
     }
 
+    /// MagusPerfectusGraveyardStateManager.SwitchGraveyardManaState (VERIFIED-DECOMP @0x180d37960):
+    /// a new state syncs the attacks (the current state's list runs, the others' pause).
+    fn magus_owner(&self, t: usize) -> Option<usize> {
+        if self.tier(t).is_some_and(|tr| tr.magus.is_some()) {
+            return Some(t);
+        }
+        let p = self.towers[t].sub.as_ref()?.parent;
+        let o = self.towers.iter().position(|x| x.id == p)?;
+        self.tier(o).is_some_and(|tr| tr.magus.is_some()).then_some(o)
+    }
+
+    fn magus_switch(&mut self, t: usize, n: u8, m: &crate::data::Magus) {
+        if self.towers[t].magus_state == n {
+            return;
+        }
+        self.towers[t].magus_state = n;
+        self.towers[t].paused_attacks = m.states.iter().enumerate().filter(|(k, _)| *k != n as usize).flat_map(|(_, l)| l.iter().cloned()).collect();
+        // UpdateGraveyardFillThreshold (VERIFIED-DECOMP @0x180d37d30), after each switch: the rate
+        // mutator on while AvailableMana / max >= rateBonusThreshold (recording wizard_paragon_r40:
+        // the full graveyard keeps the Arcane Spike at 8 frames, 16 x 0.5).
+        self.towers[t].magus_rate = m.max > 0 && self.towers[t].magus_pool / m.max as f32 >= m.rate_threshold;
+    }
+
     /// Monkeyopolis.Process (VERIFIED-DECOMP @0x180d49350), until activated: every farm in
     /// max(rangeBeforeUpgrade, range) is destroyed (Simulation.DestroyTower: no refund), its worth
     /// (int) added to the total and to this tower's; crates = max(total / valueRequiredForCrate,
@@ -10603,7 +10702,11 @@ impl Game {
                 .map(|&o| (self.towers[o].pos, self.towers[o].invested, self.towers[o].tiers.iter().any(|&x| x >= 5))).collect();
             self.sacrifices.push(Sacrifice { tower: id, at: self.towers[t].pos, orbs, start: self.sim_elapsed + 1,
                                              active_at: self.sim_elapsed + 1 + pdef.inactive_frames, degree: 0 });
-            self.towers.retain(|o| !gone.contains(&o.id) && !o.sub.as_ref().is_some_and(|s| gone.contains(&s.parent)));
+            // (The sacrificed towers and their sub-towers still act in the next frame and are gone by
+            // its end: recording wizard_paragon_r40, bought at 60: the 0-5-0's Phoenix 558 fires 815
+            // at rt 61, no W lines for any of them at 61, and the 0-5-0's shot 587 is destroyed by
+            // its DestroyProjectileIfTowerDestroyed at 62.)
+            self.sacrificed.extend(gone.iter().copied());
             let t = self.towers.iter().position(|o| o.id == id).unwrap();
             let kept: Vec<String> = self.tier(t).map(|tr| tr.attacks.iter().map(|a| a.model_name.clone()).collect()).unwrap_or_default();
             let tier = std::sync::Arc::new(self.paragon_tier(&pdef.tier, degree));
@@ -10618,8 +10721,20 @@ impl Game {
             // un-pauses once time >= activeAt, after that frame's weapons (recording
             // dart_paragon_r40: bought before t 76, first throw at t 197).
             tw.paragon_active_at = self.sim_elapsed + 1 + pdef.inactive_frames;
+            // MagusPerfectusGraveyardStateManager.Initialise (VERIFIED-DECOMP @0x180d368b0): its own
+            // NecroData, round slot 0 holding maxManaStoredInGraveyard; state 3.
+            if let Some(m) = &pdef.tier.magus {
+                tw.magus_pool = m.max as f32;
+                tw.magus_state = 3;
+            }
             tw.paragon_first = self.sim_elapsed + 1;
             tw.invested += cost;
+            // (The paragon starts on its model's first target type, not the 5-x-x's: recording
+            // ice_paragon_r40 rt 662, First after a Close Ice Monkey 5-0-0. INFERRED: the
+            // paragon's Tower takes a fresh target type.)
+            if let Some(&m) = self.target_modes(t).first() {
+                self.towers[t].target = m;
+            }
             let s = self.tier_sounds(t);
             self.sound(&s.upgrade, None);
             self.sync_abilities(t);
@@ -11260,6 +11375,11 @@ impl Game {
                         b.acid = true;
                     }
                 }
+                if self.towers[t].magus_rate {
+                    if let Some(m) = self.tier(t).and_then(|tr| tr.magus.as_ref()) {
+                        b.rate_mult *= m.rate_mult;
+                    }
+                }
                 // TurboModel (Turbo Charge): interval x multiplier, +extraDamage.
                 if let Some(tb) = &self.towers[t].turbo {
                     b.rate_mult *= tb.mult;
@@ -11616,6 +11736,13 @@ impl Game {
             .filter(|e| e.layers > 1 && (!moab_pop || e.keep || KEPT_ON_MOAB_POP.contains(&e.id.as_str())))
             .map(|e| Effect { layers: e.layers - 1, ..e.clone() })
             .collect();
+        // (A MOAB-class pop drops its other mutators at once, CarryProjectile.OnDestroy taking
+        // their projectiles: recording ice_paragon_r40 rt 189, the Icicles X destroy at age 0.)
+        let dropped_carry: Vec<u64> = if moab_pop {
+            b.effects.iter().filter(|e| !(e.keep || KEPT_ON_MOAB_POP.contains(&e.id.as_str()))).flat_map(|e| match &e.kind { EffectKind::Carry { uids, .. } => uids.clone(), _ => Vec::new() }).collect()
+        } else {
+            Vec::new()
+        };
         // DamageOverTime.OnDestroy (VERIFIED-DISASM @0x1003f90): a DamageOverTime that goes with
         // its mutator still runs CheckTick, so one due now ticks on what the bloon has become
         // (recording boomerang_paragon_r98: a burning BAD popped on its tick frame leaves its
@@ -11636,6 +11763,12 @@ impl Game {
         } else {
             Vec::new()
         };
+        if !dropped_carry.is_empty() {
+            for pr in self.projectiles.iter_mut().filter(|pr| dropped_carry.contains(&pr.uid)) {
+                pr.pierce = 0.0;
+                pr.frames_left = 0.0;
+            }
+        }
         self.remove_bloon(i);
         // DistributeCash.PostDegrade (@0x180fea0e0): the cash x Simulation.GetCashModifierFromSimBehaviors
         // (Thrive). HYPOTHESIS P-THRIVEORDER: after Mark / Worth.
@@ -11801,7 +11934,9 @@ impl Game {
             // Made in the collision pass, before this frame's movement: new objects, they move
             // from the next frame (the first child is the parent object and moves on, unless that
             // was made this frame too: recording dart_400, a Lead's second Black's Pinks).
-            if self.grid_on && !self.pop_in_process {
+            // (Made after this frame's movement (a projectile's Process): they move from the next
+            // frame already; recording ice_paragon_r40 rt 190, the beam's MOAB Ceramics.)
+            if self.grid_on && !self.pop_in_process && !self.pop_after_move {
                 child.fresh = n > 0 || parent_fresh;
             }
             // HYPOTHESIS P-INSTANTCHILD: new objects made by an instant shot's pop (after the
@@ -12773,6 +12908,39 @@ impl Game {
             if only_temp.is_none() && self.towers[t].sub.is_none() {
                 let gone = self.monkeyopolis_absorb(t);
                 absorbed.extend(gone);
+                // MagusPerfectusGraveyardStateManager.Process (VERIFIED-DECOMP @0x180d37340): 3 -> 0;
+                // Consuming (0) -> Generating (1) when the pool is empty; Generating -> Consuming
+                // when it is full (maxManaStoredInGraveyard); DrainingOverTime (2) stays. A switch
+                // runs SyncAttacksToGraveyardState (@0x180d37a90): the current state's attacks resume,
+                // the other states' pause (recording wizard_paragon_r40 MG lines: Consuming, from rt 61).
+                if let Some(m) = self.tier(t).and_then(|tr| tr.magus.clone()) {
+                    let (st, pool) = (self.towers[t].magus_state, self.towers[t].magus_pool);
+                    let next = match st {
+                        3 => Some(0),
+                        0 if pool <= 0.0 => Some(1),
+                        1 if pool >= m.max as f32 => Some(0),
+                        _ => None,
+                    };
+                    if let Some(n) = next {
+                        self.magus_switch(t, n, &m);
+                    }
+                }
+                // TowerCreateParagonTower.Process (VERIFIED-DECOMP @0x180da3fe0): once the paragon is
+                // active (its sacrifice finished), one tower, towerModels[min(degree / 20, 4)]
+                // (GetParagonTowerModelTier @0x180da3cf0), at the paragon's spot.
+                if let Some((degree, _)) = self.towers[t].paragon.clone() {
+                    if !self.towers[t].paragon_tower_made && self.sim_elapsed >= self.towers[t].paragon_active_at {
+                        self.towers[t].paragon_tower_made = true;
+                        let list = self.tier(t).map(|tr| tr.paragon_towers.clone()).unwrap_or_default();
+                        let k = if degree < 100 { degree as usize / 20 } else { 4 };
+                        if let Some(spec) = list.get(k.min(list.len().saturating_sub(1))).cloned() {
+                            let (pos, id) = (self.towers[t].pos, self.towers[t].id);
+                            // (Made in the paragon's Process: it acts from the next frame; recording
+                            // wizard_paragon_r40, Dark Phoenix 855 there at 181, first shot at 182.)
+                            self.spawn_sub(spec, pos, id, false);
+                        }
+                    }
+                }
             }
             // (A pet is made in its handler's Process: its own start with the next frame; recording
             // beast_upgrades_r30, a pet upgraded in at rt 400 aims at rt 402.)
@@ -13210,12 +13378,21 @@ impl Game {
             // and ahead of the tower's Weapons' shots (recording engineer_205: the Bloon Trap's two
             // before the Spawner's shot).
             let mut track_draws: Option<(f32, f32)> = None;
+            // The Magus graveyard this tower's weapons read: (state, pool, max) of itself or its
+            // parent paragon.
+            let magus_owner = self.magus_owner(t);
+            let magus_view: Option<(u8, f32, f32)> = magus_owner.and_then(|o| self.tier(o).and_then(|tr| tr.magus.as_ref()).map(|m| (self.towers[o].magus_state, self.towers[o].magus_pool, m.max as f32)));
             for (ai, attack) in tier.attacks.iter().chain(extra.iter()).enumerate() {
                 // (LineProjectileEmission.Emit / InstantDamageEmission.Process act as their weapon
                 // fires, before the next attack looks for a target: recording desperado_050 rt 73, the
                 // pistol's hit marks the MOAB and the rifle's line pops it before the mark attack aims.)
                 if self.in_step && !self.instant_hits.is_empty() {
                     self.instant_pass();
+                }
+                // (PauseAttack: an attack outside the Magus graveyard's state doesn't act.)
+                if !self.towers[t].paused_attacks.is_empty() && self.towers[t].paused_attacks.contains(&attack.model_name) {
+                    wi += attack.weapons.len();
+                    continue;
                 }
                 // At an activation only the ability's attacks act, those ActivateAttack.Activate
                 // (VERIFIED-DISASM @0xe20900) processes then: processOnActivate or isOneShot
@@ -14382,7 +14559,19 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             (0.0, [from[0] + d[0] * r, from[1] + d[1] * r], 0u64)
                         })
                     });
-                    let decide = empty_clip.or(best).or(ambient.then_some((0.0, pos, 0))).filter(|_| quota_left && rounds_on && grave_ok);
+                    // MagusPerfectusGraveyard.FilterEmission (VERIFIED-DECOMP @0x180c7eb40): a negative
+                    // graveyardManaChange fires in Consuming (0) while the mana isn't negative; a
+                    // positive one in Generating (1) below the max.
+                    // (MagusPerfectusGraveyard.get_GraveyardManager: the paragon's, for its Dark Phoenix too.)
+                    let mg_state = magus_view.map_or(3, |v| v.0);
+                    let mg_pool = magus_view.map_or(0.0, |v| v.1);
+                    let mg_max = magus_view.map_or(0.0, |v| v.2);
+                    let magus_ok = match weapon.mana {
+                        0 => true,
+                        m if m < 0 => mg_state == 0 && mg_pool >= 0.0,
+                        _ => mg_state == 1 && mg_pool < mg_max,
+                    };
+                    let decide = empty_clip.or(best).or(ambient.then_some((0.0, pos, 0))).filter(|_| quota_left && rounds_on && grave_ok && magus_ok);
                     // Weapon.Process (VERIFIED-DISASM @0xc6f800): once lastEmission + rateFrames
                     // <= its clock and the attack has a target, the throw animation starts and
                     // the cooldown restarts there; the projectile leaves animationOffsetFrames
@@ -15490,6 +15679,25 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             // HYPOTHESIS P-INSTANTDOUBLE: a missed-frame extra shot isn't in this frame's
                             // InstantDamageEmission.Process; it hits in the next collision pass
                             // (recording sniper_005: two hits on 132 after the double shot on 131).
+                            // MagusPerfectusGraveyard.ProjectilesCreated (VERIFIED-DECOMP @0x180c7ecf0): a
+                            // negative change ConsumeMana(|change|) (@0x180d35df0: short of it, the state
+                            // goes to Generating), a positive one adds it (GenerateMana, up to the max).
+                            if weapon.mana != 0 {
+                                if let Some(o) = self.magus_owner(t) {
+                                    if let Some(m) = self.tier(o).and_then(|tr| tr.magus.clone()) {
+                                        let need = weapon.mana.unsigned_abs() as f32;
+                                        if weapon.mana < 0 {
+                                            if self.towers[o].magus_pool >= need {
+                                                self.towers[o].magus_pool -= need;
+                                            } else {
+                                                self.magus_switch(o, 1, &m);
+                                            }
+                                        } else {
+                                            self.towers[o].magus_pool = (self.towers[o].magus_pool + need).min(m.max as f32);
+                                        }
+                                    }
+                                }
+                            }
                             // CritRoll.ProjectilesCreated (VERIFIED-DISASM @0xc71dd0): each shot gets a roll
                             // of chance + CritChanceOffset; CritRollWithDistance's (@0xc71790) is the
                             // tower-to-Target distance, rounded half to even, x bonusPerDistance.
@@ -17118,7 +17326,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     }
 
     fn tower_height(&self, t: usize) -> f32 {
-        if self.towers[t].sub.as_ref().is_some_and(|s| s.spec.circle.is_some()) { 250.0 } else { 0.0 }
+        // (TowerCreateParagonTower.Process @0x180da3fe0: an isAirBasedTower is made at z 250;
+        // recording wizard_paragon_r40 rt 327, the Dark Phoenix's balls at 257 fly over the trees.)
+        if self.towers[t].sub.as_ref().is_some_and(|s| s.spec.circle.is_some() || s.spec.air_based) { 250.0 } else { 0.0 }
     }
 
     /// Bloon.PercThroughMap (VERIFIED-DISASM @0x180fb54f0): (distanceTraveled + MaxDistUntilSpawn) /
@@ -18296,6 +18506,19 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             self.emit_z = z;
             self.emit_target = target;
             self.emit_dir_rot = Some(dir_rot);
+            // A LineProjectileEmission (the Ice paragon's beam): Emit from the tower (not
+            // dontUseTowerPosition) along its rotation (useTowerRotation), its hits at once.
+            if ex.emission.kind == "Line" && ex.emission.line_grow.is_none() && !ex.emission.line_plain {
+                if let Some(ti) = self.towers.iter().position(|t| t.id == owner) {
+                    let (from, rot) = (self.towers[ti].pos, self.towers[ti].game_rot.or(grot).unwrap_or(0.0));
+                    self.exhaust_line(from, pos, rot, &ex.emission, &ex.projectile, tiers, owner);
+                    self.emit_target = None;
+                    self.emit_dir_rot = None;
+                    self.emit_rot = None;
+                    self.emit_z = 0.0;
+                    continue;
+                }
+            }
             self.emit(pos, dir, &ex.emission, &ex.projectile, None, tiers, owner); // P-EXHAUST
             self.emit_target = None;
             self.emit_aim = None;
@@ -18313,6 +18536,125 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 }
             }
         }
+    }
+
+    /// LineProjectileEmission.Emit (VERIFIED-DISASM @0x180c43e80) without useLengthSpeed or
+    /// useTargetAsEndPoint, made by a projectile (CreateProjectileOnExhaustFraction.CheckFraction ->
+    /// Emit, recording ice_paragon_r40 rt 189 HS stacks): the line runs the constant 400 from
+    /// `from` along game rotation `rot` (clipped at a blocker unless ignoreBlockers);
+    /// CollisionGrid.GetInLine orders the bloons on it by distance; projectileInitialHitModel is
+    /// made on the first valid one and collides at once, then the line takes the rest
+    /// (Skip(index + 1) of the sequence walked again). Same as the weapon path's Ray of Doom branch.
+    /// `key_from`: Emit's ejectPoint, the BaseProjectile's spot; the line's list is ordered by each
+    /// bloon's distance to it (<>c__DisplayClass20_0.<Emit>b__0 @0x180c4d880).
+    fn exhaust_line(&mut self, from: [f32; 2], key_from: [f32; 2], rot: f32, emission: &Emission, proj: &Proj, tiers: [u8; 3], owner: u64) {
+        let gd = game_dir(rot);
+        let mut end = [from[0] + gd[0] * 400.0, from[1] + gd[1] * 400.0];
+        if !emission.line_ignore_blockers {
+            if let Some(q) = self.blocker_clip(from, 0.0, end) {
+                end = q;
+            }
+        }
+        let span = (end[0] - from[0]).hypot(end[1] - from[1]);
+        let a = (end[1] - from[1]).atan2(end[0] - from[0]);
+        let (ls, lc) = a.sin_cos();
+        let r = proj.radius;
+        let scan = |g: &Self| -> Vec<u64> {
+            let mut found: Vec<(f32, u64)> = Vec::new();
+            if r > 0.0 {
+                let mut tt = r;
+                while tt <= span {
+                    let c = [from[0] + lc * tt, from[1] + ls * tt];
+                    // (CollisionGrid.GetInLine yields a bloon at every sample that meets it: recording
+                    // ice_paragon_r40 (SimRecorder CB list) rt 189, the MOAB's object four times, so
+                    // Skip(1) after the initial hit leaves it in the list.)
+                    for (i, b) in g.bloons.iter().enumerate() {
+                        let d = &g.defs[b.kind];
+                        // (A bloon made since the grid was filled isn't in it: recording
+                        // ice_paragon_r40 rt 189, the MOAB's new Ceramics aren't in the list.)
+                        if !b.unplaced && grid_hit(c, r, b.pos, b.cell_pos, d.radius)
+                            && (!g.has_grid_rank || g.ggrid.visits(c, r, i, b.cell_pos))
+                            && circles_hit(c, r, b.pos, b.rot, &d.circles)
+                        {
+                            found.push(((b.pos[0] - key_from[0]).hypot(b.pos[1] - key_from[1]), b.id));
+                        }
+                    }
+                    tt = r + r + tt;
+                }
+            }
+            found.sort_by(|x, y| x.0.total_cmp(&y.0));
+            found.into_iter().map(|f| f.1).collect()
+        };
+        // The line projectile itself, at the start.
+        let mut single = emission.clone();
+        single.kind = "Single".into();
+        single.count = 1;
+        single.line_grow = None;
+        single.line_end = None;
+        single.line_initial = None;
+        single.markers = Vec::new();
+        let start = self.projectiles.len();
+        self.emit_rot = Some(rot);
+        self.emit(from, gd[1].atan2(gd[0]), &single, proj, None, tiers, owner);
+        self.emit_rot = None;
+        let n_line = self.projectiles.len() - start;
+        let mut ids = scan(self);
+        let line_sees_camo = self.projectiles.get(start).is_none_or(|pr| pr.buff_camo || !pr.spec.filters.iter().any(|f| f == "FilterInvisibleModel"));
+        let valid_at = ids.iter().position(|id| self.bloons.iter().find(|b| b.id == *id).is_some_and(|b| line_sees_camo || !b.camo(&self.defs[b.kind])));
+        let mut initial: Vec<u64> = Vec::new();
+        if let (Some(ip), Some(k)) = (emission.line_initial.clone(), valid_at) {
+            let first = ids[k];
+            ids.drain(..=k);
+            if let Some(bp) = self.bloons.iter().find(|b| b.id == first).map(|b| b.pos) {
+                let s0 = self.projectiles.len();
+                self.emit_rot = Some(rot);
+                self.emit(bp, gd[1].atan2(gd[0]), &single, &ip, None, tiers, owner);
+                self.emit_rot = None;
+                for pr in &mut self.projectiles[s0..] {
+                    pr.pos = bp;
+                    pr.prev = bp;
+                    pr.vel = [0.0, 0.0];
+                    pr.line_hits = Some(vec![first]);
+                    pr.line_spent = true;
+                    initial.push(pr.uid);
+                }
+            }
+        }
+        let line_uids: Vec<u64> = self.projectiles[start..start + n_line].iter().map(|pr| pr.uid).collect();
+        for pr in &mut self.projectiles[start..start + n_line] {
+            pr.pos = from;
+            pr.prev = from;
+            pr.vel = [0.0, 0.0];
+            pr.line_hits = Some({ let mut seen = std::collections::HashSet::new(); ids.iter().copied().filter(|id| seen.insert(*id)).collect() });
+            pr.line_spent = true;
+        }
+        // (Made in its projectile's Process, after the bloons have moved: a pop leaves its children
+        // from where the bloon is now; recording ice_paragon_r40 rt 189, the MOAB's Ceramics back
+        // from 211.099 by 6.675 each.)
+        let after_move = self.phase >= 2;
+        let was = self.pop_after_move;
+        self.pop_after_move = after_move || was;
+        if !initial.is_empty() {
+            self.instant_hits.extend(initial.iter().copied());
+            if self.in_step {
+                self.instant_pass();
+                let mut rest: Vec<u64> = scan(self).into_iter().skip(valid_at.unwrap_or(0) + 1).collect();
+                // (Its hits: each bloon once, in that order.)
+                let mut seen = std::collections::HashSet::new();
+                rest.retain(|id| seen.insert(*id));
+                for pr in self.projectiles.iter_mut().filter(|pr| line_uids.contains(&pr.uid)) {
+                    pr.line_hits = Some(rest.clone());
+                }
+            }
+        }
+        self.instant_hits.extend(line_uids);
+        if self.in_step {
+            self.instant_pass();
+        }
+        self.pop_after_move = was;
+        // (A MOAB its hits popped takes the projectiles it carried with it at once:
+        // CarryProjectile.OnDestroy; recording ice_paragon_r40 rt 189, the Icicles at age 0.)
+        self.carry_follow(true);
     }
 
     /// Emission.BaseEmit (VERIFIED-DISASM @0xc3dce0): the emit point is raised to the Target's
@@ -18734,6 +19076,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 dir: gdir.map(|v| [v[0], -v[1]]),
                 curvy: spec.curvy.then_some((None, curvy_inc)),
                 slow: (rnd_speed.map_or(spec.speed * FRAME_TIME, |m| m * (spec.speed * FRAME_TIME)), 0.0),
+                // (TravelStraitSlowdownModel.ctor: slowdownSpeed / 60, minSpeed / 60; a paragon's models
+                // are made at run time: recording ice_paragon_r40 rt 232, the shards 5.833 -> 5.25 ->
+                // 4.667.)
+                slow_frames: match spec.slowdown {
+                    Some([sd, mn, _]) if self.towers.iter().any(|t| t.id == owner && t.paragon.is_some()) => (sd * FRAME_TIME, mn * FRAME_TIME),
+                    _ => (0.0, 0.0),
+                },
                 seek_moved: false,
                 seek_t: self.sim_elapsed,
                 turn_pf: 0.0,
@@ -19630,6 +19979,20 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 tw.necro_points = true;
             }
             self.finish_round();
+        }
+        if !self.sacrificed.is_empty() {
+            let gone = std::mem::take(&mut self.sacrificed);
+            let mut i = 0;
+            while i < self.towers.len() {
+                let o = &self.towers[i];
+                if gone.contains(&o.id) || o.sub.as_ref().is_some_and(|s| gone.contains(&s.parent)) {
+                    self.towers.remove(i);
+                    self.removed.push((i, usize::MAX));
+                } else {
+                    i += 1;
+                }
+            }
+            self.buffs = self.compute_buffs();
         }
         self.in_step = false;
     }

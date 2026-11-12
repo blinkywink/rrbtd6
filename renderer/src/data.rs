@@ -596,6 +596,12 @@ pub struct Upgrade {
 
 #[derive(Deserialize, Clone)]
 pub struct Tier {
+    /// MagusPerfectusGraveyardStateManagerModel: max mana and each state's attack names.
+    #[serde(default)]
+    pub magus: Option<Magus>,
+    /// TowerCreateParagonTowerModel: the tower a paragon makes once active, by degree / 20.
+    #[serde(default)]
+    pub paragon_towers: Vec<std::sync::Arc<SubTowerSpec>>,
     /// MonkeyopolisModel: absorbs the farms in range once (Game::monkeyopolis_absorb).
     #[serde(default)]
     pub mopolis: Option<Mopolis>,
@@ -1153,6 +1159,9 @@ pub struct Weapon {
     /// EmissionsPerRoundFilterModel.count: at most this many shots per round (bananas).
     #[serde(default)]
     pub per_round: Option<u32>,
+    /// MagusPerfectusGraveyardModel.graveyardManaChange (0: none).
+    #[serde(default)]
+    pub mana: i32,
     /// LimitProjectileModel.limit: no shot while the tower has this many unfilled traps out.
     #[serde(default)]
     pub limit: Option<u32>,
@@ -1789,6 +1798,12 @@ pub struct Proj {
     /// linked one): the tower's range + this offset.
     #[serde(default)]
     pub range_radius: Option<f32>,
+    /// SpawnZombieOnBloonDestroyedModel.
+    #[serde(default)]
+    pub zombie: Option<Box<Zombie>>,
+    /// DestroyProjectileIfTowerDestroyedModel: gone once its tower is.
+    #[serde(default)]
+    pub tower_bound: bool,
     /// InstantModel: hits its target bloon (FilterAllExceptTargetModel) the frame it is fired.
     #[serde(default)]
     pub instant: bool,
@@ -2145,6 +2160,9 @@ pub struct FanClub {
 
 #[derive(Deserialize, Clone)]
 pub struct OrbitTower {
+    /// OrbitingTowerModel.offset: added to the game's y (recording wizard_paragon_r40).
+    #[serde(default)]
+    pub offset: f32,
     pub radius: f32,
     pub rate: f32,
 }
@@ -2403,6 +2421,9 @@ pub struct AirPattern {
 
 #[derive(Deserialize)]
 pub struct SubTowerSpec {
+    /// TowerCreateParagonTowerModel.isAirBasedTower: made at z 250 (the Dark Phoenix).
+    #[serde(default)]
+    pub air_based: bool,
     /// TowerModel.dontAddMutatorsFromParent: a parent's AddMutatorIncludeSubTowers skips it.
     #[serde(default)]
     pub no_parent_mutators: bool,
@@ -2990,4 +3011,29 @@ pub struct MopolisCost {
     pub path: usize,
     pub per_farm: f32,
     pub filter: String,
+}
+
+/// MagusPerfectusGraveyardStateManagerModel.
+#[derive(Deserialize, Clone)]
+pub struct Magus {
+    pub max: i32,
+    /// Attack model names of Consuming (0), Generating (1), DrainingOverTime (2).
+    pub states: Vec<Vec<String>>,
+    /// rateBonusThreshold / rateMultplierAmount: the rate mutator while the graveyard is that full.
+    #[serde(default)]
+    pub rate_threshold: f32,
+    #[serde(default = "one_f32")]
+    pub rate_mult: f32,
+}
+
+/// SpawnZombieOnBloonDestroyedModel: graveyardManaCost, zombieProjectile, singleEmissionModel.
+#[derive(Deserialize, Clone)]
+pub struct Zombie {
+    pub cost: i32,
+    pub projectile: Proj,
+    pub emission: Emission,
+}
+
+fn one_f32() -> f32 {
+    1.0
 }
