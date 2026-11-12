@@ -2355,6 +2355,10 @@ def main():
                                  if b and b["type"] == "PreEmptiveStrikeLauncherModel" and deref(b["f"].get("projectileModel"))), None),
                 "preempt_offset": next(([b["f"].get("throwOffsetX", 0.0), b["f"].get("throwOffsetY", 0.0), b["f"].get("throwOffsetZ", 0.0)]
                                         for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "PreEmptiveStrikeLauncherModel"), [0.0, 0.0, 0.0]),
+                # throwOffsetSecond: Launch (@0x180d5e190) uses it on even launches (currentOffsetIndex)
+                # when it isn't zero (the Sub Paragon's).
+                "preempt_offset2": next(([b["f"].get("throwOffsetSecondX", 0.0), b["f"].get("throwOffsetSecondY", 0.0), b["f"].get("throwOffsetSecondZ", 0.0)]
+                                        for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "PreEmptiveStrikeLauncherModel"), [0.0, 0.0, 0.0]),
                 # RotateToDefaultPositionTowerModel (Buccaneer 4xx / 5xx): on reaching that tier the
                 # tower turns to `rotation` (OnUpgraded @0x180d86c70).
                 "default_rot": [[b["f"].get("rotation", 0.0), float(b["f"].get("onlyOnReachingTier", 0))]

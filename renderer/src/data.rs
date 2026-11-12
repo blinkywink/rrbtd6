@@ -644,6 +644,9 @@ pub struct Tier {
     /// PreEmptiveStrikeLauncherModel throwOffsetX / Y / Z.
     #[serde(default)]
     pub preempt_offset: [f32; 3],
+    /// throwOffsetSecondX / Y / Z (zero: unused).
+    #[serde(default)]
+    pub preempt_offset2: [f32; 3],
     /// RotateToDefaultPositionTowerModel: (rotation, onlyOnReachingTier).
     #[serde(default)]
     pub default_rot: Vec<[f32; 2]>,

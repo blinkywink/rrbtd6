@@ -1788,6 +1788,8 @@ pub struct Tower {
     /// Its DamageOverTimeZone's place in the process list (as Bloon.born): 0 when made with the
     /// tower (before every bloon), else when a Paragon purchase made it.
     pub spirit_born: u64,
+    /// PreEmptiveStrikeLauncher.currentOffsetIndex: launches so far.
+    pub preempt_n: u32,
     /// FireWhenAlternateWeaponIsReady: (main weapon id, the clock it last fired at) - its
     /// set_FireWeapon lasts until that clock + 1, unless the secondary fires first.
     pub alt_at: Vec<(i32, i64)>,
@@ -4163,7 +4165,9 @@ macro_rules! collide_pass {
                 // meet a Zebra's new Green that frame).
                 || (!direct && $s.has_grid_rank && b.fresh && pr.spec.instant)
                 || (!direct && !circles_hit(pp, pr.spec.radius, bp, b.rot, &d.circles))
-                || (pr.spec.instant && pr.spec.only_target && pr.target.is_some_and(|t| t != b.id))
+                // (With no Target at all, none: recording sub_paragon_r40 rt 3440, a TargetDamage
+                // whose strike's Black was gone (Target 0) touches a Rainbow and leaves it.)
+                || (pr.spec.instant && pr.spec.only_target && pr.target.is_none_or(|t| t != b.id))
                 // CollideOnlyWithTarget.FilterCollision (VERIFIED-DISASM @0xcbb6e0): only its
                 // Target while that is valid; none once it is gone (recording boomerang_500: a
                 // MoabDot whose glaive's target popped sits out its life, its pierce unused).
@@ -7421,6 +7425,7 @@ impl Game {
             upgraded: false,
             spirit_v: None,
             spirit_born: 0,
+            preempt_n: 0,
             alt_at: Vec::new(),
             disp_rot: None,
             takedown_throws: Vec::new(),
@@ -9036,6 +9041,7 @@ impl Game {
             upgraded: false,
             spirit_v: None,
             spirit_born: 0,
+            preempt_n: 0,
             alt_at: Vec::new(),
             disp_rot: None,
             takedown_throws: Vec::new(),
@@ -9798,9 +9804,8 @@ impl Game {
                 b.hp = hp;
             }
         }
-        if self.defs[k].tags.iter().any(|t| t == "Moabs") {
-            self.outside_track.push(id);
-        }
+        // (Every bloon: a Paragon's launcher fires at any that enters; others only at MOAB-class.)
+        self.outside_track.push(id);
     }
 
     /// Ability.OnPreLivesLost (VERIFIED-DISASM @0x180dfa8e0) for every tower: an activateOnPreLeak
@@ -10752,6 +10757,10 @@ impl Game {
             // (@0x180d8ebe0) GeneratePositions at once, recording spike_paragon_r40: 184 draws at
             // rt 61 before the Paragon's point list.)
             self.spirit_init(t);
+            // (RandomPosition.Initialise (@0x180dd2fa0) too, after it in the model's behaviours:
+            // recording druid_paragon_r40, its 1771 Next(count) draws (not in the R lines) right
+            // after the vines' 184, before the first ring's.)
+            self.random_pos_init(t);
             // (Its Zoned<Bloon> is in the process list from now: after the bloons already out,
             // which move first; recording spike_paragon_r40 rt 63, a Ceramic 40.18 away before its
             // move, 38.9 after, gets the 40 zone's CarpetSpikes.)
@@ -12829,22 +12838,40 @@ impl Game {
     /// sub_050). Children of popped bloons don't count. (throwOffsetSecond, used on every other
     /// launch when set, is zero on every Sub.)
     fn preemptive_strikes(&mut self, target: u64) {
-        if !self.bloons.iter().any(|b| b.id == target) {
+        let Some(moab) = self.bloons.iter().find(|b| b.id == target).map(|b| self.defs[b.kind].tags.iter().any(|t| t == "Moabs")) else {
             return;
-        }
+        };
         let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
         for t in 0..self.towers.len() {
+            // (Not a Paragon still paused by its sacrifice: recording sub_paragon_r40, bought at
+            // 60, no strike for the MOAB entering at rt 82.)
+            // OnBloonEnterTrack (VERIFIED-DECOMP @0x180d5e670): a Paragon's (its ParagonTower
+            // active) at any bloon; another's only at a MOAB-class one (TypedTagsBitmask 0x2000).
+            if self.towers[t].paragon.is_some() {
+                if self.sim_elapsed < self.towers[t].paragon_active_at {
+                    continue;
+                }
+            } else if !moab {
+                continue;
+            }
             let Some(proj) = self.tier(t).and_then(|tr| tr.preempt.clone()) else { continue };
-            let [ex, ey, ez] = self.tier(t).map_or([0.0; 3], |tr| tr.preempt_offset);
-            let (sa, ca) = crt_sin_cos(DEG2RAD * self.towers[t].game_rot.unwrap_or(0.0));
+            let (o1, o2) = self.tier(t).map_or(([0.0; 3], [0.0; 3]), |tr| (tr.preempt_offset, tr.preempt_offset2));
+            let n = self.towers[t].preempt_n;
+            self.towers[t].preempt_n += 1;
+            let [ex, ey, ez] = if n % 2 == 0 && o2 != [0.0; 3] { o2 } else { o1 };
+            // (Turned by minus the tower's rotation: recording sub_paragon_r40 rt 633, the second
+            // offset (-8.5, 12) at a rotation of -19.59 lands where +19.59 would.)
+            let (sa, ca) = crt_sin_cos(DEG2RAD * -self.towers[t].game_rot.unwrap_or(0.0));
             let (ox, oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
             let tp = self.towers[t].pos;
             let at = [tp[0] + ox, tp[1] - (oy - ez / TAN60)];
             let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
             let start = self.projectiles.len();
             self.emit(at, 0.0, &single, &proj, None, tiers, owner);
+            let obj = self.bloons.iter().find(|b| b.id == target).map(|b| b.obj);
             for pr in &mut self.projectiles[start..] {
                 pr.target = Some(target);
+                pr.target_obj = obj;
                 pr.pos = at;
             }
         }
@@ -18593,7 +18620,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // Only Expire, its lifespan run out, first runs Expired: CreateProjectileOnExpire,
             // VERIFIED-DISASM Projectile.Expire @0xcab2a0; recording sub_003, an Airburst
             // dart out of pierce on a Lead makes 3 darts, not 6.)
-            let expired = pr.pierce > 0.0;
+            // (One kept at 0 pierce (ignorePierceExhaustion) whose lifespan runs out is Expired
+            // too: recording sub_paragon_r40 rt 675, a Paragon strike spent on its Black still
+            // leaves its TargetDamage.)
+            let expired = pr.pierce > 0.0 || (pr.spec.keep_spent && pr.frames_left <= 0.0);
             let order = pr.spec.on_exhaust.iter().enumerate().filter(|e| e.1.expire).chain(pr.spec.on_exhaust.iter().enumerate().filter(|e| !e.1.expire));
             for (k, ex) in order {
                 if pr.exhaust_done & (1 << k) != 0 || (!self.rounds_active() && !ex.between_rounds) || (ex.expire && !expired) {
@@ -18626,7 +18656,16 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     ex.stale_target = pr.target_obj.map(|o| (o, pr.inst_off));
                 }
                 ex.src = pr.uid;
-                out.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
+                // (The Target holds the bloon object: one popped since and reused by the pool for a
+                // new bloon is that bloon now; recording sub_paragon_r40 rt 1375, a strike's Black
+                // 1512 popped at 1363, its object back as 1570, which the TargetDamage hits.)
+                let mut tgt = pr.aim.or(pr.target);
+                if pr.aim.is_none() && !tgt.is_some_and(|id| self.bloons.iter().any(|b| b.id == id)) {
+                    if let Some(b) = pr.target_obj.and_then(|o| self.bloons.iter().find(|b| b.obj == o)) {
+                        tgt = Some(b.id);
+                    }
+                }
+                out.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, tgt, (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
             }
             // CreateTypedTower.Exhausted: the towerModelToMake chosen when it was fired.
             let n = pr.spec.create_tower.len();
@@ -19578,7 +19617,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 Some((p, kind)) if on_map(p, 0.0) => {
                     self.outside_track.remove(k);
                     self.preemptive_strikes(id);
-                    self.enter_voice(kind);
+                    if self.defs[kind].tags.iter().any(|t| t == "Moabs") {
+                        self.enter_voice(kind);
+                    }
                 }
                 Some(_) => k += 1,
             }
@@ -19708,7 +19749,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         self.orbit_step(true);
         for t in 0..self.towers.len() {
             let stamp = self.towers[t].spirit_born;
-            if stamp != 0 && self.towers[t].spirit_v.is_some() {
+            // (Not on the frame it was made in: Simulation adds a new process after the list's
+            // walk; recording druid_paragon_r40, bought at 60, the MOAB 47.97 away at rt 61 enters
+            // the 48 zone only at 62.)
+            if stamp != 0 && self.towers[t].spirit_v.is_some() && self.sim_elapsed * 4 > stamp + 4 {
                 self.process_bloons_before(stamp, &mut early, round_clock, &mut dots, &mut emits, &zones, &shoves, &mut leak_voice);
                 self.spirit_of_the_forest(None, Some(t));
             }
@@ -20208,10 +20252,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     }
                 }
             }
-            // The round's end flushes the factories too (VERIFIED by recording: Path.bloonsList
-            // drops its dead entries that frame).
+            // The round's end flushes the path lists (VERIFIED by recording: Path.bloonsList
+            // drops its dead entries that frame), not the bloon factory: recording
+            // sub_paragon_r40, a Zebra popped as round 41 ends keeps its object out of the pool
+            // (a strike's Target on it stays empty), and round 42's first Rainbow takes another.
             self.plist_flush();
-            self.fact_flush();
             // Simulation.RoundEnd -> DistributeXp(completed round index): heroes get the round's
             // XP (DistributeXpToHeroes), the towers' share it (InputManager.DistributeXp).
             let xp = Self::xp_for_round(self.round as i32) * self.map_difficulty.map_or(1.0, |m| TRACK_DIFFICULTY_XP_SCALE[m.min(3)]);
