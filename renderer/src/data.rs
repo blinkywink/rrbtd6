@@ -1674,6 +1674,10 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// CreateProjectilesOnTrackOnExhaustFractionModel.range (Spike Paragon pile): at Initialise
+    /// the path segments within it of the target are shuffled.
+    #[serde(default)]
+    pub track_exhaust_range: f32,
     /// DamageModifierUnstableConcoction (set as an Unstable Concoction explosion is made): extra
     /// damage on (non-MOAB, MOAB-class) bloons.
     #[serde(skip)]
@@ -2202,6 +2206,9 @@ pub struct SpiritZone {
     pub mult: f32,
     #[serde(default)]
     pub add: f32,
+    /// Its DamageOverTimeCustomModel's DamageModifierForTagModels.
+    #[serde(default)]
+    pub tag_mods: Vec<TagMod>,
 }
 
 /// MorphTowerModel (mutateAll): `max` towers on `affect` (none with an `ignore` mutator, no

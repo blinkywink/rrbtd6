@@ -1785,6 +1785,9 @@ pub struct Tower {
     /// SpiritOfTheForest: (currentRadius, currentGeneratedRadius, vineSeedOrigin, positions,
     /// lastRoundElapsed).
     pub spirit_v: Option<(f32, f32, [f32; 2], Vec<[f32; 2]>, i64)>,
+    /// Its DamageOverTimeZone's place in the process list (as Bloon.born): 0 when made with the
+    /// tower (before every bloon), else when a Paragon purchase made it.
+    pub spirit_born: u64,
     /// FireWhenAlternateWeaponIsReady: (main weapon id, the clock it last fired at) - its
     /// set_FireWeapon lasts until that clock + 1, unless the secondary fires first.
     pub alt_at: Vec<(i32, i64)>,
@@ -2640,6 +2643,8 @@ pub struct Projectile {
     moving: f32,
     /// ArriveAtTarget: (startFrame, origPos, targetPos).
     arrive_at: Option<(u64, [f32; 2], [f32; 2])>,
+    /// CreateProjectilesOnTrackOnExhaustFraction.targetPathSegments, shuffled.
+    track_segs_shuffled: Vec<(u8, usize)>,
     /// ArriveAtTarget.startPos.z: SetTarget times a new Target from it (altSpeed).
     arrive_z0: f32,
     /// ArriveAtTarget's timeToTake (seconds) for this shot.
@@ -6082,7 +6087,7 @@ impl Game {
         let id = self.spawn_at(kind, dist, path);
         let pos = self.bloons.last().map_or([0.0; 2], |b| b.pos);
         if !self.bloons.is_empty() {
-            self.spirit_of_the_forest(Some(self.bloons.len() - 1));
+            self.spirit_of_the_forest(Some(self.bloons.len() - 1), None);
         }
         // Zoned<Bloon>.BehaviorCreated: a bloon the round spawns goes into each Vagrant bloon zone it is in at once
         // (recording desperado_032 rt 1001: a Black spawned that frame 47.9 away counts for the
@@ -7011,10 +7016,12 @@ impl Game {
     /// over currentGeneratedRadius by more than generateRadius, the positions in the next ring
     /// (over gen, under gen + generateRadius from vineSeedOrigin) each AddObjectAtPosition
     /// (@0x180d92f10: NextDouble for the object, the rotation, the scale), and gen grows a ring.
-    fn spirit_grow(&mut self) {
-        for t in 0..self.towers.len() {
-            let Some(sp) = self.tier(t).and_then(|x| x.spirit.clone()) else { continue };
-            let Some((mut cur, mut gnr, origin, pos, last)) = self.towers[t].spirit_v.clone() else { continue };
+    /// (In the tower's turn, after its attacks: recording spike_paragon_r40 rt 61, the Paragon's
+    /// 12-point shuffle, then its first ring's 18 draws.)
+    fn spirit_grow(&mut self, t: usize) {
+        {
+            let Some(sp) = self.tier(t).and_then(|x| x.spirit.clone()) else { return };
+            let Some((mut cur, mut gnr, origin, pos, last)) = self.towers[t].spirit_v.clone() else { return };
             let now = self.round_clock;
             cur = (now - last) as f32 * sp.per_frame + cur;
             if sp.circle <= cur && cur != sp.circle {
@@ -7413,6 +7420,7 @@ impl Game {
             spawn_objs: Vec::new(),
             upgraded: false,
             spirit_v: None,
+            spirit_born: 0,
             alt_at: Vec::new(),
             disp_rot: None,
             takedown_throws: Vec::new(),
@@ -9027,6 +9035,7 @@ impl Game {
             spawn_objs: Vec::new(),
             upgraded: false,
             spirit_v: None,
+            spirit_born: 0,
             alt_at: Vec::new(),
             disp_rot: None,
             takedown_throws: Vec::new(),
@@ -10739,6 +10748,14 @@ impl Game {
             let s = self.tier_sounds(t);
             self.sound(&s.upgrade, None);
             self.sync_abilities(t);
+            // (Its new behaviours Initialise with the model: SpikeParagonDamageZone.Initialise
+            // (@0x180d8ebe0) GeneratePositions at once, recording spike_paragon_r40: 184 draws at
+            // rt 61 before the Paragon's point list.)
+            self.spirit_init(t);
+            // (Its Zoned<Bloon> is in the process list from now: after the bloons already out,
+            // which move first; recording spike_paragon_r40 rt 63, a Ceramic 40.18 away before its
+            // move, 38.9 after, gets the 40 zone's CarpetSpikes.)
+            self.towers[t].spirit_born = self.sim_elapsed * 4 + 3;
             true
         }
     }
@@ -11162,6 +11179,30 @@ impl Game {
     /// mutator id and cut to each id's stack limit. HYPOTHESIS P-SUPPORT: a tower is in range
     /// when its footprint touches the support radius (custom radius, else the source's range);
     /// a non-stacking id keeps its strongest instance.
+    /// CreateProjectilesOnTrackOnExhaustFraction's targetPathSegments for projectile `p`:
+    /// PathManager.GetPathSegmentsInRange (@0x180f6ba10; Path.IsSegmentInRange @0x180f6fa50:
+    /// targetable, distance^2 < range^2; paths in order, segments ascending) round `c`, shuffled
+    /// with syncedRandom (forward Fisher-Yates, @0x1818bce60).
+    fn pile_segments(&mut self, p: usize, c: [f32; 2], r: f32) {
+        let mut segs: Vec<(u8, usize)> = Vec::new();
+        for (pi, sg) in self.track_segs.iter().enumerate() {
+            for (k, q) in sg.iter().enumerate() {
+                if !self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false) {
+                    continue;
+                }
+                if (q[0] - c[0]) * (q[0] - c[0]) + (q[1] - c[1]) * (q[1] - c[1]) < r * r {
+                    segs.push((pi as u8, k));
+                }
+            }
+        }
+        let n = segs.len();
+        for i in 0..n {
+            let j = i + (self.synced_double() * (n - i) as f64) as usize;
+            segs.swap(i, j.min(n - 1));
+        }
+        self.projectiles[p].track_segs_shuffled = segs;
+    }
+
     /// Tower.IsParentTowerAParagonRecursive with the tower itself: a Paragon, or a sub-tower
     /// whose parent chain reaches one.
     fn paragon_rooted(&self, t: usize) -> bool {
@@ -12201,8 +12242,12 @@ impl Game {
     /// at 61 takes 15 + 5 + 10 at 63, 93, 123, 153; its Ceramics, born at 153, at 154.
     /// `only`: Zoned<Bloon>.BehaviorCreated for a bloon the round just spawned (recording druid_050
     /// rt 156: a Black spawned 47.86 away, within 48, ticks at 157).
-    fn spirit_of_the_forest(&mut self, only: Option<usize>) {
+    /// `sel`: None, the zones made with their towers (they run before the bloons); Some(t), tower
+    /// t's alone (one made later, run in its place after the older bloons' Process);
+    /// with `only` every zone.
+    fn spirit_of_the_forest(&mut self, only: Option<usize>, sel: Option<usize>) {
         let druids: Vec<(usize, u64, crate::data::Spirit, f32)> = (0..self.towers.len())
+            .filter(|&t| sel.map_or(only.is_some() || self.towers[t].spirit_born == 0, |x| x == t))
             .filter_map(|t| Some((t, self.towers[t].id, self.tier(t)?.spirit.clone()?, self.towers[t].spirit_v.as_ref()?.1)))
             .collect();
         if druids.is_empty() {
@@ -12210,20 +12255,22 @@ impl Game {
         }
         for (t, owner, sp, gnr) in druids {
             let c = self.towers[t].pos;
-            for k in 0..3 {
+            // (zones: close, middle, far; a Spike Paragon's one, as far.)
+            let nz = sp.zones.len().min(3);
+            for k in 0..nz {
                 let r = match k {
                     0 => gnr,
                     1 => if sp.middle <= gnr { sp.middle } else { gnr },
                     _ => if sp.close <= gnr { sp.close } else { gnr },
                 };
-                // (zones: close, middle, far.)
-                let Some(z) = sp.zones.get(2 - k).cloned() else { continue };
+                let Some(z) = sp.zones.get(nz - 1 - k).cloned() else { continue };
                 let id = &z.id;
-                let mods: std::sync::Arc<[TagMod]> = if z.tags.is_empty() {
-                    Default::default()
-                } else {
-                    vec![TagMod { tag: z.tags.join(","), mult: z.mult, add: z.add, all: false }].into()
-                };
+                let mut mv: Vec<TagMod> = Vec::new();
+                if !z.tags.is_empty() {
+                    mv.push(TagMod { tag: z.tags.join(","), mult: z.mult, add: z.add, all: false });
+                }
+                mv.extend(z.tag_mods.iter().cloned());
+                let mods: std::sync::Arc<[TagMod]> = mv.into();
                 // (Zoned.Run: BloonEnter for one newly in, BloonExit only for one it had in; a
                 // child made outside keeps the mutators it copied: recording druid_050 rt 158, a
                 // Yellow born 55 away ticks twice.)
@@ -12441,6 +12488,14 @@ impl Game {
         let tw = &mut self.towers[t];
         let temp: Vec<String> = tw.temp.iter().map(|x| x.attack.model_name.clone()).collect();
         tw.track_sets.retain(|x| names.contains(&x.key) || temp.contains(&x.key));
+        // (Under the new model's range: recording spike_paragon_r40, the Paragon's 42 gives 12
+        // points where the 5-0-0's gave 9.)
+        let ranges: Vec<(String, f32)> = self.tier(t).map(|tr| tr.attacks.iter().map(|a| (a.model_name.clone(), a.range)).collect()).unwrap_or_default();
+        for set in self.towers[t].track_sets.iter_mut() {
+            if let Some((_, r)) = ranges.iter().find(|(n, _)| *n == set.key) {
+                set.args.1 = *r;
+            }
+        }
         for k in 0..self.towers[t].track_sets.len() {
             self.track_supply_refresh_one(t, k);
         }
@@ -12464,6 +12519,12 @@ impl Game {
                 self.towers[t].sor_until = on as u64;
             }
             let sor = self.towers[t].sor_until != 0;
+            // (Becoming a Paragon is a new model, and StartSacrifice's paragon mutator after the
+            // attack's first Process another: recording spike_paragon_r40, the Paragon's 12 points
+            // shuffled at rt 61 and again at 62.)
+            if self.towers[t].paragon.is_some() {
+                (1u8, self.sim_elapsed > self.towers[t].paragon_first).hash(&mut h);
+            }
             // (An ability's attacks don't remake theirs as the mutator comes off, only as it goes
             // on at a round start (towers_phase): recording spike_052 rt 308, the tower's 19
             // points shuffled alone.)
@@ -12954,7 +13015,19 @@ impl Game {
         let mut deferred: Vec<(u64, u64, usize)> = Vec::new();
         // Towers Monkeyopolis destroyed this phase: they don't process, and go after it.
         let mut absorbed: Vec<u64> = Vec::new();
+        // (An ability's TargetTrack attacks run their first Process in their tower's turn, after
+        // its own attacks: recording spike_paragon_r40, the 0-5-0's four Spike Storm lists shuffled
+        // before the 0-0-5's points; spike_050, after the tower's first throw.)
+        let mut prev: Option<usize> = None;
+        let mut inited: Vec<u64> = Vec::new();
         for t in only_temp.map_or_else(|| (0..self.towers.len()).collect::<Vec<_>>(), |t| vec![t]) {
+            if only_temp.is_none() {
+                if let Some(pt) = prev.replace(t) {
+                    self.track_sets_init(pt);
+                    inited.push(self.towers[pt].id);
+                    self.spirit_grow(pt);
+                }
+            }
             if absorbed.contains(&self.towers[t].id) {
                 continue;
             }
@@ -16146,6 +16219,23 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             // (Weapon.Process's missed-frame shots are made in one go and get one
                             // ProjectilesCreated: recording spike_050, a storm weapon's two spikes
                             // draw their two AgeRandom lifespans, then their two rotations.)
+                            // CreateProjectilesOnTrackOnExhaustFraction.Initialise (VERIFIED-DECOMP
+                            // @0x180caa3e0), as the shot is made: PathManager.GetPathSegmentsInRange
+                            // (@0x180f6ba10, Path.IsSegmentInRange: targetable, distance^2 < range^2;
+                            // paths in order, segments ascending) round its target, shuffled with
+                            // syncedRandom (forward Fisher-Yates), before ProjectilesCreated's
+                            // rotation (recording spike_paragon_r40 rt 661: two offset draws, 22
+                            // segments, then the pile's rotation).
+                            for p in start..self.projectiles.len() {
+                                let r = self.projectiles[p].spec.track_exhaust_range;
+                                if r <= 0.0 {
+                                    continue;
+                                }
+                                // (pos is Vector3.zero, and so is the Target's position: the shot's
+                                // Target isn't set yet as it Initialises. The segments are those
+                                // round the map's centre: 22 for every pile in the recording.)
+                                self.pile_segments(p, [0.0, 0.0], r);
+                            }
                             if weapon.random_rot {
                                 rot_defer += self.projectiles.len() - start;
                             }
@@ -16330,6 +16420,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 }
             }
         }
+        if let Some(pt) = prev {
+            self.track_sets_init(pt);
+            inited.push(self.towers[pt].id);
+            self.spirit_grow(pt);
+        }
         // (Simulation.DestroyTower for Monkeyopolis's farms: gone, no refund; their sub-towers
         // with them.)
         if !absorbed.is_empty() {
@@ -16358,7 +16453,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // attacks: recording spike_050, Spike Storm's four lists shuffled after the first throw.)
         if only_temp.is_none() {
             for t in 0..self.towers.len() {
-                self.track_sets_init(t);
+                if !inited.contains(&self.towers[t].id) {
+                    self.track_sets_init(t);
+                }
                 // Darkshift.Process (VERIFIED-DECOMP @0x180e225e0): EndDarkshift on frameToMove,
                 // after that frame's attacks (recording super_004 rt 135: the last dart leaves
                 // from the old spot, the tower is at the new one as the frame ends).
@@ -19256,6 +19353,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 bolt_from: None,
                 moving: 0.0,
                 arrive_at: None,
+                track_segs_shuffled: Vec::new(),
                 arrive_z0: 0.0,
                 arrive_time: 0.0,
                 rounds_left: spec.rounds,
@@ -19424,8 +19522,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         }
         self.comanche_decide();
         self.forget_untouched();
-        self.spirit_grow();
-        self.spirit_of_the_forest(None);
+        self.spirit_of_the_forest(None, None);
         self.collect_zones();
         self.auto_abilities();
 
@@ -19609,6 +19706,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             }
         }
         self.orbit_step(true);
+        for t in 0..self.towers.len() {
+            let stamp = self.towers[t].spirit_born;
+            if stamp != 0 && self.towers[t].spirit_v.is_some() {
+                self.process_bloons_before(stamp, &mut early, round_clock, &mut dots, &mut emits, &zones, &shoves, &mut leak_voice);
+                self.spirit_of_the_forest(None, Some(t));
+            }
+        }
         let e = p1.elapsed().as_secs_f64();
         self.prof[1] += e;
         self.prof_max[1] = self.prof_max[1].max(e);
@@ -20038,6 +20142,19 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // round 41 starts at 184, the frame after the hook goes.)
         if self.round_active && self.pending.is_empty() && (self.bloons.is_empty() || emitted) && self.hooks.iter().all(|h| !h.back) {
             self.round_active = false;
+            // CreateProjectilesOnTrackOnExhaustFraction.GeneratePoints (VERIFIED-DECOMP
+            // @0x180ca9c40) for every live pile as the round ends, in list order: the path segments
+            // within range of where it is (its Target's position now), shuffled. INFERRED from
+            // recording spike_paragon_r40 rt 2845 / 3542: 25, 12, 27, 12 (and 15) segments drawn,
+            // no MiniSpikes made, the piles kept (Exhausted's AreRoundsActive check).
+            for p in 0..self.projectiles.len() {
+                let r = self.projectiles[p].spec.track_exhaust_range;
+                if r <= 0.0 {
+                    continue;
+                }
+                let c = self.projectiles[p].arrive_at.map_or(self.projectiles[p].pos, |a| a.2);
+                self.pile_segments(p, c, r);
+            }
             // TargetTrack's round events (OnEarlyRoundEnd / OnRoundSet): GeneratePoints.
             for tw in &mut self.towers {
                 tw.necro_points = true;

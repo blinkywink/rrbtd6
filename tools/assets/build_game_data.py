@@ -991,6 +991,10 @@ def main():
                 if deref(cf.get("projectile")):
                     out["on_contact"].append({"projectile": projectile(deref(cf["projectile"]), depth + 1),
                                               "emission": emission(deref(cf.get("emission"))), "at_shot": True, "map_only": True})
+            # CreateProjectilesOnTrackOnExhaustFractionModel (Spike Paragon pile): Initialise
+            # (@0x180caa3e0) shuffles the path segments within `range` of its target.
+            for ce in pb.get("CreateProjectilesOnTrackOnExhaustFractionModel", []):
+                out["track_exhaust_range"] = ce["f"].get("range", 0.0)
             for ce in pb.get("CreateProjectileOnExhaustPierceModel", []):
                 cf = ce["f"]
                 if deref(cf.get("projectile")):
@@ -2288,11 +2292,18 @@ def main():
                                                        "immune": d.get("immuneBloonProperties", 0),
                                                        "tags": [t for t in (deref(d.get("bloonTagsList")) or []) if isinstance(t, str)],
                                                        "mult": d.get("multiplier", 1.0), "add": d.get("additive", 0.0),
+                                                       "tag_mods": [tag_mod(m) for m in items(d.get("damageModifierModels"))
+                                                                    if m and m["type"] == "DamageModifierForTagModel" and m["f"].get("tag")],
                                                        "id": z.get("mutatorId") or z.get("_name", "")})(
                                                (deref(b["f"].get(k)) or {}).get("f", {}),
                                                ((deref((deref(b["f"].get(k)) or {}).get("f", {}).get("behaviorModel")) or {}).get("f") or {}))
-                                           for k in ("damageOverTimeZoneModelClose", "damageOverTimeZoneModelMiddle", "damageOverTimeZoneModelFar")]}
-                                for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "SpiritOfTheForestModel"), None),
+                                           for k in ("damageOverTimeZoneModelClose", "damageOverTimeZoneModelMiddle", "damageOverTimeZoneModelFar", "damageOverTimeZoneModel")
+                                           if deref(b["f"].get(k))]}
+                                # SpikeParagonDamageZoneModel (Spike Paragon's carpet): the same growing
+                                # rings and positions (SpikeParagonDamageZone.GeneratePositions / Update /
+                                # AddObjectAtPosition, @0x180d8e2e0 / @0x180d8f700 / @0x180d8dd10), one
+                                # zone whose range is currentGeneratedRadius (GetRange @0x180cb58b0).
+                                for b in items(tobj["f"]["behaviors"]) if b and b["type"] in ("SpiritOfTheForestModel", "SpikeParagonDamageZoneModel")), None),
                 # CollectCashZoneModel (Banana Farm x-x-5): bananas landed within its range (or
                 # attractRange) are collected for you.
                 "collect_zone": next(((0.0 if b["f"].get("useTowerRange") else b["f"].get("attractRange", 0.0))
