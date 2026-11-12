@@ -4947,7 +4947,7 @@ macro_rules! collide_pass {
         let pr = &$s.projectiles[$p];
         // (A dontUseCollisionChecker projectile skips this too: recording bomb_005, a Bomb
         // Blitz Cluster fragment flies on past a tree.)
-        if !pr.spec.ignore_blockers && !(pr.spec.no_checker && $only.is_none()) && pr.spec.blocker_rebound.is_none() && !(pr.spec.instant && pr.born >= $s.sim_elapsed * 4) && (pr.target.is_none() || pr.spec.only_target) && pr.pierce > 0.0 && pr.frames_left > 0.0 && $s.blocker_hit(pr.prev, pr.spec.vs_blocker_radius, pr.z) {
+        if !pr.spec.ignore_blockers && !(pr.spec.no_checker && $only.is_none()) && pr.spec.blocker_rebound.is_none() && !(pr.spec.instant && pr.born >= $s.sim_elapsed * 4) && (pr.target.is_none() || pr.spec.only_target) && pr.pierce > 0.0 && pr.frames_left >= 0.0 && $s.blocker_hit(pr.prev, pr.spec.vs_blocker_radius, pr.z) {
             // Projectile.CollideMap first: CreateProjectileOnContact.CollideMap (VERIFIED-DISASM
             // @0xcc1150) makes its projectile where the shot is (recording glue_500: a Bloon
             // Solver glob into the map's edge leaves its splat there).

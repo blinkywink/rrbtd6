@@ -35,10 +35,14 @@ The cursor, `public/cursor/hand*.png`, is BTD6's `HandCursor` and `HandCursorDow
 `local_extracted/ui/`) traced as a smooth white hand with a navy outline by `build_cursor.py`
 (its header has the command).
 
-## Vercel
+## Hosting
 
-Import `blinkywink/rrbtd6` and set Root Directory to `website`. `vercel.json` serves `public`
-as-is. Add `rusttd6.com` under Settings → Domains and copy the DNS records Vercel shows.
+GitHub Pages serves the site at `rusttd6.com`: every push to `main` that touches `website/` runs
+`.github/workflows/website.yml`, which builds with `python website/build_pages.py _site` and deploys
+it. The build copies `public` as-is and adds the security policy (CSP and referrer policy) to every
+page as `<meta>` tags, since Pages can't send custom headers. Pages serves `public/404.html` for
+missing pages. The custom domain is set under the repository's Settings → Pages (`public/CNAME`
+records it); `www` redirects to it.
 
 ## Preview
 

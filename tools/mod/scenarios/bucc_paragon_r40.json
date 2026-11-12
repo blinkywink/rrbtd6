@@ -1,0 +1,1 @@
+{"name": "bucc_paragon_r40", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "cash": 10000000, "towers": [{"id": "MonkeyBuccaneer-500", "x": -9.0, "y": 9.0, "upgrades": [{"frame": 60, "path": 3}]}, {"id": "MonkeyBuccaneer-050", "x": 6.0, "y": 9.0}, {"id": "MonkeyBuccaneer-005", "x": -1.5, "y": -6.0}], "quit": true}
