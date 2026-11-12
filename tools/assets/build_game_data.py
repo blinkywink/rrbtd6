@@ -534,6 +534,7 @@ def main():
                     df = d["f"]
                     effects.append({"kind": "emit", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
                                     "layers": sf.get("layers", 1), "interval": df["interval"],
+                                    "emit_on_destroy": bool(df.get("emitOnDestroy", False)),
                                     "projectile": projectile(deref(df["projectileModel"]), depth + 1)})
             # Projectile.CollideBloon runs the behaviours by collisionPass (the DamageModel's is
             # 0): a later pass goes on after the damage, on what the bloon is then and the
@@ -1995,6 +1996,9 @@ def main():
                                # RangeSupport.MutatorTower (@0x180d795b0) stretches TravelStrait
                                # lifespans too; ability range zones' Mutator (@0x180d79db0) doesn't.
                                "range_life": b["type"] == "RangeSupportModel",
+                               # SupportModel.onlyAffectParagon: Support.AddMutator (@0x180d9d6a0)
+                               # adds it with AddParagonMutator, the only way onto a Paragon.
+                               "only_paragon": bool(sf.get("onlyAffectParagon")),
                                "min_tiers": min_tiers,
                                "stacks": max(sf.get("maxStacks") or 0, sf.get("stackLimit") or 0, sf.get("maxStackCount") or 0, 1),
                                "sets": sets, "bases": bases, "tier_cap": sf["upgrade"] if b["type"] == "FreeUpgradeSupportModel" else sf.get("tierCap", 5),

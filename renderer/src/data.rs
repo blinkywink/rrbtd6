@@ -791,6 +791,9 @@ pub struct Support {
     /// RangeSupportModel's MutatorTower: the range buff also lengthens TravelStrait lifespans.
     #[serde(default)]
     pub range_life: bool,
+    /// SupportModel.onlyAffectParagon: put on with AddParagonMutator (Paragons only).
+    #[serde(default)]
+    pub only_paragon: bool,
 }
 
 /// ParagonTowerModel's purchase effects: [effect, scale] of the investment orb (and its tier-5
@@ -2821,6 +2824,9 @@ pub struct EffectSpec {
     pub damage: f32,
     #[serde(default)]
     pub interval: f32,
+    /// "emit": ProjectileOverTimeModel.emitOnDestroy (the Ninja paragon's sticky splash).
+    #[serde(default)]
+    pub emit_on_destroy: bool,
     #[serde(default)]
     pub immune: u32,
     /// SlowOnPopModel: only on a hit Bloon.WillPopBloon says pops it.

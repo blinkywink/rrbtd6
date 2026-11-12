@@ -835,7 +835,8 @@ pub enum EffectKind {
     /// None, lastTick -999999999), used again when a degrade makes its behaviour anew.
     Dot { damage: f32, interval: f32, tick: f32, immune: u32, mods: std::sync::Arc<[TagMod]>, start: Option<f32> },
     Brittle { damage: f32 },
-    Emit { interval: f32, tick: f32, proj: Box<Proj> },
+    /// `on_destroy`: ProjectileOverTimeModel.emitOnDestroy.
+    Emit { interval: f32, tick: f32, proj: Box<Proj>, on_destroy: bool },
     /// EmitOnPopModel: fired where the bloon pops.
     /// EmitOnPop: `ignore` its model's ignoreSameFrameDegrade, `skip` the behaviour's
     /// ignoringSameFrameDegrade (set by Initialise, cleared by Process and the first PreDegrade).
@@ -11161,19 +11162,56 @@ impl Game {
     /// mutator id and cut to each id's stack limit. HYPOTHESIS P-SUPPORT: a tower is in range
     /// when its footprint touches the support radius (custom radius, else the source's range);
     /// a non-stacking id keeps its strongest instance.
+    /// Tower.IsParentTowerAParagonRecursive with the tower itself: a Paragon, or a sub-tower
+    /// whose parent chain reaches one.
+    fn paragon_rooted(&self, t: usize) -> bool {
+        let mut cur = t;
+        for _ in 0..8 {
+            if self.towers[cur].paragon.is_some() {
+                return true;
+            }
+            let Some(p) = self.towers[cur].sub.as_ref().map(|s| s.parent) else { return false };
+            let Some(n) = self.towers.iter().position(|o| o.id == p) else { return false };
+            cur = n;
+        }
+        false
+    }
+
     fn supports_at(&self, def: usize, p: [f32; 2], skip: Option<usize>) -> Vec<(crate::data::Support, u32)> {
+        self.supports_at_ex(def, p, skip, false)
+    }
+
+    /// `first`: `skip` was placed since the last frame. Supports go on in the process order (a
+    /// support tower's zone runs in its Process): only towers before it reach it on its first
+    /// frame, a tower placed in the same frame among them, not its own (recording
+    /// ninja_paragon_r40: the 0-5-0's Shinobi Tactics has the 0-0-5's Caltrops at 215 frames on
+    /// rt 1, one point list; ninja_032: its own after its first throw, a second list at rt 2).
+    fn supports_at_ex(&self, def: usize, p: [f32; 2], skip: Option<usize>, first: bool) -> Vec<(crate::data::Support, u32)> {
         let name = &self.tower_defs[def].0;
         let set = self.tower_tiers[def].as_ref().and_then(|tt| tt.tiers.get("000")).map_or(0, |t| t.set);
         let reach = self.tower_defs[def].1.radius;
+        // Tower.AddMutator (VERIFIED-DECOMP @0x180c0a530): a Paragon, or a sub-tower of one
+        // (IsParentTowerAParagonRecursive), takes only artifact mutators and those put on with
+        // AddParagonMutator; a Support uses that for an onlyAffectParagon model (recording
+        // ninja_paragon_r40: the Paragon's own Shinobi Tactics never reaches it, 13 / 90 / 60 / 480
+        // frames throughout).
+        let paragon_target = skip.is_some_and(|t| self.paragon_rooted(t));
         let mut by: HashMap<String, Vec<crate::data::Support>> = HashMap::new();
         for (s, src) in self.towers.iter().enumerate() {
             let Some(tier) = self.tier(s) else { continue };
-            if src.placed_step + 1 >= self.steps as u64 {
+            if first {
+                if skip.is_none_or(|t| s >= t) {
+                    continue;
+                }
+            } else if src.placed_step + 1 >= self.steps as u64 {
                 continue;
             }
             let now = self.steps as u64;
             for sp in tier.supports.iter().chain(src.temp_supports.iter().filter(|x| if x.0.instant { x.2 < now && x.1 > 0.0 } else { x.2 + 1 < now && x.1 > -1.0 }).map(|(sp, _, _)| sp)) {
                 if Some(s) == skip && !sp.on_self {
+                    continue;
+                }
+                if sp.only_paragon != paragon_target {
                     continue;
                 }
                 if !sp.sets.is_empty() && !sp.sets.iter().any(|&m| m & set != 0) {
@@ -11297,7 +11335,7 @@ impl Game {
                 if std::iter::once(t).chain(parent).any(|o| self.tier(o).is_some_and(|tr| tr.detect_camo)) {
                     b.camo = true;
                 }
-                let sups = if self.towers[t].placed_step + 1 >= self.steps as u64 { Vec::new() } else { self.supports_at(self.towers[t].def, self.towers[t].pos, Some(t)) };
+                let sups = self.supports_at_ex(self.towers[t].def, self.towers[t].pos, Some(t), self.towers[t].placed_step + 1 >= self.steps as u64);
                 for (sp, n) in sups {
                     let k = n as f32;
                     match sp.kind.as_str() {
@@ -11768,6 +11806,21 @@ impl Game {
                 pr.pierce = 0.0;
                 pr.frames_left = 0.0;
             }
+        }
+        // ProjectileOverTime.OnDestroy (VERIFIED-DECOMP @0x181004b20): with emitOnDestroy, the
+        // bloon object going (a MOAB-class pop, or no children) emits its projectile once more,
+        // where the bloon is, before its children are made (recording ninja_paragon_r40 rt 183:
+        // the stuck MOAB's StickyBombExplosion 972, then its Ceramics 982 ...).
+        let on_destroy: Vec<(Box<Proj>, u64)> = if moab_pop || strip || self.child_kinds[kind].is_empty() {
+            b.effects.iter().enumerate().filter(|(k, e)| !b.effects[..*k].iter().any(|x| x.id == e.id))
+                .filter_map(|(_, e)| match &e.kind { EffectKind::Emit { proj, on_destroy: true, .. } => Some((proj.clone(), e.owner)), _ => None }).collect()
+        } else {
+            Vec::new()
+        };
+        for (proj, owner) in on_destroy {
+            let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
+            let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false};
+            self.emit(pp0, 0.0, &single, &proj, None, tiers, owner);
         }
         self.remove_bloon(i);
         // DistributeCash.PostDegrade (@0x180fea0e0): the cash x Simulation.GetCashModifierFromSimBehaviors
@@ -12903,6 +12956,12 @@ impl Game {
         let mut absorbed: Vec<u64> = Vec::new();
         for t in only_temp.map_or_else(|| (0..self.towers.len()).collect::<Vec<_>>(), |t| vec![t]) {
             if absorbed.contains(&self.towers[t].id) {
+                continue;
+            }
+            // (A tower a Paragon purchase sacrificed doesn't process in its last frame, only its
+            // sub-towers do: recording ninja_paragon_r40, no W / AT lines for the 0-5-0 and 0-0-5
+            // at rt 61, nor a Caltrops point list remade as the 0-5-0's Shinobi Tactics comes off.)
+            if self.towers[t].sub.is_none() && self.sacrificed.contains(&self.towers[t].id) {
                 continue;
             }
             if only_temp.is_none() && self.towers[t].sub.is_none() {
@@ -16741,10 +16800,15 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                         dots.push((b.id, dot_damage(*damage, mods, &self.defs[b.kind].tags), *immune, e.owner, e.distribute, e.id.clone(), prev, e.seq));
                     }
                 }
-                EffectKind::Emit { interval, tick, proj } => {
+                EffectKind::Emit { interval, tick, proj, on_destroy } => {
                     *tick += 1.0;
                     if *tick >= *interval * FPS {
                         *tick = 0.0;
+                        emits.push((b.pos, proj.clone(), e.owner, b.id, b.layer));
+                    }
+                    // ProjectileOverTime.OnDestroy (VERIFIED-DECOMP @0x181004b20): going with its
+                    // mutator, emitOnDestroy sets lastTick far back, so CheckTick emits once more.
+                    if *on_destroy && !behind && e.frames_left <= 0.0 {
                         emits.push((b.pos, proj.clone(), e.owner, b.id, b.layer));
                     }
                 }
@@ -18050,7 +18114,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     }))
                 }
                 "emit" => match &e.projectile {
-                    Some(p) => EffectKind::Emit { interval: e.interval, tick: 0.0, proj: p.clone() },
+                    Some(p) => EffectKind::Emit { interval: e.interval, tick: 0.0, proj: p.clone(), on_destroy: e.emit_on_destroy },
                     None => continue,
                 },
                 "mark" => EffectKind::Mark { damage_mult: e.mult, cash_mult: e.damage },
