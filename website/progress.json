@@ -1,6 +1,6 @@
 {
   "_how": "Edit the numbers, then run: python website/build_progress.py. Towers: recorded scenarios that match the real game frame by frame / all recorded. Areas: rough estimates out of 10.",
-  "updated": "2026-11-13",
+  "updated": "2026-11-14",
   "towers": [
     [
       "Dart Monkey",
@@ -134,7 +134,7 @@
     ],
     [
       "Paragons",
-      11,
+      12,
       12
     ]
   ],
