@@ -83,6 +83,28 @@ def under(go, root, nodes):
     return False
 
 
+def world_pos(nodes, go):
+    """A scene object's world position: its local position through its parents' scale and rotation
+    (quaternion x, y, z, w)."""
+    def rot(q, v):
+        x, y, z, w = q
+        tx, ty, tz = 2 * (y * v[2] - z * v[1]), 2 * (z * v[0] - x * v[2]), 2 * (x * v[1] - y * v[0])
+        return [v[0] + w * tx + y * tz - z * ty, v[1] + w * ty + z * tx - x * tz, v[2] + w * tz + x * ty - y * tx]
+    get = lambda g: nodes.get(g, nodes.get(str(g)))
+    n = get(go)
+    if n is None:
+        return [0.0, 0.0, 0.0]
+    p = list(n["pos"])
+    k = n.get("parent")
+    while k is not None and get(k) is not None:
+        par = get(k)
+        p = [p[i] * par["scale"][i] for i in range(3)]
+        p = rot(par["rot"], p)
+        p = [p[i] + par["pos"][i] for i in range(3)]
+        k = par.get("parent")
+    return p
+
+
 def map_logic(by, components, nodes, parts):
     """map.json's "logic": removeables and map events (renderer/src/map_logic.rs). A trigger or action
     the runtime doesn't have is left out, so an event with only such triggers never fires."""
@@ -150,6 +172,13 @@ def map_logic(by, components, nodes, parts):
                 out.append({"kind": "Sell", "id": comp_id(f["removeable"])})
             elif k == "MapEventActiveAction" and comp_id(f.get("mapEvent")):
                 out.append({"kind": "Event", "id": comp_id(f["mapEvent"]), "active": bool(f["setToActive"])})
+            elif k == "RotateAreaAction" and comp_id(f.get("area")) in by:
+                # The area's pivotPoint object (world, clone frame: x, Unity z), else its own origin.
+                area = by[comp_id(f["area"])]
+                pg = (area["fields"].get("pivotPoint") or {}).get("go")
+                wp = world_pos(nodes, pg if pg is not None else area["go"])
+                out.append({"kind": "RotateArea", "id": a["id"], "area": area["id"], "rotation": f["rotation"],
+                            "duration": f["duration"], "pivot": [wp[0], wp[2]]})
             elif k == "TriggerMapActionsAction" and depth < 8 and comp_id(f.get("mapActions")) in by:
                 out += actions(ids(by[comp_id(f["mapActions"])]["fields"].get("actions")), depth + 1)
         return out

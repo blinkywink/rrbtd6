@@ -23380,7 +23380,18 @@ mod tests {
         // The recorder raises the lives cap so leaks don't end the run (SimRecorder).
         g.lives = 1e6;
         // "DartMonkey-205": base tower and tiers.
-        for (id, x, y) in &towers {
+        // Where the game's first W lines have the towers (in placement order), when that isn't the
+        // scenario's spot: map logic moved it before the recording opened (recording
+        // map_geared_dart_205_r40: a tower on Geared's turning gear starts 90 degrees round).
+        // (Only where the map's logic turns areas: elsewhere a first W line can be a sub-tower's,
+        // recording beast_010's beast.)
+        let start_w: Vec<[f32; 2]> = if g.logic_turns_areas() { first_w.iter().filter(|w| w.1 == 0).map(|w| w.2).collect() } else { Vec::new() };
+        for (ti, (id, x, y)) in towers.iter().enumerate() {
+            let (xv, yv): (f32, f32) = match start_w.get(ti).filter(|_| start_w.len() == towers.len()) {
+                Some(w) if (w[0] - *x).abs() > 0.5 || (-w[1] - *y).abs() > 0.5 => (w[0], -w[1]),
+                _ => (*x, *y),
+            };
+            let (x, y) = (&xv, &yv);
             let (base, tiers) = match id.split_once('-') {
                 Some((b, t)) if t.len() == 3 => (b, t.bytes().map(|c| c - b'0').collect::<Vec<u8>>()),
                 _ => (id.as_str(), vec![0, 0, 0]),

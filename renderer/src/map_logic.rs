@@ -68,6 +68,9 @@ pub enum Action {
     Removeable { id: i64, active: bool },
     Sell { id: i64 },
     Event { id: i64, active: bool },
+    /// RotateAreaAction: `area` turns `rotation` degrees (Unity's sense) over `duration` seconds
+    /// about `pivot` (clone frame), with the towers on it.
+    RotateArea { id: i64, area: i64, rotation: f32, duration: f32, pivot: [f32; 2] },
     /// A newer export's kind: does nothing, and the map still loads.
     #[serde(other)]
     Other,
@@ -102,6 +105,11 @@ pub struct LogicState {
     pub hide_parts: Vec<usize>,
     /// Lives leaked since the last step's check (a leak happens while its bloon is borrowed).
     pub lives_lost: f64,
+    /// RotateAreaAction per action id: (area, pivot, rotationPerFrame (radians), durationFrames,
+    /// spinList (start frames), currRotation).
+    spins: Vec<(i64, i64, [f32; 2], f32, i64, Vec<i64>, f32)>,
+    /// While logic_start runs: each caught-up event's trigger count.
+    catch_up: Option<Vec<(i64, i32)>>,
 }
 
 impl LogicState {
@@ -112,6 +120,8 @@ impl LogicState {
             events_active: def.events.iter().map(|e| e.active).collect(),
             triggered: def.events.iter().map(|e| vec![false; e.triggers.len()]).collect(),
             round_skip: Vec::new(),
+            spins: Vec::new(),
+            catch_up: None,
             pool: map.areas.clone(),
             paths,
             dormant: map.paths.iter().filter(|p| !p.active && p.points.len() > 1).cloned().collect(),
@@ -177,7 +187,10 @@ impl Game {
             }
             hit
         }, round);
+        // (A RotateAreaAction caught up here turns at once: GotoPostAction with the trigger count.)
+        self.logic.catch_up = Some(hits.iter().map(|&(e, i)| (self.logic.def.events[e].id, self.logic.round_skip[e][i].1)).collect());
         self.logic_trigger_at(|e, i, t| matches!(t, Trigger::StartMap) || hits.contains(&(e, i)));
+        self.logic.catch_up = None;
     }
 
     /// The (event, trigger) pairs of AfterRound triggers `cond` passes for round `r`.
@@ -221,11 +234,68 @@ impl Game {
         if self.logic.def.events.is_empty() {
             return;
         }
+        self.logic_spin();
         let lost = std::mem::take(&mut self.logic.lives_lost);
         if lost > 0.0 {
             self.logic_lives_lost(lost, self.start_lives);
         }
         self.logic_trigger(|t| matches!(t, Trigger::SimTime { frames, round_time: rt } if if *rt { round_time } else { play } >= *frames));
+    }
+
+    /// The map's events have a RotateAreaAction (towers can move with an area).
+    pub(crate) fn logic_turns_areas(&self) -> bool {
+        self.logic.def.events.iter().any(|e| e.actions.iter().any(|a| matches!(a, Action::RotateArea { .. })))
+    }
+
+    /// RotateAreaAction.Process (VERIFIED-DECOMP @0x180f8d720), each frame: spins that have run
+    /// durationFrames end; the rest turn the area by their count x rotationPerFrame
+    /// (Map.RotateArea @0x180f5e130: the area's outline and holes about its pivot, then each
+    /// tower on it: Tower.RotateAroundPivot @0x180c159d0, RotateTower adds the angle in degrees
+    /// to its rotation, Vector2.RotateAroundPoint @0x180f45c20 turns its position by -angle).
+    /// STAND-IN: a tower is on the area when the area is the first holding its centre; pets,
+    /// grounded air units, the tower's own created areas and the catch-up at a later start round
+    /// (GotoPostAction) aren't modelled.
+    fn logic_spin(&mut self) {
+        let now = self.steps as i64;
+        for k in 0..self.logic.spins.len() {
+            let (_, area, pivot, per, dur, _, _) = self.logic.spins[k];
+            self.logic.spins[k].5.retain(|&s| dur > now - s);
+            let n = self.logic.spins[k].5.iter().filter(|&&s| s <= now).count();
+            if n == 0 {
+                continue;
+            }
+            let a = n as f32 * per;
+            self.logic.spins[k].6 += a;
+            self.logic_turn_area(area, pivot, a, true);
+        }
+    }
+
+    /// Map.RotateArea (@0x180f5e130): area `area`'s outline and holes, then (with `towers`) the
+    /// towers on it, turned by `a` radians about `pivot`.
+    fn logic_turn_area(&mut self, area: i64, pivot: [f32; 2], a: f32, towers: bool) {
+        {
+            // In the game's frame (y up): x' = dx cos(-a) - dy sin(-a) + px, y' = dx sin(-a) + dy cos(-a) + py.
+            let (sn, cs) = crt_sin_cos(-a);
+            let pv = [pivot[0], -pivot[1]];
+            let turn = |p: [f32; 2]| -> [f32; 2] {
+                let (dx, dy) = (p[0] - pv[0], -p[1] - pv[1]);
+                [dx * cs - dy * sn + pv[0], -(dy * cs + dx * sn + pv[1])]
+            };
+            let on: Vec<usize> = (0..self.towers.len())
+                .filter(|&t| towers && self.towers[t].sub.is_none())
+                // (The clone's base land, id 0, is first in its list; the game's BaseArea is last.)
+                .filter(|&t| self.areas.iter().find(|ar| ar.id != 0 && Self::in_area(self.towers[t].pos, ar)).is_some_and(|ar| ar.id == area))
+                .collect();
+            for ar in self.areas.iter_mut().chain(self.logic.pool.iter_mut()).filter(|ar| ar.id == area) {
+                ar.points = ar.points.iter().map(|&p| turn(p)).collect();
+                ar.holes = ar.holes.iter().map(|h| h.iter().map(|&p| turn(p)).collect()).collect();
+            }
+            let deg = a * (180.0 / std::f32::consts::PI);
+            for t in on {
+                self.towers[t].pos = turn(self.towers[t].pos);
+                self.towers[t].game_rot = Some(self.towers[t].game_rot.unwrap_or(0.0) + deg);
+            }
+        }
     }
 
     /// LivesLowerThanTrigger.OnLivesLost: the health went from above the limit to at or below it.
@@ -294,6 +364,37 @@ impl Game {
     fn logic_action(&mut self, action: Action) {
         match action {
             Action::Other => {}
+            Action::RotateArea { id, area, rotation, duration, pivot } => {
+                // Initialise (VERIFIED-DECOMP @0x180f8d390): rotationPerFrame = rotation / duration
+                // x 1/60, durationFrames = (int)(duration x 60); the model's rotation is radians the
+                // other way round (Vector2.RotateAroundPoint turns by its negation; recording
+                // map_geared_dart_205_r40: the tower goes +0.1875 deg a frame round the pivot in the
+                // game's frame, its own rotation -0.1875). PerformAction (@0x180f8d600): spinList
+                // gets the next frame.
+                let k = match self.logic.spins.iter().position(|s| s.0 == id) {
+                    Some(k) => k,
+                    None => {
+                        let rad = -rotation * (std::f32::consts::PI / 180.0);
+                        self.logic.spins.push((id, area, pivot, rad / duration * (1.0f32 / 60.0), (duration * 60.0) as i64, Vec::new(), 0.0));
+                        self.logic.spins.len() - 1
+                    }
+                };
+                // Caught up at the start: GotoPostAction (@0x180f8d190) turns the area at once to
+                // count x rotation (no spin). STAND-IN: the count is the event's first caught-up
+                // trigger's; recording map_geared_dart_205_r40 starts its gear elsewhere (the tower
+                // 90 deg round from its spot, the outline 225 deg from round 1's), so how the game
+                // reaches round 40's state isn't settled; the towers placed after don't turn.
+                let ev = self.logic.def.events.iter().find(|e| e.actions.iter().any(|x| matches!(x, Action::RotateArea { id: i, .. } if *i == id))).map(|e| e.id);
+                if let Some(n) = self.logic.catch_up.as_ref().and_then(|c| c.iter().find(|x| Some(x.0) == ev)).map(|x| x.1) {
+                    let rad = -rotation * (std::f32::consts::PI / 180.0);
+                    let a = n as f32 * rad - self.logic.spins[k].6;
+                    self.logic.spins[k].6 += a;
+                    self.logic_turn_area(area, pivot, a, false);
+                    return;
+                }
+                let at = self.steps as i64 + 1;
+                self.logic.spins[k].5.push(at);
+            }
             Action::Path { id, active } => {
                 if active {
                     self.logic_activate_path(id);
