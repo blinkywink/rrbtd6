@@ -70,6 +70,8 @@ record_one() {
     sleep 3
   done
   result=$(grep "SimRecorder done" "$GAME/MelonLoader/Latest.log" 2>/dev/null | tail -1)
+  # (The log line can come before the recording is on disk: give it a moment.)
+  if [ -n "$ok" ]; then for w in 1 2 3 4 5; do [ -f "$UD/$name.rec" ] && break; sleep 2; done; fi
   if [ -n "$ok" ] && [ -f "$UD/$name.rec" ]; then
     cp "$UD/$name.rec" "$OUT/"
     cp "$UD"/*.map "$OUT/" 2>/dev/null || true

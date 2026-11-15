@@ -216,6 +216,11 @@ frame; midpoint from the quick table) is clear of TreeStumpBlocker (height 29) a
 (the game's own outlines); the segment START points (66 blocked, 67 clear) would fit. Check what
 Attack.GetPathSegmentsInRangeFast's lineOfSight uses for the tower's position (its z 30 on the stump?) and the
 segment point (a read-only probe: log PathSegmentInRange.lineOfSight per segment for the attack).
+DONE (2026-11-15): 83 maps have the game's own paths / quick tables / area outlines and order imported
+(tools/mod/scenarios/mapdump/mapdump_<key>.json, 60-frame runs, dumps in research/dumps/recordings/pending/mapdump;
+then import_paths.py <Map>.map <key> for each). LEFT (their dump runs failed: no mode screen): -ouch (its map id
+isn't the key; try "#ouch"), castlerevenge, darkcastle, enchantedglade, springspring, trickytracks, xfactor
+(probably locked / special maps in this profile). A failed run leaves the game waiting on the menu: close it.
 Next: the next hero / tower if the shop gains one; otherwise more crosspath coverage (e.g. Quincy with
 other towers' MOAB-class targets on curves, where this shared offset matters most).
 
@@ -283,8 +288,17 @@ the game code / recordings), or it hides problems later.
 - Alchemist: buffs it gives other towers don't show their icon over those towers' heads.
   FIXED (2026-11-12): brews and Overclock add their mutators' indicators (AddAcidicMixture /
   AddBerserkerBrewToProjectileModel and OverclockModel ctors: buffLocsName / buffIconName, not stackable).
-  OPEN: icon order (the game's mutator-list order, P-BUFFORDER), the inactive icons of towers that could buff
-  (canEventuallyBuff, UpdateBuffs' second loop), Ultraboost's permanent stack icon (OverclockPermanentModel
+  DONE (2026-11-15): icon order. Not the mutator list: BuffIndicatorUi.Awake (@0x180a412f0) makes one
+  icon per GameModel.buffIndicatorModels entry (99, keyed by FullName = iconName + buffName,
+  @0x181118700) under buffsUi, and UpdatePlacedTowerBuffs (@0x180a43b60) only Shows the ones activeBuffs
+  name (allBuffIcons TryGetValue), so icons sit in that list's order and a FullName missing from it isn't
+  shown. Exported as game.json `buff_order`; Game::buff_icons sorts by it (test buff_icons_in_model_order).
+  (For reference: Mutable.mutators is a SortedListLite<TimedMutator> by DESCENDING
+  BehaviorMutator.priority (+0x34; SortMutators @0x180f373d0), and SortedInsert (@0x18014ca90) puts a new
+  equal-priority one BEFORE the first equal element its binary search probes, not at the end.)
+  OPEN: the inactive icons of towers that could buff
+  (canEventuallyBuff, UpdateBuffs' second loop: AddDiscountZoneBuffs, then each tower's supporting
+  behaviours via vfunc 0x9f8 (in range) / TowerBehaviorBuffModel.GetBuffIndicatorModel + vfunc 0x9c8), Ultraboost's permanent stack icon (OverclockPermanentModel
   reads its indicator from its behaviours), roundsRemaining text for timed ones.
   PLAN (2026-11-12, read): the icons are Tower.activeBuffs (BuffQuery: buffIndicator, timedMutator, tower,
   canEventuallyBuff, canCurrentlyBuff, availableBuffCount, unavailableBuffCount), rebuilt by Tower.UpdateBuffs

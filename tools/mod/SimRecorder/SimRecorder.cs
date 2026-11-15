@@ -256,6 +256,14 @@ public class Recorder : MelonMod
                     MelonCoroutines.Start(MenuShots());
                     return;
                 }
+                // A map given by any case (an export key such as "intheloop"): the game's own id.
+                try
+                {
+                    var items = Il2CppAssets.Scripts.Data.GameData.Instance.mapSet.Maps.items;
+                    for (int k = 0; items != null && k < items.Length; k++)
+                        if (items[k] != null && string.Equals(items[k].id, Sc.map, StringComparison.OrdinalIgnoreCase)) { Sc.map = items[k].id; break; }
+                }
+                catch (Exception e) { LoggerInstance.Msg("map id lookup: " + e.Message); }
                 var d = InGameData.Editable;
                 d.selectedMap = Sc.map;
                 d.selectedDifficulty = Sc.difficulty;
