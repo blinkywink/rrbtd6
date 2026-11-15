@@ -83,6 +83,10 @@ pub struct GameData {
     /// ParagonDegreeDataModel.
     #[serde(default)]
     pub paragon_degree: Option<ParagonDegree>,
+    /// GameModel.buffIndicatorModels' FullNames (iconName + buffName) in order: the buff icons'
+    /// slots under a tower (BuffIndicatorUi.Awake).
+    #[serde(default)]
+    pub buff_order: Vec<String>,
     /// All heroes' shop entries; the chosen one replaces the shop's hero slot.
     #[serde(default)]
     pub heroes: Vec<ShopItem>,

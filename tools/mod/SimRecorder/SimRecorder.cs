@@ -103,6 +103,11 @@ public class Scenario
     public bool fx_particles { get; set; } = false;
     /// Log every Targetting.CanHitMoab call (CM lines).
     public bool canhitmoab { get; set; } = false;
+    /// Read-only: log Attack.GetPathSegmentsInRangeFast's PathSegmentInRange flags between
+    /// recorded frames segprobe_from..segprobe_to (SG lines).
+    public bool segprobe { get; set; } = false;
+    public int segprobe_from { get; set; } = 0;
+    public int segprobe_to { get; set; } = 0;
     /// "victory" / "defeat": at recorded frame end_frame open that end screen as InGame does
     /// (OnVictory: ShowVictoryScreen(GetVictorySceneName, GetVictoryScreenData); Lose:
     /// MenuManager.QueueMenu(GetDefeatSceneName, GetDefeatSceneData)) without their rewards,
@@ -146,6 +151,7 @@ public class Recorder : MelonMod
 
     internal static Scenario Sc;
     internal static StreamWriter Out;
+    internal static System.Collections.Generic.List<string> PreLines = new();
     internal static StreamWriter FxOut;
     /// `# herolevel` lines made while placing, written with the header.
     internal static readonly List<string> HeroLevelLines = new();
@@ -375,6 +381,9 @@ public class Recorder : MelonMod
                 for (int k = 0; xs != null && k < xs.Length; k++) xsl.Add(F(xs[k]));
                 Out.WriteLine($"# xpscale {string.Join(",", xsl)} map {sim.model.map.mapDifficulty} rating {F(sim.model.selectedDifficultyRating)} endRound {sim.map.spawner.endRound}");
                 foreach (var t in Sc.towers) Out.WriteLine($"# tower {t.id} {F(t.x)} {F(t.y)}");
+                // segprobe lines from before the file was open (the towers' first segment lists).
+                foreach (var l in PreLines) Out.WriteLine(l);
+                PreLines.Clear();
                 foreach (var l in HeroLevelLines) Out.WriteLine(l);
                 // The map's areas as the simulation holds them: "# area index name active blocker height points".
                 try
@@ -1077,6 +1086,80 @@ static class SetRotationPatch
         var w = Recorder.Out;
         if (Recorder.Sc == null || w == null || !Recorder.Sc.canhitmoab) return;
         try { if (__instance.bloonModel.isMoab) w.WriteLine($"SR {Recorder.Recorded} {__instance.Id.Id} {Recorder.F(__0)} {Recorder.F(__instance.Rotation)}"); } catch { }
+    }
+}
+
+// Attack.GetPathSegmentsInRangeFast (with segprobe): "SG frame tower range from(x y z) | path:min:inRange:canSeeCamo:lineOfSight ..."
+// (read-only postfix: the list it returns).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Attack), nameof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Attack.GetPathSegmentsInRangeFast))]
+static class SegProbePatch
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Attack __instance, float __0,
+        Il2CppSystem.Collections.Generic.List<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.PathSegmentInRange> __result)
+    {
+        var w = Recorder.Out;
+        var sc = Recorder.Sc;
+        if (sc == null || !sc.segprobe || (w != null && (Recorder.Recorded < sc.segprobe_from || Recorder.Recorded > sc.segprobe_to))) return;
+        try
+        {
+            var tw = __instance.tower;
+            var sb = new StringBuilder($"SG {Recorder.Recorded} {tw?.Id.Id} {Recorder.F(__0)} {Recorder.F(tw.Position.X)} {Recorder.F(tw.Position.Y)} {Recorder.F(tw.Position.Z)} |");
+            if (__result != null)
+                for (int i = 0; i < __result.Count; i++)
+                {
+                    var r = __result[i];
+                    sb.Append($" {Recorder.F(r.segment.min)}:{(r.inRange ? 1 : 0)}{(r.canSeeCamo ? 1 : 0)}{(r.lineOfSight ? 1 : 0)}");
+                }
+            if (w != null) w.WriteLine(sb.ToString()); else Recorder.PreLines.Add(sb.ToString());
+        }
+        catch (System.Exception e) { w?.WriteLine($"SG err {e.GetType().Name} {e.Message}"); }
+    }
+}
+
+// Attack.GetPathSegmentsInRange (with segprobe): as SegProbePatch, "SGR ..." (InitTargetPathSegments' list).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Attack), nameof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Attack.GetPathSegmentsInRange))]
+static class SegProbeRangePatch
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Attack __instance, float __0,
+        Il2CppSystem.Collections.Generic.List<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.PathSegmentInRange> __result)
+    {
+        var w = Recorder.Out;
+        var sc = Recorder.Sc;
+        if (sc == null || !sc.segprobe || (w != null && (Recorder.Recorded < sc.segprobe_from || Recorder.Recorded > sc.segprobe_to))) return;
+        try
+        {
+            var tw = __instance.tower;
+            var sb = new StringBuilder($"SGR {Recorder.Recorded} {tw?.Id.Id} {Recorder.F(__0)} {Recorder.F(tw.Position.X)} {Recorder.F(tw.Position.Y)} {Recorder.F(tw.Position.Z)} |");
+            if (__result != null)
+                for (int i = 0; i < __result.Count; i++)
+                {
+                    var r = __result[i];
+                    sb.Append($" {Recorder.F(r.segment.min)}:{(r.inRange ? 1 : 0)}{(r.canSeeCamo ? 1 : 0)}{(r.lineOfSight ? 1 : 0)}");
+                }
+            if (w != null) w.WriteLine(sb.ToString()); else Recorder.PreLines.Add(sb.ToString());
+        }
+        catch (System.Exception e) { w?.WriteLine($"SGR err {e.GetType().Name} {e.Message}"); }
+    }
+}
+
+// Area.Intersects(from, to, ...) returning true (with segprobe): "AI frame area from(x y) to(x y) ip(x y) edge p0 p1".
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Track.Area), nameof(Il2CppAssets.Scripts.Simulation.Track.Area.Intersects),
+    new[] { typeof(Il2CppAssets.Scripts.Simulation.SMath.Vector2), typeof(Il2CppAssets.Scripts.Simulation.SMath.Vector2),
+            typeof(Il2CppAssets.Scripts.Simulation.SMath.Vector2), typeof(Il2CppAssets.Scripts.Simulation.SMath.Vector2), typeof(Il2CppAssets.Scripts.Simulation.SMath.Vector2) },
+    new[] { ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Ref, ArgumentType.Ref, ArgumentType.Ref })]
+static class AreaIntersectsProbe
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Track.Area __instance, Il2CppAssets.Scripts.Simulation.SMath.Vector2 __0,
+        Il2CppAssets.Scripts.Simulation.SMath.Vector2 __1, ref Il2CppAssets.Scripts.Simulation.SMath.Vector2 __2,
+        ref Il2CppAssets.Scripts.Simulation.SMath.Vector2 __3, ref Il2CppAssets.Scripts.Simulation.SMath.Vector2 __4, bool __result)
+    {
+        var sc = Recorder.Sc;
+        if (sc == null || !sc.segprobe || !__result || Recorder.Out != null) return;
+        try
+        {
+            Recorder.PreLines.Add($"AI {__instance.name} {Recorder.F(__0.x)} {Recorder.F(__0.y)} {Recorder.F(__1.x)} {Recorder.F(__1.y)} ip {Recorder.F(__4.x)} {Recorder.F(__4.y)} edge {Recorder.F(__2.x)} {Recorder.F(__2.y)} {Recorder.F(__3.x)} {Recorder.F(__3.y)}");
+        }
+        catch { }
     }
 }
 

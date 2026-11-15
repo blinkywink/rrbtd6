@@ -2782,6 +2782,12 @@ def main():
     # ParagonDegreeDataModel (GameModel.paragonDegreeDataModel): power thresholds per degree and
     # the per-degree stat steps (research: ParagonTower.GetTowerInvestment / CombineInvestments /
     # GetDegreeFromInvestment / GetDegreeMutator, PowerDegreeMutator.MutateTower).
+    # GameModel.buffIndicatorModels: BuffIndicatorUi.Awake (@0x180a412f0) makes one icon per entry
+    # under buffsUi in this order (allBuffIcons, keyed by BuffIndicatorModel.FullName = iconName +
+    # buffName, @0x181118700); UpdatePlacedTowerBuffs (@0x180a43b60) only shows the ones a tower's
+    # activeBuffs name, so they sit in this order and one with no entry isn't shown.
+    buff_order = [str(deref(b["f"].get("iconName")) or "") + str(deref(b["f"].get("buffName")) or "")
+                  for b in items(gm["f"].get("buffIndicatorModels")) if b]
     pdm = deref(gm["f"].get("paragonDegreeDataModel"))
     paragon_degree = None
     if pdm:
@@ -3027,6 +3033,7 @@ def main():
         "heroes": [shop_entry(f["towerId"], True) for f in heroes if f["towerId"] in HEROES],
         "round_scale": round_set.get("scale", 1.0),
         "paragon_degree": paragon_degree,
+        "buff_order": buff_order,
         "map": game_map,
         "notes": [
             "Emission spacing inside a bloon group is a HYPOTHESIS (evenly spaced over duration).",

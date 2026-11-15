@@ -3134,6 +3134,21 @@ type DotTick = (u64, f32, u32, u64, (bool, bool), String, f32, u64);
 /// DamageOverTime.DealDamage (VERIFIED-DISASM @0x1003cb0): damage plus each modifier's
 /// additive for the bloon's tags, times every modifier's multiplier (recording glue_500: Bloon
 /// Solver's 1 + 4 on a MOAB).
+/// An attack's segment line-of-sight inputs (`Game::los_clear`): attackThroughWalls, the first
+/// weapon's eject (x, y) and RotateToTarget's additionalRotation.
+#[derive(Clone, Copy, Default)]
+pub struct Los {
+    pub through_walls: bool,
+    pub eject: [f32; 2],
+    pub extra: f32,
+}
+
+impl Los {
+    pub fn of(a: &crate::data::Attack) -> Los {
+        Los { through_walls: a.through_walls, eject: a.weapons.first().map_or([0.0; 2], |w| [w.eject[0], w.eject[1]]), extra: a.extra_rotation }
+    }
+}
+
 fn dot_damage(damage: f32, mods: &[TagMod], tags: &[String]) -> f32 {
     let add: f32 = mods.iter().filter(|m| tag_match(tags, m)).map(|m| m.add).sum();
     let mult: f32 = mods.iter().map(|m| m.mult).product();
@@ -3719,6 +3734,8 @@ pub struct Game {
     pop_emits: Vec<([f32; 2], Box<Proj>, Box<Emission>, u64, f32, u64, f32)>,
     pub hooks: Vec<Hook>,
     pub paragon_degree: Option<crate::data::ParagonDegree>,
+    /// GameModel.buffIndicatorModels' FullNames in order (data::GameData::buff_order).
+    pub buff_order: std::sync::Arc<[String]>,
     /// Difficulty: cost multiplier, sell share, round bonus (base, per round), locked towers,
     /// selling disabled (CHIMPS), and its name.
     pub cost_mult: f32,
@@ -5875,6 +5892,7 @@ impl Game {
             prof: [0.0; 3],
             syphon: 0.0,
             paragon_degree: d.paragon_degree.clone(),
+            buff_order: d.buff_order.clone().into(),
             cost_mult: mode.cost_mult,
             sell_mult: mode.sell,
             round_bonus: mode.bonus,
@@ -7483,6 +7501,34 @@ impl Game {
         best.map(|b| b.0)
     }
 
+    /// PathSegmentInRange.lineOfSight as Attack.GetPathSegmentsInRange (VERIFIED-DECOMP
+    /// @0x180dad8f0; the list InitTargetPathSegments keeps) has it: the line from the tower to the
+    /// segment's point is clear, and so is the one from the tower plus CheckFromOffset (@0x180dac780:
+    /// the first WeaponModel's ejectX / ejectY) turned by additionalRotation + Vector2.get_Rotation
+    /// (point - tower). Recording map_treestump_dart_205_r40 with probe *_seg (SGR / AI lines):
+    /// segment 66 is clear from the 2-0-5's centre, blocked by TreeStumpBlocker from (1.40, 18.45).
+    fn seg_line_clear(&self, attack: &crate::data::Attack, pos: [f32; 2], q: [f32; 2]) -> bool {
+        self.los_clear(Los::of(attack), pos, q)
+    }
+
+    fn los_clear(&self, los: Los, pos: [f32; 2], q: [f32; 2]) -> bool {
+        if los.through_walls {
+            return true;
+        }
+        if !self.line_clear(pos, 0.0, q) {
+            return false;
+        }
+        let eject = los.eject;
+        if eject == [0.0; 2] {
+            return true;
+        }
+        let g = [q[0] - pos[0], -(q[1] - pos[1])];
+        let a = RAD2DEG * crt_atan2(g[1], g[0]) - 90.0 + los.extra;
+        let (sn, cs) = crt_sin_cos(DEG2RAD * a);
+        let r = [cs * eject[0] - sn * eject[1], sn * eject[0] + cs * eject[1]];
+        self.line_clear([pos[0] + r[0], pos[1] - r[1]], 0.0, q)
+    }
+
     pub fn line_clear(&self, from: [f32; 2], from_z: f32, to: [f32; 2]) -> bool {
         for a in self.areas.iter().filter(|a| a.is_blocker && !a.is_disabled && a.height > from_z) {
             for poly in std::iter::once(&a.points).chain(a.holes.iter()) {
@@ -8123,7 +8169,7 @@ impl Game {
         let no_moab = a.exclude_tags.iter().any(|x| x == "Moabs");
         let d2 = |q: [f32; 2]| (q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]);
         let mut best: Option<([f32; 2], f32)> = None;
-        for (pi, k) in self.visible_segments(self.attack_pos(t), range, no_moab, a.through_walls) {
+        for (pi, k) in self.visible_segments(self.attack_pos(t), range, no_moab, Los::of(a)) {
             let q = self.track_segs[pi as usize][k];
             if best.is_none_or(|(_, b)| d2(q) < b) {
                 best = Some((q, d2(q)));
@@ -12710,14 +12756,17 @@ impl Game {
     /// BuffIndicatorModel.ctor @0x181118650) counts each copy up to it, shown "x" + n by
     /// BuffIcon.Show (@0x180a41020); a non-stackable one shows no count (0 here). The supports'
     /// mutators: one per mutatorId (isUnique), its copies for a stacking one; then Overclock's.
-    /// HYPOTHESIS P-BUFFORDER: icons sorted by name (the game keeps the mutator list's order).
+    /// Order: BuffIndicatorUi.Awake (@0x180a412f0) makes one icon per
+    /// GameModel.buffIndicatorModels entry under buffsUi, and UpdatePlacedTowerBuffs
+    /// (@0x180a43b60) only shows the ones whose FullName the tower's buffs name (allBuffIcons
+    /// TryGetValue), so they sit in that list's order whatever the tower's mutator order, and a
+    /// FullName missing from it isn't shown.
     pub fn buff_icons(&self, t: usize) -> Vec<(String, u32)> {
         let mut queries: Vec<(String, String, i32, u32)> = self
             .supports_at(self.towers[t].def, self.towers[t].pos, Some(t))
             .into_iter()
             .filter_map(|(sp, n)| Some((sp.icon?, sp.buff_name, sp.buff_max, n)))
             .collect();
-        queries.sort();
         // Alchemist brews on it (their mutators' indicators).
         for b in &self.towers[t].brews {
             if let Some(icon) = &b.brew.buff_icon {
@@ -12749,7 +12798,12 @@ impl Game {
                 }
             }
         }
-        groups.into_iter().map(|g| (g.1, g.3)).collect()
+        let mut slotted: Vec<(usize, String, u32)> = groups
+            .into_iter()
+            .filter_map(|g| Some((self.buff_order.iter().position(|f| *f == g.0)?, g.1, g.3)))
+            .collect();
+        slotted.sort_by_key(|g| g.0);
+        slotted.into_iter().map(|g| (g.1, g.2)).collect()
     }
 
     fn compute_buffs(&self) -> Vec<Buff> {
@@ -14057,7 +14111,11 @@ impl Game {
         let set = &self.towers[t].track_sets[k];
         if set.supply.as_ref().is_none_or(|s| s.2 != tiers) || set.sig != sig {
             self.towers[t].track_sets[k].sig = sig;
-            let mut pts: Vec<[f32; 2]> = self.visible_segments(c, range, no_moab, through_walls).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
+            let key = self.towers[t].track_sets[k].key.clone();
+            let los = self.tier(t).and_then(|tr| tr.attacks.iter().chain(tr.abilities.iter().flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter())).find(|a| a.model_name == key).map(Los::of))
+                .or_else(|| self.towers[t].temp.iter().find(|x| x.attack.model_name == key).map(|x| Los::of(&x.attack)))
+                .map_or(Los { through_walls, ..Default::default() }, |l| Los { through_walls, ..l });
+            let mut pts: Vec<[f32; 2]> = self.visible_segments(c, range, no_moab, los).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
             // (The list is the Close one: squared distance from the tower, a stable OrderBy;
             // recording ninja_002: with it the shuffle gives the game's -134.1, -99.1, -113.1,
             // -92.1, -106.1 Caltrops in turn.)
@@ -14100,10 +14158,10 @@ impl Game {
     /// (@0xdafaa0, b__48_1) orders by squared distance from the tower (a stable OrderBy); none
     /// found: no target. Offset per axis by NextDouble * maxTrackOffset - maxTrackOffset * 0.5
     /// (x, then y).
-    fn first_visible_track_point(&mut self, tower: [f32; 2], c: [f32; 2], range: f32, off: f32, no_moab: bool, through_walls: bool) -> Option<(f32, [f32; 2], u64)> {
+    fn first_visible_track_point(&mut self, tower: [f32; 2], c: [f32; 2], range: f32, off: f32, no_moab: bool, los: Los) -> Option<(f32, [f32; 2], u64)> {
         let d2 = |q: [f32; 2]| (q[0] - tower[0]) * (q[0] - tower[0]) + (q[1] - tower[1]) * (q[1] - tower[1]);
         let mut best: Option<([f32; 2], f32)> = None;
-        for (pi, k) in self.visible_segments(c, range, no_moab, through_walls) {
+        for (pi, k) in self.visible_segments(c, range, no_moab, los) {
             let q = self.track_segs[pi as usize][k];
             if best.is_none_or(|(_, b)| d2(q) < b) {
                 best = Some((q, d2(q)));
@@ -14948,7 +15006,7 @@ impl Game {
                 if self.towers[t].acid_pts.as_ref().is_none_or(|a| a.2 != key) {
                     let no_moab = attack.exclude_tags.iter().any(|x| x == "Moabs");
                     let tp = self.towers[t].pos;
-                    let mut segs: Vec<[f32; 2]> = self.visible_segments(pos, range, no_moab, attack.through_walls).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
+                    let mut segs: Vec<[f32; 2]> = self.visible_segments(pos, range, no_moab, Los::of(attack)).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
                     let d2 = |q: &[f32; 2]| (q[0] - tp[0]) * (q[0] - tp[0]) + (q[1] - tp[1]) * (q[1] - tp[1]);
                     segs.sort_by(|a, b| d2(a).total_cmp(&d2(b)));
                     let n = segs.len() as i32;
@@ -15343,7 +15401,7 @@ impl Game {
                     let seg_ok = self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false);
                     let seg_q = self.track_segs.get(pi).and_then(|sg| sg.get(k)).copied();
                     let near = |q: [f32; 2], reach: f32| seg_ok && (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2) <= reach * reach;
-                    let clear = seg_q.is_some_and(|q| attack.through_walls || self.line_clear(pos, 0.0, q));
+                    let clear = seg_q.is_some_and(|q| self.seg_line_clear(attack, pos, q));
                     let plain = seg_q.is_some_and(|q| near(q, if no_moab { range } else { range + 2.0 })) && clear;
                     (plain, clear, seg_q.is_some_and(|q| near(q, range + 40.0)))
                 };
@@ -15397,7 +15455,7 @@ impl Game {
                     let seg_q = self.track_segs.get(b.path as usize).and_then(|sg| sg.get(seg_idx)).copied();
                     let seg_near = |q: [f32; 2], reach: f32| seg_ok && (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2) <= reach * reach;
                     let check_segment=||{
-                        let clear=seg_q.is_some_and(|q|attack.through_walls||self.line_clear(pos,0.0,q));
+                        let clear=seg_q.is_some_and(|q|self.seg_line_clear(attack,pos,q));
                         let plain=seg_q.is_some_and(|q|seg_near(q,if no_moab{range}else{range+2.0}))&&clear;
                         let moab_near=seg_q.is_some_and(|q|seg_near(q,range+40.0));
                         (plain,clear,moab_near)
@@ -15838,7 +15896,7 @@ impl Game {
                                 Some(b) => Some(b),
                                 None => self.closest_track_point(pos, range, off),
                             },
-                            _ if attack.track_closest && attack.track_default => self.first_visible_track_point(self.towers[t].pos, pos, range, off, no_moab, attack.through_walls),
+                            _ if attack.track_closest && attack.track_default => self.first_visible_track_point(self.towers[t].pos, pos, range, off, no_moab, Los::of(attack)),
                             // CloseTargetTrack (VERIFIED-DISASM GeneratePoints @0xdb55f0, GetTargets
                             // MoveNext @0xdbf7b0): Attack.GetVisibleInRangePathSegment's point (2 up),
                             // moved by (d x maxOffset - maxOffset x 0.5) on x then y, two
@@ -15873,7 +15931,7 @@ impl Game {
                     // P-SANDBOXNECRO: sandbox always has them (owner, 2026-11-02: the real
                     // sandbox Necromancer raises undead from pops of sent bloons, no round
                     // played; which round event the sandbox fires isn't found yet).
-                    let seg = if self.towers[t].necro_points || self.sandbox { self.necro_target(t, pos, range, no_moab, attack.through_walls) } else { None };
+                    let seg = if self.towers[t].necro_points || self.sandbox { self.necro_target(t, pos, range, no_moab, Los::of(attack)) } else { None };
                     self.towers[t].necro_seg = seg;
                     best = seg.map(|(pi, k)| (0.0, self.track_segs[pi as usize][k], 0));
                 }
@@ -19372,7 +19430,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let q = *self.track_segs.get(b.path as usize)?.get(k)?;
         let dd = (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2);
         let reach = if no_moab { range } else { range + 2.0 };
-        let clear = attack.through_walls || self.line_clear(pos, 0.0, q);
+        let clear = self.seg_line_clear(attack, pos, q);
         if dd <= reach * reach && clear {
             return Some((dd, b.pos));
         }
@@ -19618,13 +19676,14 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     /// @0xdcda00): the targetable segments (canTargetSegment, point on the map) whose point is
     /// within range (+ 2 unless the attack filters MOABs out) with a clear line from the tower,
     /// paths in order, segments ascending. (PathSegment.bloonsInvulnerable isn't imported.)
-    fn visible_segments(&self, pos: [f32; 2], range: f32, no_moab: bool, through_walls: bool) -> Vec<(u8, usize)> {
+    /// (Line of sight as `seg_line_clear`: from the tower and from its eject point.)
+    fn visible_segments(&self, pos: [f32; 2], range: f32, no_moab: bool, los: Los) -> Vec<(u8, usize)> {
         let reach = if no_moab { range } else { range + 2.0 };
         let mut out = Vec::new();
         for (pi, sg) in self.track_segs.iter().enumerate() {
             for (k, q) in sg.iter().enumerate() {
                 let ok = self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false);
-                if ok && on_map(*q, 0.0) && (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2) <= reach * reach && (through_walls || self.line_clear(pos, 0.0, *q)) {
+                if ok && on_map(*q, 0.0) && (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2) <= reach * reach && self.los_clear(los, pos, *q) {
                     out.push((pi as u8, k));
                 }
             }
@@ -19643,11 +19702,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     ///   first of equals in Path.bloonsList), and the segments on its path ending past it
     ///   (pathIndexToSet = that path).
     /// - Otherwise the segments on pathsInRange[currentPathIndex] (pathIndexToSet = the next).
-    fn necro_target(&mut self, t: usize, pos: [f32; 2], range: f32, no_moab: bool, through_walls: bool) -> Option<(u8, usize)> {
+    fn necro_target(&mut self, t: usize, pos: [f32; 2], range: f32, no_moab: bool, los: Los) -> Option<(u8, usize)> {
         // The First list: SetVisiblePathSegments (VERIFIED-DISASM @0xdafaa0, b__48_0) orders them
         // by PathSegment.distanceUntilLeak, ascending (a stable OrderBy): the furthest along
         // first (recording wizard_004: the undead start near the far end of the range).
-        let mut segs = self.visible_segments(pos, range, no_moab, through_walls);
+        let mut segs = self.visible_segments(pos, range, no_moab, los);
         segs.sort_by(|a, b| self.seg_until_leak(a.0, a.1).total_cmp(&self.seg_until_leak(b.0, b.1)));
         let mut paths: Vec<u8> = Vec::new();
         let mut max_dist: HashMap<u8, f32> = HashMap::new();
@@ -19716,7 +19775,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let pos = self.attack_pos(t);
         let no_moab = attack.exclude_tags.iter().any(|x| x == "Moabs");
         let mut best: Option<((u8, usize), f32)> = None;
-        for (pi, k) in self.visible_segments(pos, range, no_moab, attack.through_walls) {
+        for (pi, k) in self.visible_segments(pos, range, no_moab, Los::of(&attack)) {
             let q = self.track_segs[pi as usize][k];
             let d = (q[0] - at[0]).powi(2) + (q[1] - at[1]).powi(2);
             if best.is_none_or(|(_, b)| d < b) {
@@ -23986,6 +24045,33 @@ mod beast_tests {
         assert!(icons.iter().all(|(_, n)| *n == 0), "{icons:?}");
         let names: std::collections::HashSet<&String> = icons.iter().map(|(i, _)| i).collect();
         assert_eq!(names.len(), icons.len(), "{icons:?}");
+    }
+
+    /// BuffIndicatorUi.Awake / UpdatePlacedTowerBuffs: the icons over a tower sit in
+    /// GameModel.buffIndicatorModels' order (one fixed slot per FullName), not the mutators'.
+    #[test]
+    fn buff_icons_in_model_order() {
+        let mut g = game();
+        g.cash = 1e7;
+        assert_eq!(g.buff_order.len(), 99);
+        let v = g.tower_defs.iter().position(|(n, _)| n == "MonkeyVillage").unwrap();
+        let dart = g.tower_defs.iter().position(|(n, _)| n == "DartMonkey").unwrap();
+        let d = place_near(&mut g, dart, 300.0);
+        let v1 = place_near(&mut g, v, 300.0);
+        for _ in 0..3 {
+            assert!(g.upgrade(v1, 1));
+        }
+        for _ in 0..2 {
+            assert!(g.upgrade(v1, 0));
+        }
+        for _ in 0..3 {
+            g.step();
+        }
+        let icons = g.buff_icons(d);
+        assert!(icons.len() >= 2, "{icons:?}");
+        let slot = |icon: &String| g.buff_order.iter().position(|f| f.starts_with(icon.as_str())).unwrap();
+        let slots: Vec<usize> = icons.iter().map(|(i, _)| slot(i)).collect();
+        assert!(slots.windows(2).all(|w| w[0] < w[1]), "{icons:?} {slots:?}");
     }
 
     /// MonkeyopolisUpgradeCost / Monkeyopolis: 0-0-5 needs a Banana Farm in range, costs

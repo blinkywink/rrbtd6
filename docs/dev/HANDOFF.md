@@ -210,17 +210,14 @@ reordered the same way, by name (plus first point for duplicate names) against a
 MORE MAPS (2026-11-15): pending/maps (scenarios map_<key>_dart_205_r40.json, land spots picked 16-22 from the
 track): run tools/mod/import_paths.py <recording dir>/<Map>.map <key> first for a newly recorded map (the game's own
 path points / quick table / area outlines; it now also puts the areas in the dump's order). Cubism, InTheLoop MATCH.
-OPEN map_treestump_dart_205_r40 rt 580: the 2-0-5 (on the raised TreeStump land, height 30) takes Blue 515 on
-segment 66 at rt 580; the game waits for segment 67 (rt 589). The clone's segment 66 point (-60.49, 11.88, clone
-frame; midpoint from the quick table) is clear of TreeStumpBlocker (height 29) and every other blocker polygon
-(the game's own outlines); the segment START points (66 blocked, 67 clear) would fit. Check what
-Attack.GetPathSegmentsInRangeFast's lineOfSight uses for the tower's position (its z 30 on the stump?) and the
-segment point (a read-only probe: log PathSegmentInRange.lineOfSight per segment for the attack).
+DONE map_treestump_dart_205_r40 (maps 3/3): the per-frame targeting uses the segment list InitTargetPathSegments keeps, from Attack.GetPathSegmentsInRange (@0x180dad8f0, not the Fast one): a segment clear from the tower is checked again from the tower plus CheckFromOffset (@0x180dac780: the first WeaponModel ejectX / ejectY) turned by RotateToTarget additionalRotation + Vector2.get_Rotation(point - tower) (= atan2 - 90). Probe scenario tools/mod/scenarios/map_treestump_dart_205_r40_seg.json (segprobe: SG / SGR lines with each PathSegmentInRange flag, AI lines for Area.Intersects hits; lines from before the .rec opens are buffered) in pending/maps_probe: segment 66 clear from (5, 22), blocked by TreeStumpBlocker from (1.40, 18.45). `seg_line_clear` in game.rs. NOT YET: CheckFromOffset returns zero when the attack model has some second behaviour type (unidentified, typeinfo 0x184f67028). visible_segments (TargetTrack / necro / acid pool lists, the same cached list) now uses the same check (`Los`, `los_clear`); full regression unchanged.
 DONE (2026-11-15): 83 maps have the game's own paths / quick tables / area outlines and order imported
 (tools/mod/scenarios/mapdump/mapdump_<key>.json, 60-frame runs, dumps in research/dumps/recordings/pending/mapdump;
 then import_paths.py <Map>.map <key> for each). LEFT (their dump runs failed: no mode screen): -ouch (its map id
 isn't the key; try "#ouch"), castlerevenge, darkcastle, enchantedglade, springspring, trickytracks, xfactor
 (probably locked / special maps in this profile). A failed run leaves the game waiting on the menu: close it.
+CAUTION: that ~85-launch batch left the real game stuck on its title screen (each launch logs in to NK): record in
+small batches with pauses, no retry loops.
 Next: the next hero / tower if the shop gains one; otherwise more crosspath coverage (e.g. Quincy with
 other towers' MOAB-class targets on curves, where this shared offset matters most).
 

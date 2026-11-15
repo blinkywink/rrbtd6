@@ -1,0 +1,1 @@
+{"name": "map_treestump_dart_205_r40_seg", "map": "TreeStump", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 100, "seed": 777123, "towers": [{"id": "DartMonkey-205", "x": 5.0, "y": 22.0}], "quit": true, "cash": 10000000, "segprobe": true, "segprobe_from": 0, "segprobe_to": 700}
