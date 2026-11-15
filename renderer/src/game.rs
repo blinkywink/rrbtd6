@@ -280,6 +280,10 @@ pub struct Bloon {
     pub prev: [f32; 2],
     /// Its distance when this frame began.
     pub prev_dist: f32,
+    /// Its distance before its latest move: the path segment whose list holds it (the segment
+    /// lists lag a move behind; recording quincy_r04 rt 649, a bounce in the collision pass takes a
+    /// Red still listed on the nearer segment).
+    pub seg_dist: f32,
     /// This frame's speed multiplier (slows, MOAB shove...).
     pub mult: f32,
     /// Where the bloon grid has it: its cell is updated as it processes, before it moves, so a
@@ -3467,6 +3471,9 @@ pub struct Game {
     /// On a flush frame, the list places from before it: the collision grid is filled in that
     /// order (recording dart_052: a Blue ahead of a Yellow the flush moved in front of it).
     grid_rank_pre: Option<FastMap<u64, u32>>,
+    /// The path lists' ranks before this frame's flush: the game flushes after the CollisionChecker
+    /// (recording quincy_l20_r60 rt 525: a bounce takes the bloon first on its segment before the flush).
+    plist_rank_pre: Option<FastMap<u64, u32>>,
     /// The projectile factory's list: every projectile made (by uid), the dead ones until the
     /// next flush. `projectiles` keeps the live ones in this order.
     proj_list: Vec<u64>,
@@ -4412,6 +4419,17 @@ macro_rules! collide_pass {
                 k += 1;
                 continue;
             }
+            // FilterWithChance.FilterBloon (VERIFIED-DISASM @0x180c408a0): one synced draw per bloon
+            // it is asked about, passed when filterChance > the draw (recording quincy_l14_r50 rt
+            // 302: the Storm of Arrows Area skips most bloons, a Lead among them).
+            if let Some(c) = pr.spec.filter_chance {
+                let seed = $s.freeplay_seed;
+                let draw = $s.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
+                if !(c as f64 > draw) {
+                    k += 1;
+                    continue;
+                }
+            }
             // HYPOTHESIS P-EAT: a trap swallows every bloon it touches whole (no pops, no pop
             // cash) while it holds less than rbeCapacity RBE; then it closes and waits to be
             // collected for the eaten RBE x rbeCashMultiplier.
@@ -5313,7 +5331,15 @@ macro_rules! collide_pass {
                     if ((rt.delay * FPS) as f64).round_ties_even() > 0.0 {
                         pr.retarget_at = Some($sim_now);
                     } else {
+                        let old = $s.projectiles[$p].vel;
                         $s.retarget($p, &rt, false);
+                        // (The collision pass comes before the shot's TravelStrait: this frame's move
+                        // goes along the new heading from where it began; recording quincy_r04 rt 79,
+                        // an arrow off a Red at once toward the next.)
+                        let pr = &mut $s.projectiles[$p];
+                        if pr.spec.travel_strait && !pr.spec.instant && pr.spec.path.is_none() && pr.vel != old && pr.frames_left > 0.0 {
+                            pr.pos = [pr.prev[0] + pr.vel[0], pr.prev[1] + pr.vel[1]];
+                        }
                     }
                 }
             }
@@ -5662,6 +5688,7 @@ impl Game {
             pending_pets: Vec::new(),
             round_banana: None,
             grid_rank_pre: None,
+            plist_rank_pre: None,
             proj_list: Vec::new(),
             proj_obj: Default::default(),
             proj_pool: Vec::new(),
@@ -6527,7 +6554,7 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
-        self.bloons.push(Bloon { held: false, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, mult: 1.0, cell_pos: pos, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
+        self.bloons.push(Bloon { held: false, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
         self.plist_add(id, path);
         self.dart_time_spawned();
         if self.grid_on {
@@ -13090,6 +13117,9 @@ impl Game {
         let parent_galv = if self.defs[kind].is_moab { (0, 0) } else { b.galv };
         let parent_galv_chain = if self.defs[kind].is_moab { None } else { b.galv_chain.clone() };
         let parent_galv_zone = (b.galv_zone.clone(), b.galv_zone_skip, b.galv_seq);
+        // (The first child is the parent object, still filed on its segment: recording
+        // quincy_l20_r60 rt 525, a Yellow popped to a Red found by a bounce on its old segment.)
+        let parent_seg = b.seg_dist;
         let parent_chill = if self.defs[kind].is_moab { (0, 0) } else { b.chill };
         let parent_id = b.id;
         let lineage: std::sync::Arc<[u64]> = b.lineage.iter().flat_map(|l| l.iter().copied()).chain(std::iter::once(b.layer)).collect();
@@ -13382,6 +13412,7 @@ impl Game {
                 });
                 ch.prev = self.tracks[path as usize].bloon_pos(d0);
                 ch.prev_dist = d0;
+                ch.seg_dist = if n == 0 { parent_seg } else { d0 };
                 // (The others are made after this frame's movement, so they wait already.)
                 if n == 0 && parent_at {
                     ch.pos = pp0;
@@ -13640,6 +13671,7 @@ impl Game {
                     b.dist = d0;
                 }
                 b.prev_dist = d0;
+                b.seg_dist = if b.id == parent_id { parent_seg } else { d0 };
                 b.track_mult = tm;
             }
         }
@@ -18396,6 +18428,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // Pink's step rounds that way as its distance passes 256).
             let step = speed_frames(b.model_speed(&self.defs[b.kind], b.frozen_speed(&self.defs[b.kind], self.defs[b.kind].speed)) * mult) * b.track_mult * 1.0;
             moved = Some(step);
+            b.seg_dist = b.dist;
             b.dist = (b.dist + step).max(0.0);
             // Bloon.Move keeps a moving bloon from trailing the entrance by more than
             // 1.25 x its radius; a child made behind it this frame stays put until it moves
@@ -18656,6 +18689,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     fn closest_target(&self, q: [f32; 2], distance: f32, ok: impl Fn(&Bloon) -> bool, at: impl Fn(&Bloon) -> [f32; 2]) -> Option<usize> {
         #[cfg(test)] let _closest_timer=sim_profile::Timer::new(1);
         let reach = distance + 40.0;
+        // (A copy made in this collision pass is filed by the next Path.Process, after it.)
+        let now4 = self.sim_elapsed * 4;
         let mut best: Option<usize> = None;
         let mut best_d = f32::MAX;
         // The bloons on each segment within reach, in storage order: one pass over the bloons
@@ -18666,7 +18701,17 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         };
         let mut on_seg: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
         for (i, b) in self.bloons.iter().enumerate() {
-            let k = (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize;
+            // (Not one not yet moved: Bloon.Move files it on its segment; recording quincy_r30 rt
+            // 3125, an arrow's last bounce finds nothing though a new Zebra stands 42 off.)
+            // (Nor one made this frame that hasn't moved: recording quincy_l07_r40 rt 1853.)
+            if (b.unplaced || (self.phase == 0 && b.born >= now4)) && b.wind.is_none() {
+                continue;
+            }
+            // (Path.Process files the bloons after the CollisionChecker: in the collision pass a
+            // bloon is still on the segment of its distance before its latest move; later in the
+            // frame, on its frame-start one (recordings quincy_r04 rt 649 / boomerang_500).)
+            let sd = if self.phase == 0 { b.seg_dist } else { b.prev_dist };
+            let k = (b.wind_seg.unwrap_or(sd) / 7.0).max(0.0) as usize;
             if near(b.path as usize, k) {
                 on_seg.entry((b.path as usize, k)).or_default().push(i);
             }
@@ -18680,7 +18725,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 }
                 let in_range = (sp[0] - q[0]).powi(2) + (sp[1] - q[1]).powi(2) <= (distance + 2.0) * (distance + 2.0);
                 let mut on: Vec<usize> = on_seg.remove(&(pi, k)).unwrap_or_default();
-                on.sort_by_cached_key(|&i| self.path_rank.get(&self.bloons[i].id).map_or(u32::MAX, |r| r.1));
+                let pre = if self.phase == 0 { self.plist_rank_pre.as_ref() } else { None };
+                on.sort_by_cached_key(|&i| { let id = self.bloons[i].id; pre.and_then(|m| m.get(&id).copied()).or_else(|| self.path_rank.get(&id).map(|r| r.1)).unwrap_or(u32::MAX) });
                 for i in on {
                     let b = &self.bloons[i];
                     let d = &self.defs[b.kind];
@@ -21373,7 +21419,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         self.moved_early.clear();
         self.phase = 0;
         self.grid_rank_pre = None;
+        self.plist_rank_pre = None;
         if self.sim_elapsed % 60 == 0 {
+            self.plist_rank_pre = Some(self.path_rank.iter().map(|(&id, &(_, k))| (id, k)).collect());
             if self.has_grid_rank {
                 self.grid_rank_pre = Some(self.path_rank.iter().map(|(&id, &(_, k))| (id, k)).collect());
             }
@@ -23066,6 +23114,8 @@ mod tests {
         let mut meta = std::collections::HashMap::new();
         let mut towers: Vec<(String, f32, f32)> = Vec::new();
         let mut targets: Vec<(usize, String)> = Vec::new();
+        // SimRecorder's `# herolevel k level model xp` (Hero.UpgradeToLevel after placing).
+        let mut hero_levels: Vec<(usize, u8, f32)> = Vec::new();
         let mut points: Vec<(usize, [f32; 2])> = Vec::new();
         let mut ability_at: Option<usize> = None;
         // `# seed`: GameModel.randomSeed (freeplay rounds, the end screens' callout pick).
@@ -23114,6 +23164,7 @@ mod tests {
                 Some("#") if f.get(1) == Some(&"tower") => towers.push((f[2].into(), f[3].parse().unwrap(), f[4].parse().unwrap())),
                 // SimRecorder inputs: a tower's targeting mode, and the frame abilities go off after.
                 Some("#") if f.get(1) == Some(&"target") => targets.push((f[2].parse().unwrap(), f[3].to_string())),
+                Some("#") if f.get(1) == Some(&"herolevel") => hero_levels.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f.get(6).and_then(|x| x.parse().ok()).unwrap_or(0.0))),
                 Some("#") if f.get(1) == Some(&"point") => points.push((f[2].parse::<usize>().unwrap(), [f[3].parse::<f32>().unwrap(), -f[4].parse::<f32>().unwrap()])),
                 Some("#") if f.get(1) == Some(&"ability") => ability_at = f[2].parse().ok(),
                 Some("#") if f.get(1) == Some(&"seed") => seed = f[2].parse().ok(),
@@ -23196,7 +23247,10 @@ mod tests {
             assert!(g.place_at(def, [*x, -*y], false), "can't place {id} at {x},{}", -y);
             g.locked = locked;
             let t = g.towers.iter().rposition(|t| t.sub.is_none()).unwrap();
-            g.towers[t].tiers = [tiers[0], tiers[1], tiers[2]];
+            // (A hero keeps the level 1 it is placed at.)
+            if g.hero_def(def).is_none() {
+                g.towers[t].tiers = [tiers[0], tiers[1], tiers[2]];
+            }
             // (Made at this tier in one go: the base tier's shuffles didn't happen.)
             g.synced = rng_before;
             g.towers[t].randpos.clear();
@@ -23230,6 +23284,15 @@ mod tests {
             // InputManager.CreateTowerAt as SimRecorder calls it leaves Tower.worth at 0
             // (logged); bought upgrades add to it.
             g.towers[t].invested = 0.0;
+        }
+        for &(k, level, xp) in &hero_levels {
+            let t = g.towers.iter().enumerate().filter(|(_, t)| t.sub.is_none()).nth(k).map(|(i, _)| i).unwrap();
+            g.towers[t].tiers[0] = level;
+            g.towers[t].xp = xp;
+            g.init_point(t);
+            g.init_air(t);
+            g.sync_abilities(t);
+            g.sync_pets(t);
         }
         for (k, name) in &targets {
             let t = g.towers.iter().enumerate().filter(|(_, t)| t.sub.is_none()).nth(*k).map(|(i, _)| i).unwrap();

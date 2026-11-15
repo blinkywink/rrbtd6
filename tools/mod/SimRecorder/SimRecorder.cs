@@ -37,6 +37,8 @@ public class TowerSpec
     public float y { get; set; }
     /// Targeting mode to set after placing ("First", "Last", "Close", "Strong"); empty keeps the default.
     public string target { get; set; } = "";
+    /// A hero's level, set after placing (Hero.UpgradeToLevel); 0 keeps the level it is placed at.
+    public int level { get; set; } = 0;
     /// Camo priority on (TargetCamo.prioritiseCamo on the tower's attacks).
     public bool camo { get; set; } = false;
     /// Throws with the left hand (the Boomerang's "UseLeftHand" tower-menu action, FlipFollowPath).
@@ -143,6 +145,8 @@ public class Recorder : MelonMod
     internal static Scenario Sc;
     internal static StreamWriter Out;
     internal static StreamWriter FxOut;
+    /// `# herolevel` lines made while placing, written with the header.
+    internal static readonly List<string> HeroLevelLines = new();
     static readonly HashSet<int> shotTaken = new();
     internal static readonly HashSet<string> weaponNamed = new();
     internal static int Recorded;
@@ -299,6 +303,19 @@ public class Recorder : MelonMod
                 }
                 // Targeting modes, in placement order (the factory's list keeps creation order).
                 var placed = sim.factory.GetFactory<Tower>().up.list;
+                // Hero levels: Hero.UpgradeToLevel(level, input, no effect, tiers counted).
+                for (int k = 0; k < Sc.towers.Count && k < placed.Count; k++)
+                {
+                    if (Sc.towers[k].level <= 1) continue;
+                    Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Hero hero = null;
+                    var tbs = placed[k].Behaviors.list;
+                    for (int j = 0; j < tbs.Count && hero == null; j++)
+                        hero = tbs[j]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Hero>();
+                    if (hero == null) throw new Exception("tower " + k + " is not a hero");
+                    var up = hero.UpgradeToLevel(Sc.towers[k].level, InGame.instance.bridge.GetInputId(), false, false);
+                    LoggerInstance.Msg($"tower {k} hero level {Sc.towers[k].level}: {up} -> {placed[k].towerModel.name}");
+                    HeroLevelLines.Add($"# herolevel {k} {Sc.towers[k].level} {placed[k].towerModel.name} xp {Recorder.F(hero.xp)}");
+                }
                 for (int k = 0; k < Sc.towers.Count && k < placed.Count; k++)
                 {
                     var name = Sc.towers[k].target;
@@ -348,6 +365,8 @@ public class Recorder : MelonMod
                 for (int k = 0; xs != null && k < xs.Length; k++) xsl.Add(F(xs[k]));
                 Out.WriteLine($"# xpscale {string.Join(",", xsl)} map {sim.model.map.mapDifficulty} rating {F(sim.model.selectedDifficultyRating)} endRound {sim.map.spawner.endRound}");
                 foreach (var t in Sc.towers) Out.WriteLine($"# tower {t.id} {F(t.x)} {F(t.y)}");
+                foreach (var l in HeroLevelLines) Out.WriteLine(l);
+                HeroLevelLines.Clear();
                 for (int k = 0; k < Sc.towers.Count; k++)
                     if (!string.IsNullOrEmpty(Sc.towers[k].target)) Out.WriteLine($"# target {k} {Sc.towers[k].target}");
                 if (Sc.ability >= 0) Out.WriteLine($"# ability {Sc.ability}");
@@ -1019,6 +1038,27 @@ static class DrainXpPatch
         if (xp.towers != null)
             foreach (var kv in xp.towers) sb.Append(' ').Append(kv.Key).Append(':').Append(Recorder.F(kv.Value));
         w.WriteLine(sb.ToString());
+    }
+}
+
+// Hero.AddXp: "HX frame amount xpBefore xpAfter levelsGainedThisRound heroXpMultiplier
+// endOfRoundHeroXpScale" (Simulation.DistributeXpToHeroes scales the round's XP by both).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Hero), nameof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Hero.AddXp))]
+static class HeroAddXpPatch
+{
+    static float before;
+    static void Prefix(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Hero __instance) { try { before = __instance.xp; } catch { } }
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Hero __instance, float amount)
+    {
+        var w = Recorder.Out;
+        if (Recorder.Sc == null || w == null) return;
+        try
+        {
+            var sim = InGame.instance?.bridge?.simulation;
+            var m = sim?.model;
+            w.WriteLine($"HX {Recorder.Recorded} {Recorder.F(amount)} {Recorder.F(before)} {Recorder.F(__instance.xp)} {__instance.levelsGainedThisRound} {(m != null ? Recorder.F(m.heroXpMultiplier) : "-")} {(sim != null ? Recorder.F(sim.endOfRoundHeroXpScale) : "-")}");
+        }
+        catch (System.Exception e) { w.WriteLine($"HX {Recorder.Recorded} err {e.GetType().Name}"); }
     }
 }
 

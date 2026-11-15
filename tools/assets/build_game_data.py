@@ -340,6 +340,7 @@ def main():
         filters, exclude_bloons, exclude_tags, require_tags = [], [], [], []
         skip_mutated, need_mutated = [], []
         glue_filter, skip_frozen, cant_hit = 0, False, 0
+        filter_chance = None
         out_require_effects = None
         for fm in pb.get("ProjectileFilterModel", []):
             for x in items(fm["f"]["filters"]):
@@ -351,6 +352,10 @@ def main():
                     # that its damage can't hurt.
                     if x["type"] == "FilterBloonIfDamageTypeModel":
                         cant_hit |= x["f"].get("ifCantHitBloonProperties", 0)
+                    # FilterWithChance.FilterBloon (VERIFIED-DISASM @0x180c408a0): passes when
+                    # filterChance > Simulation.syncedRandom.NextDouble(), one draw per bloon it's asked about.
+                    if x["type"] == "FilterWithChanceModel":
+                        filter_chance = x["f"].get("filterChance", 1.0)
                     if x["type"] == "FilterOutBloonModel":
                         exclude_bloons.append(x["f"]["bloonId"])
                     if x["type"] == "FilterOutTagModel":
@@ -675,7 +680,10 @@ def main():
             # that layer (Tech Terror's blast carries into a MOAB's Ceramics).
             "distribute_set": (lambda m: None if m is None else [t for t in (deref(m["f"].get("bloonTags")) or []) if isinstance(t, str)] or ([m["f"]["bloonTag"]] if m["f"].get("bloonTag") else []))((pb.get("DistributeToChildrenBloonModifierModel") or [None])[0]),
             # DamageModel.ignoreImmunityDestroy: false = a hit on a bloon it can't damage destroys it.
-            "immune_keep": bool(dmg.get("ignoreImmunityDestroy", False)),
+            # (Or Projectile.CanBeDepleted (VERIFIED-DECOMP @0x180c8b7b0) false: a DestroyWhenHitImmuneModel
+            # with getsDestroyed off (@0x180cb8c40) keeps it through Bloon.Damage's Projectile.Deplete;
+            # recording quincy_l14_r50 rt 311, the Storm of Arrows Area on a Fortified Lead.)
+            "immune_keep": bool(dmg.get("ignoreImmunityDestroy", False)) or any(not m["f"].get("getsDestroyed", True) for m in pb.get("DestroyWhenHitImmuneModel", [])),
             # Whether it has a DamageModel at all (AddBehaviorToBloon's applyOnlyIfDamaged asks it).
             "damage_model": bool(pb.get("DamageModel")),
             # Its DamageModel's name has "FirstStrike": SubCommanderSupport doesn't scale its damage.
@@ -707,6 +715,7 @@ def main():
             "blocker_rebound": next(({"clear": b["f"].get("clearCollidedWith", False)} for b in pb.get("ProjectileBlockerCollisionReboundModel", [])), None),
             "knockback": (pb.get("KnockbackModel") or [{"f": None}])[0]["f"],
             "filters": filters,
+            "filter_chance": filter_chance,
             "no_hit": "FilterAllModel" in filters,
             # ProjectileModel.dontUseCollisionChecker: CollisionChecker.Process skips it.
             "no_checker": bool(f.get("dontUseCollisionChecker")),

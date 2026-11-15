@@ -1770,6 +1770,9 @@ pub struct Proj {
     /// ChilledModel.chilledDuration (s): its stage mutator's life (see Game::pre_damage_effects).
     #[serde(default)]
     pub chill: Option<f32>,
+    /// FilterWithChanceModel.filterChance.
+    #[serde(default)]
+    pub filter_chance: Option<f32>,
     /// Chilled.SlowNearby: see `ChillNearby`.
     #[serde(default)]
     pub chill_nearby: Option<ChillNearby>,
