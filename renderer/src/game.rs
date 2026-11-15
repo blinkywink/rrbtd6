@@ -3474,6 +3474,10 @@ pub struct Game {
     /// The path lists' ranks before this frame's flush: the game flushes after the CollisionChecker
     /// (recording quincy_l20_r60 rt 525: a bounce takes the bloon first on its segment before the flush).
     plist_rank_pre: Option<FastMap<u64, u32>>,
+    /// The last rotation Bloon.SetRotation gave a bloon of each model: CollisionGroupData
+    /// .precalculatedOffset lives on the shared BloonModel, so every bloon of the model is measured
+    /// with it (probe quincy_l12_r60_cm, CM / SR lines).
+    kind_rot: FastMap<usize, f32>,
     /// The projectile factory's list: every projectile made (by uid), the dead ones until the
     /// next flush. `projectiles` keeps the live ones in this order.
     proj_list: Vec<u64>,
@@ -4371,7 +4375,7 @@ macro_rules! collide_pass {
                 // second Pink the frame after the blast; glue_400 rt 2805: a moving Linger does
                 // meet a Zebra's new Green that frame).
                 || (!direct && $s.has_grid_rank && b.fresh && pr.spec.instant)
-                || (!direct && !circles_hit(pp, pr.spec.radius, bp, b.rot, &d.circles))
+                || (!direct && !circles_hit(pp, pr.spec.radius, bp, $s.mrot(b), &d.circles))
                 // (With no Target at all, none: recording sub_paragon_r40 rt 3440, a TargetDamage
                 // whose strike's Black was gone (Target 0) touches a Rainbow and leaves it.)
                 || (pr.spec.instant && pr.spec.only_target && pr.target.is_none_or(|t| t != b.id))
@@ -5689,6 +5693,7 @@ impl Game {
             round_banana: None,
             grid_rank_pre: None,
             plist_rank_pre: None,
+            kind_rot: Default::default(),
             proj_list: Vec::new(),
             proj_obj: Default::default(),
             proj_pool: Vec::new(),
@@ -6555,6 +6560,13 @@ impl Game {
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
         self.bloons.push(Bloon { held: false, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
+        // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
+        // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
+        if self.defs[kind].rotate_to_follow_path {
+            if let Some(r) = self.path_rot(path, dist) {
+                self.kind_rot.insert(kind, r);
+            }
+        }
         self.plist_add(id, path);
         self.dart_time_spawned();
         if self.grid_on {
@@ -6711,6 +6723,14 @@ impl Game {
     /// CollisionGroupData.precalculatedOffset of bloon `b`'s collision circle `ci`, as the
     /// attack targeting has it: turned by the bloon's rotation (game frame, y flipped here), or
     /// along the track where the path gives none.
+    /// The rotation a bloon's collision circles are turned by: CollisionGroupData.precalculatedOffset
+    /// is on the shared BloonModel, set by the model's last Bloon.SetRotation (probe
+    /// quincy_l12_r60_cm: CM / SR lines; recording quincy_l12_r60 rt 3044, an arrow meets a MOAB by
+    /// another MOAB's circle offsets).
+    fn mrot(&self, b: &Bloon) -> f32 {
+        self.kind_rot.get(&b.kind).copied().unwrap_or(b.rot)
+    }
+
     fn circle_off(&self, b: &Bloon, ci: usize) -> [f32; 2] {
         let c = self.defs[b.kind].circles[ci];
         match self.path_rot(b.path, 0.0).map(|_| b.rot) {
@@ -9559,7 +9579,7 @@ impl Game {
                     let cell = if b.cell_pos[0].is_finite() { b.cell_pos } else { b.pos };
                     if grid_hit(c, r, b.pos, cell, df.radius)
                         && (!self.has_grid_rank || !b.cell_pos[0].is_finite() || self.ggrid.visits(c, r, i, b.cell_pos))
-                        && circles_hit(c, r, b.pos, b.rot, &df.circles)
+                        && circles_hit(c, r, b.pos, self.kind_rot.get(&b.kind).copied().unwrap_or(b.rot), &df.circles)
                     {
                         found.push(((b.pos[0] - from[0]).hypot(b.pos[1] - from[1]), b.id));
                     }
@@ -15404,7 +15424,10 @@ impl Game {
                         // rotation (Bloon.SetRotation, VERIFIED-DISASM @0xfd5260; Vector2.Rotate as
                         // game_dir), game frame (y flipped here). Recording dart_502: on a curve the
                         // MOAB's lagging rotation puts its front circle in range 4 frames sooner.
-                        let rot = self.path_rot(b.path, 0.0).map(|_| b.rot);
+                        // (Targetting.CanHitMoab reads the circles' precalculatedOffset, which the
+                        // model's last Bloon.SetRotation set: probe quincy_l12_r60_cm rt 3033, MOAB 463
+                        // measured with MOAB 2380's -128.13; recording quincy_l12_r60 rt 3036.)
+                        let rot = self.path_rot(b.path, 0.0).map(|_| self.kind_rot.get(&b.kind).copied().unwrap_or(b.rot));
                         let tr = &self.tracks[b.path as usize];
                         let (a, z) = (tr.pos((b.dist - 0.5).max(0.0)), tr.pos(b.dist + 0.5));
                         let l = (z[0] - a[0]).hypot(z[1] - a[1]).max(1e-6);
@@ -17563,7 +17586,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                             let d = &self.defs[b.kind];
                                             if grid_hit(c, r, b.pos, b.cell_pos, d.radius)
                                                 && (!self.has_grid_rank || self.ggrid.visits(c, r, i, b.cell_pos))
-                                                && circles_hit(c, r, b.pos, b.rot, &d.circles)
+                                                && circles_hit(c, r, b.pos, self.kind_rot.get(&b.kind).copied().unwrap_or(b.rot), &d.circles)
                                             {
                                                 found.push(((b.pos[0] - line_start[0]).hypot(b.pos[1] - line_start[1]), b.id));
                                             }
@@ -17635,7 +17658,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                                 let d = &g.defs[b.kind];
                                                 if grid_hit(c, r, b.pos, b.cell_pos, d.radius)
                                                     && (!g.has_grid_rank || g.ggrid.visits(c, r, i, b.cell_pos))
-                                                    && circles_hit(c, r, b.pos, b.rot, &d.circles)
+                                                    && circles_hit(c, r, b.pos, g.kind_rot.get(&b.kind).copied().unwrap_or(b.rot), &d.circles)
                                                 {
                                                     found.push(((b.pos[0] - from[0]).hypot(b.pos[1] - from[1]), b.id));
                                                 }
@@ -18468,6 +18491,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         if let Some(tsf) = moved.filter(|_| self.defs[b.kind].rotate_to_follow_path) {
             if let Some(r) = self.track_rot.get(b.path as usize).filter(|v| !v.is_empty()).map(|v| v[((b.dist / 0.01).max(0.0) as usize).min(v.len() - 1)]) {
                 b.rot = lerp_angle(b.rot, r, tsf * 0.5);
+                let (k, rr) = (b.kind, b.rot);
+                self.kind_rot.insert(k, rr);
             }
         }
         // Bloon.Process (VERIFIED-DISASM): it leaks once distance - radius reaches leakDist
@@ -20678,7 +20703,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                         // ice_paragon_r40 rt 189, the MOAB's new Ceramics aren't in the list.)
                         if !b.unplaced && grid_hit(c, r, b.pos, b.cell_pos, d.radius)
                             && (!g.has_grid_rank || g.ggrid.visits(c, r, i, b.cell_pos))
-                            && circles_hit(c, r, b.pos, b.rot, &d.circles)
+                            && circles_hit(c, r, b.pos, g.kind_rot.get(&b.kind).copied().unwrap_or(b.rot), &d.circles)
                         {
                             found.push(((b.pos[0] - key_from[0]).hypot(b.pos[1] - key_from[1]), b.id));
                         }

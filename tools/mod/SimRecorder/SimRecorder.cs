@@ -101,6 +101,8 @@ public class Scenario
     /// Also each particle (ParticleSystem.GetParticles; off by default: suspected of crashing the
     /// game when the interop's Particle layout differs from the engine's).
     public bool fx_particles { get; set; } = false;
+    /// Log every Targetting.CanHitMoab call (CM lines).
+    public bool canhitmoab { get; set; } = false;
     /// "victory" / "defeat": at recorded frame end_frame open that end screen as InGame does
     /// (OnVictory: ShowVictoryScreen(GetVictorySceneName, GetVictoryScreenData); Lose:
     /// MenuManager.QueueMenu(GetDefeatSceneName, GetDefeatSceneData)) without their rewards,
@@ -1038,6 +1040,44 @@ static class DrainXpPatch
         if (xp.towers != null)
             foreach (var kv in xp.towers) sb.Append(' ').Append(kv.Key).Append(':').Append(Recorder.F(kv.Value));
         w.WriteLine(sb.ToString());
+    }
+}
+
+// Targetting.CanHitMoab: "CM frame bloon range px py pz sharedRange result offx offy" (what a tower's
+// targeting measures a MOAB's collision circles from).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Targetting), nameof(Il2CppAssets.Scripts.Simulation.Bloons.Targetting.CanHitMoab))]
+static class CanHitMoabPatch
+{
+    static int count;
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Bloons.Bloon bloon, float range, Il2CppAssets.Scripts.Simulation.SMath.Vector3 position, bool usingSharedRange, bool __result)
+    {
+        var w = Recorder.Out;
+        if (Recorder.Sc == null || w == null || !Recorder.Sc.canhitmoab || count++ > 200000) return;
+        try
+        {
+            var sb = new StringBuilder($"CM {Recorder.Recorded} {bloon?.Id.Id} {Recorder.F(range)} {Recorder.F(position.x)} {Recorder.F(position.y)} {Recorder.F(position.z)} {usingSharedRange} {__result}");
+            if (bloon != null)
+            {
+                sb.Append($" rot {Recorder.F(bloon.Rotation)} pos {Recorder.F(bloon.Position.X)} {Recorder.F(bloon.Position.Y)}");
+                var cs = bloon.AdditionalCollisions();
+                for (int k = 0; cs != null && k < cs.Length; k++)
+                    sb.Append($" c {Recorder.F(cs[k].offset.x)},{Recorder.F(cs[k].offset.y)},{Recorder.F(cs[k].radius)},{Recorder.F(cs[k].precalculatedOffset.x)},{Recorder.F(cs[k].precalculatedOffset.y)}");
+            }
+            w.WriteLine(sb.ToString());
+        }
+        catch (System.Exception e) { w.WriteLine($"CM err {e.GetType().Name} {e.Message}"); }
+    }
+}
+
+// Bloon.SetRotation on MOAB-class bloons: "SR frame bloon r rotationAfter" (with canhitmoab).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Bloon), nameof(Il2CppAssets.Scripts.Simulation.Bloons.Bloon.SetRotation))]
+static class SetRotationPatch
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Bloons.Bloon __instance, float __0)
+    {
+        var w = Recorder.Out;
+        if (Recorder.Sc == null || w == null || !Recorder.Sc.canhitmoab) return;
+        try { if (__instance.bloonModel.isMoab) w.WriteLine($"SR {Recorder.Recorded} {__instance.Id.Id} {Recorder.F(__0)} {Recorder.F(__instance.Rotation)}"); } catch { }
     }
 }
 
