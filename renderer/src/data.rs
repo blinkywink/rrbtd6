@@ -538,6 +538,9 @@ pub struct Area {
     /// `AreaModel.height` (the Area transform's world y).
     #[serde(default)]
     pub height: f32,
+    /// `AreaModel.renderHeightOffset` (Map.GetTerrainHeight adds it to the height).
+    #[serde(default, rename = "renderHeightOffset")]
+    pub render_offset: f32,
     /// `blockerCircles` of blocker areas: (x, z, radius) in our ground frame.
     #[serde(default)]
     pub blockers: Vec<[f32; 3]>,
@@ -997,6 +1000,10 @@ pub struct Attack {
     /// AttackModel.attackThroughWalls: targets aren't checked for a clear line (Map.IsTargetLineClear).
     #[serde(default)]
     pub through_walls: bool,
+    /// CheckTargetsWithoutOffsetsModel on the attack: no CheckFromOffset line (Attack.CheckFromOffset
+    /// @0x180dac780 returns zero).
+    #[serde(default)]
+    pub los_no_offset: bool,
     /// FighterPilotPattern target suppliers: FilterTargetAngleModel fieldOfView.
     #[serde(default)]
     pub fighter: Option<f32>,

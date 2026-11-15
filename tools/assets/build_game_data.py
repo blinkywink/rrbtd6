@@ -1721,6 +1721,9 @@ def main():
                     "fire_without_target": af.get("fireWithoutTarget", False),
                     # AttackModel.attackThroughWalls: no Map.IsTargetLineClear check.
                     "through_walls": bool(af.get("attackThroughWalls", False)),
+                    # CheckTargetsWithoutOffsetsModel: Attack.CheckFromOffset (@0x180dac780) is zero, so
+                    # the line of sight is checked from the tower only.
+                    "los_no_offset": any(x and x["type"] == "CheckTargetsWithoutOffsetsModel" for x in items(af["behaviors"])),
                     # TargetSelectedPointModel.startWithClosestTrackPoint: the point starts on the
                     # attack's visible in-range path segment (TargetSelectedPoint.Process).
                     "point_start_track": any(x and x["type"] == "TargetSelectedPointModel" and x["f"].get("startWithClosestTrackPoint")

@@ -122,12 +122,30 @@ def pick_in(areas, paths, lo, hi):
     return best and best[1]
 
 
+def rec_points(path):
+    """Bloon positions a recording saw (B lines, game frame), as path-like points (x, y, order)."""
+    pts = []
+    for line in open(path, encoding="utf-8"):
+        if line.startswith("B "):
+            f = line.split()
+            pts.append((float(f[4]), float(f[5]), float(len(pts))))
+    return [pts[::max(1, len(pts) // 20000)]] if pts else []
+
+
 def main():
-    dump_dir, names = sys.argv[1], sys.argv[2:]
+    # --near <recording>: judge distance from where that recording's bloons went (the map's paths
+    # this round really uses; Erosion's round 40 runs on few of its seven paths).
+    args = sys.argv[1:]
+    near = None
+    if "--near" in args:
+        k = args.index("--near")
+        near = args[k + 1]
+        args = args[:k] + args[k + 2:]
+    dump_dir, names = args[0], args[1:]
     for name in names:
         areas, paths = load(os.path.join(dump_dir, name + ".map"))
         apply_logic(areas, name.lower(), 40)
-        p = pick(areas, paths)
+        p = pick(areas, rec_points(near) if near else paths)
         if p is None:
             print(name, "no spot")
             continue

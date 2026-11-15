@@ -546,7 +546,7 @@ mod tests {
     use super::*;
 
     fn area(id: i64, height: f32) -> Area {
-        Area { id, kind: 3, points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], holes: Vec::new(), height, blockers: Vec::new(), is_disabled: false, is_blocker: false }
+        Area { id, kind: 3, points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], holes: Vec::new(), height, render_offset: 0.0, blockers: Vec::new(), is_disabled: false, is_blocker: false }
     }
 
     fn game_with(logic: LogicDef, areas: Vec<Area>) -> Game {

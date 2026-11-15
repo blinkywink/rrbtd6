@@ -3145,7 +3145,10 @@ pub struct Los {
 
 impl Los {
     pub fn of(a: &crate::data::Attack) -> Los {
-        Los { through_walls: a.through_walls, eject: a.weapons.first().map_or([0.0; 2], |w| [w.eject[0], w.eject[1]]), extra: a.extra_rotation }
+        // (Attack.CheckFromOffset @0x180dac780: the first WeaponModel's eject, or zero with a
+        // CheckTargetsWithoutOffsetsModel.)
+        let eject = if a.los_no_offset { [0.0; 2] } else { a.weapons.first().map_or([0.0; 2], |w| [w.eject[0], w.eject[1]]) };
+        Los { through_walls: a.through_walls, eject, extra: a.extra_rotation }
     }
 }
 
@@ -5786,6 +5789,7 @@ impl Game {
                     kind: AREA_LAND,
                     points: vec![[-WORLD_X, -WORLD_Z], [WORLD_X, -WORLD_Z], [WORLD_X, WORLD_Z], [-WORLD_X, WORLD_Z]],
                     height: 0.0,
+                    render_offset: 0.0,
                     blockers: Vec::new(),
                     is_disabled: false,
                     is_blocker: false,
@@ -7534,7 +7538,8 @@ impl Game {
         if los.through_walls {
             return true;
         }
-        if !self.line_clear(pos, 0.0, q) {
+        let z = self.terrain_z(pos);
+        if !self.line_clear(pos, z, q) {
             return false;
         }
         let eject = los.eject;
@@ -7545,7 +7550,28 @@ impl Game {
         let a = RAD2DEG * crt_atan2(g[1], g[0]) - 90.0 + los.extra;
         let (sn, cs) = crt_sin_cos(DEG2RAD * a);
         let r = [cs * eject[0] - sn * eject[1], sn * eject[0] + cs * eject[1]];
-        self.line_clear([pos[0] + r[0], pos[1] - r[1]], 0.0, q)
+        self.line_clear([pos[0] + r[0], pos[1] - r[1]], z, q)
+    }
+
+    /// A tower's Position.z where it stands (InputManager.QueryPlacementPosition @0x180f83240:
+    /// Map.GetTerrainHeight(p, 0, 1) @0x180f5b0b0, the first active area holding p, unplaceable
+    /// and type 5 skipped, its height + renderHeightOffset; 0 off every area), the z
+    /// Attack.GetPathSegmentsInRange (@0x180dad8f0) checks lines of sight from, so blockers no
+    /// taller don't block (recording map_sunkencolumns_dart_205_r40 rt 564: a 2-0-5 on 50-high
+    /// LandRight, itself a blocker, shoots past the 50-high Blocking areas). STAND-IN: the entity
+    /// height term (vtable 0x228) the origin adds is taken as 0, and z is taken where the tower is
+    /// now, not kept from its placement.
+    pub(crate) fn terrain_z(&self, p: [f32; 2]) -> f32 {
+        // (The clone's base land is areas[0]; the game's BaseArea, height 0, is last.)
+        for a in self.areas.iter().skip(1) {
+            if a.kind == 5 || a.kind == 3 {
+                continue;
+            }
+            if Self::in_area(p, a) {
+                return a.height + a.render_offset;
+            }
+        }
+        0.0
     }
 
     pub fn line_clear(&self, from: [f32; 2], from_z: f32, to: [f32; 2]) -> bool {
@@ -15543,7 +15569,7 @@ impl Game {
                             // given unless attackThroughWalls) the line to the circle itself.
                             .find(|c| {
                                 (c[0] - pos[0]).powi(2) + (c[1] - pos[1]).powi(2) < (range + c[2]) * (range + c[2])
-                                    && (seg_clear || self.line_clear(pos, 0.0, [c[0], c[1]]))
+                                    && (seg_clear || self.line_clear(pos, self.terrain_z(pos), [c[0], c[1]]))
                             })
                             .map(|c| {
                                 aim_at = [c[0], c[1]];
@@ -15810,7 +15836,7 @@ impl Game {
                         if attack.min_range > 0.0 && (b.pos[0] - pos[0]).powi(2) + (b.pos[1] - pos[1]).powi(2) < attack.min_range * attack.min_range {
                             continue;
                         }
-                        if !attack.through_walls && !self.line_clear(pos, 0.0, b.pos) {
+                        if !attack.through_walls && !self.line_clear(pos, self.terrain_z(pos), b.pos) {
                             continue;
                         }
                         any_target = true;
@@ -19393,7 +19419,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     fn tower_height(&self, t: usize) -> f32 {
         // (TowerCreateParagonTower.Process @0x180da3fe0: an isAirBasedTower is made at z 250;
         // recording wizard_paragon_r40 rt 327, the Dark Phoenix's balls at 257 fly over the trees.)
-        if self.towers[t].sub.as_ref().is_some_and(|s| s.spec.circle.is_some() || s.spec.air_based) { 250.0 } else { 0.0 }
+        // Else its Position.z where it stands (terrain_z).
+        if self.towers[t].sub.as_ref().is_some_and(|s| s.spec.circle.is_some() || s.spec.air_based) { 250.0 } else { self.terrain_z(self.towers[t].pos) }
     }
 
     /// Bloon.PercThroughMap (VERIFIED-DISASM @0x180fb54f0): (distanceTraveled + MaxDistUntilSpawn) /
@@ -19497,7 +19524,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             let (sa, ca) = crt_sin_cos(DEG2RAD * -b.rot);
             let (ox, oy) = (ca * c[0] - sa * c[1], ca * c[1] + sa * c[0]);
             let p = [b.pos[0] + ox, b.pos[1] - oy];
-            ((p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2) < (range + c[2]) * (range + c[2]) && (clear || self.line_clear(pos, 0.0, p))).then_some((dd, p))
+            ((p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2) < (range + c[2]) * (range + c[2]) && (clear || self.line_clear(pos, self.terrain_z(pos), p))).then_some((dd, p))
         })
     }
 
