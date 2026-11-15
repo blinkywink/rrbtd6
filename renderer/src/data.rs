@@ -766,6 +766,9 @@ pub struct Tier {
 #[derive(Deserialize, Clone)]
 pub struct Support {
     pub kind: String,
+    /// The ricochet zone's RetargetOnContactModel (kind "ricochet").
+    #[serde(default)]
+    pub retarget: Option<Retarget>,
     pub mult: f32,
     pub add: f32,
     pub id: String,

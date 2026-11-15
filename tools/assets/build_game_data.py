@@ -1949,6 +1949,7 @@ def main():
                         "ActivateVisibilitySupportZoneModel": "camo",
                         "ActivateProjectileSpeedSupportZoneModel": "speed",
                         "ActivateDamageBypassSupportZoneModel": "immune",
+                        "ActivateRicochetSupportZoneModel": "ricochet",
                         "ActivateTowerDamageSupportZoneModel": "damage"}.get(x["type"])
                 if kind:
                     mult, add = 0.0, 0.0
@@ -1989,7 +1990,12 @@ def main():
                     # never the village itself; mutated at once, not from the next frame.
                     if x["type"] == "CallToArmsModel":
                         glob, use_tower = not xf.get("useRadius"), bool(xf.get("useRadius"))
-                    out["supports"].append({"kind": kind, "mult": mult, "add": add,
+                    # RicochetMutator.Mutate (VERIFIED-DISASM @0x180e26bf0): every ProjectileModel in the
+                    # tower's model with a TravelStraitModel and no InstantModel gets a RetargetOnContactModel
+                    # (distance, maxBounces, delay, targetType, expireIfNoTargetFound) added at the end.
+                    ric = {"distance": xf.get("distance", 0.0), "max_bounces": int(xf.get("maxBounces", 0) or 0), "delay": xf.get("delay", 0.0),
+                           "expire_if_none": bool(xf.get("expireIfNoTargetFound")), "after_travel": True} if kind == "ricochet" else None
+                    out["supports"].append({"kind": kind, "mult": mult, "add": add, "retarget": ric,
                                             "id": xf.get("mutatorId") or x["type"], "global": glob,
                                             "radius": None if glob or use_tower else rng,
                                             "self": x["type"] != "CallToArmsModel" and bool(xf.get("canEffectThisTower", xf.get("canAffectThisTower", True))),

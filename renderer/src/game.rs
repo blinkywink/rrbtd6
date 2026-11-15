@@ -3010,6 +3010,8 @@ pub struct Buff {
     pub speed_mult: f32,
     /// ActivateProjectileSpeedSupportZone: TravelStrait speed + this.
     pub speed_add: f32,
+    /// ActivateRicochetSupportZone: the RetargetOnContact its TravelStrait shots get.
+    pub ricochet: Option<crate::data::Retarget>,
     pub camo: bool,
     pub immune: Option<u32>,
     /// AddAcidicMixtureToProjectileMutator.Mutate (VERIFIED-DISASM @0x1811b8a00): the tower's
@@ -3051,6 +3053,7 @@ impl Default for Buff {
             pierce_pct: None,
             speed_mult: 0.0,
             speed_add: 0.0,
+            ricochet: None,
             camo: false,
             immune: None,
             acid: false,
@@ -3168,7 +3171,7 @@ impl Buff {
     /// The projectile as fired under these buffs (None if unchanged). Damage-type support reaches
     /// sub-projectiles too (explosions); pierce and speed only the shot itself.
     fn projectile(&self, p: &Proj) -> Option<Proj> {
-        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_x == 1.0 && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.speed_add == 0.0 && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
+        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_x == 1.0 && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.speed_add == 0.0 && self.ricochet.is_none() && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
             return None;
         }
         let mut q = p.clone();
@@ -3240,6 +3243,13 @@ impl Buff {
         q.speed *= 1.0 + self.speed_mult;
         if q.travel_strait {
             q.speed += self.speed_add;
+        }
+        // RicochetMutator.Mutate: AddBehavior, so after its TravelStrait (and any own RetargetOnContact
+        // keeps the first one: the clone carries one).
+        if let (Some(r), true, false) = (self.ricochet.as_ref(), q.travel_strait, q.instant) {
+            if q.retarget.is_none() {
+                q.retarget = Some(r.clone());
+            }
         }
         if self.acid {
             fn unlead(p: &mut Proj) {
@@ -12778,6 +12788,7 @@ impl Game {
                         "pierce_pct" => b.pierce_pct = Some((sp.mult, n)),
                         "speed" => b.speed_mult += sp.mult * k,
                         "speed_add" => b.speed_add += sp.add * k,
+                        "ricochet" => b.ricochet = sp.retarget.clone(),
                         "camo" => b.camo = true,
                         "immune" => b.immune = Some(b.immune.unwrap_or(u32::MAX) & sp.add as u32),
                         "cash" => b.cash_mult *= sp.mult.powi(n as i32),
@@ -13987,7 +13998,7 @@ impl Game {
                 sor.hash(&mut h);
             }
             if let Some(b) = self.buffs.get(t) {
-                (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_x.to_bits(), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.vig_range.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits(), b.speed_add.to_bits()).hash(&mut h);
+                (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_x.to_bits(), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.vig_range.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits(), b.speed_add.to_bits(), b.ricochet.is_some()).hash(&mut h);
             }
             h.finish()
         };
