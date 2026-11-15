@@ -635,6 +635,13 @@ pub struct Tier {
     /// DamageBasedAttackSpeedModel (Skywarden).
     #[serde(default)]
     pub damage_speed: Option<DamageSpeed>,
+    /// LightningRodManagerModel (Skywarden x-5-x): damageTypesToZap.
+    #[serde(default)]
+    pub rod_manager: Option<Vec<String>>,
+    /// RoundBasedAttackSpeedModel (Engineer Paragon): bonusAttackSpeedPerRoundPercent,
+    /// maxWeaponAttackSpeed.
+    #[serde(default)]
+    pub round_speed: Option<[f32; 2]>,
     /// AddMakeshiftAreaModel: deck areas towers can stand on.
     #[serde(default)]
     pub decks: Vec<Deck>,
@@ -1382,6 +1389,13 @@ pub struct BurstFire {
     /// On an AttackAirUnitModel: each shot leaves from the air unit (EmissionOverTime.Process).
     #[serde(default)]
     pub air: bool,
+    /// BurstWeaponIncreasingArcBehavior.angleIncreases: each shot's RandomArc randomAngle.
+    #[serde(default)]
+    pub arcs: Vec<f32>,
+    /// The EmissionOverTime's EmissionSupplyRandomTargetModels, in order: [minRadius, maxRadius,
+    /// mapBorder, spawnProjectilesOnTarget (0 / 1)].
+    #[serde(default)]
+    pub supply: Vec<[f32; 4]>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1394,6 +1408,12 @@ pub struct Alternate {
 #[derive(Deserialize, Clone)]
 pub struct Emission {
     pub kind: String,
+    /// EmissionOverTimeModel: [count, timeBetween x 60, initialFireDelay x 60].
+    #[serde(default)]
+    pub over_time: Option<[f32; 3]>,
+    /// Its EmissionSupplyRandomTargetModels: [minRadius, maxRadius, mapBorder, spawnOnTarget].
+    #[serde(default)]
+    pub supply: Vec<[f32; 4]>,
     /// ArcEmissionModel.useProjectileRotation.
     #[serde(default)]
     pub proj_rot: bool,
@@ -1597,6 +1617,9 @@ pub struct Exhaust {
     /// (Runtime: the uid of the projectile it came from, for the process-list order.)
     #[serde(skip)]
     pub src: u64,
+    /// (Runtime: the bloon its ArriveAtTarget was flying at, when it went at the Target.)
+    #[serde(skip)]
+    pub arrive_target: Option<u64>,
     pub projectile: Proj,
     pub emission: Emission,
     /// Fires once the share of its pierce used reaches `fraction`, or (when >= 0) the share
@@ -1623,6 +1646,9 @@ pub struct Exhaust {
     /// when the projectile is made: a child made this frame may have taken it over.
     #[serde(skip)]
     pub stale_target: Option<(u32, [f32; 2])>,
+    /// Run time: the emitting projectile's Target collision-circle offset (Target.Position).
+    #[serde(skip)]
+    pub target_off: [f32; 2],
 }
 
 #[derive(Deserialize, Clone)]
@@ -1735,6 +1761,45 @@ pub struct Proj {
     /// KnockbackModel: hit bloons go backwards for a while.
     #[serde(default)]
     pub knockback: Option<Knockback>,
+    /// WindlashModel (Skywarden): see `Windlash`.
+    #[serde(default)]
+    pub windlash: Option<Box<Windlash>>,
+    /// ChilledModel.chilledDuration (s): its stage mutator's life (see Game::pre_damage_effects).
+    #[serde(default)]
+    pub chill: Option<f32>,
+    /// Chilled.SlowNearby: see `ChillNearby`.
+    #[serde(default)]
+    pub chill_nearby: Option<ChillNearby>,
+    /// Chilled.EmitIceShrapnel: see `ChillShrapnel`.
+    #[serde(default)]
+    pub chill_shrapnel: Option<std::sync::Arc<ChillShrapnel>>,
+    /// LightningRodEmitModel (Skywarden x-5-x): see `RodEmit`.
+    #[serde(default)]
+    pub rod_emit: Option<Box<RodEmit>>,
+    /// EmitOnDamageWithStateModel (Skywarden x-x-4+ FrozenRemains): see `StateEmit`.
+    #[serde(default)]
+    pub state_emits: Vec<StateEmit>,
+    /// LightningRodModel: this projectile is a lightning rod (see `Rod`).
+    #[serde(default)]
+    pub rod: Option<Box<Rod>>,
+    /// CollideReducePierceForBloonStateModel (collisionPass -1): Collide (VERIFIED-DECOMP
+    /// @0x180c9cf60) draws a synced NextDouble on every hit, then adds extraPierce when the bloon
+    /// has one of its states and percentChanceOfPierceReduce <= the draw; the models' 50 against
+    /// a 0..1 draw never passes, so only the draw is kept (recording sky_300 rt 28).
+    #[serde(default)]
+    pub pierce_draw: bool,
+    /// GalvanizedModel: [stage duration s, stunDuration s, stunDamage, stunSpeedMultiplier].
+    #[serde(default)]
+    pub galvanize: Option<[f32; 4]>,
+    /// Galvanized.mutatorDurations: (bloon id, stun seconds) checked before stunDuration.
+    #[serde(default)]
+    pub galvanize_durations: Vec<(String, f32)>,
+    /// GalvanizedModel's chain lightning (GalvanizedBehavior.OnBloonDamaged / EmitProjectile).
+    #[serde(default)]
+    pub galvanize_chain: Option<std::sync::Arc<GalvChain>>,
+    /// It has a TravelStraitModel (GalvanizedBehavior.ProjectileFilter takes only those).
+    #[serde(default)]
+    pub travel_strait: bool,
     /// AgeModel.lifespan (seconds), when it has one.
     #[serde(default)]
     pub age_lifespan: Option<f32>,
@@ -2062,6 +2127,9 @@ pub struct Ability {
     /// PlaceProjectileAtModel (Mega Mine): placed at a picked point.
     #[serde(default)]
     pub place_at: Option<PlaceAt>,
+    /// ActivateLightningRodZapModel (Skywarden Thunder Charge).
+    #[serde(default)]
+    pub rod_zap: Option<RodZap>,
     /// SyphonFundingModel.lifespan (seconds).
     #[serde(default)]
     pub syphon: f32,
@@ -2302,6 +2370,9 @@ pub struct DamageSpeed {
     pub increase: f32,
     pub max_stacks: u32,
     pub idle_frames: u32,
+    /// damageCap: OnBloonDamaged counts at most this per hit (0: no cap).
+    #[serde(default)]
+    pub cap: f32,
 }
 
 /// GyrfalconPatternModel: the bird waits `cooldown` seconds, dives at a bloon (maxSpeed x
@@ -2724,6 +2795,13 @@ pub struct AdoraSpec {
     pub accel_in: f32,
     pub decel_gt: f32,
     pub lifespan: f32,
+    /// TrackTargetAfterDelayModel (Sniper Paragon shrapnel): the same homing after `delay`
+    /// seconds, with `target_type` ("Random": First / Last / Close / Strong by its own
+    /// System.Random).
+    #[serde(default)]
+    pub after_delay: Option<f32>,
+    #[serde(default)]
+    pub target_type: String,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2759,6 +2837,16 @@ pub struct StateMod {
 /// (damage = extra damage per hit).
 #[derive(Deserialize, Clone)]
 pub struct EffectSpec {
+    /// AddBehaviorToSingleBloonModel.firstHitOnly (Collide @0x180c81f70): applied on the
+    /// behaviour's first collision only (hasCollided, kept by a pooled behaviour object).
+    #[serde(default)]
+    pub single_first: bool,
+    /// AddBehaviorToSingleBloonModel.chance: above 0, a synced NextDouble (chance < it: skip).
+    #[serde(default)]
+    pub single_chance: f32,
+    /// Chilled.hitBloon: only on the projectile's first hit that will damage a bloon.
+    #[serde(default)]
+    pub first_hit_only: bool,
     pub kind: String,
     pub id: String,
     /// The mutator's overlayType ("GlueBasic", "Ice", "Bleed"...; empty: none): the bloon shows
@@ -2950,6 +3038,101 @@ fn one_usize() -> usize {
     1
 }
 
+/// EmitOnDamageWithStateModel (EmitOnDamageWithState.OnBloonDegrade @0x180cbafd0 / OnBloonDestroy
+/// @0x180cbb010): when this projectile degrades a bloon (mustBePopped: only one it destroys)
+/// that has one of `states` (none: any) and one of `ids` (none: any), `projectile` through
+/// EmissionAtClosestPathSegment at the bloon.
+#[derive(Deserialize, Clone)]
+pub struct StateEmit {
+    #[serde(default)]
+    pub must_pop: bool,
+    #[serde(default)]
+    pub states: Vec<String>,
+    #[serde(default)]
+    pub ids: Vec<String>,
+    pub projectile: Proj,
+}
+
+/// LightningRodEmitModel (LightningRodEmit.Collide @0x180cc9580, collisionPass -1): a rod at the
+/// hit bloon once per `cooldown` s, unless one of the tower's rods is within `min_dist`.
+#[derive(Deserialize, Clone)]
+pub struct RodEmit {
+    pub cooldown: f32,
+    pub min_dist: f32,
+    #[serde(default)]
+    pub rod: Option<Proj>,
+}
+
+/// ActivateLightningRodZapModel: rate / delayPerJump / duration in seconds; `proj` the
+/// lightningRod (ThunderLightning) shot along its LineProjectileEmission (useTargetAsEndPoint).
+#[derive(Deserialize, Clone)]
+pub struct RodZap {
+    pub rate: f32,
+    pub damage: f32,
+    pub pierce_per_jump: f32,
+    pub delay: f32,
+    pub duration: f32,
+    #[serde(default)]
+    pub proj: Option<Proj>,
+}
+
+/// ChilledModel's ice shrapnel (Chilled.EmitIceShrapnel @0x180c9a170): shrapnelRange,
+/// shrapnelCount, its projectile and emission.
+#[derive(Deserialize, Clone)]
+pub struct ChillShrapnel {
+    pub range: f32,
+    pub count: usize,
+    pub projectile: Proj,
+    pub emission: Emission,
+}
+
+/// ChilledModel's SlowNearby (Chilled.SlowNearby @0x180c9b870): slowRadius, radiusMultiplier,
+/// moabStageTwoSlowMod, affectMoab, slowDuration (s).
+#[derive(Deserialize, Clone)]
+pub struct ChillNearby {
+    pub radius: f32,
+    pub mult: f32,
+    pub moab_mult: f32,
+    pub moab: bool,
+    pub lifespan: f32,
+}
+
+/// LightningRodModel (LightningRod.GetRadius @0x180cca1f0 / TryEmitLightning @0x180cca610).
+#[derive(Deserialize, Clone)]
+pub struct Rod {
+    pub radius: f32,
+    #[serde(default)]
+    pub scale: bool,
+    #[serde(default)]
+    pub base: f32,
+    #[serde(default)]
+    pub zap_cd: f32,
+    #[serde(default)]
+    pub zap: Option<Proj>,
+}
+
+/// WindlashModel (Skywarden): stage mutators for `duration` s; from stage 2 the arrows.
+#[derive(Deserialize, Clone)]
+pub struct Windlash {
+    pub duration: f32,
+    pub min: f32,
+    pub max: f32,
+    pub interval: f32,
+    pub speed: f32,
+    #[serde(default)]
+    pub moab: bool,
+    #[serde(default)]
+    pub arrow: Option<Proj>,
+    #[serde(default)]
+    pub arrow_emission: Option<Emission>,
+    /// vacuumProjectile (WindVacuum: wind along the track) and its EmissionAtClosestPathSegment
+    /// [count, spacing].
+    #[serde(default)]
+    pub vacuum: Option<Proj>,
+    #[serde(default)]
+    pub vacuum_at: Option<[f32; 2]>,
+}
+
 /// KnockbackModel: the KnockbackMutator for `lifespan` seconds; the bloon's speed becomes
 /// speed - |m x speed|, m the MOAB / heavy (Lead, Ceramic, Fortified) / light multiplier.
 #[derive(Deserialize, Clone, Debug)]
@@ -3052,4 +3235,17 @@ pub struct Zombie {
 
 fn one_f32() -> f32 {
     1.0
+}
+
+/// GalvanizedModel: chainLightningDamageTypes (as immunity values), projectile, emission.
+#[derive(Deserialize, Clone)]
+pub struct GalvChain {
+    pub types: Vec<u32>,
+    /// GalvanizedBehaviorModel's magnet: radius, turnStrength, maxAngle, magnetBloonProperties (bits).
+    #[serde(default)]
+    pub magnet: [f32; 3],
+    #[serde(default)]
+    pub magnet_props: u32,
+    pub projectile: Proj,
+    pub emission: Emission,
 }

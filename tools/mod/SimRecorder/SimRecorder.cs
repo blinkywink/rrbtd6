@@ -80,6 +80,7 @@ public class Scenario
     /// Recorded frames [first, last] whose synced NextDouble draws (R d lines) also list their
     /// native callers (GameAssembly RVAs + 0x180000000).
     public int[] rstack { get; set; }
+    public bool bloonfactory { get; set; }
     /// Effect capture (<name>.fx): every rendered frame while fx_from <= recorded frames <= fx_to,
     /// the camera and each active particle system (with its particles), sprite and TextMeshPro
     /// text whose hierarchy path contains one of fx_filter (all when empty). Use with fast false.
@@ -814,6 +815,21 @@ public class Recorder : MelonMod
             m.WriteLine($"getinline_movenext 0x{fp - gbase + 0x180000000:x} {System.Runtime.InteropServices.Marshal.PtrToStringAnsi(Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_name(klass))}");
         }
         catch (Exception e) { m.WriteLine("getinline_movenext error " + e.Message); }
+        // Factory`1's methods for WindlashBehavior (shared generics, no static address).
+        try
+        {
+            var fac = sim.factory.GetFactory<Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.WindlashBehavior>();
+            IntPtr klass = Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(fac.Pointer);
+            long gbase = System.Diagnostics.Process.GetCurrentProcess().Modules.Cast<System.Diagnostics.ProcessModule>().First(x => x.ModuleName == "GameAssembly.dll").BaseAddress.ToInt64();
+            foreach (var (mn, ac) in new[] { ("Flush", 1), ("Create", 1), ("CreateBehavior", 1), ("Clear", 0), ("get_PooledCount", 0) })
+            {
+                IntPtr mi = Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_method_from_name(klass, mn, ac);
+                if (mi == IntPtr.Zero) { m.WriteLine($"factory_method {mn} missing"); continue; }
+                long fp = System.Runtime.InteropServices.Marshal.ReadIntPtr(mi).ToInt64();
+                m.WriteLine($"factory_method {mn} 0x{fp - gbase + 0x180000000:x}");
+            }
+        }
+        catch (Exception e) { m.WriteLine("factory_method error " + e.Message); }
         LoggerInstance.Msg("map dumped: " + paths.Count + " paths");
     }
 
@@ -1127,6 +1143,8 @@ static class SimulatePatch
                 if (b == null || b.IsDestroyed) continue;
                 var p = b.Position;
                 w.WriteLine($"B {b.Id.Id} {b.bloonModel.id} {Recorder.F(b.distanceTraveled)} {Recorder.F(p.X)} {Recorder.F(p.Y)} {b.health}");
+                // Off its track (MoveWithWind / WindlashBehavior carries): "OT bloon offTrackCount".
+                try { if (b.offTrackCount != 0) w.WriteLine($"OT {b.Id.Id} {b.offTrackCount}"); } catch (Exception) { }
                 // Its offTrackCount when carried: "BO id count".
                 if (b.offTrackCount > 0) w.WriteLine($"BO {b.Id.Id} {b.offTrackCount}");
                 // Its Position.z when that isn't 0: "BZ id z".
@@ -1345,6 +1363,46 @@ static class SimulatePatch
                 }
             }
         });
+        // The WindlashBehavior factory (pool reuse keeps a stale interval): "WF freePtr
+        // createdSinceLastFlush up:obj[x=destroyed],... pool:obj,..." when it has anything.
+        Part("windlashfactory", () =>
+        {
+            var f = sim.factory.GetFactory<Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.WindlashBehavior>();
+            if (f == null) return;
+            var up = f.up.list;
+            int fp = f.freePtr;
+            if (up.Count == 0 && fp == 0) return;
+            var sb = new StringBuilder($"WF {fp} {f.createdSinceLastFlush} up:");
+            for (int k = 0; k < up.Count; k++)
+            {
+                var q = up[k];
+                sb.Append(q == null ? "null" : (q.IsDestroyed ? "x" : "") + q.Pointer.ToInt64().ToString("x")).Append(',');
+            }
+            sb.Append(" pool:");
+            var pool = f.pool;
+            for (int k = 0; pool != null && k < pool.Count; k++)
+            {
+                var q = pool[k];
+                sb.Append(q == null ? "null" : q.Pointer.ToInt64().ToString("x")).Append(',');
+            }
+            w.WriteLine(sb.ToString());
+        });
+        // The bloon factory (its up list is the bloons' process order): "BF freePtr
+        // createdSinceLastFlush id[x=destroyed]:obj,..." for scenarios with "bloonfactory": true.
+        if (Recorder.Sc != null && Recorder.Sc.bloonfactory) Part("bloonfactory", () =>
+        {
+            var f = sim.factory.GetFactory<Il2CppAssets.Scripts.Simulation.Bloons.Bloon>();
+            if (f == null) return;
+            var up = f.up.list;
+            var sb = new StringBuilder($"BF {f.freePtr} {f.createdSinceLastFlush} ");
+            for (int k = 0; k < up.Count; k++)
+            {
+                var q = up[k];
+                if (q == null) { sb.Append("null,"); continue; }
+                sb.Append(q.IsDestroyed ? "x" : "").Append(q.Id.Id).Append(':').Append(q.Pointer.ToInt64().ToString("x")).Append(',');
+            }
+            w.WriteLine(sb.ToString());
+        });
         Part("projectiles", () =>
         {
             var ps = sim.factory.GetFactory<Projectile>().up.list;
@@ -1469,11 +1527,134 @@ static class MoveWithWindPatch
     }
 }
 
+// FactoryFactory.Flush: "FF force" when the simulation flushes its factories.
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Factory.FactoryFactory), "Flush")]
+static class FactoryFlushProbe
+{
+    static void Prefix(bool __0)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try { w.WriteLine($"FF {(__0 ? 1 : 0)}"); } catch (Exception) { }
+    }
+}
+
+// WindlashBehavior (Skywarden): Initialise doesn't reset interval, so a pooled behaviour object
+// brings its old one. "WI object interval lifetime bloon" after Initialise, "WD object interval
+// windActive bloon" before OnDestroy, "WS object interval bloon" before StartStage1.
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.WindlashBehavior), "Initialise")]
+static class WindlashInitProbe
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.WindlashBehavior __instance)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try
+        {
+            var b = __instance.bloon;
+            w.WriteLine($"WI {__instance.Pointer.ToInt64():x} {Recorder.F(__instance.interval)} {Recorder.F(__instance.lifetime)} {(b == null ? -1 : b.Id.Id)} {__instance.stage} {__instance.applyWind}");
+        }
+        catch (Exception) { }
+    }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.WindlashBehavior), "OnDestroy")]
+static class WindlashDestroyProbe
+{
+    static void Prefix(Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.WindlashBehavior __instance)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try
+        {
+            var b = __instance.bloon;
+            w.WriteLine($"WD {__instance.Pointer.ToInt64():x} {Recorder.F(__instance.interval)} {__instance.windActive} {(b == null ? -1 : b.Id.Id)}");
+        }
+        catch (Exception) { }
+    }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.WindlashBehavior), "StartStage1")]
+static class WindlashStartProbe
+{
+    static void Prefix(Il2CppAssets.Scripts.Simulation.Bloons.Behaviors.WindlashBehavior __instance)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try
+        {
+            var b = __instance.bloon;
+            w.WriteLine($"WS {__instance.Pointer.ToInt64():x} {Recorder.F(__instance.interval)} {(b == null ? -1 : b.Id.Id)}");
+        }
+        catch (Exception) { }
+    }
+}
+
+// TrackTargetAfterDelay.Initialise (Sniper Paragon shrapnel): "TI projectile emmisionIndex time"
+// (the inputs of its System.Random seed).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Behaviors.TrackTargetAfterDelay), "Initialise")]
+static class TrackTargetAfterDelayInitProbe
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Behaviors.TrackTargetAfterDelay __instance)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try
+        {
+            var pj = __instance.projectile;
+            var sim = InGame.instance?.bridge?.Simulation;
+            w.WriteLine($"TI {(pj == null ? -1 : pj.Id.Id)} {(pj == null ? -1 : pj.emmisionIndex)} {(sim == null ? -1 : sim.time.elapsed)} {(sim == null ? -1 : sim.roundTime.elapsed)}");
+            if (pj != null) w.WriteLine($"TO {pj.Id.Id} {pj.Pointer.ToInt64():x}");
+        }
+        catch (Exception) { }
+    }
+}
+
+// TrackTargetAfterDelay.GetNewTarget (Sniper Paragon shrapnel): "TG projectile roundTime target-after"
+// (each Random draw's search, to count them per shot).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Behaviors.TrackTargetAfterDelay), "GetNewTarget")]
+static class TrackTargetAfterDelayNewTargetProbe
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Behaviors.TrackTargetAfterDelay __instance)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try
+        {
+            var pj = __instance.projectile;
+            var sim = InGame.instance?.bridge?.Simulation;
+            var tb = pj?.target._bloon;
+            w.WriteLine($"TG {(pj == null ? -1 : pj.Id.Id)} {(sim == null ? -1 : sim.roundTime.elapsed)} {(tb == null ? -1 : tb.Id.Id)}");
+        }
+        catch (Exception) { }
+    }
+}
+
+// Pool probe: every projectile as it is made (Projectile.Initialise): "PO projectile object-pointer
+// stale-emmisionIndex model-id" (the factory's allocation order, against the XO lines).
+[HarmonyPatch(typeof(Projectile), "Initialise")]
+static class ProjectileInitPoolProbe
+{
+    static void Postfix(Projectile __instance)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
+        try { w.WriteLine($"PO {__instance.Id.Id} {__instance.Pointer.ToInt64():x} {__instance.emmisionIndex} {__instance.projectileModel?.id}"); } catch (Exception) { }
+    }
+}
+
 // Every projectile-bloon collision as the CollisionChecker makes it: "H projectile bloon health-after
 // pierce-after" (written before the frame's F line).
 [HarmonyPatch(typeof(Projectile), nameof(Projectile.CollideBloon))]
 static class CollideBloonPatch
 {
+    // Before it: "HP projectile bloon health-before model" (what the collision starts from).
+    static void Prefix(Projectile __instance, Bloon __0)
+    {
+        var w = Recorder.Out;
+        if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames || __0 == null) return;
+        try { w.WriteLine($"HP {__instance.Id.Id} {__0.Id.Id} {__0.health} {__0.bloonModel.id} {__instance.projectileModel?.id}"); } catch (Exception) { }
+    }
     static void Postfix(Projectile __instance, Bloon __0)
     {
         var w = Recorder.Out;
@@ -1676,6 +1857,9 @@ static class EndLog
     {
         if (p == null || Recorder.Out == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
         try { Recorder.Out.WriteLine($"X {how} {p.Id.Id} {p.Age} {Recorder.F(p.pierce)}"); } catch (Exception) { }
+        // Pool probe: "XO projectile object-pointer emmisionIndex" as it is destroyed (which object a
+        // later projectile reuses, and the index it leaves there).
+        if (how == "destroy") { try { Recorder.Out.WriteLine($"XO {p.Id.Id} {p.Pointer.ToInt64():x} {p.emmisionIndex}"); } catch (Exception) { } }
     }
 }
 

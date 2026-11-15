@@ -410,6 +410,11 @@ def main():
                             "minus_age": s["type"] == "SlowMinusAbilityDurationModel",
                             # SlowOnPop.Collide (VERIFIED-DISASM @0x180cde190): only when Bloon.WillPopBloon.
                             "only_if_pop": s["type"] == "SlowOnPopModel"})
+            # Slow.Collide (VERIFIED-DECOMP @0x180cde360): chance > 0 draws a synced NextDouble and
+            # puts nothing on when chance < it (recording sky_050 rt 121: Thunder Charge's 35% stun,
+            # draw 0.615, the MOAB moves on).
+            if sf.get("chance", 0.0) > 0.0:
+                effects[-1]["chance"] = sf["chance"]
         for s in pb.get("FreezeModel", []):
             sf = s["f"]
             effects.append({"kind": "freeze", "id": sf.get("mutationId") or "", "mult": sf.get("speed", 0.0),
@@ -573,6 +578,20 @@ def main():
         for s in pb.get("IncreaseBloonWorthWithTierModel", []):
             effects.append({"kind": "worth", "id": s["f"].get("mutatorId") or "Worth", "lifespan": 9999999.0, "layers": 1,
                             "damage": s["f"].get("cashPerTier", 0.0)})
+        # AddBehaviorToSingleBloonModel with IncreaseDamageFromAllTypesModel (Sniper Paragon
+        # "Insights"): the hit bloon takes `amount` more from every hit
+        # (IncreaseDamageFromAllTypes.GetModifiedDamage @0x180ff8470: + amount unless armoured);
+        # collisionPass 1, after the hit's damage (recording sniper_paragon_r40 rt 181 / 227: the
+        # MOAB's shot marks the Ceramic it became, whose next 5-damage shrapnel hit deals 10).
+        for s in pb.get("AddBehaviorToSingleBloonModel", []):
+            sf = s["f"]
+            for d in items(sf.get("behaviors")):
+                if d and d["type"] == "IncreaseDamageFromAllTypesModel":
+                    effects.append({"kind": "brittle", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
+                                    "layers": sf.get("layers", 1), "damage": d["f"].get("amount", 0.0),
+                                    "refresh": not sf.get("isUnique", False),
+                                    "after_damage": sf.get("collisionPass", 0) >= 1,
+                                    "single_first": bool(sf.get("firstHitOnly")), "single_chance": sf.get("chance", 0.0)})
         for s in pb.get("AddBonusDamagePerHitToBloonModel", []):
             sf = s["f"]
             effects.append({"kind": "brittle", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
@@ -770,9 +789,89 @@ def main():
                             "accel_in": af.get("accelerateInAngle", 0.0),
                             "decel_gt": af.get("startDeceleratingIfAngleGreaterThan", 0.0),
                             "lifespan": af.get("lifespan", 0.0)}
+        # TrackTargetAfterDelayModel (Sniper Paragon shrapnel): AdoraTrackTarget's homing after
+        # a delay (TrackTargetAfterDelay.Process / UpdateVelocity / UpdateRotation / GetNewTarget,
+        # @0x180cf02c0 / @0x180cf09f0 / @0x180cf0600 / @0x180cefc60).
+        if pb.get("TrackTargetAfterDelayModel"):
+            af = pb["TrackTargetAfterDelayModel"][0]["f"]
+            out["adora"] = {"rotation": af.get("rotation", 0.0), "min": af.get("minimumSpeed", 0.0),
+                            "max": af.get("maximumSpeed", 0.0), "accel": af.get("acceleration", 0.0),
+                            "accel_in": af.get("accelerateInAngle", 0.0), "decel_gt": af.get("startDeceleratingIfAngleGreaterThan", 0.0),
+                            "lifespan": af.get("lifespan", 0.0), "after_delay": af.get("delay", 0.0),
+                            "target_type": af.get("targetType") or "First"}
         if hero_track and "seek" not in out and not pb.get("AdoraTrackTargetModel"):
             out["seek"] = {"distance": 9999.0, "turn_rate": hero_track.get("rotation", 9.0) * 60.0,
                            "max_angle": 360.0, "new_targets": True}
+        # GalvanizedModel (Skywarden x-3+-x blasts; Galvanized.Collide @0x180cbf710, Stun @0x180cc0270):
+        # the stage mutators' duration, the stun (damage, duration, speed multiplier).
+        # GalvanizedBehavior.ProjectileFilter: GetBehavior<TravelStraitModel> (exact type).
+        if pb.get("TravelStraitModel"):
+            out["travel_strait"] = True
+        if pb.get("GalvanizedModel"):
+            gf = pb["GalvanizedModel"][0]["f"]
+            out["galvanize"] = [gf.get("duration", 0.0), gf.get("stunDuration", 0.0), gf.get("stunDamage", 0.0), gf.get("stunSpeedMultiplier", 0.0)]
+            # Galvanized.Initialise: mutatorDurations from its projectile's BloonTagDamageOverrideModels
+            # (each bloonIds entry -> damageAdditive, the stun's seconds for that bloon).
+            gp = deref(gf.get("projectile"))
+            out["galvanize_durations"] = [[bid, b["f"].get("damageAdditive", 0.0)]
+                                          for b in items((gp or {}).get("f", {}).get("behaviors")) if b and b["type"] == "BloonTagDamageOverrideModel"
+                                          for bid in items(b["f"].get("bloonIds"))] if gp else []
+            # GalvanizedBehavior.OnBloonDamaged (VERIFIED-DECOMP @0x180feec30): a later hit whose
+            # DamageModel's damage type (BloonPropertyHelper.GetDamageTypeFromImmunities, an exact
+            # immuneBloonProperties lookup, .cctor @0x1804ddde0: Sharp 0x11, Shatter 1, Explosion 2,
+            # Fire 8, Cold 5, Glacier 4, Energy 0x49, Plasma 0x48, Frigid 0xC, Acid 0x40, Normal 0) is
+            # in chainLightningDamageTypes emits `projectile` from the bloon (EmitProjectile @0x180fede60).
+            types = {"Sharp": 0x11, "Shatter": 1, "Explosion": 2, "Fire": 8, "Cold": 5, "Glacier": 4,
+                     "Energy": 0x49, "Plasma": 0x48, "Frigid": 0xC, "Acid": 0x40, "Normal": 0}
+            if gp:
+                out["galvanize_chain"] = {"types": [types[t] for t in items(gf.get("chainLightningDamageTypes")) if t in types],
+                                          "projectile": projectile(gp, 1), "emission": emission(deref(gf.get("emission"))),
+                                          # GalvanizedBehavior.Process / IsTargetInSeekAngleRange / UpdateRotation
+                                          # (VERIFIED-DECOMP @0x180feefb0 / @0x180fee990 / @0x180fef420): the magnet.
+                                          "magnet": [gf.get("radius", 0.0), gf.get("turnStrength", 0.0), gf.get("maxAngle", 0.0)],
+                                          "magnet_props": sum({"Lead": 1, "Black": 2, "White": 4, "Purple": 8, "Frozen": 16, "Immune": 32, "Glass": 64}.get(t, 0) for t in items(gf.get("magnetBloonProperties")))}
+        # WindlashModel (Skywarden 3xx and 4xx / 5xx bolts; Windlash.Collide @0x180cf8360, the bloon's
+        # WindlashBehavior @0x18103c220): duration, distances, windInterval, speedMultiplier,
+        # affectMoab; the arrows (windProjectile through its ArcEmission) from stage 2.
+        if pb.get("WindlashModel"):
+            wl = pb["WindlashModel"][0]["f"]
+            arrow = deref(wl.get("windProjectile"))
+            out["windlash"] = {"duration": wl.get("windlashDuration", 0.0), "min": wl.get("distanceMin", 0.0), "max": wl.get("distanceMax", 0.0),
+                               "interval": wl.get("windInterval", 0.0), "speed": wl.get("speedMultiplier", 1.0), "moab": bool(wl.get("affectMoab")),
+                               "arrow": projectile(arrow, depth + 1) if arrow and depth < 4 else None,
+                               "arrow_emission": emission(deref(wl.get("emission"))) if deref(wl.get("emission")) else None}
+            vac = deref(wl.get("vacuumProjectile"))
+            ve = deref(wl.get("vacuumEmission"))
+            if vac and depth < 4:
+                out["windlash"]["vacuum"] = projectile(vac, depth + 1)
+                out["windlash"]["vacuum_at"] = [float((ve or {}).get("f", {}).get("count", 1)), float((ve or {}).get("f", {}).get("spacing", 0.0))]
+        # LightningRodEmitModel (Skywarden x-5-x blasts; LightningRodEmit.Collide @0x180cc9580, pass
+        # -1): a rod at the hit bloon's closest path point once per `cooldown`, unless one of the
+        # tower's rods is within minEmitDistance; the rod (LightningRodModel: radius, scaled by
+        # the tower's range over towerBaseRadius, zapCooldown, its Lightning).
+        if pb.get("LightningRodEmitModel") and depth < 4:
+            rf = pb["LightningRodEmitModel"][0]["f"]
+            rp = deref(rf.get("projectile"))
+            out["rod_emit"] = {"cooldown": rf.get("cooldown", 0.0), "min_dist": rf.get("minEmitDistance", 0.0),
+                               "rod": projectile(rp, depth + 1) if rp else None}
+        # EmitOnDamageWithStateModel (EmitOnDamageWithState.OnBloonDegrade @0x180cbafd0): FrozenRemains
+        # where this projectile degrades a bloon (with the state / id filters).
+        if pb.get("EmitOnDamageWithStateModel") and depth < 4:
+            out["state_emits"] = [{"must_pop": bool(m["f"].get("mustBePopped")),
+                                   "states": [t for t in items(m["f"].get("bloonStates")) if isinstance(t, str)],
+                                   "ids": [t for t in items(m["f"].get("bloonIds")) if isinstance(t, str)],
+                                   "projectile": projectile(deref(m["f"].get("projectile")), depth + 1)}
+                                  for m in pb["EmitOnDamageWithStateModel"] if deref(m["f"].get("projectile"))]
+        if pb.get("LightningRodModel") and depth < 4:
+            rf = pb["LightningRodModel"][0]["f"]
+            zp = deref(rf.get("projectile"))
+            out["rod"] = {"radius": rf.get("radius", 0.0), "scale": bool(rf.get("scaleWithTowerRadius")),
+                          "base": rf.get("towerBaseRadius", 0.0), "zap_cd": rf.get("zapCooldown", 0.0),
+                          "zap": projectile(zp, depth + 1) if zp else None}
+        # CollideReducePierceForBloonStateModel: a synced draw per hit (its 50% check against a 0..1
+        # draw never adds pierce; Collide @0x180c9cf60).
+        if pb.get("CollideReducePierceForBloonStateModel"):
+            out["pierce_draw"] = True
         if pb.get("WindModel"):
             wf = pb["WindModel"][0]["f"]
             out["wind"] = {"min": wf["distanceMin"], "max": wf["distanceMax"], "chance": wf.get("chance", 1.0),
@@ -789,18 +888,39 @@ def main():
                            "first": (lambda tl: "DamageModel" in tl and tl.index("WindModel") < tl.index("DamageModel")
                                      and (pb["WindModel"][0]["f"].get("collisionPass", 0) <= pb["DamageModel"][0]["f"].get("collisionPass", 0)))(
                                          [b["type"] for b in items(f["behaviors"]) if b])}
-        # Skywarden: WindlashModel blows bloons back distanceMin..Max (like WindModel);
-        # ChilledModel slows non-MOABs to `multiplier` for slowDuration. STAND-IN P-SKYSTATES:
-        # the stages, vacuum pull, shrapnel and Galvanized / Heat states aren't modelled.
-        if pb.get("WindlashModel") and "wind" not in out:
-            wf = pb["WindlashModel"][0]["f"]
-            out["wind"] = {"min": wf.get("distanceMin", 0.0), "max": wf.get("distanceMax", 0.0), "chance": 1.0,
-                           "moabs": bool(wf.get("affectMoab")), "tag_scale": 0.0, "tags": []}
+        # Skywarden: ChilledModel slows non-MOABs to `multiplier` for slowDuration. (WindlashModel is
+        # `windlash` above: its push comes from WindlashBehavior on the bloon, not at the hit.)
         for c in pb.get("ChilledModel", []):
             cf = c["f"]
+            out["chill"] = cf.get("chilledDuration", 0.0)
+            # Chilled.SlowNearby (VERIFIED-DECOMP @0x180c9b870), on a hit of a bloon past stage 1:
+            # the bloons in the projectile's zone (slowRadius, BloonFilter: no 0x1000 / 0x8000 tags)
+            # get radiusSlowMutator (radiusMultiplier), a MOAB-class one with affectMoab the
+            # moabRadiusSlowMutator (moabStageTwoSlowMod), for slowDuration.
+            # Chilled.EmitIceShrapnel (VERIFIED-DECOMP @0x180c9a170), once per projectile on a hit of
+            # a bloon past stage 2: BloonManager.GetTargets(shrapnelRange, Close, shrapnelCount)
+            # from the projectile, `projectile` through `emission` at the hit bloon for each.
+            sp = deref(cf.get("projectile"))
+            if sp and depth < 4:
+                out["chill_shrapnel"] = {"range": cf.get("shrapnelRange", 0.0), "count": int(cf.get("shrapnelCount", 0) or 0),
+                                         "projectile": projectile(sp, depth + 1), "emission": emission(deref(cf.get("emission")))}
+            out["chill_nearby"] = {"radius": cf.get("slowRadius", 0.0), "mult": cf.get("radiusMultiplier", 1.0),
+                                   "moab_mult": cf.get("moabStageTwoSlowMod", 1.0), "moab": bool(cf.get("affectMoab")),
+                                   "lifespan": cf.get("slowDuration", 0.0)}
+            # Chilled.Collide (VERIFIED-DECOMP @0x180c99c50): if WillDamageBloon, on the projectile's
+            # first such hit, unless the bloon has the slow already.
+            # (It lasts one pop: recording sky_003 rt 2555, a chilled Black's Pinks at 0.75 x;
+            # sky_004 rt 1910, a chilled Black popped two layers to a Yellow at full speed.)
             effects.append({"kind": "slow", "id": "Skywarden:Chilled", "mult": cf.get("multiplier", 1.0),
-                            "lifespan": cf.get("slowDuration", 0.0), "layers": 1, "glue": 0, "refresh": True,
-                            "tags": [] if cf.get("affectMoab") else ["!Moabs"]})
+                            "lifespan": cf.get("slowDuration", 0.0), "layers": 2, "glue": 0, "refresh": False,
+                            "unique": True, "only_if_damaged": True, "first_hit_only": True,
+                            "tags": ["!Moabs"]})
+            # (With affectMoab a MOAB-class bloon gets its own slow, moabStageOneSlowMod: recording
+            # sky_004 rt 80, a MOAB at 0.9 x speed.)
+            if cf.get("affectMoab"):
+                effects.append({"kind": "slow", "id": "Skywarden:Chilled", "mult": cf.get("moabStageOneSlowMod", 1.0),
+                                "lifespan": cf.get("slowDuration", 0.0), "layers": 2, "glue": 0, "refresh": False,
+                                "unique": True, "only_if_damaged": True, "first_hit_only": True, "tags": ["Moabs"]})
         if pb.get("RemoveBloonModifiersModel"):
             rf = pb["RemoveBloonModifiersModel"][0]["f"]
             out["decamo"] = bool(rf.get("cleanseCamo"))
@@ -943,6 +1063,16 @@ def main():
                                   "projectile": projectile(deref(ce["f"]["projectile"]), depth + 1),
                                   "emission": emission(deref(ce["f"]["emission"]))}
                                  for ce in pb.get("CreateProjectileOnExhaustFractionModel", [])]
+            # FrozenRemainsExplosionModel (Skywarden x-x-5's FrozenRemains): the same behaviour
+            # (recording sky_025 rt 1996, two blasts as a remains is used up), but its blast only
+            # freezes: in every pair the second hits without damage (rt 1997 / 2101 / 2131; INFERRED,
+            # FrozenRemainsExplosion.Initialise @0x180cbf3b0 doesn't decompile past its emission).
+            for ce in pb.get("FrozenRemainsExplosionModel", []):
+                fp = projectile(deref(ce["f"]["projectile"]), depth + 1)
+                fp["damage"] = 0.0
+                out["on_exhaust"].append({"fraction": ce["f"]["fraction"], "duration_fraction": ce["f"]["durationfraction"],
+                                          "between_rounds": bool(ce["f"].get("canCreateInBetweenRounds")),
+                                          "projectile": fp, "emission": emission(deref(ce["f"]["emission"]))})
             # CreateDistanceProjectileOnExhaustFractionModel (Skywarden arcs): the projectile gets
             # +piercePerInterval and +radiusPerInterval per distanceInterval flown.
             out["on_exhaust"] += [{"fraction": ce["f"]["fraction"], "duration_fraction": ce["f"]["durationfraction"],
@@ -1082,6 +1212,14 @@ def main():
             ape = next((x["f"] for x in items(e["f"].get("behaviors")) if x and x["type"] == "AcidPoolEmissionModel"), None)
             if ape is not None:
                 out["pool_every"] = int(ape.get("alwaysPoolOnCount", 0))
+            # EmissionOverTimeModel with EmissionSupplyRandomTargetModels (the Supply Drop crate's
+            # Collectables).
+            if e["type"] == "EmissionOverTimeModel":
+                ef = e["f"]
+                out["over_time"] = [float(ef.get("count", 1)), ef.get("timeBetween", 0.0) * 60.0, ef.get("initialFireDelay", 0.0) * 60.0]
+                out["supply"] = [[x["f"].get("minRadius", 0.0), x["f"].get("maxRadius", 0.0), x["f"].get("mapBorder", 0.0),
+                                  1.0 if x["f"].get("spawnProjectilesOnTarget") else 0.0]
+                                 for x in items(ef.get("behaviors")) if x and x["type"] == "EmissionSupplyRandomTargetModel"]
         return out
 
     def emission_kind(e):
@@ -1283,10 +1421,19 @@ def main():
                 eot = deref(w["f"].get("emission"))
                 if eot and eot["type"] == "EmissionOverTimeModel":
                     burst = {"count": eot["f"].get("count", 1), "frames": eot["f"].get("timeBetween", 0.0) * 60.0, "over_time": True,
-                             "delay": eot["f"].get("initialFireDelay", 0.0) * 60.0, "air": b["type"] == "AttackAirUnitModel"}
+                             "delay": eot["f"].get("initialFireDelay", 0.0) * 60.0, "air": b["type"] == "AttackAirUnitModel",
+                             # EmissionSupplyRandomTargetModel (Sniper Paragon's Supply Drop), in order.
+                             "supply": [[x["f"].get("minRadius", 0.0), x["f"].get("maxRadius", 0.0), x["f"].get("mapBorder", 0.0),
+                                         1.0 if x["f"].get("spawnProjectilesOnTarget") else 0.0]
+                                        for x in items(eot["f"].get("behaviors")) if x and x["type"] == "EmissionSupplyRandomTargetModel"]}
                 for x in items(w["f"].get("behaviors")):
                     if x and x["type"] == "BurstWeaponBehaviorModel":
                         burst = {"count": x["f"]["count"], "frames": x["f"].get("intervalFrames", 0), "always_empty": bool(x["f"].get("alwaysEmptyClip"))}
+                    # BurstWeaponIncreasingArcBehaviorModel (Skywarden 4xx): the same burst, each shot's
+                    # RandomArcEmission.randomAngle = angleIncreases[arcIndex] (Process @0x180c6cb20).
+                    if x and x["type"] == "BurstWeaponIncreasingArcBehaviorModel":
+                        burst = {"count": x["f"]["count"], "frames": x["f"].get("intervalFrames", 0), "always_empty": bool(x["f"].get("alwaysEmptyClip")),
+                                 "arcs": [float(a) for a in (deref(x["f"].get("angleIncreases")) or [])] if isinstance(deref(x["f"].get("angleIncreases")), list) else [float(a) for a in items(x["f"].get("angleIncreases"))]}
                     if x and x["type"] == "EmissionsPerRoundFilterModel":
                         per_round = x["f"]["count"]
                     if x and x["type"] == "CritMultiplierModel":
@@ -1523,6 +1670,16 @@ def main():
                                  # The Prince's own spot on the track and offset (Emit @0xc493b0).
                                  princeRange=em["f"].get("maxPathRandomRange", 0),
                                  princeOffset=em["f"].get("maxPathOffset", 0))
+            # TargetGrapplableModel (Buccaneer Paragon's grapples, as a plain attack's target
+            # provider): only MOAB-class bloons it has the hooks for (a BAD needs 9999999), never
+            # a Boss; recording bucc_paragon_r40, no grapple at the Blacks, Ceramics and its MOAB
+            # gone before the Paragon is active. (MultiHookManager's hook sharing and reload, and
+            # zomgHooksRequired, aren't modelled: no hook fires in the recordings.)
+            grap = next((deref(af.get("targetProvider"))["f"] for _ in [0]
+                         if (deref(af.get("targetProvider")) or {}).get("type") == "TargetGrapplableModel"), None)
+            if grap is not None:
+                require_tags = list(require_tags) + ["Moabs"]
+                exclude_tags = list(exclude_tags) + ["Boss"] + (["Bad"] if grap.get("badHooksRequired", 0) > 100 else [])
             return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "turn_body": turn_body, "marker_z": marker_z, "rotate_always": rotate_always, "air_rotate": any(x and x["type"] == "RotateToTargetAirUnitModel" for x in items(af["behaviors"])), "air_target": any(x and x["type"] in ("TargetFirstAirUnitModel", "TargetLastAirUnitModel", "TargetStrongAirUnitModel") for x in items(af["behaviors"])), "face_middle": face_middle,
                     # AttackModel name: Tower.UpdatedModel keeps the Attack of the same name.
                     "model_name": af.get("_name") or "",
@@ -1678,6 +1835,14 @@ def main():
                     out["track_charge"] = projectile(deref(xf["projectileModel"]))
                 if x["type"] == "LeapingSwordModel" and deref(xf.get("impactProjectileModel")):
                     out["leap"] = {"projectile": projectile(deref(xf["impactProjectileModel"])), "delay": xf.get("landDelay", 0.0)}
+                # ActivateLightningRodZapModel (Skywarden x-5-x Thunder Charge; Activate @0x180e05320,
+                # Process @0x180e059e0, Emit @0x180e053c0): the lightningRod projectile through its
+                # lineEmission from rod to rod.
+                if x["type"] == "ActivateLightningRodZapModel":
+                    zp = deref(xf.get("lightningRod"))
+                    out["rod_zap"] = {"rate": xf.get("rate", 0.0), "damage": xf.get("damage", 0.0),
+                                      "pierce_per_jump": xf.get("piercePerJump", 0.0), "delay": xf.get("delayPerJump", 0.0),
+                                      "duration": xf.get("duration", 0.0), "proj": projectile(zp, 1) if zp else None}
                 # SyphonFundingModel (Benjamin): for `lifespan`, see P-SYPHON.
                 if x["type"] == "SyphonFundingModel":
                     out["syphon"] = xf.get("lifespan", 0.0)
@@ -1797,9 +1962,11 @@ def main():
                         mult, add = xf.get("multiplier", 0.0), xf.get("additive", 0.0)
                     if kind == "pierce":
                         add = xf.get("pierceIncrease", 0.0)
-                    # HYPOTHESIS P-SPEEDPCT: speedIncrease is a percentage (200 = +200%).
+                    # ProjectileSpeedMutator.Mutate (VERIFIED-DISASM @0x180e25680): every TravelStraitModel
+                    # in the tower's model gets set_Speed(speed + speedIncrease) (recording
+                    # sky_ricochet_dart rt 137: a 0-0-2 dart at 350 + 200 = 550, 9.17 a frame).
                     if kind == "speed":
-                        mult = xf.get("speedIncrease", 0.0) / 100.0
+                        kind, add = "speed_add", xf.get("speedIncrease", 0.0)
                     # DamageBypass: projectiles may damage these BloonProperties (a mask of the
                     # 16 low property bits that stay immune).
                     if kind == "immune":
@@ -2129,8 +2296,12 @@ def main():
                         pets.append(sp)
         # Skywarden: ToggleFocusStanceModel (Focus: range / interval / lifespan multipliers) and
         # DamageBasedAttackSpeedModel (faster per `threshold` damage dealt, reset when idle).
-        stance, damage_speed = None, None
+        stance, damage_speed, rod_manager = None, None, None
         for b in items(tobj["f"]["behaviors"]):
+            # LightningRodManagerModel (Skywarden x-5-x; LightningRodManager.OnBloonDamaged
+            # @0x180d32ea0): the damage types whose hits make a rod zap.
+            if b and b["type"] == "LightningRodManagerModel":
+                rod_manager = [t for t in items(b["f"].get("damageTypesToZap")) if isinstance(t, str)]
             if b and b["type"] == "ToggleFocusStanceModel":
                 bf = b["f"]
                 stance = {"range": bf.get("rangeMultiplier", 1.0), "rate": bf.get("rateMultiplier", 1.0),
@@ -2138,7 +2309,12 @@ def main():
             if b and b["type"] == "DamageBasedAttackSpeedModel":
                 bf = b["f"]
                 damage_speed = {"threshold": bf.get("damageThreshold", 1.0), "increase": bf.get("increasePerThreshold", 0.0),
-                                "max_stacks": bf.get("maxStacks", 0), "idle_frames": bf.get("maxTimeInFramesWithoutDamage", 0)}
+                                "max_stacks": bf.get("maxStacks", 0), "idle_frames": bf.get("maxTimeInFramesWithoutDamage", 0),
+                                "cap": bf.get("damageCap", 0.0)}
+        # RoundBasedAttackSpeedModel (Engineer Paragon): (bonusAttackSpeedPerRoundPercent,
+        # maxWeaponAttackSpeed).
+        round_speed = next(([b["f"].get("bonusAttackSpeedPerRoundPercent", 0.0), b["f"].get("maxWeaponAttackSpeed", 0.0)]
+                            for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "RoundBasedAttackSpeedModel"), None)
         # GyrfalconPatternModel (Beast Handler birds): dive, grab bloons, grapple them.
         grapple = None
         for b in items(tobj["f"]["behaviors"]):
@@ -2261,7 +2437,7 @@ def main():
                 "air": air, "submerge": submerge, "air_modes": air_modes,
                 # PursuitSettingModel.pursuitDistance (PursuitSetting.GetPursuitDestination).
                 "pursuit_distance": next((x["f"].get("pursuitDistance", 0.0) for b in items(f["behaviors"]) if b and b["type"] in ("AttackModel", "AttackAirUnitModel")
-                                          for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed, "magus": magus, "paragon_towers": paragon_towers, "mopolis": mopolis_out, "mopolis_cost": mopolis_cost,
+                                          for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed, "rod_manager": rod_manager, "round_speed": round_speed, "magus": magus, "paragon_towers": paragon_towers, "mopolis": mopolis_out, "mopolis_cost": mopolis_cost,
                 # TapTowerAbilityBehavior.IsBanned (VERIFIED-DECOMP @0x180e5dcb0), the model part:
                 # Overclock / Take Aim can't pick a paragon, a Beast Handler pet, an
                 # IgnoreAllMutatorsTowerModel tower, an ignoreTowerForSelection one (IsSelectable), a
