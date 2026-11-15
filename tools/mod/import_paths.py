@@ -25,35 +25,45 @@ def load_offsets(path):
 
 
 def load_areas(path):
-    """Map.areas from the dump: name -> (outline, holes), y flipped to our frame."""
-    areas, cur = {}, None
+    """Map.areas from the dump, in order: (name, outline, holes), y flipped to our frame. Names can
+    repeat (Cornfield's thirteen CornfieldBlocking1), so this is a list, not a dict."""
+    areas, cur = [], None
     pt = lambda t: [float(t.split(",")[0]), -float(t.split(",")[1])]
     for line in open(path, encoding="utf-8"):
         f = line.split()
         if not f:
             continue
         if f[0] == "area":
-            cur = " ".join(f[7:]).removeprefix("AreaModel_")
-            areas[cur] = ([], [])
+            cur = [" ".join(f[7:]).removeprefix("AreaModel_"), [], []]
+            areas.append(cur)
         elif f[0] == "poly" and cur is not None:
-            areas[cur] = ([pt(t) for t in f[1:]], [])
+            cur[1] = [pt(t) for t in f[1:]]
         elif f[0] == "hole" and cur is not None:
-            areas[cur][1].append([pt(t) for t in f[1:]])
+            cur[2].append([pt(t) for t in f[1:]])
     return areas
 
 
 def patch_areas(m, areas):
-    # The game's own outline points (exact), for the areas it has under the same name.
-    for a in m.get("areas", []):
-        got = areas.get(a.get("name"))
-        if got:
-            a["points"], a["holes"] = got
-    # And Map.areas' order (the dump lists them in the simulation's order: ProjectileBlockerCollisionRebound
-    # takes the first blocker area crossed), when the names are unique.
-    order = list(areas.keys())
-    names = [a.get("name") for a in m.get("areas", [])]
-    if len(set(names)) == len(names) and all(n in order for n in names):
-        m["areas"].sort(key=lambda a: order.index(a.get("name")))
+    # The game's own outline points (exact) and Map.areas' order (the dump lists them in the
+    # simulation's order: ProjectileBlockerCollisionRebound takes the first blocker area crossed).
+    # Each map area takes the unused dumped area of its name whose first point is nearest its own
+    # (the asset export's outline), so repeated names keep their own outlines.
+    used, match = set(), {}
+    for i, a in enumerate(m.get("areas", [])):
+        mine = (a.get("points") or [[0.0, 0.0]])[0]
+        # (Names compared with whitespace collapsed: the dump's are space-split; MushroomGrotto's
+        # "RocksTopLeft  (1)".)
+        nm = " ".join((a.get("name") or "").split())
+        cands = [k for k, d in enumerate(areas) if d[0] == nm and k not in used and d[1]]
+        if not cands:
+            continue
+        k = min(cands, key=lambda k: math.dist(areas[k][1][0][:2], mine[:2]))
+        used.add(k)
+        match[i] = k
+        a["points"], a["holes"] = areas[k][1], areas[k][2]
+    if len(match) == len(m.get("areas", [])):
+        order = sorted(range(len(m["areas"])), key=lambda i: match[i])
+        m["areas"] = [m["areas"][i] for i in order]
 
 
 def load_dump(path):

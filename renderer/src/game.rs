@@ -6252,9 +6252,12 @@ impl Game {
         true
     }
 
-    /// Path.bloonsList.Add.
-    fn plist_add(&mut self, id: u64, path: u8) {
-        let p = path as usize;
+    /// Path.bloonsList.Add. Every path's bloonsList is the one Bloon factory list
+    /// (PathManager.Init @0x180f6c0b0: Path+0x40 = the factory's list of Bloons), so all bloons
+    /// share list 0 (recording map_quad_dart_205_r40: every path's L line lists the same bloons).
+    fn plist_add(&mut self, id: u64, _path: u8) {
+        let path = 0u8;
+        let p = 0usize;
         if self.path_lists.len() <= p {
             self.path_lists.resize_with(p + 1, Vec::new);
         }
@@ -6263,8 +6266,9 @@ impl Game {
     }
 
     /// Moves just-added bloon `id` from the end of its path's list to the frame's mark.
-    fn plist_move_to_mark(&mut self, id: u64, path: u8) {
-        let p = path as usize;
+    fn plist_move_to_mark(&mut self, id: u64, _path: u8) {
+        let path = 0u8;
+        let p = 0usize;
         let Some(&mark) = self.plist_mark.get(p) else { return };
         let list = &mut self.path_lists[p];
         if list.last().map(|e| e.0) != Some(id) || mark >= list.len() - 1 {
@@ -18238,6 +18242,28 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 if l.is_none_or(|(_, dist, r)| if last { b.dist < dist } else { b.dist > dist } || (b.dist == dist && rank < r)) {
                     *l = Some((bi, b.dist, rank));
                 }
+            }
+        }
+        // PathManager.FindGlobalBest (VERIFIED-DECOMP @0x180f6a7d0): one global best of the
+        // paths' bests (the TargetType's comparer; INFERRED: distance until leak, First the
+        // least, Last the most). Recording map_quad_dart_205_r40 rt 1191: the 2-0-5 takes Black
+        // 997 (420.9 along its path) over 1137 (268.7 along another).
+        let until = |i: usize| -> f32 { let b = &self.bloons[i]; self.tracks[b.path as usize].length() - b.dist };
+        let mut best: Option<usize> = None;
+        for (p, l) in lead.iter().enumerate() {
+            if let Some((bi, _, _)) = *l {
+                let better = best.is_none_or(|q| {
+                    let (bq, _, _) = lead[q].unwrap();
+                    if last { until(bi) > until(bq) } else { until(bi) < until(bq) }
+                });
+                if better {
+                    best = Some(p);
+                }
+            }
+        }
+        for (p, l) in lead.iter_mut().enumerate() {
+            if Some(p) != best {
+                *l = None;
             }
         }
         lead
