@@ -203,6 +203,9 @@ def write_spawner(d, components, nodes, scene_order, parts, first_spawner):
         for c, a in zip(areas, data["areas"]):
             a["id"] = c["id"]
         logic = map_logic(by, components, nodes, parts)
+    elif len(areas) == len(data["areas"]) and {c["id"] for c in areas} == {a.get("id") for a in data["areas"]}:
+        # (Areas already carrying their ids, put in Map.areas' runtime order by import_paths.py.)
+        logic = map_logic(by, components, nodes, parts)
     else:
         print("areas don't line up with map.json:", os.path.basename(d), len(areas), len(data["areas"]), flush=True)
     if data.get("spawner") != spawner or data.get("logic") != logic or "id" not in (data["areas"] or [{}])[0]:
@@ -384,7 +387,13 @@ def export(key, scripts):
     os.replace(tmp, os.path.join(d, "mechanics.json"))
     # MapLoader.GatherMapBloonPathSpawners: currentMap.GetComponentInChildren<PathSpawner>(), the first
     # active one depth first, a GameObject before its children.
-    spawners = {c["go"]: c["id"] for c in components if c["type"].endswith(".PathSpawner") and c["enabled"]}
+    # (GetComponentInChildren takes a GameObject's FIRST PathSpawner: Bazaar has two on one object,
+    # an AlternateRoundSplitter's and a BloonTagOnlySplitter's; recording map_bazaar_dart_205_r40
+    # alternates by round.)
+    spawners = {}
+    for c in components:
+        if c["type"].endswith(".PathSpawner") and c["enabled"]:
+            spawners.setdefault(c["go"], c["id"])
     map_go = next((c["go"] for c in components if c["type"].endswith(".Unity.Map.Map")), None)
     first_spawner, stack = None, [map_go] if map_go else []
     while stack and first_spawner is None:

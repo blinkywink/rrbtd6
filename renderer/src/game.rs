@@ -12673,6 +12673,14 @@ impl Game {
         self.projectiles[p].track_segs_shuffled = segs;
     }
 
+    /// Path.leakDist (Path.InitEntryExits), what PathSegment.distanceUntilLeak counts down to: on
+    /// a multi-path map the paths' lengths past the exit differ (recording map_haunted_dart_205_r40
+    /// rt 813: First takes Black 963, 392.2 from Path's 729.59 leak, over 971, 410.1 from Path (1)'s
+    /// 798.19, though 971 is nearer its path's end point).
+    fn leak_dist(&self, path: usize) -> f32 {
+        self.track_ends.get(path).and_then(|e| e.1).unwrap_or_else(|| self.tracks[path].length())
+    }
+
     /// Tower.IsParentTowerAParagonRecursive with the tower itself: a Paragon, or a sub-tower
     /// whose parent chain reaches one.
     fn paragon_rooted(&self, t: usize) -> bool {
@@ -15623,7 +15631,7 @@ impl Game {
                         let rank = self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64);
                         prio * 1e12 + if air_strong == Some(b.id) { 1e10 } else { -(b.path as f64) * 1e8 - seg_idx as f64 * 1e4 - rank * 1e-3 }
                     } else if mode == TargetMode::Strong && seg_in {
-                        let len = self.tracks[b.path as usize].length() as f64;
+                        let len = self.leak_dist(b.path as usize) as f64;
                         let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         // TargetStrong.GetTarget (VERIFIED-DISASM @0xe0dfa0): over Attack
                         // .GetVisibleTargets, the first with a strictly higher danger (recording
@@ -15640,11 +15648,11 @@ impl Game {
                         // 63, not a Blue at 441.3 still filed on 62.)
                         // (prio is the camo / MOAB priority count: the f32 score near 1e12 can't
                         // order bloons; recording dart_002_camo_r37.)
-                        let len = self.tracks[b.path as usize].length() as f64;
+                        let len = self.leak_dist(b.path as usize) as f64;
                         let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e9 } else { -until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
                     } else if mode == TargetMode::Last && seg_in {
-                        let len = self.tracks[b.path as usize].length() as f64;
+                        let len = self.leak_dist(b.path as usize) as f64;
                         let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e9 } else { until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
                     } else if mode == TargetMode::Elite {
@@ -18248,7 +18256,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // paths' bests (the TargetType's comparer; INFERRED: distance until leak, First the
         // least, Last the most). Recording map_quad_dart_205_r40 rt 1191: the 2-0-5 takes Black
         // 997 (420.9 along its path) over 1137 (268.7 along another).
-        let until = |i: usize| -> f32 { let b = &self.bloons[i]; self.tracks[b.path as usize].length() - b.dist };
+        let until = |i: usize| -> f32 { let b = &self.bloons[i]; self.leak_dist(b.path as usize) - b.dist };
         let mut best: Option<usize> = None;
         for (p, l) in lead.iter().enumerate() {
             if let Some((bi, _, _)) = *l {
@@ -21712,7 +21720,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         self.carry_follow(true);
         self.grid.build(&self.bloons, lo, hi);
         if self.has_grid_rank {
-            let (rank, pre, single) = (&self.path_rank, &self.grid_rank_pre, self.tracks.len() == 1);
+            // (Path.bloonsList is the one Bloon factory list on every map, so its order is the
+            // grid's on multi-path maps too: recording map_haunted_dart_205_r40 rt 551, two paths
+            // side by side, buckets in that list's order.)
+            let (rank, pre, single) = (&self.path_rank, &self.grid_rank_pre, true);
             let key = |b: &Bloon| match pre {
                 Some(pre) => pre.get(&b.id).map_or(u64::MAX, |&k| k as u64),
                 None => rank.get(&b.id).map_or(u64::MAX, |r| r.1 as u64),
