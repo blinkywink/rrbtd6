@@ -1318,6 +1318,18 @@ fn game_dir(deg: f32) -> [f32; 2] {
 /// RotateToTarget.ApplyRotation: towers aim from 10 above their position.
 const DISPLAY_TOWER_HEIGHT: f32 = 10.0;
 
+/// The clone-frame y RotateToTarget.ApplyRotation (VERIFIED-DECOMP @0x180dd7930) aims from: the
+/// tower's Position (y, z) through Vector3.ToDisplaySpace (@0x180f48400: (x, z, -y - z / tan60)),
+/// display y + `lift`, and back through ToSimulationSpace (@0x180f485a0: y = -dz - dy / tan60), in
+/// f32 (recording map_erosion_dart_205_r40 rt 582: a tower at z 10 aims at -115.85982; probe
+/// pending/maps_probe/map_erosion_dart_205_r40_sr RT line, same target).
+fn aim_origin_y(clone_y: f32, z: f32, lift: f32) -> f32 {
+    let y = -clone_y;
+    let dz = -y - z / TAN60;
+    let sy = -dz - (z + lift) / TAN60;
+    -sy
+}
+
 /// lastEmission of a weapon that never fired (int.MinValue: ready at once).
 const NEVER: i64 = i32::MIN as i64;
 
@@ -14381,7 +14393,7 @@ impl Game {
             // (recording bucc_040 rt 120: tower -209.33203, hook at (-1.82026, -0.7643168), z 3.5).
             let pos = self.towers[t].pos;
             let bp = self.bloons[i].pos;
-            let aim_from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
+            let aim_from = [pos[0], aim_origin_y(pos[1], self.terrain_z(pos), DISPLAY_TOWER_HEIGHT)];
             let tr = RAD2DEG * crt_atan2(bp[0] - aim_from[0], -(bp[1] - aim_from[1])) + td.turn;
             self.towers[t].game_rot = Some(tr);
             self.towers[t].angle = (tr - 90.0) * DEG2RAD;
@@ -16133,7 +16145,7 @@ impl Game {
                     if let Some((_, _, id)) = best.filter(|b| b.2 != 0) {
                         if let Some(b) = self.bloons.iter().find(|b| b.id == id) {
                             let tp = self.towers[t].pos;
-                            let from = [tp[0], tp[1] + DISPLAY_TOWER_HEIGHT / TAN60];
+                            let from = [tp[0], aim_origin_y(tp[1], self.terrain_z(tp), DISPLAY_TOWER_HEIGHT)];
                             let q = b.prev;
                             let r = RAD2DEG * crt_atan2(q[0] - from[0], -(q[1] - from[1])) + attack.extra_rotation;
                             self.towers[t].game_rot = Some(r);
@@ -16367,6 +16379,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     if let Some(Some((_, p, _))) = young_best {
                         self.air_rotate_to(t, 0, buff.attack_range(attack), Some(p));
                     }
+                    let stand_z = self.terrain_z(self.towers[t].pos);
                     let tw = &mut self.towers[t];
                     // EmissionsPerRoundFilter.Process (VERIFIED-DECOMP @0x180c75cb0): each round's
                     // `count` bananas come due at (int)(i x duration / (count - 1) + start) (one:
@@ -16546,7 +16559,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     if st.anim >= 0 && aim_id != 0 && attack.rotate && !turning && weapon.aim_offset.is_none_or(|o| o == 0.0) && extra_rot == 0.0 && newest == w && in_list {
                         if let Some(b) = self.bloons.iter().find(|b| b.id == aim_id) {
                             let target = [b.pos[0] + aim_off[0], b.pos[1] + aim_off[1]];
-                            let aim_from = [pos[0], pos[1] + attack.marker_z.unwrap_or(DISPLAY_TOWER_HEIGHT) / TAN60];
+                            let aim_from = [pos[0], aim_origin_y(pos[1], stand_z, attack.marker_z.unwrap_or(DISPLAY_TOWER_HEIGHT))];
                             let r = RAD2DEG * crt_atan2(target[0] - aim_from[0], -(target[1] - aim_from[1]));
                             // (rotateTower off with a throw marker: only the attack turns, the tower's
                             // Rotation stays; recording village_500 rt 40, the ballista's bolt ejects
@@ -16572,7 +16585,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     } else if st.anim >= 0 && aim_id == 0 && !ambient && attack.rotate && !turning && weapon.aim_offset.is_none() && extra_rot == 0.0 {
                         // (A point Target too: recording alch_052 rt 1321, the acid-pool throw at a
                         // track point turns the Alchemist as it starts, not at the release.)
-                        let aim_from = [pos[0], pos[1] + DISPLAY_TOWER_HEIGHT / TAN60];
+                        let aim_from = [pos[0], aim_origin_y(pos[1], stand_z, DISPLAY_TOWER_HEIGHT)];
                         tw.game_rot = Some(RAD2DEG * crt_atan2(aimed[0] - aim_from[0], -(aimed[1] - aim_from[1])));
                         tw.turret_rel = tw.game_rot.unwrap() - tw.base_rot;
                     }
@@ -16713,6 +16726,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 }
                                 break 'shot;
                             }
+                            let stand_z = self.terrain_z(self.towers[t].pos);
                             let tw = &mut self.towers[t];
                             // Towers without RotateToTargetModel keep their placement facing and fire
                             // along it (HYPOTHESIS P-NOROTATE: full-circle arcs start at that facing).
@@ -16720,7 +16734,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             // target from its own position raised 10 in display space (10 / tan 60 down the
                             // map in the game's y, up in the clone's), each frame of the throw; the shot
                             // leaves along that facing.
-                            let aim_from = [pos[0], pos[1] + attack.marker_z.unwrap_or(DISPLAY_TOWER_HEIGHT) / TAN60];
+                            let aim_from = [pos[0], aim_origin_y(pos[1], stand_z, attack.marker_z.unwrap_or(DISPLAY_TOWER_HEIGHT))];
                             // (An earlier weapon of the attack in its throw has the attack's Target: the
                             // tower faces it, and this release leaves from that facing; recording
                             // druid_300 rt 725, the lightning released while the thorns' throw turns
