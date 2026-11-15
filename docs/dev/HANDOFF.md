@@ -199,7 +199,8 @@ first in Map.areas order (ProjectileBlockerCollisionRebound.Process), and the cl
 asset file's object order. SimRecorder now writes "# area index name active blocker height" header lines;
 Map.areas is the scene hierarchy in REVERSE (depth first by sibling index): tools/assets/export_map.py sorts
 areas so. The local Tutorial / Logs map.json had only their areas reordered (a fresh export_map.py run also
-changes their path data vs the current files: check that before re-extracting maps).
+changes their path data vs the current files: check that before re-extracting maps). All 89 local maps' areas were then
+reordered the same way, by name (plus first point for duplicate names) against a fresh export.
 Next: the next hero / tower if the shop gains one; otherwise more crosspath coverage (e.g. Quincy with
 other towers' MOAB-class targets on curves, where this shared offset matters most).
 
