@@ -48,6 +48,12 @@ def patch_areas(m, areas):
         got = areas.get(a.get("name"))
         if got:
             a["points"], a["holes"] = got
+    # And Map.areas' order (the dump lists them in the simulation's order: ProjectileBlockerCollisionRebound
+    # takes the first blocker area crossed), when the names are unique.
+    order = list(areas.keys())
+    names = [a.get("name") for a in m.get("areas", [])]
+    if len(set(names)) == len(names) and all(n in order for n in names):
+        m["areas"].sort(key=lambda a: order.index(a.get("name")))
 
 
 def load_dump(path):

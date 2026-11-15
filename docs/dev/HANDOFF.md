@@ -116,6 +116,11 @@ Ground rules follow.
 
 ## Regression baseline (must not drop)
 
+Current (2026-11-15): every set full. Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
+sniper tack sub beast engineer desperado dartling mortar bucc druid super ace heli spike farm mermonkey village
+paragon sky quincy moab logs` and `sh tools/rec/compare.sh --root dart boomerang` (sky 39, quincy 14, moab 5,
+logs 3, dart 70, boomerang 99, paragon 12).
+
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
@@ -198,9 +203,19 @@ RotateToTarget.ApplyRotation: SR / RT lines) are fine. DONE moab_dart_502_r60 rt
 first in Map.areas order (ProjectileBlockerCollisionRebound.Process), and the clone's map areas were in the
 asset file's object order. SimRecorder now writes "# area index name active blocker height" header lines;
 Map.areas is the scene hierarchy in REVERSE (depth first by sibling index): tools/assets/export_map.py sorts
-areas so. The local Tutorial / Logs map.json had only their areas reordered (a fresh export_map.py run also
-changes their path data vs the current files: check that before re-extracting maps). All 89 local maps' areas were then
+areas so. The local Tutorial / Logs map.json had only their areas reordered (export_map.py alone writes the raw bezier
+path; the installed files' path (682 points with dists / speeds) comes from export_map_pair.py's later step, as
+extract_all runs it: no issue). All 89 local maps' areas were then
 reordered the same way, by name (plus first point for duplicate names) against a fresh export.
+MORE MAPS (2026-11-15): pending/maps (scenarios map_<key>_dart_205_r40.json, land spots picked 16-22 from the
+track): run tools/mod/import_paths.py <recording dir>/<Map>.map <key> first for a newly recorded map (the game's own
+path points / quick table / area outlines; it now also puts the areas in the dump's order). Cubism, InTheLoop MATCH.
+OPEN map_treestump_dart_205_r40 rt 580: the 2-0-5 (on the raised TreeStump land, height 30) takes Blue 515 on
+segment 66 at rt 580; the game waits for segment 67 (rt 589). The clone's segment 66 point (-60.49, 11.88, clone
+frame; midpoint from the quick table) is clear of TreeStumpBlocker (height 29) and every other blocker polygon
+(the game's own outlines); the segment START points (66 blocked, 67 clear) would fit. Check what
+Attack.GetPathSegmentsInRangeFast's lineOfSight uses for the tower's position (its z 30 on the stump?) and the
+segment point (a read-only probe: log PathSegmentInRange.lineOfSight per segment for the attack).
 Next: the next hero / tower if the shop gains one; otherwise more crosspath coverage (e.g. Quincy with
 other towers' MOAB-class targets on curves, where this shared offset matters most).
 
