@@ -3,10 +3,13 @@
     python -I tools/mod/gen_map_scenarios.py <dump dir> <MapName> [<MapName> ...]
 
 Reads the game's own map dump (<dump dir>/<MapName>.map: SimRecorder's path points and areas) and
-writes tools/mod/scenarios/map_<key>_dart_205_r40.json. A spot is placeable when it lies in a land
-area (type 2) and at least the tower radius (6) away from every track / water / unplaceable
-area (types 0, 1, 3) and from the map border; of those within 16-22 of a path point, the one
+writes tools/mod/scenarios/map_<key>_dart_205_r40.json. A spot is placeable when the first area (Map.areas
+order) holding it and eight points round its footprint (radius 6) is land (type 2), off the border; of those within 16-22 of a path point (else 12-30, else 30-40: Spillway's wide channel), the one
 nearest the path's middle third (so bloons pass it for a while) is taken.
+
+Areas the map's logic (local_extracted/maps/<key>/map.json) destroys or creates with AfterRound events that
+have fired by the start round (CheckIfTriggered at the start, triggerOnceIfRoundMissed catch-up) are applied
+first (Erosion: round 40 starts with the round-18 and round-36 land gone).
 """
 import json
 import math
@@ -37,6 +40,27 @@ def load(path):
     return areas, paths
 
 
+def apply_logic(areas, key, start_round):
+    """Marks the dump's areas (same order as map.json's, BaseArea extra at the end) inactive / active as
+    AfterRound events fired by `start_round` leave them (STAND-IN: AfterRound triggers only)."""
+    mj = os.path.join(ROOT, "local_extracted", "maps", key, "map.json")
+    if not os.path.exists(mj):
+        return
+    d = json.load(open(mj, encoding="utf-8"))
+    ids = [a.get("id") for a in d["areas"]]
+    r = start_round - 1
+    for ev in (d.get("logic") or {}).get("events", []):
+        fired = any(t["kind"] == "AfterRound" and (r == t["round"] or (t.get("missed") and r > t["round"])
+                    or (t["nth"] > 0 and r > t["round"] and (r - t["round"]) % t["nth"] == 0)) for t in ev["triggers"])
+        if not (fired and ev.get("active", True)):
+            continue
+        for act in ev["actions"]:
+            if act["kind"] == "Area":
+                for i in act["ids"]:
+                    if i in ids and ids.index(i) < len(areas):
+                        areas[ids.index(i)]["active"] = act["create"]
+
+
 def inside(p, poly):
     c, n = False, len(poly)
     for i in range(n):
@@ -60,20 +84,28 @@ def in_area(p, a):
     return any(inside(p, poly) for poly in a["polys"]) and not any(inside(p, h) for h in a["holes"])
 
 
+def area_at(p, areas):
+    """The first active area in Map.areas order that holds p (BaseArea, last, is the fallback)."""
+    return next((a for a in areas if a["active"] and in_area(p, a)), None)
+
+
 def placeable(p, areas):
     if not (-150 + RADIUS <= p[0] <= 150 - RADIUS and -116 + RADIUS <= p[1] <= 116 - RADIUS):
         return False
-    if not any(a["active"] and a["type"] == 2 and in_area(p, a) for a in areas):
-        return False
-    for a in areas:
-        if not a["active"] or a["type"] not in (0, 1, 3):
-            continue
-        if in_area(p, a) or any(edge_dist(p, poly) < RADIUS for poly in a["polys"]):
+    # The centre and eight points round the footprint all on land (type 2) by the first area.
+    for k in range(9):
+        q = p if k == 8 else (p[0] + RADIUS * math.cos(k * math.pi / 4), p[1] + RADIUS * math.sin(k * math.pi / 4))
+        a = area_at(q, areas)
+        if a is None or a["type"] != 2:
             return False
     return True
 
 
 def pick(areas, paths):
+    return pick_in(areas, paths, 16.0, 22.0) or pick_in(areas, paths, 12.0, 30.0) or pick_in(areas, paths, 30.0, 40.0)
+
+
+def pick_in(areas, paths, lo, hi):
     pts = [q for path in paths for q in path]
     total = max(q[2] for q in pts)
     best = None
@@ -82,7 +114,7 @@ def pick(areas, paths):
             p = (float(gx), float(gy))
             near = min(pts, key=lambda q: (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2)
             d = math.hypot(near[0] - p[0], near[1] - p[1])
-            if not 16.0 <= d <= 22.0 or not placeable(p, areas):
+            if not lo <= d <= hi or not placeable(p, areas):
                 continue
             score = abs(near[2] / total - 0.5)
             if best is None or score < best[0]:
@@ -94,6 +126,7 @@ def main():
     dump_dir, names = sys.argv[1], sys.argv[2:]
     for name in names:
         areas, paths = load(os.path.join(dump_dir, name + ".map"))
+        apply_logic(areas, name.lower(), 40)
         p = pick(areas, paths)
         if p is None:
             print(name, "no spot")

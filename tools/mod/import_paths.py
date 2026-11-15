@@ -5,7 +5,7 @@
 The game builds each path's points from the scene's line nodes and curves (BezierLineNodes /
 CurvedLineNodes: Bezier pieces, fitted cubic splines); the dump is that result, so the clone's
 distances along the track (spawn, leak, segments, positions) match it exactly. Each dumped path
-replaces the exported path whose first point is nearest its own (the game's y is the clone's -y).
+replaces the exported path of its name (else the one whose first point is nearest its own) (the game's y is the clone's -y).
 Updates local_extracted/maps/<key>/map.json, and game.json's map when it is that map.
 """
 import json
@@ -73,7 +73,13 @@ def load_dump(path):
         if not f:
             continue
         if f[0] == "path":
-            cur = {"id": f[1], "points": []}
+            # (The name can hold spaces: Quarry's "PathStandard 1"; the flags start at "active=".)
+            k = next((j for j, t in enumerate(f) if t.startswith("active=")), 2)
+            cur = {"id": " ".join(f[1:k]), "points": []}
+            # Path.spawnDistance / leakDistance (-1: none), as the game has them.
+            for t in f[k:]:
+                if t.startswith(("spawn=", "leak=", "untilLeak=")):
+                    cur[t.split("=")[0]] = float(t.split("=")[1])
             paths.append(cur)
         elif f[0] == "p" and cur is not None:
             cur["points"].append([float(f[1]), -float(f[2])])
@@ -94,7 +100,10 @@ def patch(m, dumped):
     used = set()
     for dp in dumped:
         first = dp["points"][0]
-        best = min((i for i in range(len(m["paths"])) if i not in used),
+        # The path of the same name when there is exactly one; else the nearest first point
+        # (BloonariusPrime's PathStandard and PathBoss start at the same point).
+        named = [i for i in range(len(m["paths"])) if i not in used and m["paths"][i].get("name") == dp["id"]]
+        best = named[0] if len(named) == 1 else min((i for i in range(len(m["paths"])) if i not in used),
                    key=lambda i: math.dist(m["paths"][i]["points"][0][:2], first), default=None)
         if best is None:
             continue
@@ -108,6 +117,9 @@ def patch(m, dumped):
             m["paths"][best]["quick_rot"] = dp["quick_rot"]
         if dp.get("no_target"):
             m["paths"][best]["no_target"] = dp["no_target"]
+        for k, mk in (("spawn", "spawn"), ("leak", "leak"), ("untilLeak", "until_leak")):
+            if k in dp:
+                m["paths"][best][mk] = dp[k]
     if m["paths"]:
         m["path"] = m["paths"][0]["points"]
 

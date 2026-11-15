@@ -114,7 +114,8 @@ def map_logic(by, components, nodes, parts):
     def trigger(t):
         k, f = short(t), t["fields"]
         if k == "AfterRoundTrigger":
-            return {"kind": "AfterRound", "round": f["round"], "nth": f["everyNthRound"], "primes": bool(f["usePrimeNumbers"])}
+            return {"kind": "AfterRound", "round": f["round"], "nth": f["everyNthRound"], "primes": bool(f["usePrimeNumbers"]),
+                    "missed": bool(f.get("triggerOnceIfRoundMissed", 0))}
         if k == "StartRoundTrigger":
             return {"kind": "StartRound", "round": f["round"], "nth": f["everyNthRound"], "primes": bool(f["usePrimeNumbers"]),
                     "from_start": bool(f["countFromStartRound"])}
@@ -208,9 +209,14 @@ def write_spawner(d, components, nodes, scene_order, parts, first_spawner):
         logic = map_logic(by, components, nodes, parts)
     else:
         print("areas don't line up with map.json:", os.path.basename(d), len(areas), len(data["areas"]), flush=True)
-    if data.get("spawner") != spawner or data.get("logic") != logic or "id" not in (data["areas"] or [{}])[0]:
+    # MapMods.bloonSpeed -> Map.mapWideBloonSpeed (Bloon.get_TotalSpeedFrames multiplies by it).
+    mods = next((c["fields"] for c in components if c["type"].endswith(".MapMods")), None)
+    bloon_speed = float(mods["bloonSpeed"]) if mods else 1.0
+    if data.get("spawner") != spawner or data.get("logic") != logic or "id" not in (data["areas"] or [{}])[0]             or data.get("bloon_speed", 1.0) != bloon_speed:
         data["spawner"] = spawner
         data["logic"] = logic
+        if bloon_speed != 1.0 or "bloon_speed" in data:
+            data["bloon_speed"] = bloon_speed
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as stream:
             json.dump(data, stream)

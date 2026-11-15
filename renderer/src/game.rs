@@ -3603,6 +3603,11 @@ pub struct Game {
     track_exit: Vec<(Vec<usize>, usize)>,
     /// Per track: Path.spawnDist and leakDist (None with an entry / exit splitter).
     track_ends: Vec<(Option<f32>, Option<f32>)>,
+    /// Map.mapWideBloonSpeed (MapMods.bloonSpeed; Workshop 1.5): Bloon.get_TotalSpeedFrames'
+    /// map factor (recording map_workshop_dart_205_r40: the MOAB steps 0.78125, not 0.5208).
+    map_speed: f32,
+    /// Path.maximumDistanceUntilLeak per track, when imported (`leak_dist`).
+    track_until: Vec<Option<f32>>,
     /// Per track: each PathSegment's point (the path point at its centre).
     track_segs: Vec<Vec<[f32; 2]>>,
     /// Per track, per segment: PathSegment.canTargetSegment (GatherPathInfoData, VERIFIED-DISASM
@@ -5008,7 +5013,7 @@ macro_rules! collide_pass {
                         b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Knock { m: [kb.light, kb.heavy, kb.moab] }, id: "Knockback".into(), frames_left: (kb.lifespan * FPS).round(), total: (kb.lifespan * FPS).round(), added: $s.sim_elapsed, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
                         if b.dist != b.prev_dist {
                             let s = speed_frames(b.model_speed(&$s.defs[b.kind], b.frozen_speed(&$s.defs[b.kind], $s.defs[b.kind].speed)));
-                            b.dist = (b.prev_dist + s * b.track_mult * 1.0 * b.mult).max(0.0);
+                            b.dist = (b.prev_dist + s * b.track_mult * $s.map_speed * b.mult).max(0.0);
                             b.pos = $s.tracks[b.path as usize].bloon_pos(b.dist);
                         }
                     }
@@ -5524,12 +5529,14 @@ impl Game {
         // name).
         let mut tracks: Vec<crate::data::MapPath> = d.map.paths.iter().filter(|p| p.active && p.points.len() > 1).cloned().collect();
         if tracks.is_empty() {
-            tracks.push(crate::data::MapPath { name: String::new(), active: true, id: 0, entry: Vec::new(), exit: Vec::new(), exit_splitter: 0, entry_splitter: 0, points: d.map.path.clone(), dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), quick_rot: Vec::new(), no_target: Vec::new() });
+            tracks.push(crate::data::MapPath { name: String::new(), active: true, id: 0, entry: Vec::new(), exit: Vec::new(), exit_splitter: 0, entry_splitter: 0, points: d.map.path.clone(), dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), quick_rot: Vec::new(), no_target: Vec::new(), spawn: None, leak: None, until_leak: None });
         }
         // Reverse mode (ReverseModel): bloons run every track end to start, so each track is
         // flipped and its splitters swap roles; the old end tracks become the spawn tracks.
         if d.modes.get(&d.mode).is_some_and(|m| m.reverse) {
             for t in &mut tracks {
+                // (The imported spawn / leak distances are the forward path's.)
+                (t.spawn, t.leak, t.until_leak) = (None, None, None);
                 t.points.reverse();
                 std::mem::swap(&mut t.entry, &mut t.exit);
                 std::mem::swap(&mut t.entry_splitter, &mut t.exit_splitter);
@@ -5754,37 +5761,12 @@ impl Game {
             pre_super: None,
             tower_defs,
             tower_tiers,
-            track_ends: tracks
-                .iter()
-                .map(|p| {
-                    let t = Track::new(p.points.clone());
-                    let (spawn, leak) = t.entry_exit();
-                    (spawn.filter(|_| p.entry.is_empty()), leak.filter(|_| p.exit.is_empty()))
-                })
-                .collect(),
+            track_ends: tracks.iter().map(Game::path_ends).collect(),
+            map_speed: d.map.bloon_speed,
+            track_until: tracks.iter().map(|p| p.until_leak).collect(),
             track_segs: tracks.iter().map(|p| Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick).segments()).collect(),
             track_rot: tracks.iter().map(|p| p.quick_rot.clone()).collect(),
-            track_seg_ok: tracks
-                .iter()
-                .map(|p| {
-                    let tr = Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick);
-                    let len = tr.length();
-                    let n = tr.segments().len();
-                    (0..n)
-                        .map(|i| {
-                            let lo = i as f32 * 7.0;
-                            let centre = lo + ((len.min(lo + 7.0)) - lo) * 0.5;
-                            if p.no_target.len() == p.dists.len() && !p.dists.is_empty() {
-                                // The point the centre falls on (last point at or before it).
-                                let k = p.dists.iter().rposition(|&d| d <= centre).unwrap_or(0);
-                                !p.no_target[k]
-                            } else {
-                                on_map(tr.pos(centre), 0.0)
-                            }
-                        })
-                        .collect()
-                })
-                .collect(),
+            track_seg_ok: tracks.iter().map(Game::path_seg_ok).collect(),
             tracks: tracks.iter().map(|p| Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick)).collect(),
             track_exit,
             track_entry,
@@ -6607,6 +6589,39 @@ impl Game {
 
     /// Bloon.Move / SetDistanceTravelled (VERIFIED-DISASM @0xfd3b90, @0xfd4fa0): a bloon is
     /// never behind spawnDist - 1.25 x its radius (it waits just off the map's edge).
+    /// A path's (spawnDistance, leakDistance) as `track_ends` holds them: where it enters and
+    /// leaves the map, for a path bloons start (no entry) or leak from (no exit).
+    pub(crate) fn path_ends(p: &crate::data::MapPath) -> (Option<f32>, Option<f32>) {
+        // (The game's own, when imported: recording map_workshop_dart_205_r40, a Black held at
+        // PathStart's 71.07 - 10, where the crossing gives 71.06.)
+        if let (Some(s), Some(l)) = (p.spawn, p.leak) {
+            return ((s >= 0.0).then_some(s), (l >= 0.0).then_some(l));
+        }
+        let t = Track::new(p.points.clone());
+        let (spawn, leak) = t.entry_exit();
+        (spawn.filter(|_| p.entry.is_empty()), leak.filter(|_| p.exit.is_empty()))
+    }
+
+    /// A path's 7-long segments that can be targeted (`track_seg_ok`).
+    pub(crate) fn path_seg_ok(p: &crate::data::MapPath) -> Vec<bool> {
+        let tr = Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick);
+        let len = tr.length();
+        let n = tr.segments().len();
+        (0..n)
+            .map(|i| {
+                let lo = i as f32 * 7.0;
+                let centre = lo + ((len.min(lo + 7.0)) - lo) * 0.5;
+                if p.no_target.len() == p.dists.len() && !p.dists.is_empty() {
+                    // The point the centre falls on (last point at or before it).
+                    let k = p.dists.iter().rposition(|&d| d <= centre).unwrap_or(0);
+                    !p.no_target[k]
+                } else {
+                    on_map(tr.pos(centre), 0.0)
+                }
+            })
+            .collect()
+    }
+
     fn held_at_spawn(&self, kind: usize, path: u8, dist: f32) -> f32 {
         match self.track_ends.get(path as usize).and_then(|e| e.0) {
             Some(sd) => {
@@ -9175,7 +9190,7 @@ impl Game {
                 // (A bloon made after the bird is processed after it: its move is this frame.)
                 if b.born > st.stamp {
                     let (kind, path, dist) = (b.kind, b.path, b.dist);
-                    let step = speed_frames(self.defs[kind].speed) * b.speed_mult(&self.defs[kind]);
+                    let step = speed_frames(self.defs[kind].speed) * b.speed_mult(&self.defs[kind]) * self.map_speed;
                     let d = self.held_at_spawn(kind, path, dist + step);
                     let q = self.tracks[path as usize].bloon_pos(d);
                     let b = self.bloons.iter_mut().find(|b| b.id == h).unwrap();
@@ -12677,7 +12692,14 @@ impl Game {
     /// a multi-path map the paths' lengths past the exit differ (recording map_haunted_dart_205_r40
     /// rt 813: First takes Black 963, 392.2 from Path's 729.59 leak, over 971, 410.1 from Path (1)'s
     /// 798.19, though 971 is nearer its path's end point).
+    /// Path.maximumDistanceUntilLeak (PathSegment ctor @0x180f6d050: leakDist without an exit
+    /// router, else the router's paths' + totalPathLength) when imported: recording
+    /// map_workshop_dart_205_r40 rt 1728, First takes the Zebra on a belt nearer the end of
+    /// Workshop's chain of 15 paths, not the one nearer its own belt's end.
     fn leak_dist(&self, path: usize) -> f32 {
+        if let Some(u) = self.track_until.get(path).copied().flatten() {
+            return u;
+        }
         self.track_ends.get(path).and_then(|e| e.1).unwrap_or_else(|| self.tracks[path].length())
     }
 
@@ -13435,7 +13457,7 @@ impl Game {
         for n in 0..n_kids {
             let c = self.child_kinds[kind][n];
             let d0 = (start_dist - n as f32 * spacing).max(0.0);
-            let d1 = if moved && n == 0 { (d0 + speed_frames(self.defs[c].speed) * parent_tm * 1.0 * mult).max(0.0) } else { d0 };
+            let d1 = if moved && n == 0 { (d0 + speed_frames(self.defs[c].speed) * parent_tm * self.map_speed * mult).max(0.0) } else { d0 };
             if n == 0 {
                 self.spawn_parent_obj = Some(parent_obj);
             }
@@ -13735,7 +13757,7 @@ impl Game {
             for (k, &j) in finals.iter().enumerate() {
                 let c = self.bloons[j].kind;
                 let d0 = (start_dist - k as f32 * sp).max(0.0);
-                let d1 = if moved && k == 0 { (d0 + speed_frames(self.defs[c].speed) * parent_tm * 1.0 * mult).max(0.0) } else { d0 };
+                let d1 = if moved && k == 0 { (d0 + speed_frames(self.defs[c].speed) * parent_tm * self.map_speed * mult).max(0.0) } else { d0 };
                 // Not held at the entrance: that waits for the child's first Bloon.Move
                 // (recording dart_400: a Lead's fourth Pink at 169.2, then 173.6).
                 let dist = d1;
@@ -18537,11 +18559,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             b.first_move = std::mem::take(&mut b.unplaced);
             b.mult = mult;
             // Bloon.get_TotalSpeedFrames (VERIFIED-DISASM @0xfd7730): speedFrames (speed /
-            // 60) x trackSpeedMultiplier x the spawner's multiplier (1) x behaviours'. A slow is
+            // 60) x trackSpeedMultiplier x Map.mapWideBloonSpeed (+0xc0) x behaviours'. A slow is
             // a SlowMutator (Mutate @0x18121e5a0): BloonModel.set_Speed(multiplier x speed), so
             // speedFrames = (multiplier x speed) x 1/60 (recording sky_003 rt 2603: a chilled
             // Pink's step rounds that way as its distance passes 256).
-            let step = speed_frames(b.model_speed(&self.defs[b.kind], b.frozen_speed(&self.defs[b.kind], self.defs[b.kind].speed)) * mult) * b.track_mult * 1.0;
+            let step = speed_frames(b.model_speed(&self.defs[b.kind], b.frozen_speed(&self.defs[b.kind], self.defs[b.kind].speed)) * mult) * b.track_mult * self.map_speed;
             moved = Some(step);
             b.seg_dist = b.dist;
             b.dist = (b.dist + step).max(0.0);
@@ -19684,10 +19706,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         }
     }
 
-    /// PathSegment.distanceUntilLeak: the track's length less the segment's centre.
-    /// HYPOTHESIS P-SEGLEAK: measured from the centre (Path.Init isn't transcribed).
+    /// PathSegment.distanceUntilLeak (VERIFIED-DISASM, ctor @0x180f6d050: +0x38 =
+    /// Path.maximumDistanceUntilLeak - the centre distance, start + (end - start) x 0.5).
     fn seg_until_leak(&self, pi: u8, k: usize) -> f32 {
-        let len = self.tracks.get(pi as usize).map_or(0.0, |t| t.length());
+        if self.tracks.get(pi as usize).is_none() {
+            return f32::MAX;
+        }
+        let len = self.leak_dist(pi as usize);
         self.seg_span(pi as usize, k).map_or(f32::MAX, |(centre, _)| len - centre)
     }
 

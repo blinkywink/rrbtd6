@@ -45,7 +45,8 @@ pub struct EventDef {
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind")]
 pub enum Trigger {
-    AfterRound { round: i32, nth: i32, primes: bool },
+    /// missed: triggerOnceIfRoundMissed (TriggerCond: a round index past `round` fires it once).
+    AfterRound { round: i32, nth: i32, primes: bool, #[serde(default)] missed: bool },
     StartMap,
     PreBloonSpawn { tag: String },
     RemoveableSold { id: i64 },
@@ -86,6 +87,9 @@ pub struct LogicState {
     events_active: Vec<bool>,
     /// MapTrigger.triggered per event, per trigger.
     triggered: Vec<Vec<bool>>,
+    /// AfterRoundTrigger hasTriggeredFromRoundSkip and its trigger count (CheckIfTriggered), per
+    /// event, per trigger (filled on first use).
+    round_skip: Vec<Vec<(bool, i32)>>,
     /// Every Area of the map: DestroyArea and CreateArea move them out of and into `Game::areas`.
     pool: Vec<Area>,
     /// The active paths' data (parallel to `Game::tracks`), and paths not yet on the map.
@@ -107,6 +111,7 @@ impl LogicState {
             removeables: def.removeables.iter().map(|r| RemoveableState { active: r.active, sold: false }).collect(),
             events_active: def.events.iter().map(|e| e.active).collect(),
             triggered: def.events.iter().map(|e| vec![false; e.triggers.len()]).collect(),
+            round_skip: Vec::new(),
             pool: map.areas.clone(),
             paths,
             dormant: map.paths.iter().filter(|p| !p.active && p.points.len() > 1).cloned().collect(),
@@ -119,7 +124,35 @@ impl LogicState {
         }
     }
 
-    /// AfterRoundTrigger.TriggerCond for round index `r`.
+    /// AfterRoundTrigger.TriggerCond for round index `r` with triggerOnceIfRoundMissed
+    /// (VERIFIED-DECOMP @0x180f7a5b0): once the skip has fired, a count of 0 always fires; before
+    /// it, an index past `round` fires and sets it; otherwise the plain condition.
+    fn after_round_cond(r: i32, round: i32, nth: i32, primes: bool, missed: bool, skip: &mut (bool, i32)) -> bool {
+        if missed {
+            if skip.0 {
+                if skip.1 == 0 {
+                    return true;
+                }
+            } else if r > round {
+                skip.0 = true;
+                return true;
+            }
+        }
+        LogicState::after_round(r, round, nth, primes)
+    }
+
+    /// AfterRoundTrigger.GetTriggerCount's count for round index `r` (CheckIfTriggered @0x180f79f20).
+    fn after_round_count(r: i32, round: i32, nth: i32, primes: bool) -> i32 {
+        if primes {
+            return (1..=r + 1).filter(|&k| LogicState::after_round(k, i32::MAX, 0, true)).count() as i32;
+        }
+        if round > r {
+            return 0;
+        }
+        if nth > 0 { (r - round) / nth + 1 } else { 1 }
+    }
+
+    /// AfterRoundTrigger.TriggerCond for round index `r` (without triggerOnceIfRoundMissed).
     fn after_round(r: i32, round: i32, nth: i32, primes: bool) -> bool {
         if r == round {
             return true;
@@ -135,17 +168,42 @@ impl Game {
     /// StartMapTrigger and the catch-up of AfterRoundTrigger.CheckIfTriggered at a later start round.
     pub(super) fn logic_start(&mut self) {
         let round = self.round as i32;
-        self.logic_trigger(|t| match t {
-            Trigger::StartMap => true,
-            Trigger::AfterRound { round: at, nth, primes } => LogicState::after_round(round - 1, *at, *nth, *primes),
-            _ => false,
-        });
+        // CheckIfTriggered: TriggerCond(0) || TriggerCond(1), then the trigger count.
+        let hits = self.logic_after_round_hits(|r, at, nth, primes, missed, skip| {
+            let hit = LogicState::after_round_cond(r - 1, at, nth, primes, missed, skip)
+                || LogicState::after_round_cond(r, at, nth, primes, missed, skip);
+            if hit {
+                skip.1 = LogicState::after_round_count(r - 1, at, nth, primes);
+            }
+            hit
+        }, round);
+        self.logic_trigger_at(|e, i, t| matches!(t, Trigger::StartMap) || hits.contains(&(e, i)));
+    }
+
+    /// The (event, trigger) pairs of AfterRound triggers `cond` passes for round `r`.
+    fn logic_after_round_hits(&mut self, mut cond: impl FnMut(i32, i32, i32, bool, bool, &mut (bool, i32)) -> bool, r: i32) -> Vec<(usize, usize)> {
+        let l = &mut self.logic;
+        if l.round_skip.len() != l.def.events.len() {
+            l.round_skip = l.def.events.iter().map(|e| vec![(false, 0); e.triggers.len()]).collect();
+        }
+        let mut hits = Vec::new();
+        for (e, ev) in l.def.events.iter().enumerate() {
+            for (i, t) in ev.triggers.iter().enumerate() {
+                if let Trigger::AfterRound { round: at, nth, primes, missed } = t {
+                    if cond(r, *at, *nth, *primes, *missed, &mut l.round_skip[e][i]) {
+                        hits.push((e, i));
+                    }
+                }
+            }
+        }
+        hits
     }
 
     /// AfterRoundTrigger.OnRoundEnd: TriggerCond(1) is the round index that just finished.
     pub(super) fn logic_round_end(&mut self) {
         let round = self.round as i32;
-        self.logic_trigger(|t| matches!(t, Trigger::AfterRound { round: at, nth, primes } if LogicState::after_round(round, *at, *nth, *primes)));
+        let hits = self.logic_after_round_hits(|r, at, nth, primes, missed, skip| LogicState::after_round_cond(r, at, nth, primes, missed, skip), round);
+        self.logic_trigger_at(|e, i, _| hits.contains(&(e, i)));
     }
 
     /// StartRoundTrigger.OnRoundStart (TriggerCond): `round` is the round starting, counted from the
@@ -194,10 +252,14 @@ impl Game {
     /// Sets the triggers `hit` selects, then runs each active event that is now triggered
     /// (MapEvent.TriggerTriggered, IsTriggered: any trigger, or all with allTriggersRequired).
     fn logic_trigger(&mut self, hit: impl Fn(&Trigger) -> bool) {
+        self.logic_trigger_at(|_, _, t| hit(t));
+    }
+
+    fn logic_trigger_at(&mut self, hit: impl Fn(usize, usize, &Trigger) -> bool) {
         for e in 0..self.logic.def.events.len() {
             let mut any = false;
             for (i, t) in self.logic.def.events[e].triggers.iter().enumerate() {
-                if hit(t) {
+                if hit(e, i, t) {
                     self.logic.triggered[e][i] = true;
                     any = true;
                 }
@@ -339,11 +401,21 @@ impl Game {
         let Some(i) = self.logic.dormant.iter().position(|p| p.id == id) else { return };
         let mut p = self.logic.dormant.remove(i);
         if self.logic.reversed {
+            (p.spawn, p.leak, p.until_leak) = (None, None, None);
             p.points.reverse();
             std::mem::swap(&mut p.entry, &mut p.exit);
             std::mem::swap(&mut p.entry_splitter, &mut p.exit_splitter);
         }
-        self.tracks.push(Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick));
+        let track = Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick);
+        // (Its spawn / leak distances and segment tables too: recording map_cargo_dart_205_r40, the
+        // round-40 MOAB on the path turned on at the start is held at PathSpecial's spawnDistance
+        // 132.49 - radius x 1.25, 106.24, like any path's.)
+        self.track_ends.push(Game::path_ends(&p));
+        self.track_until.push(p.until_leak);
+        self.track_segs.push(track.segments());
+        self.track_rot.push(p.quick_rot.clone());
+        self.track_seg_ok.push(Game::path_seg_ok(&p));
+        self.tracks.push(track);
         self.logic.paths.push(p);
         let paths = &self.logic.paths;
         let ids = &mut self.logic.splitter_ids;
@@ -411,7 +483,7 @@ mod tests {
     #[test]
     fn after_round_fires_at_the_end_of_that_round_index() {
         let hidden = RemoveableDef { id: 1, name: "Late".into(), cost: 1, active: false, destroy_area: false, areas: vec![10], hide: vec![] };
-        let event = EventDef { id: 2, once: true, all: false, active: true, triggers: vec![Trigger::AfterRound { round: 39, nth: 0, primes: false }], actions: vec![Action::Removeable { id: 1, active: true }] };
+        let event = EventDef { id: 2, once: true, all: false, active: true, triggers: vec![Trigger::AfterRound { round: 39, nth: 0, primes: false, missed: false }], actions: vec![Action::Removeable { id: 1, active: true }] };
         let mut g = game_with(LogicDef { removeables: vec![hidden], events: vec![event] }, vec![area(10, 1.0)]);
         g.round = 38;
         g.logic_round_end();
@@ -419,6 +491,19 @@ mod tests {
         g.round = 39;
         g.logic_round_end();
         assert_eq!(g.removeable_at([5.0, 5.0]), Some(0));
+    }
+
+    /// triggerOnceIfRoundMissed: a game started past the round fires it at the start (Erosion:
+    /// round 40 starts with the round-18 land gone; the game refused a tower there).
+    #[test]
+    fn missed_after_round_fires_once_at_a_later_start() {
+        let mk = |missed| EventDef { id: 2, once: true, all: false, active: true, triggers: vec![Trigger::AfterRound { round: 18, nth: 0, primes: false, missed }], actions: vec![Action::Area { ids: vec![10], create: false }] };
+        for missed in [false, true] {
+            let mut g = game_with(LogicDef { removeables: vec![], events: vec![mk(missed)] }, vec![area(10, 1.0)]);
+            g.round = 40;
+            g.logic_start();
+            assert_eq!(g.areas.iter().any(|a| a.id == 10), !missed, "missed {missed}");
+        }
     }
 
     /// Every exported map loads (one that doesn't silently plays game.json's map instead) and its

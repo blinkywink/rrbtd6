@@ -415,6 +415,10 @@ pub struct MapData {
     /// Removeables and map events (map_logic.rs).
     #[serde(default)]
     pub logic: Option<crate::game::map_logic::LogicDef>,
+    /// MapMods.bloonSpeed (MapModel / Map.mapWideBloonSpeed): every bloon's speed multiplier on
+    /// the map (Workshop 1.5).
+    #[serde(default = "one_f32")]
+    pub bloon_speed: f32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -485,6 +489,16 @@ pub struct MapPath {
     /// PointInfo.disablePathTargeting per point (imported from the game's map dump).
     #[serde(default)]
     pub no_target: Vec<bool>,
+    /// Path.spawnDistance / leakDistance from the game's map dump (-1: none); without them the
+    /// clone works them out from where the path crosses the map's edge.
+    #[serde(default)]
+    pub spawn: Option<f32>,
+    #[serde(default)]
+    pub leak: Option<f32>,
+    /// Path.maximumDistanceUntilLeak from the dump: leakDist on an exit path, else its length plus
+    /// the exit router's paths' (what PathSegment.distanceUntilLeak and First count from).
+    #[serde(default)]
+    pub until_leak: Option<f32>,
     #[serde(default = "yes")]
     pub active: bool,
     /// The Path component's id; `entry` / `exit` list path ids from its splitters, and
