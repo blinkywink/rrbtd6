@@ -190,6 +190,16 @@ the model's LAST SetRotation (`kind_rot`, `mrot`): probe pending/quincy_probe/qu
 "canhitmoab": true -> CM lines with each circle's precalculatedOffset, SR lines with each SetRotation; seed
 811805639 replays quincy_l12_r60): at rt 3033 MOAB 463 (rotation 180) is measured with MOAB 2380's -128.13.
 A new bloon's SetPath sets it too (quincy_l19_r80 rt 2893: a BFB's MOABs).
+NEW COVERAGE (2026-11-15): pending/moab (scenarios moab_*.json, seed 777123, rounds 60-78 single towers):
+5/5 MATCH. CAUTION: a Harmony patch on Targetting.CanHitMoab (its by-ref Vector3 offset) perturbs the game:
+with it installed the game aims at the MOAB's centre (the first moab_* recordings and the *_cm probes were made
+so and were wrong; the patch is removed and the set re-recorded). Probes that only read (SetRotation,
+RotateToTarget.ApplyRotation: SR / RT lines) are fine. DONE moab_dart_502_r60 rt 2732: a Juggernaut ball crossing two overlapping tree areas bounces off the
+first in Map.areas order (ProjectileBlockerCollisionRebound.Process), and the clone's map areas were in the
+asset file's object order. SimRecorder now writes "# area index name active blocker height" header lines;
+Map.areas is the scene hierarchy in REVERSE (depth first by sibling index): tools/assets/export_map.py sorts
+areas so. The local Tutorial / Logs map.json had only their areas reordered (a fresh export_map.py run also
+changes their path data vs the current files: check that before re-extracting maps).
 Next: the next hero / tower if the shop gains one; otherwise more crosspath coverage (e.g. Quincy with
 other towers' MOAB-class targets on curves, where this shared offset matters most).
 

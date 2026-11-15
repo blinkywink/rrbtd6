@@ -133,7 +133,24 @@ def main():
                 # here z' = -sim.y.
                 rings.append([(p[0], p[2] + p[1] * tilt) for p in pts])
             if rings:
-                areas.append({"type": t["type"], "isBlocker": bool(t["isBlocker"]),
+                # Map.areas order (the simulation's list, what ProjectileBlockerCollisionRebound walks):
+                # the scene hierarchy's in reverse, depth first by sibling index (recording
+                # moab_dart_502_r60's "# area" header lines: TreeSectionBottomLeft, BottomRight,
+                # TopRight, Entrance, TopLeft, then PathEdge (4), (3), (2), (5), (1): the exact reverse of
+                # the hierarchy), not the asset file's object order.
+                def hier_key(tr_id):
+                    key = []
+                    while tr_id:
+                        tr = tt(tr_id)
+                        fa = tr["m_Father"]["m_PathID"]
+                        if fa:
+                            sib = [k["m_PathID"] for k in tt(fa)["m_Children"]]
+                            key.append(sib.index(tr_id) if tr_id in sib else 0)
+                        else:
+                            key.append(tr.get("m_RootOrder", 0))
+                        tr_id = fa
+                    return list(reversed(key))
+                areas.append({"type": t["type"], "isBlocker": bool(t["isBlocker"]), "_order": hier_key(go_tr),
                               "name": tt(t["m_GameObject"]["m_PathID"])["m_Name"],
                               "height": world(go_tr)[1],
                               "renderHeightOffset": t.get("renderHeightOffset", 0.0),
@@ -142,6 +159,10 @@ def main():
                               "blockers": [(c["position"]["x"], -c["position"]["y"], c["radius"])
                                            for c in (t.get("blockerCircles") or [])] if t["isBlocker"] else [],
                               "points": rings[0], "holes": rings[1:]})
+
+    areas.sort(key=lambda a: a["_order"], reverse=True)
+    for a in areas:
+        a.pop("_order", None)
 
     # Terrain: the largest GameObject whose renderer uses the *TerrainTexture material (props
     # such as Workshop's chutes share it).

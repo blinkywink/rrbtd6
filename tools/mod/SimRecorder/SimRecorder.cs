@@ -368,6 +368,19 @@ public class Recorder : MelonMod
                 Out.WriteLine($"# xpscale {string.Join(",", xsl)} map {sim.model.map.mapDifficulty} rating {F(sim.model.selectedDifficultyRating)} endRound {sim.map.spawner.endRound}");
                 foreach (var t in Sc.towers) Out.WriteLine($"# tower {t.id} {F(t.x)} {F(t.y)}");
                 foreach (var l in HeroLevelLines) Out.WriteLine(l);
+                // The map's areas as the simulation holds them: "# area index name active blocker height points".
+                try
+                {
+                    var ars = sim.map.areas;
+                    for (int k = 0; ars != null && k < ars.Count; k++)
+                    {
+                        var a = ars[k];
+                        var am = a.areaModel;
+                        var pts = am?.polygon?.points;
+                        Out.WriteLine($"# area {k} {a.name} {a.isActive} {am?.isBlocker} {F(am != null ? am.height : 0f)} {(pts != null ? pts.Length : -1)} {(pts != null && pts.Length > 0 ? F(pts[0].x) + "," + F(pts[0].y) : "")}");
+                    }
+                }
+                catch (System.Exception e) { Out.WriteLine("# area err " + e.Message); }
                 HeroLevelLines.Clear();
                 for (int k = 0; k < Sc.towers.Count; k++)
                     if (!string.IsNullOrEmpty(Sc.towers[k].target)) Out.WriteLine($"# target {k} {Sc.towers[k].target}");
@@ -1043,31 +1056,9 @@ static class DrainXpPatch
     }
 }
 
-// Targetting.CanHitMoab: "CM frame bloon range px py pz sharedRange result offx offy" (what a tower's
-// targeting measures a MOAB's collision circles from).
-[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Targetting), nameof(Il2CppAssets.Scripts.Simulation.Bloons.Targetting.CanHitMoab))]
-static class CanHitMoabPatch
-{
-    static int count;
-    static void Postfix(Il2CppAssets.Scripts.Simulation.Bloons.Bloon bloon, float range, Il2CppAssets.Scripts.Simulation.SMath.Vector3 position, bool usingSharedRange, bool __result)
-    {
-        var w = Recorder.Out;
-        if (Recorder.Sc == null || w == null || !Recorder.Sc.canhitmoab || count++ > 200000) return;
-        try
-        {
-            var sb = new StringBuilder($"CM {Recorder.Recorded} {bloon?.Id.Id} {Recorder.F(range)} {Recorder.F(position.x)} {Recorder.F(position.y)} {Recorder.F(position.z)} {usingSharedRange} {__result}");
-            if (bloon != null)
-            {
-                sb.Append($" rot {Recorder.F(bloon.Rotation)} pos {Recorder.F(bloon.Position.X)} {Recorder.F(bloon.Position.Y)}");
-                var cs = bloon.AdditionalCollisions();
-                for (int k = 0; cs != null && k < cs.Length; k++)
-                    sb.Append($" c {Recorder.F(cs[k].offset.x)},{Recorder.F(cs[k].offset.y)},{Recorder.F(cs[k].radius)},{Recorder.F(cs[k].precalculatedOffset.x)},{Recorder.F(cs[k].precalculatedOffset.y)}");
-            }
-            w.WriteLine(sb.ToString());
-        }
-        catch (System.Exception e) { w.WriteLine($"CM err {e.GetType().Name} {e.Message}"); }
-    }
-}
+// (No Harmony patch on Targetting.CanHitMoab: its by-ref Vector3 offset doesn't survive the
+// Il2CppInterop trampoline, and the game then aims at the MOAB's centre (moab_* recordings made with it,
+// 2026-11-15, were wrong and re-recorded).)
 
 // Bloon.SetRotation on MOAB-class bloons: "SR frame bloon r rotationAfter" (with canhitmoab).
 [HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Bloon), nameof(Il2CppAssets.Scripts.Simulation.Bloons.Bloon.SetRotation))]
@@ -1078,6 +1069,24 @@ static class SetRotationPatch
         var w = Recorder.Out;
         if (Recorder.Sc == null || w == null || !Recorder.Sc.canhitmoab) return;
         try { if (__instance.bloonModel.isMoab) w.WriteLine($"SR {Recorder.Recorded} {__instance.Id.Id} {Recorder.F(__0)} {Recorder.F(__instance.Rotation)}"); } catch { }
+    }
+}
+
+// RotateToTarget.ApplyRotation (with canhitmoab): "RT frame tower targetPos(x y z) towerRotation"
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.RotateToTarget), nameof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.RotateToTarget.ApplyRotation))]
+static class ApplyRotationPatch
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.RotateToTarget __instance)
+    {
+        var w = Recorder.Out;
+        if (Recorder.Sc == null || w == null || !Recorder.Sc.canhitmoab) return;
+        try
+        {
+            var at = __instance.attack; var tw = at?.tower;
+            var tp = at.target.Position;
+            w.WriteLine($"RT {Recorder.Recorded} {tw?.Id.Id} {Recorder.F(tp.x)} {Recorder.F(tp.y)} {Recorder.F(tp.z)} {Recorder.F(tw.Rotation)} tw {Recorder.F(tw.Position.X)} {Recorder.F(tw.Position.Y)} {Recorder.F(tw.Position.Z)}");
+        }
+        catch (System.Exception e) { w.WriteLine($"RT err {e.GetType().Name} {e.Message}"); }
     }
 }
 
