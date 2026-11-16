@@ -1947,6 +1947,9 @@ pub struct Tower {
     /// Attack.hadValidTarget by attack model name: what its last FindTarget (when its weapon was
     /// ready) found.
     pub had_target: HashMap<String, bool>,
+    /// Attack.frameTarget of a RotateToTarget attack that turns every frame (rotate_always): the
+    /// bloon its last FindTarget found and the aim's offset from it, kept while its weapons reload.
+    pub rot_held: HashMap<String, (u64, [f32; 2])>,
     /// A running Marked To Pop.
     pub mtp: Option<MtpState>,
     /// Comanche Defense: ComancheDefence.activationTime (Simulation.time of its latest
@@ -3943,6 +3946,8 @@ macro_rules! collide_pass {
             continue;
         }
         $s.projectiles[$p].prev = $s.projectiles[$p].pos;
+        // (Its z as the last Process left it: ProjectileBlockerCollisionRebound.lastPosition.z.)
+        let z_last = $s.projectiles[$p].z;
         if std::mem::take(&mut $s.projectiles[$p].clear_hits_next) {
             $s.projectiles[$p].hit.clear();
         }
@@ -4159,11 +4164,15 @@ macro_rules! collide_pass {
             // ProjectileBlockerCollisionRebound.Process (VERIFIED-DISASM @0xcefc20): after it
             // moves, the first blocker area (in the map's order, not below it) whose edge the
             // move crossed from outside turns it: mirrored across that edge, the rest of the
-            // move carried on from the crossing.
+            // move carried on from the crossing. An area lower than lastPosition.z (the z the
+            // last Process left; AreaModel.height < it) is skipped (recording
+            // map_sunkencolumns_dart_paragon_r40 rt 586: the paragon's Ultra-Juggernaut
+            // shards at z 72, from a paragon on SunkenColumns' raised land, fly over BlockingRight,
+            // height 50; VERIFIED-DECOMP @0x180cd1110).
             // (Not once ExpireProjectileAtScreenEdge, listed before it, has expired it.)
             let edge_expired = pr.spec.expire_at_edge && pr.frames_left <= 0.0;
             if let (Some(rb), false, false) = (&pr.spec.blocker_rebound, pr.spec.ignore_blockers, edge_expired) {
-                if let Some((at, dir)) = $s.areas.iter().filter(|a| a.is_blocker && a.height >= 0.0).find_map(|a| blocker_bounce(a, pr.prev, pr.pos)) {
+                if let Some((at, dir)) = $s.areas.iter().filter(|a| a.is_blocker && a.height >= z_last).find_map(|a| blocker_bounce(a, pr.prev, pr.pos)) {
                     pr.pos = at;
                     let sf = pr.spec.speed * FRAME_TIME;
                     pr.vel = [dir[0] * sf, dir[1] * sf];
@@ -8368,6 +8377,7 @@ impl Game {
             show: Some((crate::anim::PLACE_CLIP.into(), 0.0)),
             attacking_fx: false,
             had_target: HashMap::new(),
+            rot_held: HashMap::new(),
             mtp: None,
             grave: Vec::new(),
             necro_points: false,
@@ -10795,6 +10805,7 @@ impl Game {
             show: None,
             attacking_fx: false,
             had_target: HashMap::new(),
+            rot_held: HashMap::new(),
             mtp: None,
             grave: Vec::new(),
             necro_points: false,
@@ -15810,6 +15821,27 @@ impl Game {
                     let (now_t, rc) = (self.sim_elapsed as i64, self.round_clock);
                     // (A banana weapon finds its point the frame before it is ready: below.)
                     if attack.weapons.iter().zip(&self.towers[t].weapons[wi..wi + n]).all(|(w, st)| st.anim < 0 && !st.ready(if w.between_rounds { now_t } else { rc }) && !(w.per_round.is_some() && st.ready(rc + 1))) {
+                        // RotateToTarget.Process (VERIFIED-DECOMP @0x180dd80d0) with onlyRotateDuringThrow
+                        // and rotateOnlyOnThrow off calls ApplyRotation (@0x180dd7930) every frame,
+                        // weapons ready or not: with Attack.HasValidTarget (@0x180daeee0: frameTarget's
+                        // bloon not destroyed, same id) the tower turns to that Target where it is now
+                        // (recording map_quad_ninja_paragon_r40 rt 182: the reloading Sticky Bomb attack,
+                        // after the MOAB's move, turns the Paragon to -3.965 while Attack 0's shurikens
+                        // leave along -4.52). INFERRED: the Target's offset from the bloon as found.
+                        if attack.rotate_always && attack.turn_body && attack.offset_rot.is_none() {
+                            let held = self.towers[t].rot_held.get(&attack.model_name).copied();
+                            let at = held.and_then(|(id, off)| self.bloons.iter().find(|b| b.id == id).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
+                            match at {
+                                Some(q) => {
+                                    let tp = self.towers[t].pos;
+                                    let from = [tp[0], aim_origin_y(tp[1], self.terrain_z(tp), DISPLAY_TOWER_HEIGHT)];
+                                    let r = RAD2DEG * crt_atan2(q[0] - from[0], -(q[1] - from[1])) + attack.extra_rotation;
+                                    self.towers[t].game_rot = Some(r);
+                                    self.towers[t].angle = (r - 90.0) * DEG2RAD;
+                                }
+                                None => { self.towers[t].rot_held.remove(&attack.model_name); }
+                            }
+                        }
                         if air_turn {
                             let kept = self.towers[t].air.as_ref().and_then(|a| a.hm_target.get(ai).copied().flatten());
                             let tgt = kept.and_then(|(id, off)| self.bloons.iter().find(|b| b.id == id).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
@@ -16644,6 +16676,11 @@ impl Game {
                 // target where it was as the frame before began; recording mermonkey_040 rt 121-126,
                 // the ability turning the tower from 122).
                 if attack.rotate_always && attack.turn_body && attack.offset_rot.is_none() {
+                    let held = best.filter(|b| b.2 != 0).and_then(|(_, aim, id)| self.bloons.iter().find(|b| b.id == id).map(|b| (id, [aim[0] - b.pos[0], aim[1] - b.pos[1]])));
+                    match held {
+                        Some(h) => { self.towers[t].rot_held.insert(attack.model_name.clone(), h); }
+                        None => { self.towers[t].rot_held.remove(&attack.model_name); }
+                    }
                     if let Some((_, _, id)) = best.filter(|b| b.2 != 0) {
                         if let Some(b) = self.bloons.iter().find(|b| b.id == id) {
                             let tp = self.towers[t].pos;
