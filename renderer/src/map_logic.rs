@@ -313,7 +313,9 @@ impl Game {
                 [dx * cs - dy * sn + pv[0], -(dy * cs + dx * sn + pv[1])]
             };
             let on: Vec<usize> = (0..self.towers.len())
-                .filter(|&t| towers && self.towers[t].sub.is_none())
+                // (Map.areaTowers holds sub-towers too: recording map_geared_engineer_204_r40, the
+                // Sentries on the gear turn with it.)
+                .filter(|_| towers)
                 // (The clone's base land, id 0, is first in its list; the game's BaseArea is last.)
                 .filter(|&t| self.areas.iter().find(|ar| ar.id != 0 && Self::in_area(self.towers[t].pos, ar)).is_some_and(|ar| ar.id == area))
                 .collect();

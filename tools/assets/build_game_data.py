@@ -1184,6 +1184,12 @@ def main():
         # EatBloonModel (Bloon Trap): swallows bloons up to rbeCapacity, then pays out.
         eat = (pb.get("EatBloonModel") or [None])[0]
         out["eat"] = {"capacity": eat["f"]["rbeCapacity"], "cash_mult": eat["f"]["rbeCashMultiplier"]} if eat else None
+        # EatBloon.EmitCash (@0x180cb98d0): a full trap is destroyed and its EatBloonModel.projectile
+        # (the "Full" trap) made in its place; that one's AgeModel lifespan (recording
+        # map_geared_engineer_204_r40: Full 1149 lives 300 frames).
+        if eat and deref(eat["f"].get("projectile")):
+            fp = projectile(deref(eat["f"]["projectile"]), depth + 1)
+            out["eat"]["full_lifespan"] = fp.get("age_lifespan") or fp.get("lifespan")
         # CollideExtraPierceReductionModel: each hit uses this much more pierce.
         # (By tag when one is given: each hit on a bloon with that tag uses extraAmount more.)
         tagged = [c["f"] for c in pb.get("CollideExtraPierceReductionModel", []) if c["f"].get("bloonTag")]

@@ -2271,6 +2271,9 @@ pub struct Proj {
 pub struct Eat {
     pub capacity: f32,
     pub cash_mult: f32,
+    /// The Full trap's lifespan (seconds; EatBloonModel.projectile's AgeModel).
+    #[serde(default)]
+    pub full_lifespan: Option<f32>,
 }
 
 /// A temporary tower spawned by a projectile (Sentry): its own tier, gone after `lifespan` seconds.

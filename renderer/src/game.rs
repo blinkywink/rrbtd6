@@ -4353,7 +4353,13 @@ macro_rules! collide_pass {
                 $s.sound(&pr.spec.pickup_sounds, None);
                 $s.cash_pops.push((pr.pos, pr.value));
             } else if $s.projectiles[$p].frames_left <= 0.0 {
-                $s.projectiles.remove($p);
+                let pr = $s.projectiles.remove($p);
+                // STAND-IN: a Full trap's payout (EmitCash's cash, not modelled yet) is collected
+                // as it goes rather than lost.
+                if pr.spec.eat.is_some() {
+                    $s.collect_projectile_cash(&pr);
+                    $s.cash_pops.push((pr.pos, pr.value));
+                }
             } else {
                 $p += 1;
             }
@@ -4589,6 +4595,11 @@ macro_rules! collide_pass {
                     // STAND-IN pickup reach (a quarter of this: 15 units), like bananas.
                     pr.spec.cash = Some(crate::data::Cash { min: 0.0, max: 0.0, bonus: 0.0, pickup: Some(60.0),bonus_shared:false });
                     pr.spec.no_hit = true;
+                    // (EmitCash makes the Full trap in its place, gone after its AgeModel
+                    // lifespan: recording map_geared_engineer_204_r40, full at rt 2169, gone at 2470.)
+                    if let Some(l) = eat.full_lifespan {
+                        pr.frames_left = l * FPS;
+                    }
                     break;
                 }
                 continue;
@@ -6974,12 +6985,6 @@ impl Game {
         Self::point_in_poly(p, &a.points) && !a.holes.iter().any(|h| Self::point_in_poly(p, h))
     }
 
-    /// A circle touches an area: its centre is inside it, or it crosses the outline or a hole's
-    /// edge (STAND-IN for Area.Intersects with holes).
-    fn circle_hits_area(c: [f32; 2], r: f32, a: &Area) -> bool {
-        Self::in_area(c, a) || Self::circle_crosses_area(c, r, a)
-    }
-
     /// Area.Intersects with a circle: it crosses the outline or a hole's edge.
     fn circle_crosses_area(c: [f32; 2], r: f32, a: &Area) -> bool {
         let crosses = |poly: &[[f32; 2]]| {
@@ -8112,13 +8117,16 @@ impl Game {
         if area.kind != AREA_LAND {
             return false;
         }
-        // Other unplaceable areas within 0..=5 above it must not touch the 0.75 * radius circle.
+        // Other unplaceable areas within 0..=5 above it must not cross the 0.75 * radius circle
+        // (Area.Intersects @0x180f494b0 -> Polygon.Intersects @0x180f233e0: edges only, so an
+        // area holding the whole circle doesn't count; recording map_geared_engineer_204_r40,
+        // Geared's unplaceable BaseArea under every spot).
         for o in &self.areas {
             if std::ptr::eq(o, area) || o.kind == AREA_SKIPPED || o.kind == AREA_LAND {
                 continue;
             }
             let dh = o.height - area.height;
-            if (0.0..=5.0).contains(&dh) && Self::circle_hits_area(p, r * 0.75, o) {
+            if (0.0..=5.0).contains(&dh) && Self::circle_crosses_area(p, r * 0.75, o) {
                 return false;
             }
         }
