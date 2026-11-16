@@ -717,6 +717,8 @@ pub struct Tier {
     pub trade_empire: Option<TradeEmpire>,
     #[serde(default)]
     pub cashback: Option<Cashback>,
+    #[serde(default)]
+    pub discount_zones: Vec<DiscountZone>,
     /// FlagshipAttackSpeedIncreaseModel.attackSpeedIncrease.
     #[serde(default)]
     pub flagship: Option<f32>,
@@ -815,7 +817,7 @@ pub struct Tier {
 
 /// A *SupportModel. `kind`: "range" (x(1 + mult) + add), "rate" (interval x mult), "pierce" (+add),
 /// "speed" (projectile speed x(1 + mult)), "camo", "immune" (damage type -> add), "cash" (pop cash
-/// x mult), "discount" (cost x(1 - mult) up to `tier_cap`).
+/// x mult), "discount" (FreeUpgradeSupportModel: free up to `tier_cap`).
 #[derive(Deserialize, Clone)]
 pub struct Support {
     pub kind: String,
@@ -1323,12 +1325,47 @@ pub struct TradeEmpire {
     pub moab: f32,
 }
 
+/// DiscountZoneModel (Monkey Business / Commerce, Sun Temple, ...): the fields
+/// TowerManager.GetZoneDiscount (@0x180c2bd90) tests.
+#[derive(Deserialize, Clone)]
+pub struct DiscountZone {
+    /// discountMultiplier (+0x40).
+    pub mult: f32,
+    /// stackLimit (+0x44): of a stackName group, the largest multipliers kept.
+    pub stack_limit: i32,
+    /// stackName (+0x48).
+    pub group: String,
+    /// affectSelf (+0x50).
+    pub affect_self: bool,
+    /// tierCap (+0x54), tierMin (+0x58).
+    pub tier_cap: i32,
+    pub tier_min: i32,
+    /// towerBaseIdList (+0x68).
+    pub bases: Vec<String>,
+    /// upgradeId (+0x78): only that upgrade when set.
+    pub upgrade_id: String,
+    /// isGlobal (+0x81): no range test.
+    pub global: bool,
+    /// Its BuffIndicatorModel (TowerBehaviorBuffModel.GetBuffIndicatorModel).
+    pub icon: Option<String>,
+    pub buff_name: String,
+    pub buff_max: i32,
+}
+
 /// CashbackZoneModel (Favored Trades): towers in range sell for more.
 #[derive(Deserialize, Clone)]
 pub struct Cashback {
     pub mult: f64,
     pub max: f64,
     pub stacks: u32,
+    /// Its BuffIndicatorModel (TowerBehaviorBuffModel.GetBuffIndicatorModel @0x18124c210:
+    /// iconName buffIconName, buffName buffLocsName, maxStackSize).
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub buff_name: String,
+    #[serde(default)]
+    pub buff_max: i32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2586,6 +2623,10 @@ pub struct SubTowerSpec {
     /// TowerModel.dontAddMutatorsFromParent: a parent's AddMutatorIncludeSubTowers skips it.
     #[serde(default)]
     pub no_parent_mutators: bool,
+    /// TowerModel.isSubTower (+0x100): CashbackZone / GenericTowerBehaviorBuff
+    /// TestPlacementTowerBuff give it no buff icon.
+    #[serde(default)]
+    pub is_sub: bool,
     /// TowerModel name ("ShootyTurretTower").
     #[serde(default)]
     pub name: String,

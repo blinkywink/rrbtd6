@@ -125,6 +125,9 @@ Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
 spike, super, village. Alchemist 34/34. Druid 34/34 (2026-11-09). Mermonkey 34/34, Banana Farm 25/25, Monkey Village 25/25, Spike Factory 24/25, Super Monkey 28/34 (2026-11-10; heli / ace / super re-recorded, old ones in pending/<set>_old). Full run 2026-11-10: every set above at full count (mortar 25/25, bucc 34/34). Monkey Ace 25/25 (2026-11-10): add `ace` to the regression run.
+Unit tests (`cargo test --profile game -p btd6-game`, 2026-11-16): 5 already failing at 9538de1 and
+before (coop targeted_darkshift..., paragon_degree_and_upgrade, sub_commander, necromancer_graveyard,
+round_bench presets_have_exact_round_degree_and_paragon_counts); OPEN: look at them.
 compare.sh now builds once and runs recordings in parallel (RRBTD6_JOBS, default 12): the whole
 regression takes ~1.5 min. Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.
@@ -317,10 +320,57 @@ the game code / recordings), or it hides problems later.
   (For reference: Mutable.mutators is a SortedListLite<TimedMutator> by DESCENDING
   BehaviorMutator.priority (+0x34; SortMutators @0x180f373d0), and SortedInsert (@0x18014ca90) puts a new
   equal-priority one BEFORE the first equal element its binary search probes, not at the end.)
-  OPEN: the inactive icons of towers that could buff
-  (canEventuallyBuff, UpdateBuffs' second loop: AddDiscountZoneBuffs, then each tower's supporting
-  behaviours via vfunc 0x9f8 (in range) / TowerBehaviorBuffModel.GetBuffIndicatorModel + vfunc 0x9c8), Ultraboost's permanent stack icon (OverclockPermanentModel
-  reads its indicator from its behaviours), roundsRemaining text for timed ones.
+  UpdateBuffs (@0x180c186b0) order, READ 2026-11-16: (1) the tower's TimedMutators with a
+  buffIndicator (done); (2) every Support in the game whose CanShowInactiveBuffIcon (slot 140) is true
+  for this tower: an INACTIVE icon (canEventuallyBuff 1, canCurrentlyBuff 0); the base returns false,
+  only MonkeySubParagonSupport overrides it (OPEN, sub paragon only); (3) AddDiscountZoneBuffs
+  (iterator MoveNext @0x180c2f200, READ): Tower +0x288 (a set of DiscountZone) cleared; for path
+  0..2 with the tower's TowerModel.tiers[path], if get_owner (PlayerOwnerId +0xb8) == -1 (as
+  decompiled; single player's owner IS -1: every recording's IN lines end in -1), not isParagon, not
+  TowerManager.IsTowerPathTierLocked and not Tower.IsUpgradeBlocked: the set UnionWith
+  Tower.FindDiscountZones(path) (MoveNext @0x180c30a00: TowerManager.GetZoneDiscount(towerModel,
+  position, path, tier + 1, owner, the path's next upgrade name) -> its zones); then one ACTIVE query
+  (canCurrentlyBuff 1) per zone with its TowerBehaviorBuffModel indicator. IsTowerPathTierLocked
+  (@0x180c2c9f0): locked unless TowerModel.upgrades (+0xe0) has an upgrade on the path, then tier
+  locks / TowerInventory (never here). DONE (2026-11-16): ported with GetZoneDiscount
+  (@0x180c2bd90, Game::zone_discount): every DiscountZone (tower not IsSuspended) unless isGlobal
+  needs DistanceSquared(zone tower, p) <= zone TowerModel.range^2 and, at d^2 <= 1.4e-45 (its own
+  spot), affectSelf; for an upgrade (path >= 0) not 0 < tierCap < tier; tierMin <= tier;
+  dontAffectOthersInCoop: same owner; upgradeId (if set) == the upgrade's name; towerBaseIdList
+  holds the baseId. Grouped by stackName in TowerManager.discountStacks (a Dictionary kept for
+  the game: `discount_keys` keeps its key order), each group Sorted by discountMultiplier
+  (b__6_0 @0x180c32c90) then Reversed (List.Reverse @0x181c484a0), cut to its first zone's
+  stackLimit; GetDiscountMultiplier (@0x180c29250) sums the kept multipliers in f32.
+  GetTowerUpgradeCost (@0x180c2acc0): cost (or the override) -> TowerUpgradeLocks behaviours ->
+  GetFreeUpgrade -> discount = zone + GetAreaDiscount (map area +0x48 per area model) +
+  ComeOnEverybody (SimulationBehaviorDiscount) -> cost x (1 - discount) (0 when free); mode 13
+  (and an artifact flag) extras; tower behaviour cost multipliers. DiscountZoneModel is now
+  game.json tier `discount_zones` (no longer a "discount" support; that kind is only
+  FreeUpgradeSupport, still a STAND-IN for GetFreeUpgrade). Village xx1 / xx2 icons
+  (BuffIconVillagexx1 / xx2) and Sun Temple / hero ones come from the same zones. Test
+  village_discount_zones. NOT PORTED: GetAreaDiscount, ComeOnEverybody, GetFreeUpgrade, the
+  final rounding (P-DISCOUNT). (4) every GenericTowerBehaviorBuff (only BuffIconSheriffGiddyUp, a
+  hero), CashbackZone, SellIncreaseZone (none in the models), each via TestPlacementTowerBuff (slot
+  137), added only when canCurrentlyBuff (+0x19); (5) AddOtherBuffs (iterator MoveNext
+  @0x180c2f870, READ 2026-11-16): the tower's weapon behaviours (vfunc 0x958), ability behaviours
+  and tower behaviours each yield their own GetBuffs(); overrides: BuffIconPerTowerInRange (Druid
+  x-x-x with BuffIconDruidBananaFarm: GetBuffs MoveNext @0x180d11ab0 yields one query, active,
+  availableBuffCount = the count of its zone list (behaviour +0x70, list +0xa8), nothing when 0;
+  Filter @0x180d04d70: a Tower whose baseId is in towerIdFilter; GetTowerRange @0x180d04ef0:
+  rangeOverride if > 0 else the tower's TowerModel.range), VagrantWeaponBehavior (Desperado
+  BuffIconWanderer / Shotgun / Rifle), Overcharge (BuffIconOvercharge, ParagonOvercharge). OPEN: port
+  them (the zone list's membership rule first: find what fills +0x70 / +0xa8).
+  BuffQuery: indicator +0, timedMutator +8, tower +0x10, canEventuallyBuff +0x18, canCurrentlyBuff
+  +0x19, availableBuffCount +0x1c, unavailableBuffCount +0x20. GroupStackableBuffs: a stackable
+  (+0x38) FullName adds 1 per query with availableBuffCount 0, up to maxStackSize (+0x3c).
+  DONE (2026-11-16): Favored Trades' icon. CashbackZone.TestPlacementTowerBuff (@0x180d06500):
+  nothing for a sub tower (TowerModel.isSubTower +0x100, exported as SubTowerSpec.is_sub) or a
+  paragon (+0x12c); else canCurrentlyBuff = Vector2.DistanceSquared(zone tower, tower) <= zone
+  TowerModel.range^2 (Tower.towerModel is the mutated model: Tower.UpdatedModel). The zone's own
+  ship counts. BuffIconBuccaneerxx4 (maxStackSize 3) exported as tier `cashback.icon / buff_name /
+  buff_max`; test favored_trades_buff_icon. Not checked on screen.
+  OPEN: Ultraboost's permanent stack icon (OverclockPermanentModel reads its indicator from its
+  behaviours), roundsRemaining text for timed ones, (2) / (3) / (5) above.
   PLAN (2026-11-12, read): the icons are Tower.activeBuffs (BuffQuery: buffIndicator, timedMutator, tower,
   canEventuallyBuff, canCurrentlyBuff, availableBuffCount, unavailableBuffCount), rebuilt by Tower.UpdateBuffs
   (@0x180c186b0): one per mutator on the tower whose BehaviorMutator has a buffIndicator (+0x40; with

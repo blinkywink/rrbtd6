@@ -2135,7 +2135,7 @@ def main():
         support_kinds = {"RangeSupportModel": "range", "RateSupportModel": "rate", "PierceSupportModel": "pierce",
                          "ProjectileSpeedSupportModel": "speed", "VisibilitySupportModel": "camo",
                          "DamageTypeSupportModel": "immune", "SupportShinobiTacticsModel": "rate",
-                         "DiscountZoneModel": "discount", "DamageSupportModel": "damage",
+                         "DamageSupportModel": "damage",
                          # AbilityCooldownScaleSupportModel: abilities in range recharge faster;
                          # MonkeyCityIncomeSupportModel (Monkey City): income x incomeModifier.
                          "AbilityCooldownScaleSupportModel": "ability_cd", "MonkeyCityIncomeSupportModel": "income",
@@ -2164,8 +2164,6 @@ def main():
                   add = sf.get("pierce", 0.0)
               if b["type"] == "DamageTypeSupportModel":
                   add = sf.get("immuneBloonProperties", 0)
-              if b["type"] == "DiscountZoneModel":
-                  mult = sf.get("discountMultiplier", 0.0)
               if b["type"] == "FreeUpgradeSupportModel":
                   mult = 1.0
               base_filter = {"BananaCentralBuffModel": ["BananaFarm"], "CentralMarketBuffModel": ["MonkeyBuccaneer"]}.get(b["type"], [])
@@ -2576,8 +2574,24 @@ def main():
                                        "damage": b["f"].get("damageBuff", 0), "ceramic": b["f"].get("ceramicDamageBuff", 0),
                                        "moab": b["f"].get("moabDamageBuff", 0)}
                                       for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "TradeEmpireBuffModel"), None),
+                # DiscountZoneModel (TowerManager.GetZoneDiscount @0x180c2bd90 reads every field).
+                "discount_zones": [{"mult": b["f"].get("discountMultiplier", 0.0), "stack_limit": b["f"].get("stackLimit", 0),
+                                    "group": b["f"].get("stackName") or "", "affect_self": bool(b["f"].get("affectSelf")),
+                                    "tier_cap": b["f"].get("tierCap", 0), "tier_min": b["f"].get("tierMin", 0),
+                                    "bases": [s for s in (deref(b["f"].get("towerBaseIdList")) or []) if isinstance(s, str)],
+                                    "upgrade_id": b["f"].get("upgradeId") or "", "global": bool(b["f"].get("isGlobal")),
+                                    "icon": (b["f"].get("buffIconName") or None)
+                                            if (b["f"].get("buffIconName") or b["f"].get("buffLocsName")) else None,
+                                    "buff_name": b["f"].get("buffLocsName") or "", "buff_max": b["f"].get("maxStackSize") or 0}
+                                   for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "DiscountZoneModel"],
                 "cashback": next(({"mult": b["f"].get("cashbackZoneMultiplier", 0.0), "max": b["f"].get("cashbackMaxPercent", 0.95),
-                                   "stacks": b["f"].get("maxStacks", 1)}
+                                   "stacks": b["f"].get("maxStacks", 1),
+                                   # its BuffIndicatorModel (TowerBehaviorBuffModel.GetBuffIndicatorModel:
+                                   # none when both names are empty)
+                                   "icon": (b["f"].get("buffIconName") or None)
+                                           if (b["f"].get("buffIconName") or b["f"].get("buffLocsName")) else None,
+                                   "buff_name": b["f"].get("buffLocsName") or "",
+                                   "buff_max": b["f"].get("maxStackSize") or 0}
                                   for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "CashbackZoneModel"), None),
                 "flagship": next((b["f"].get("attackSpeedIncrease", 1.0) for b in items(tobj["f"]["behaviors"])
                                   if b and b["type"] == "FlagshipAttackSpeedIncreaseModel"), None),
@@ -2701,6 +2715,8 @@ def main():
                 "selectable": not f.get("ignoreTowerForSelection", False),
                 # TowerModel.dontAddMutatorsFromParent: AddMutatorIncludeSubTowers skips it.
                 "no_parent_mutators": bool(f.get("dontAddMutatorsFromParent")),
+                # TowerModel.isSubTower (+0x100): TowerBehaviorBuff queries skip it.
+                "is_sub": bool(f.get("isSubTower")),
                 # CreateEffectOnPlaceModel / CreateEffectOnExpireModel (mini Sun Avatar): (effect, scale).
                 "place_fx": next(([prefab_name((deref(b["f"].get("effectModel")) or {}).get("f", {}).get("assetId")),
                                    (deref(b["f"].get("effectModel")) or {}).get("f", {}).get("scale", 1.0)]

@@ -62,8 +62,8 @@
 //!   at round end.
 //! - HYPOTHESIS P-SUPPORT: support buffs reach towers whose footprint touches the radius;
 //!   one instance per mutator id unless it stacks; range x(1 + m) + a, rate x m, pierce + a.
-//! - HYPOTHESIS P-DISCOUNT: DiscountZone discounts sum (per stack limit) up to tierCap and
-//!   discounted prices round to the nearest 5.
+//! - Discounts: DiscountZone selection is TowerManager.GetZoneDiscount (VERIFIED-DECOMP, see
+//!   Game::zone_discount); HYPOTHESIS P-DISCOUNT left: discounted prices round to the nearest 5.
 //! - Druid: P-EMIT-RANDOM (thorn spread), P-LIGHTNING (chain without branching), P-INTERVAL
 //!   (Ball Lightning sub-shots at a random bloon in range), P-REMOVEMUT (tornado strips effects
 //!   by mutator id), P-ATTARGET (Jungle Vines land on their target).
@@ -3785,6 +3785,10 @@ pub struct Game {
     pub paragon_degree: Option<crate::data::ParagonDegree>,
     /// GameModel.buffIndicatorModels' FullNames in order (data::GameData::buff_order).
     pub buff_order: std::sync::Arc<[String]>,
+    /// TowerManager.discountStacks' keys (stackName) in the order first added: a
+    /// Dictionary<string, List<DiscountZone>> kept for the game (GetZoneDiscount only clears the
+    /// lists), so GetDiscountMultiplier sums the groups in that order.
+    pub discount_keys: std::sync::Mutex<Vec<String>>,
     /// Difficulty: cost multiplier, sell share, round bonus (base, per round), locked towers,
     /// selling disabled (CHIMPS), and its name.
     pub cost_mult: f32,
@@ -5976,6 +5980,7 @@ impl Game {
             syphon: 0.0,
             paragon_degree: d.paragon_degree.clone(),
             buff_order: d.buff_order.clone().into(),
+            discount_keys: std::sync::Mutex::new(Vec::new()),
             cost_mult: mode.cost_mult,
             sell_mult: mode.sell,
             round_bonus: mode.bonus,
@@ -8096,7 +8101,7 @@ impl Game {
     /// Price of tower `def` placed at `p`, after discounts. HYPOTHESIS P-DISCOUNT: discounted
     /// prices round to the nearest 5 like the game's other price scaling.
     pub fn place_cost(&self, def: usize, p: [f32; 2]) -> f64 {
-        let cost = game_cost(self.tower_defs[def].1.cost, self.cost_mult, self.discount(def, p, None, 0));
+        let cost = game_cost(self.tower_defs[def].1.cost, self.cost_mult, self.discount(def, p, None, None, 0, ""));
         match self.free_tower(def) {
             Some(m) => cost * m,
             None => cost,
@@ -12233,7 +12238,8 @@ impl Game {
             let lvl = h.levels.iter().find(|l| l.level == tw.tiers[0] + 1)?;
             return Some((lvl.name.clone(), (((lvl.xp - tw.xp) * h.cost_per_xp).max(11.0)) as f64));
         }
-        let d = self.discount(tw.def, tw.pos, Some(t), next[path] as u32);
+        let up_name = tt.upgrades.iter().find(|u| u.path == path && u.tier == cur).map_or("", |u| u.name.as_str());
+        let d = self.discount(tw.def, tw.pos, Some(t), Some(path), next[path] as u32, up_name);
         // MonkeyopolisUpgradeCost (IsUpgradeBlocked @0x180d48d60, GetUpgradeCost @0x180d489a0): on
         // its path the upgrade needs a farm in range and costs costPerFarm per farm, in place of
         // the model's cost (TowerManager.GetTowerUpgradeCost: behaviours before the discounts).
@@ -13131,6 +13137,62 @@ impl Game {
         if let (Some(_), Some((icon, name))) = (self.towers[t].overclock, &self.towers[t].overclock_icon) {
             queries.push((icon.clone(), name.clone(), 0, 1));
         }
+        // Discount zones: Tower.AddDiscountZoneBuffs (MoveNext @0x180c2f200): for each path, if
+        // the owner is -1 (single player: recordings' IN lines), the model isn't a paragon,
+        // TowerManager.IsTowerPathTierLocked (@0x180c2c9f0: true unless the model has a next
+        // upgrade on the path; tier locks / inventory never lock here) and Tower.IsUpgradeBlocked
+        // (@0x180c10d20: the tower's upgrade locks, Monkeyopolis without a farm) don't hold, the
+        // zones of FindDiscountZones (MoveNext @0x180c30a00: GetZoneDiscount for tier + 1 and
+        // that upgrade's name) go in one set; one active query per zone.
+        if self.towers[t].paragon.is_none() && self.towers[t].sub.is_none() {
+            let tw = &self.towers[t];
+            if let Some(tt) = self.tower_tiers[tw.def].as_ref() {
+                let mut seen: Vec<(usize, String)> = Vec::new();
+                for path in 0..3 {
+                    let mut next = tw.tiers;
+                    next[path] += 1;
+                    if !tt.tiers.contains_key(&format!("{}{}{}", next[0], next[1], next[2])) {
+                        continue;
+                    }
+                    if let Some(mc) = self.tier(t).and_then(|tr| tr.mopolis_cost.clone()).filter(|mc| mc.path == path) {
+                        if self.mopolis_farms(t, &mc.filter, self.range(t)).is_empty() {
+                            continue;
+                        }
+                    }
+                    let cur = tw.tiers[path] as usize;
+                    let up = tt.upgrades.iter().find(|u| u.path == path && u.tier == cur).map_or("", |u| u.name.as_str());
+                    for (_, zones) in self.zone_discount(tw.def, tw.pos, Some(path), cur as u32 + 1, up) {
+                        for (o, z) in zones {
+                            if seen.iter().any(|s| s.0 == o && s.1 == z.group) {
+                                continue;
+                            }
+                            seen.push((o, z.group.clone()));
+                            if let Some(icon) = &z.icon {
+                                queries.push((icon.clone(), z.buff_name.clone(), z.buff_max, 1));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Favored Trades: UpdateBuffs' CashbackZone loop (every CashbackZone in the game, its
+        // own tower included) adds the query CashbackZone.TestPlacementTowerBuff
+        // (@0x180d06500) returns when canCurrentlyBuff: none for a sub tower (TowerModel
+        // +0x100) or a paragon (+0x12c), else Vector2.DistanceSquared(zone tower, this tower)
+        // <= the zone tower's TowerModel.range squared (its mutated model: Tower.UpdatedModel).
+        // (Its source not IsSuspended and an empty baseIds filter always hold here.)
+        let target_skipped = self.towers[t].paragon.is_some() || self.towers[t].sub.as_ref().is_some_and(|s| s.spec.is_sub);
+        if !target_skipped {
+            let p = self.towers[t].pos;
+            for (o, tw) in self.towers.iter().enumerate() {
+                let Some(cb) = self.tier_of(tw).and_then(|tr| tr.cashback.as_ref()) else { continue };
+                let Some(icon) = &cb.icon else { continue };
+                let r = self.range(o);
+                if (tw.pos[0] - p[0]).powi(2) + (tw.pos[1] - p[1]).powi(2) <= r * r {
+                    queries.push((icon.clone(), cb.buff_name.clone(), cb.buff_max, 1));
+                }
+            }
+        }
         // (FullName, icon, kept maxStackSize, count)
         let mut groups: Vec<(String, String, i32, u32)> = Vec::new();
         for (icon, name, max, copies) in queries {
@@ -13373,15 +13435,93 @@ impl Game {
             .collect()
     }
 
-    /// Discount (fraction off) for buying tier `tier` (0 = the tower itself) of `def` at `p`.
-    pub fn discount(&self, def: usize, p: [f32; 2], skip: Option<usize>, tier: u32) -> f64 {
-        let d: f32 = self
+    /// Discount (fraction off) for buying tier `tier` (0 = the tower itself) of `def` at `p`:
+    /// `path` and `upgrade` (the UpgradeModel's name) for an upgrade, None / "" when placing
+    /// (TowerManager.GetTowerCost passes path -1, tier 0). The zones' part is
+    /// GetDiscountMultiplier (@0x180c29250) of GetZoneDiscount: the kept zones'
+    /// discountMultiplier summed in f32, group by group. STAND-IN: FreeUpgradeSupport (Primary
+    /// Mentoring / Expertise) still a whole discount up to its tier through `supports_at`
+    /// (GetFreeUpgrade not ported).
+    pub fn discount(&self, def: usize, p: [f32; 2], skip: Option<usize>, path: Option<usize>, tier: u32, upgrade: &str) -> f64 {
+        let free: f32 = self
             .supports_at(def, p, skip)
             .iter()
             .filter(|(sp, _)| sp.kind == "discount" && tier <= sp.tier_cap)
             .map(|(sp, n)| sp.mult * *n as f32)
             .sum();
-        d.min(1.0) as f64
+        let mut d = 0.0f32;
+        for (_, zones) in self.zone_discount(def, p, path, tier, upgrade) {
+            for (_, z) in zones {
+                d += z.mult;
+            }
+        }
+        (free + d).min(1.0) as f64
+    }
+
+    /// TowerManager.GetZoneDiscount (VERIFIED-DECOMP @0x180c2bd90): every DiscountZone in the
+    /// game (tower order) whose tower isn't suspended (always here) passes:
+    /// - unless isGlobal: Vector2.DistanceSquared(zone tower, p) <= its TowerModel.range^2
+    ///   (the mutated model), and a zone on that very spot (d^2 <= 1.4e-45) only with affectSelf;
+    /// - for an upgrade (path >= 0): not (0 < tierCap < tier); always tierMin <= tier;
+    /// - dontAffectOthersInCoop: same owner (always in single player);
+    /// - a set upgradeId equal to the upgrade's name; a towerBaseIdList holding the tower's
+    ///   baseId.
+    /// Each stackName group is sorted by discountMultiplier (the lambda b__6_0 @0x180c32c90),
+    /// Reversed (largest first) and cut to its first zone's stackLimit. Returned in the
+    /// dictionary's key order (`discount_keys`), each zone with its tower.
+    pub fn zone_discount(&self, def: usize, p: [f32; 2], path: Option<usize>, tier: u32, upgrade: &str) -> Vec<(String, Vec<(usize, crate::data::DiscountZone)>)> {
+        let name = &self.tower_defs[def].0;
+        let tier = tier as i32;
+        let mut keys = self.discount_keys.lock().unwrap();
+        let mut groups: Vec<Vec<(usize, crate::data::DiscountZone)>> = vec![Vec::new(); keys.len()];
+        for (o, tw) in self.towers.iter().enumerate() {
+            let Some(tr) = self.tier_of(tw) else { continue };
+            for z in &tr.discount_zones {
+                if !z.global {
+                    let r = self.range(o);
+                    let (dx, dy) = (tw.pos[0] - p[0], tw.pos[1] - p[1]);
+                    let d2 = dx * dx + dy * dy;
+                    if r * r < d2 {
+                        continue;
+                    }
+                    if d2 <= f32::from_bits(1) && !z.affect_self {
+                        continue;
+                    }
+                }
+                if path.is_some() && 0 < z.tier_cap && z.tier_cap < tier {
+                    continue;
+                }
+                if z.tier_min > tier {
+                    continue;
+                }
+                if !z.upgrade_id.is_empty() && z.upgrade_id != upgrade {
+                    continue;
+                }
+                if !z.bases.is_empty() && !z.bases.iter().any(|b| b == name) {
+                    continue;
+                }
+                let k = match keys.iter().position(|g| *g == z.group) {
+                    Some(k) => k,
+                    None => {
+                        keys.push(z.group.clone());
+                        groups.push(Vec::new());
+                        keys.len() - 1
+                    }
+                };
+                groups[k].push((o, z.clone()));
+            }
+        }
+        keys.iter()
+            .cloned()
+            .zip(groups)
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, mut v)| {
+                v.sort_by(|a, b| b.1.mult.total_cmp(&a.1.mult));
+                let keep = v[0].1.stack_limit.max(0) as usize;
+                v.truncate(keep);
+                (k, v)
+            })
+            .collect()
     }
 
     pub fn tower_at(&self, p: [f32; 2]) -> Option<usize> {
@@ -24565,6 +24705,47 @@ mod beast_tests {
         assert_eq!(names.len(), icons.len(), "{icons:?}");
     }
 
+    /// TowerManager.GetZoneDiscount: Monkey Business (stackLimit 1) and Monkey Commerce
+    /// (stackLimit 3) per stackName group, tierCap 3, not the village's own upgrades; their icons
+    /// (AddDiscountZoneBuffs), Commerce counted per zone.
+    #[test]
+    fn village_discount_zones() {
+        let mut g = game();
+        g.cash = 1e7;
+        let v = g.tower_defs.iter().position(|(n, _)| n == "MonkeyVillage").unwrap();
+        let dart = g.tower_defs.iter().position(|(n, _)| n == "DartMonkey").unwrap();
+        let d = place_near(&mut g, dart, 300.0);
+        let v1 = place_near(&mut g, v, 300.0);
+        let v2 = place_near(&mut g, v, 300.0);
+        let pos = g.towers[d].pos;
+        for _ in 0..2 {
+            assert!(g.upgrade(v1, 2));
+        }
+        let up = |g: &Game, t: usize, path: usize| {
+            let tt = g.tower_tiers[g.towers[t].def].as_ref().unwrap();
+            tt.upgrades.iter().find(|u| u.path == path && u.tier == g.towers[t].tiers[path] as usize).unwrap().name.clone()
+        };
+        let disc = |g: &Game, path: usize| g.discount(dart, pos, Some(d), Some(path), g.towers[d].tiers[path] as u32 + 1, &up(g, d, path));
+        assert_eq!(disc(&g, 0), (0.1f32 + 0.05f32) as f64);
+        // Not the village's own upgrades (affectSelf false).
+        let vp = g.towers[v1].pos;
+        assert_eq!(g.discount(v, vp, Some(v1), Some(0), 1, &up(&g, v1, 0)), 0.0);
+        for _ in 0..2 {
+            assert!(g.upgrade(v2, 2));
+        }
+        // Major: one kept; Minor: both.
+        assert_eq!(disc(&g, 0), (0.1f32 + (0.05f32 + 0.05f32)) as f64);
+        let icons = g.buff_icons(d);
+        assert!(icons.contains(&("BuffIconVillagexx1".to_string(), 0)), "{icons:?}");
+        assert!(icons.contains(&("BuffIconVillagexx2".to_string(), 2)), "{icons:?}");
+        // tierCap 3: a 3-0-0 dart's fourth tier isn't discounted, its other paths are.
+        for _ in 0..3 {
+            assert!(g.upgrade(d, 0));
+        }
+        assert_eq!(disc(&g, 0), 0.0);
+        assert!(disc(&g, 1) > 0.0);
+    }
+
     /// BuffIndicatorUi.Awake / UpdatePlacedTowerBuffs: the icons over a tower sit in
     /// GameModel.buffIndicatorModels' order (one fixed slot per FullName), not the mutators'.
     #[test]
@@ -24616,7 +24797,7 @@ mod beast_tests {
         }
         assert_eq!(farms, 2);
         let (_, cost) = g.next_upgrade(t, 2).expect("two farms in range");
-        assert_eq!(cost, game_cost(10000.0, g.cost_mult, g.discount(g.towers[t].def, pos, Some(t), 5)));
+        assert_eq!(cost, game_cost(10000.0, g.cost_mult, g.discount(g.towers[t].def, pos, Some(t), Some(2), 5, &g.tower_tiers[g.towers[t].def].as_ref().unwrap().upgrades.iter().find(|u| u.path == 2 && u.tier == 4).unwrap().name)));
         let worth: f64 = g.towers.iter().filter(|o| o.def == farm).map(|o| o.invested as f32 as i32 as f64).sum();
         let id = g.towers[t].id;
         assert!(g.upgrade(t, 2));
@@ -25052,6 +25233,42 @@ mod beast_tests {
         }
         let te = g.towers[placed[0]].pos;
         assert!(g.cash_pops.iter().any(|&(q, v)| q == te && (v - 40.0).abs() < 1e-6), "Trade Empire pays 2 ships x 10 + 1 Favored Trades x 20");
+    }
+
+    /// Tower.UpdateBuffs' CashbackZone loop: every Favored Trades ship in range, the ship
+    /// itself included, adds a BuffIconBuccaneerxx4 query; stackable to maxStackSize 3.
+    #[test]
+    fn favored_trades_buff_icon() {
+        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../local_extracted/game/game.json");
+        let mut d: crate::data::GameData = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let m = concat!(env!("CARGO_MANIFEST_DIR"), "/../local_extracted/maps/logs/map.json");
+        d.map = serde_json::from_str(&std::fs::read_to_string(m).expect("logs map exported")).unwrap();
+        let mut g = Game::new(d);
+        g.cash = 1e9;
+        let def = g.tower_defs.iter().position(|(x, _)| x == "MonkeyBuccaneer").unwrap();
+        let mut placed = Vec::new();
+        'outer: for y in (-200..200).step_by(6) {
+            for x in (-300..300).step_by(6) {
+                if g.place(def, [x as f32, y as f32]) {
+                    placed.push(g.towers.len() - 1);
+                    if placed.len() == 4 {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        assert_eq!(placed.len(), 4, "room for four ships");
+        let count = |g: &Game, t: usize| g.buff_icons(t).into_iter().find(|(i, _)| i == "BuffIconBuccaneerxx4").map(|(_, n)| n);
+        assert_eq!(count(&g, placed[0]), None);
+        g.towers[placed[0]].tiers = [0, 0, 4];
+        g.buffs = g.compute_buffs();
+        assert_eq!(count(&g, placed[0]), Some(1), "its own zone");
+        assert_eq!(count(&g, placed[1]), Some(1));
+        for &t in &placed[1..] {
+            g.towers[t].tiers = [0, 0, 4];
+        }
+        g.buffs = g.compute_buffs();
+        assert_eq!(count(&g, placed[1]), Some(3), "four zones, maxStackSize 3");
     }
 
     /// P-FIGHTER: Aircraft Carrier keeps at most 3 planes (SubTowerFilterModel); they pop and
