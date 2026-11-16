@@ -295,6 +295,11 @@ pub struct Bloon {
     /// Where the bloon grid has it: its cell is updated as it processes, before it moves, so a
     /// frame's collisions see the cell from a frame before `prev`.
     pub cell_pos: [f32; 2],
+    /// The model it had at its last Process (set when its cell is; a degrade's first child, the
+    /// same object, keeps the parent's until then): Bloon.nonTargetable is that model's
+    /// (recording map_kartsndarts_druid_052_r40 rt 481: a MOAB's Ceramic in the tunnel is still
+    /// met by the thorns after the one that popped it).
+    pub cell_kind: usize,
     /// A Windlash carry ended by a re-hit: the carried spot, where the next frame's collision
     /// pass still meets the bloon (its grid entry not moved yet).
     pub coll_hold: Option<[f32; 2]>,
@@ -4462,7 +4467,9 @@ macro_rules! collide_pass {
                 // (And a nonTargetable bloon only for ignoreNonTargetable: recording
                 // map_kartsndarts_dart_205_r40 rt 438, darts pass a Ceramic in the tunnel, no
                 // damage and no pierce spent.)
-                || (!pr.spec.ignore_nontarget && $s.bloon_nontarget(b))
+                // (Bloon.Process sets the flag: a degrade's first child keeps its parent's
+                // until it moves; rt 481, a MOAB's Ceramic in the tunnel is still met.)
+                || (!pr.spec.ignore_nontarget && $s.bloon_nontarget_kind(b, b.cell_kind))
                 || pr.spec.exclude_bloons.iter().any(|x| $s.names[b.kind].starts_with(x.as_str()))
                 // FilterMutatedTarget.FilterBloon (VERIFIED-DISASM @0x180c20240): recording
                 // ice_005, icicles never hit a bloon carrying Ice:Icicles.
@@ -6654,7 +6661,7 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
-        self.bloons.push(Bloon { held: false, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
+        self.bloons.push(Bloon { held: false, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
         if self.defs[kind].rotate_to_follow_path {
@@ -6719,6 +6726,17 @@ impl Game {
 
     fn bloon_nontarget(&self, b: &Bloon) -> bool {
         self.bloon_nontarget_at(b, b.dist)
+    }
+
+    /// `bloon_nontarget` with the flags of model `kind` (MOAB-class: moabsInvulnerable).
+    fn bloon_nontarget_kind(&self, b: &Bloon, kind: usize) -> bool {
+        let Some((ds, inv, minv)) = self.track_inv.get(b.path as usize) else { return false };
+        if ds.is_empty() {
+            return false;
+        }
+        let k = ds.partition_point(|&d| d <= b.dist).saturating_sub(1);
+        let flags = if self.defs[kind].is_moab { minv } else { inv };
+        flags.get(k).copied().unwrap_or(false) && flags.get(k + 1).copied().unwrap_or(false)
     }
 
     /// `bloon_nontarget` as Bloon.Process left it at distance `dist` (a bloon that hasn't moved
@@ -13479,6 +13497,7 @@ impl Game {
         // if the parent was below its ceiling, else it starts now.
         let parent_grow = (self.defs[kind].layer_number < ceiling).then_some(b.grow_t);
         let parent_cell = b.cell_pos;
+        let parent_cell_kind = b.cell_kind;
         let parent_hold = b.coll_hold;
         // (Popped in a Process after its move this frame: refiled from its frame-start spot.)
         // (A chain of degrades in one hit keeps the first one's.)
@@ -13983,6 +14002,9 @@ impl Game {
                 }
             }
             child.cell_pos = self.ghost_cell.take().unwrap_or(parent_cell);
+            if n == 0 {
+                child.cell_kind = parent_cell_kind;
+            }
             if n == 0 && parent_at && child.wind.is_none() {
                 child.pos = pp0;
                 child.prev = parent_prev;
@@ -22058,6 +22080,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // since the last pass are all in it.
         for b in &mut self.bloons {
             if !b.fresh {
+                b.cell_kind = b.kind;
                 b.cell_pos = b.cell_next.take().unwrap_or(b.prev);
                 b.prev = b.pos;
                 b.prev_dist = b.dist;

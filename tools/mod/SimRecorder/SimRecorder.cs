@@ -106,6 +106,8 @@ public class Scenario
     /// Read-only: log Attack.GetPathSegmentsInRangeFast's PathSegmentInRange flags between
     /// recorded frames segprobe_from..segprobe_to (SG lines).
     public bool segprobe { get; set; } = false;
+    /// Read-only: each bloon's scales and Radius every recorded frame (BS lines).
+    public bool bloonscale { get; set; } = false;
     /// Read-only: at the start of recorded frames proclist_from..proclist_to, Simulation.process
     /// in order (PR lines: "PR index type id destroyed").
     public int proclist_from { get; set; } = -1;
@@ -785,7 +787,7 @@ public class Recorder : MelonMod
                 var q = pts[k];
                 // Last: disablePathTargeting (PathSegment.GatherPathInfoData: a segment whose
                 // centre falls on such a point can't be targeted).
-                m.WriteLine($"p {F(q.point.x)} {F(q.point.y)} {F(q.point.z)} {F(q.distance)} {F(q.bloonSpeedMultiplier)} {q.bloonsInvulnerable} {q.moabsInvulnerable} {F(q.bloonScale)} {q.disablePathTargeting}");
+                m.WriteLine($"p {F(q.point.x)} {F(q.point.y)} {F(q.point.z)} {F(q.distance)} {F(q.bloonSpeedMultiplier)} {q.bloonsInvulnerable} {q.moabsInvulnerable} {F(q.bloonScale)} {q.disablePathTargeting} {F(q.moabScale)}");
             }
             // Path.pointInfos: the point every CacheDistance along the path that a distance is
             // looked up in (Path.DistanceToPointInfo).
@@ -1339,6 +1341,8 @@ static class SimulatePatch
                 if (b == null || b.IsDestroyed) continue;
                 var p = b.Position;
                 w.WriteLine($"B {b.Id.Id} {b.bloonModel.id} {Recorder.F(b.distanceTraveled)} {Recorder.F(p.X)} {Recorder.F(p.Y)} {b.health}");
+                // Read-only: "BS id trackScale baseScale globalBloonScale Radius" (scenario "bloonscale").
+                if (Recorder.Sc.bloonscale) w.WriteLine($"BS {b.Id.Id} {Recorder.F(b.trackScale)} {Recorder.F(b.baseScale)} {Recorder.F(b.globalBloonScale)} {Recorder.F(b.Radius)}");
                 // Off its track (MoveWithWind / WindlashBehavior carries): "OT bloon offTrackCount".
                 try { if (b.offTrackCount != 0) w.WriteLine($"OT {b.Id.Id} {b.offTrackCount}"); } catch (Exception) { }
                 // Its offTrackCount when carried: "BO id count".
