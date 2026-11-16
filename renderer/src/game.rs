@@ -1931,7 +1931,8 @@ pub struct Tower {
     pub had_target: HashMap<String, bool>,
     /// A running Marked To Pop.
     pub mtp: Option<MtpState>,
-    /// Comanche Defense: frames until it can call in again, call-ins this round.
+    /// Comanche Defense: ComancheDefence.activationTime (Simulation.time of its latest
+    /// activation, as f32), the activated25 / 50 / 75 flags.
     pub comanche: (f32, u32),
     /// VigilanteTowerBehavior.lastActivatedAt (roundTime); None before the first.
     pub vigilante_at: Option<i64>,
@@ -3848,6 +3849,8 @@ pub struct Game {
     pub(crate) coop_pointers: HashMap<u64, Option<[f32; 2]>>,
     /// MoabShoveZone.lastAffectedBloonAt (roundTime) by tower id.
     shove_last: HashMap<u64, i64>,
+    /// The simulation frame `moab_shove_step` last ran in (it runs once a frame).
+    shove_frame: u64,
     /// MoabShoveMutator on a bloon (by id): roundTime it lapses, its speed scale, the tower, the
     /// layer it holds for.
     shoved: HashMap<u64, (i64, f32, u64, u64)>,
@@ -4992,7 +4995,22 @@ macro_rules! collide_pass {
                     }
                     for kid in std::iter::once(id).chain($kids.iter().copied()).collect::<Vec<_>>() {
                         if let Some(j) = $s.bloons.iter().position(|b| b.id == kid) {
-                            $s.apply_effects(j, &spec, owner, dmg, true);
+                            if kid == id {
+                                $s.apply_effects(j, &spec, owner, dmg, true);
+                            } else {
+                                // (A copy the hit made: AddBehaviorToBloon's pass-1 add isn't
+                                // called on it (no M add on a copy in its pop frame in recording
+                                // map_candyfalls_dartling_204_r40); one that copied the mutator
+                                // keeps its timer (rt 1720: Laser Shock with 42 frames left, gone
+                                // by 1774). INFERRED: one without it still gets it.)
+                                let mut kid_spec = spec.clone();
+                                let b = &$s.bloons[j];
+                                // (Only a DamageOverTime one here: a copied emitter (Super Glue's
+                                // splat) is initialised again on the copy, which the re-add stands
+                                // in for; recordings glue_005 / glue_025.)
+                                kid_spec.effects.retain(|e| e.kids.is_none() || e.kind != "dot" || !b.has_effect(&e.id));
+                                $s.apply_effects(j, &kid_spec, owner, dmg, true);
+                            }
                         }
                     }
                 }
@@ -5967,6 +5985,7 @@ impl Game {
             preset_target: None,
             coop_pointers: HashMap::new(),
             shove_last: HashMap::new(),
+            shove_frame: u64::MAX,
             shoved: HashMap::new(),
             comanche_due: Vec::new(),
             coop_wallets: None,
@@ -8685,6 +8704,10 @@ impl Game {
     /// the heli not behind it (dot(heading, bloon - heli) <= 0), PercThroughMap >= 0.01) gets the
     /// MoabShoveMutator for 30 frames of movement and one layer (Bloon.AddMutatorForNumLayers).
     fn moab_shove_step(&mut self) {
+        if self.shove_frame == self.sim_elapsed {
+            return;
+        }
+        self.shove_frame = self.sim_elapsed;
         for t in 0..self.towers.len() {
             let Some(sh) = self.tier(t).and_then(|tr| tr.moab_shove.clone()) else { continue };
             let id = self.towers[t].id;
@@ -12141,6 +12164,21 @@ impl Game {
         let count = self.paragon_degree.as_ref().map_or(100, |p| p.requirements.len()).max(1);
         let per = (count / levels).max(1);
         Some((*degree as usize / per).min(levels - 1) + 1)
+    }
+
+    /// A display `name` as a Paragon at its display level shows it (ParagonAssetSwapModel: the
+    /// swap for exactly this level, or one applied to all levels above it; ParagonAssetSwapPerDegreeModel).
+    pub fn paragon_display(&self, tw: &Tower, name: &str) -> Option<String> {
+        let lvl = self.paragon_level(tw)?;
+        let pd = self.tower_tiers[tw.def].as_ref()?.paragon.as_ref()?;
+        if let Some(list) = pd.per_degree.iter().find(|l| l.first().is_some_and(|f| f == name)) {
+            return list.get(lvl - 1).filter(|n| !n.is_empty()).cloned();
+        }
+        pd.swaps
+            .iter()
+            .filter(|(from, _, d, above)| from == name && (*d == lvl || (*above && lvl >= *d)))
+            .max_by_key(|(_, _, d, _)| *d)
+            .map(|(_, to, _, _)| to.clone())
     }
 
     /// Tower `t` can become its Paragon: it has one, `t` has a tier 5, and the towers of its
@@ -18535,6 +18573,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         dots: &mut Vec<DotTick>, emits: &mut Vec<([f32; 2], Box<Proj>, u64, u64, u64)>,
         zones: &[([f32; 2], f32, crate::data::Zone)], shoves: &[([f32; 2], crate::data::MoabShove)], leak_voice: &mut bool) {
         #[cfg(test)] let schedule_start=std::time::Instant::now();
+        // (MoabShoveZone acts in its heli's turn, before bloons newer than it move: recording
+        // map_rake_heli_204_r40 rt 875, the 2-0-4's Comanche helis, newer than the MOAB, made it
+        // move early while the shove step waited for the end of the tower phase, so it was
+        // shoved 29 frames for the game's 30. INFERRED: the shoving heli is older than the bloons.)
+        if self.towers.iter().any(|tw| tw.sub.is_none()) && (0..self.towers.len()).any(|t| self.tier(t).is_some_and(|tr| tr.moab_shove.is_some())) {
+            self.moab_shove_step();
+        }
         let mut j = 0;
         while j < self.bloons.len() {
             let b = &self.bloons[j];
@@ -19292,6 +19337,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     }
 
     fn comanche_decide(&mut self) {
+        let mut retreat: Vec<u64> = Vec::new();
         for t in 0..self.towers.len() {
             let Some(cm) = self.tier(t).and_then(|tr| tr.comanche.clone()) else { continue };
             let id = self.towers[t].id;
@@ -19346,6 +19392,27 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     self.comanche_due.push((t, spot));
                 }
                 self.towers[t].comanche.1 |= 1 << k;
+                // (activationTime = the Process argument, Simulation.time: RootObject.
+                // ProcessRootObject passes it, not 1; recording map_rake_heli_204_r40, round 40's
+                // activations with all three helis out still restamp it.)
+                self.towers[t].comanche.0 = self.sim_elapsed as f32;
+            }
+            // Retreat once activationTime + durationFrames <= time (VERIFIED-DECOMP Process
+            // @0x180d0bdf0): each heli flies to the map edge nearest it and is destroyed when
+            // there (HasRetreated); the minis are made 50 past the edge and stay put, so they go
+            // at once (recording map_rake_heli_204_r40: all three gone at rt 2308, 900 frames
+            // after the round's 75% activation).
+            if self.towers[t].comanche.1 != 0 && self.towers[t].comanche.0 + cm.duration as f32 <= self.sim_elapsed as f32 {
+                let id = self.towers[t].id;
+                retreat.extend(self.towers.iter().filter(|o| o.sub.as_ref().is_some_and(|s| s.parent == id && s.spec.name == cm.tower.name)).map(|o| o.id));
+            }
+        }
+        for g in retreat {
+            if let Some(k) = self.towers.iter().position(|o| o.id == g) {
+                // (TowerManager.DestroyTower: off the process list in order, as an expired
+                // sub-tower.)
+                self.towers.remove(k);
+                self.removed.push((k, usize::MAX));
             }
         }
     }

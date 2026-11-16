@@ -1,0 +1,1 @@
+{"name": "map_candyfalls_dartling_204_r40", "map": "CandyFalls", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "DartlingGunner-204", "x": -36.0, "y": 20.0, "point": [-46.35, 6.08], "target": "Locked"}], "quit": true, "cash": 10000000}

@@ -429,6 +429,12 @@ pub struct ParagonDef {
     /// The Paragon UpgradeModel.icon.
     #[serde(default)]
     pub icon: String,
+    /// ParagonAssetSwapModel: (display, its replacement, display degree, applyToAllAbove).
+    #[serde(default)]
+    pub swaps: Vec<(String, String, usize, bool)>,
+    /// ParagonAssetSwapPerDegreeModel: a display's name per display degree (first = the original).
+    #[serde(default)]
+    pub per_degree: Vec<Vec<String>>,
     /// ParagonTowerModel.displayDegreePaths count: display levels.
     #[serde(default = "one_usize")]
     pub levels: usize,
@@ -2933,6 +2939,10 @@ pub struct EffectSpec {
     /// the damage, on what the bloon is then.
     #[serde(default)]
     pub after_damage: bool,
+    /// An after-damage AddBehaviorToBloonModel's cascadeMutators: the children the hit made get
+    /// it too (None: not from one; they do).
+    #[serde(default)]
+    pub kids: Option<bool>,
     /// AddBehaviorToBloonModel.dontCopy: a degrade's other children don't get it.
     #[serde(default)]
     pub dont_copy: bool,

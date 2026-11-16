@@ -554,6 +554,11 @@ def main():
             if sf.get("collisionPass", -1) >= 1:
                 for e in effects[n0:]:
                     e["after_damage"] = True
+                    # AddBehaviorToBloonModel.cascadeMutators: only then do the children the hit
+                    # made get it too (recording map_candyfalls_dartling_204_r40 rt 1720: Laser
+                    # Shock, no cascade, goes on the hit bloon only; its copy keeps the copied
+                    # mutator's 42 frames).
+                    e["kids"] = bool(sf.get("cascadeMutators", False))
             # AddBehaviorToBloonModel.chance (Icicles 0.25): a syncedRandom draw per hit.
             if sf.get("chance", 0.0) > 0.0:
                 for e in effects[n0:]:
@@ -2760,6 +2765,15 @@ def main():
         bases = [prefab_name(g) for g in dpaths if g] if not ptm.get("changeAttackDisplay") else []
         paragon = ({"tier": tier(pt), "cost": pu["cost"], "name": pu["_name"], "display": prefab_name(pt["f"].get("display")), "top": top,
                     "tops": tops, "bases": bases, "levels": len(dpaths),
+                    # ParagonAssetSwapModel: [displayToSwap, newDisplay, displayDegree, applyToAllAbove]
+                    # (prefab names); ParagonAssetSwapPerDegreeModel: a display's name per display
+                    # degree (the first is the one swapped). Display only.
+                    "swaps": [[prefab_name(b["f"].get("displayToSwap")), prefab_name(b["f"].get("newDisplay")),
+                               b["f"].get("displayDegree", 0), bool(b["f"].get("applyToAllAbove"))]
+                              for b in items(pt["f"]["behaviors"]) if b and b["type"] == "ParagonAssetSwapModel"
+                              and prefab_name(b["f"].get("displayToSwap")) and prefab_name(b["f"].get("newDisplay"))] if pt else [],
+                    "per_degree": [[prefab_name(g) or "" for g in (deref(b["f"].get("displayDegrees")) or []) if isinstance(g, str)]
+                                   for b in items(pt["f"]["behaviors"]) if b and b["type"] == "ParagonAssetSwapPerDegreeModel"] if pt else [],
                     "base_display": pt["f"].get("display"),
                     # TowerModel.portrait: the upgrade panel's portrait (file names vary:
                     # "ParagonMagusPerfectus", "Paragon - MasterBuilder", "SpikeFactoryParagon").
