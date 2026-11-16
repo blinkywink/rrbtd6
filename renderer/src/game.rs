@@ -9965,6 +9965,11 @@ impl Game {
     /// through LineProjectileEmission.Emit with useTargetAsEndPoint, from `from` to `to`: the
     /// bloons on that segment (CollisionGrid.GetInLine, ordered from the start) hit at once.
     fn rod_zap_line(&mut self, t: usize, from: [f32; 2], to: [f32; 2], z: f32, pj: &Proj) {
+        // PointLineEffectModel (useLineProjectileEmissionShowEffect): its lightning line along the zap
+        // (display only).
+        if let Some(pl) = self.tier(t).and_then(|tr| tr.point_line.clone()) {
+            self.beams.push((from, to, pl));
+        }
         let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
         let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
         // (Vector2 rotation in the game's frame (its y is the clone's -y); a zero line keeps 0:
@@ -15990,7 +15995,7 @@ impl Game {
                 // Attack.InitTargetPathSegments (VERIFIED-DECOMP @0x180daeef0): an attack whose model has
                 // addsToSharedGrid puts its segments in range into the SharedTowerGrid, at
                 // sharedGridRange when that is non-zero (else its own range).
-                let shared: Vec<([f32; 2], f32, Los)> = if attack.shared_range {
+                let shared: Vec<([f32; 2], f32, Los, bool)> = if attack.shared_range {
                     let mut v = Vec::new();
                     // (The tower's own addsToSharedGrid attacks are in the grid too.)
                     for o in (0..self.towers.len()).filter(|&o| self.towers[o].sub.is_none()) {
@@ -15998,7 +16003,9 @@ impl Game {
                         let ob = self.buffs.get(o).cloned().unwrap_or_default();
                         for a in tr.attacks.iter().filter(|a| a.adds_shared) {
                             let r = if a.shared_grid_range != 0.0 { a.shared_grid_range } else { ob.attack_range(a) };
-                            v.push((self.attack_pos(o), r, Los::of(a)));
+                            // (PathSegmentInRange.canSeeCamo = !Attack.cantTargetCamo: Attack.
+                            // GetPathSegmentsInRange, VERIFIED-DECOMP @0x180dad8f0.)
+                            v.push((self.attack_pos(o), r, Los::of(a), a.camo || ob.camo));
                         }
                     }
                     v
@@ -16198,17 +16205,19 @@ impl Game {
                     // keeps: inRange when some grid entry there is (PathSegment.IsInRange: its point
                     // within that attack's range + 2), line of sight when shareLineOfSight or the
                     // attack's own sight of it, and some such entry has line of sight too.
-                    let (g_in, g_los) = if attack.shared_range {
+                    // canSeeCamo when some grid entry there has inRange, canSeeCamo and line of sight.
+                    let (g_in, g_los, g_camo) = if attack.shared_range {
                         match seg_q.filter(|_| seg_ok) {
                             Some(sq) => {
-                                let near = |&(q, rr, _): &([f32; 2], f32, Los)| (sq[0] - q[0]).powi(2) + (sq[1] - q[1]).powi(2) <= (rr + 2.0) * (rr + 2.0);
+                                let near = |&(q, rr, _, _): &([f32; 2], f32, Los, bool)| (sq[0] - q[0]).powi(2) + (sq[1] - q[1]).powi(2) <= (rr + 2.0) * (rr + 2.0);
                                 let g_in = shared.iter().any(near);
-                                (g_in, g_in && (attack.shared_los || seg_clear) && shared.iter().any(|e| near(e) && self.los_clear(e.2, e.0, sq)))
+                                let g_camo = g_in && shared.iter().any(|e| e.3 && near(e) && self.los_clear(e.2, e.0, sq));
+                                (g_in, g_in && (attack.shared_los || seg_clear) && shared.iter().any(|e| near(e) && self.los_clear(e.2, e.0, sq)), g_camo)
                             }
-                            None => (false, false),
+                            None => (false, false, false),
                         }
                     } else {
-                        (false, false)
+                        (false, false, false)
                     };
                     // Targetting.GetTargets (VERIFIED-DECOMP @0x180fdbe70): a segment entry without
                     // both inRange and line of sight still gives a MOAB-class bloon through
@@ -16272,7 +16281,12 @@ impl Game {
                     if !seg_in && shared.is_empty() {
                         continue;
                     }
-                    if b.camo(d) && !camo {
+                    // (Targetting.GetTargets: a camo bloon needs its segment entry's canSeeCamo; a
+                    // shared-range attack's entries are the pressed ones. Recording
+                    // map_lotusisland_sub_200_quincy_camo_r33: an Advanced Intel Sub, whose
+                    // FilterInvisibleSubIntel lets camo through but whose own entries can't see it,
+                    // never fires at camo bloons, even in its own range, with only Quincy beside it.)
+                    if b.camo(d) && if attack.shared_range { (!camo && !attack.intel_camo) || !g_camo } else { !camo } {
                         continue;
                     }
                     // FilterOnlyCamoIn.FilterBloon (@0xc20590): bloon.bloonModel.isCamo.

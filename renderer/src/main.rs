@@ -3023,7 +3023,14 @@ async fn game_main() {
                                     None => None,
                                 }
                             }
-                            None => None,
+                            // A sprite display (Skywarden's LightningLarge3): its texture, untinted, its width.
+                            None => {
+                                let sm: Option<serde_json::Value> = std::fs::read_to_string(dir.join("sprite.json")).ok().and_then(|s| serde_json::from_str(&s).ok());
+                                sm.and_then(|m| {
+                                    let w = m["w"].as_f64().unwrap_or(5.0) as f32;
+                                    load_work::complete_asset(tex(dir.join("sprite.png"))).map(|t| (t, [255u8; 4], w))
+                                })
+                            }
                         };
                         beam_strips.insert(name.clone(), strip);
                     }

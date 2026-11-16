@@ -639,6 +639,9 @@ pub struct Tier {
     /// CreateEffectOnAirUnitModel: an effect kept on the tower's air unit (display only).
     #[serde(default)]
     pub air_fx: Option<String>,
+    /// PointLineEffectModel: a line display along its line shots (display only).
+    #[serde(default)]
+    pub point_line: Option<LineFx>,
     /// CreateEffectOnParentOnAttackModel: (effect, scale) on the parent tower as this one attacks.
     #[serde(default)]
     pub parent_attack_fx: Option<(Option<String>, f32)>,
@@ -1162,6 +1165,10 @@ pub struct Attack {
     /// grid alone (else also the attack's own sight of the segment).
     #[serde(default)]
     pub shared_los: bool,
+    /// FilterInvisibleSubIntel: can't see camo itself (its grid entries don't), but camo bloons
+    /// pass its filter, so it hits them on pressed segments another tower sees camo on.
+    #[serde(default)]
+    pub intel_camo: bool,
     /// AttackModel.addsToSharedGrid / sharedGridRange (0: its own range).
     #[serde(default)]
     pub adds_shared: bool,

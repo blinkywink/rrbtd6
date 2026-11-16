@@ -357,7 +357,7 @@ for tower in TOWERS:
         def walk_disp(o):
             if isinstance(o, dict):
                 for k, v in o.items():
-                    if k == "display" and isinstance(v, str) and len(v) == 32 and all(ch in "0123456789abcdef" for ch in v):
+                    if k in ("display", "beam") and isinstance(v, str) and len(v) == 32 and all(ch in "0123456789abcdef" for ch in v):
                         found.add(v)
                     walk_disp(v)
             elif isinstance(o, list):

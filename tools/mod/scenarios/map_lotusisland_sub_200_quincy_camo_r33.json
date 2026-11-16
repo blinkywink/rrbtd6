@@ -1,0 +1,1 @@
+{"name": "map_lotusisland_sub_200_quincy_camo_r33", "map": "LotusIsland", "difficulty": "Hard", "mode": "Clicks", "round": 33, "frames": 2400, "seed": 777123, "cash": 10000000, "towers": [{"id": "MonkeySub-200", "x": -128.0, "y": 66.0}, {"id": "Quincy", "x": -74.0, "y": 58.0, "level": 1}], "quit": true}

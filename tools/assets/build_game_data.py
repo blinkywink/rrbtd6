@@ -1368,6 +1368,7 @@ def main():
             # TargetMoabModel (Bomb Shooter's "Boom" attack): MOAB-class bloons first.
             prio_moab = any(x and x["type"] == "TargetMoabModel" for x in items(af["behaviors"]))
             glue_filter, skip_frozen, cant_hit, only_camo, offscreen = 0, False, 0, False, 0
+            intel_camo = False
             for x in items(af["behaviors"]):
                 if x and x["type"] == "AttackFilterModel":
                     for flt in items(x["f"]["filters"]):
@@ -1376,6 +1377,11 @@ def main():
                             cant_hit |= flt["f"].get("ifCantHitBloonProperties", 0)
                         if flt and flt["type"] == "FilterInvisibleModel" and flt["f"].get("isActive", True):
                             camo = False
+                        # FilterInvisibleSubIntel (Advanced Intel, VERIFIED-DECOMP): CantTargetCamo is
+                        # the model's isActive (@0x180c1f8c0, shared with FilterInvisible), FilterBloon
+                        # always passes (@0x1804ee640): camo only where another tower's grid entry sees it.
+                        if flt and flt["type"] == "FilterInvisibleSubIntelModel" and flt["f"].get("isActive", True):
+                            camo, intel_camo = False, True
                         # INFERRED: inclusive=True filters the tag out (Alluring Melody's attack
                         # "entrances non MOAB-Class Bloons"; its projectile filters Moabs out too).
                         if flt and flt["type"] == "FilterWithTagModel":
@@ -1709,7 +1715,7 @@ def main():
             if grap is not None:
                 require_tags = list(require_tags) + ["Moabs"]
                 exclude_tags = list(exclude_tags) + ["Boss"] + (["Bad"] if grap.get("badHooksRequired", 0) > 100 else [])
-            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "shared_los": shared_los,
+            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "shared_los": shared_los, "intel_camo": intel_camo,
                     # (Attack.InitTargetPathSegments @0x180daeef0: with addsToSharedGrid its segments in
                     # range (sharedGridRange when it is non-zero, else its range) go to the
                     # SharedTowerGrid that Advanced Intel's TargetSupplierSharedRange presses.)
@@ -2557,6 +2563,11 @@ def main():
                                            (deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("scale", 1.0)]
                                           for b in [x for a in items(f["behaviors"]) if a for x in [a] + (items(a["f"].get("behaviors")) if a["type"] == "AttackModel" else [])]
                                           if b and b["type"] == "CreateEffectOnParentOnAttackModel"), None),
+                # PointLineEffectModel (Skywarden x-5-x): a line display (`beam`, a display GUID, every
+                # lineDisplayLength) along its line shots. Display only.
+                "point_line": next(({"beam": (deref(b["f"].get("lineDisplayPath")) or {"f": {}})["f"].get("assetPath"),
+                                     "len": b["f"].get("lineDisplayLength", 0.0), "endless": False, "start": None, "end": None}
+                                    for b in items(f["behaviors"]) if b and b["type"] == "PointLineEffectModel"), None),
                 # CreateEffectOnRoundEndModel: an effect on the tower as each round ends (the Rare Quincy
                 # Action Figure). Display only.
                 "round_end_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))

@@ -55,8 +55,19 @@ effect names, model behaviours the data builder never reads).
 
 ## Left
 
+- Need mechanics the clone doesn't simulate: D&D Monke's `MagicBarrierDisplayModel` (barrier near the track's
+  end), Pat Fusty's `BigSqueezeFortifiedEffectModel` (MetalBandDropFX when a fortified MOAB's band drops),
+  the Great White pet's `CreateGreatWhiteEffectModel` (grab / drag / RetreatFx), the Sheriff's
+  `ControlledEffectZoneModel`, Silas' `DetonateEffectModel` (Frostbite detonation; damage, not only display).
+- Cosmetic pets (`PetCreateEffectOnPlace / Sell`): the clone has no cosmetic pets.
+
 - `MalevolenceFx` / `MalevolenceSpellCast` (Corvus) exported to effects/, not drawn: the clone doesn't
   simulate the Malevolence spell (its display shows while that attack isn't paused).
+- Model transforms (scale, offset) aren't compared with the game automatically: the FX capture covers
+  particle systems only. Report anything that looks wrong in docs/dev/ISSUES.txt.
+
+## Done (2026-11-16)
+
 - Projectile emit effects (`ProjectileCreateEffectOnEmitModel`, `emit_fx`): Herald of Everfrost's hailstorm,
   the Sub's airburst muzzle flash.
 - Monkey Fan Club (Dart 040 / 050): the transformation cloud on each fan as it turns and as it turns back
@@ -65,6 +76,9 @@ effect names, model behaviours the data builder never reads).
 - Mermonkey x-x-4 / x-x-5's Trance Totem: as it attacks, its siren spiral plays on the Mermonkey
   (`CreateEffectOnParentOnAttackModel` on the totem's attack, tier `parent_attack_fx`; main.rs watches the
   totem's attack_t restart).
+- Skywarden x-5-x's lightning-rod zaps draw its `PointLineEffectModel` line (LightningLarge3, a sprite strip
+  tiled every 85.19 along the zap; tier `point_line`, pushed in `rod_zap_line`; the beam loader now takes
+  sprite displays too).
 - The Rare Quincy Action Figure plays its round-end effect (`CreateEffectOnRoundEndModel`, tier `round_end_fx`).
 - Drones (Drone, Drone Swarm, Gyrfalcon) play their `CreateEffectOnAirUnitDestroyModel` effect (SellEffect)
   where the air unit is when they expire (sub-tower `air_destroy_fx`).
@@ -72,9 +86,3 @@ effect names, model behaviours the data builder never reads).
 - Beast Handler pets now play their tier's BeastUpgradeFx when the handler upgrades (sub-towers' own
   `upgrade_fx`). (`TranceGroundEffect`, Mermonkey x-x-3:
   a weapon's EjectEffectModel, played per shot; now at range / displayRadius too.)
-- Paragon degree displays (`ParagonAssetSwapModel`), Beast Handler pet upgrade effects
-  (`BeastUpgradeFx` on the pets), `ToggleEffectWhileAbilityActiveModel` (Druid), `MagicBarrierDisplayModel`
-  (D&D Monke), `CreateRopeEffectModel` (Buccaneer hooks), `PointLineEffectModel` (Skywarden): exported art,
-  not drawn. See docs/dev/NOT_BUILT.md.
-- Model transforms (scale, offset) aren't compared with the game automatically: the FX capture covers
-  particle systems only. Report anything that looks wrong in docs/dev/ISSUES.txt.
