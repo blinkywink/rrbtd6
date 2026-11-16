@@ -1702,7 +1702,12 @@ def main():
             if grap is not None:
                 require_tags = list(require_tags) + ["Moabs"]
                 exclude_tags = list(exclude_tags) + ["Boss"] + (["Bad"] if grap.get("badHooksRequired", 0) > 100 else [])
-            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "turn_body": turn_body, "marker_z": marker_z, "rotate_always": rotate_always, "air_rotate": any(x and x["type"] == "RotateToTargetAirUnitModel" for x in items(af["behaviors"])), "air_target": any(x and x["type"] in ("TargetFirstAirUnitModel", "TargetLastAirUnitModel", "TargetStrongAirUnitModel") for x in items(af["behaviors"])), "face_middle": face_middle,
+            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range,
+                    # (Attack.InitTargetPathSegments @0x180daeef0: with addsToSharedGrid its segments in
+                    # range (sharedGridRange when it is non-zero, else its range) go to the
+                    # SharedTowerGrid that Advanced Intel's TargetSupplierSharedRange presses.)
+                    "adds_shared": bool(af.get("addsToSharedGrid")), "shared_grid_range": af.get("sharedGridRange", 0.0),
+                    "turn_body": turn_body, "marker_z": marker_z, "rotate_always": rotate_always, "air_rotate": any(x and x["type"] == "RotateToTargetAirUnitModel" for x in items(af["behaviors"])), "air_target": any(x and x["type"] in ("TargetFirstAirUnitModel", "TargetLastAirUnitModel", "TargetStrongAirUnitModel") for x in items(af["behaviors"])), "face_middle": face_middle,
                     # AttackModel name: Tower.UpdatedModel keeps the Attack of the same name.
                     "model_name": af.get("_name") or "",
                     "range": af["range"], "camo": camo, "rotate": rotate, "turn_rate": turn_rate,

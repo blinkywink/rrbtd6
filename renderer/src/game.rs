@@ -15927,11 +15927,20 @@ impl Game {
                 let (camo, range) = (attack.camo || buff.camo, buff.attack_range(attack));
                 // STAND-IN P-SHARED: Advanced Intel shares the ranges of all other placed towers
                 // (not sub-towers), each at its own buffed range.
+                // Attack.InitTargetPathSegments (VERIFIED-DECOMP @0x180daeef0): an attack whose model has
+                // addsToSharedGrid puts its segments in range into the SharedTowerGrid, at
+                // sharedGridRange when that is non-zero (else its own range).
                 let shared: Vec<([f32; 2], f32, Los)> = if attack.shared_range {
-                    (0..self.towers.len())
-                        .filter(|&o| o != t && self.towers[o].sub.is_none())
-                        .map(|o| (self.attack_pos(o), self.range(o), self.tier(o).and_then(|tr| tr.attacks.first()).map_or(Los::default(), Los::of)))
-                        .collect()
+                    let mut v = Vec::new();
+                    for o in (0..self.towers.len()).filter(|&o| o != t && self.towers[o].sub.is_none()) {
+                        let Some(tr) = self.tier(o) else { continue };
+                        let ob = self.buffs.get(o).cloned().unwrap_or_default();
+                        for a in tr.attacks.iter().filter(|a| a.adds_shared) {
+                            let r = if a.shared_grid_range != 0.0 { a.shared_grid_range } else { ob.attack_range(a) };
+                            v.push((self.attack_pos(o), r, Los::of(a)));
+                        }
+                    }
+                    v
                 } else {
                     Vec::new()
                 };

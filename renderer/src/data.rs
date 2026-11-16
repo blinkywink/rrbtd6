@@ -1152,6 +1152,11 @@ pub struct Attack {
     /// any other tower count as in range.
     #[serde(default)]
     pub shared_range: bool,
+    /// AttackModel.addsToSharedGrid / sharedGridRange (0: its own range).
+    #[serde(default)]
+    pub adds_shared: bool,
+    #[serde(default)]
+    pub shared_grid_range: f32,
 }
 
 fn yes() -> bool {
