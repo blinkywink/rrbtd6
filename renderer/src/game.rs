@@ -1924,6 +1924,9 @@ pub struct Tower {
     pub spirit_born: u64,
     /// PreEmptiveStrikeLauncher.currentOffsetIndex: launches so far.
     pub preempt_n: u32,
+    /// FinalStrike: (countingFrom, currentMissileIndex, lastMissileFiredAt) in Simulation.time
+    /// while it runs.
+    pub fstrike: Option<(u64, i32, i64)>,
     /// FireWhenAlternateWeaponIsReady: (main weapon id, the clock it last fired at) - its
     /// set_FireWeapon lasts until that clock + 1, unless the secondary fires first.
     pub alt_at: Vec<(i32, i64)>,
@@ -3802,6 +3805,9 @@ pub struct Game {
     pub upgrade_fx: Vec<([f32; 2], &'static str)>,
     /// Towers that used Monkey Fan Club and are still fans (display: the leader's effect).
     pub fan_leaders: Vec<u64>,
+    /// BeastHandlerLeash.timesOfLastMoves per handler id: Simulation.time of each slot's last pet
+    /// move (Initialise: -999999999).
+    pub pet_moves: HashMap<u64, [i64; 2]>,
     /// Paragon purchases for the renderer's sacrifice effects (display only).
     pub sacrifices: Vec<Sacrifice>,
     /// Towers placed this frame: (position, placement effect prefab, scale).
@@ -6016,6 +6022,7 @@ impl Game {
             overlays: d.overlays.clone(),
             upgrade_fx: Vec::new(),
             fan_leaders: Vec::new(),
+            pet_moves: HashMap::new(),
             sacrifices: Vec::new(),
             place_fx: Vec::new(),
             effect_seq: 0,
@@ -8376,6 +8383,7 @@ impl Game {
             spirit_v: None,
             spirit_born: 0,
             preempt_n: 0,
+            fstrike: None,
             alt_at: Vec::new(),
             disp_rot: None,
             takedown_throws: Vec::new(),
@@ -10810,6 +10818,7 @@ impl Game {
             spirit_v: None,
             spirit_born: 0,
             preempt_n: 0,
+            fstrike: None,
             alt_at: Vec::new(),
             disp_rot: None,
             takedown_throws: Vec::new(),
@@ -10979,6 +10988,94 @@ impl Game {
             }
         }
         best.map(|(q, _)| q)
+    }
+
+    /// The pet in leash slot `slot` of handler `t` (towerModel 0 / towerModelSecond 1): the
+    /// handler's live pet of that slot's model.
+    pub fn leashed_pet(&self, t: usize, slot: usize) -> Option<usize> {
+        let id = self.towers.get(t)?.id;
+        let pet = self.tier(t)?.pets.get(slot)?.clone();
+        self.towers.iter().position(|o| o.sub.as_ref().is_some_and(|s| s.pet && s.parent == id && s.spec.id == pet.id))
+    }
+
+    /// TSMThemeBeastHandler's move button for `slot`: None when it isn't shown (CanMovePet: the
+    /// slot's pet model has canMove and a live pet), else the cooldown left as a fill (0 when
+    /// ready). UpdateFromSimInfo (@0x180b8d9b0): interactable when now - lastMove > 119, else the
+    /// cooldownFade image at 1 - (now - last) / 120.
+    pub fn pet_move_state(&self, t: usize, slot: usize) -> Option<f32> {
+        let pet = self.tier(t)?.pets.get(slot)?;
+        if !pet.can_move {
+            return None;
+        }
+        self.leashed_pet(t, slot)?;
+        let last = self.pet_moves.get(&self.towers[t].id).map_or(-999_999_999, |m| m[slot]);
+        let since = self.sim_elapsed as i64 - last;
+        Some(if since > 119 { 0.0 } else { 1.0 - since as f32 / 120.0 })
+    }
+
+    /// DeployInput.IsPositionValid (VERIFIED-DECOMP @0x180a59dd0) for a pet move: the pet's model
+    /// (BeastHandlerLeash.GetTowerBehaviorCustomInputData @0x180cfc930: a copy without areaTypes 4
+    /// and 6) can be placed there, and IsSimTowerValid (@0x180a5a460): within the handler's range.
+    /// STAND-IN: contributing handlers (Merge) aren't simulated, so only the own handler counts.
+    pub fn pet_move_ok(&self, t: usize, slot: usize, p: [f32; 2]) -> bool {
+        let Some(pet) = self.tier(t).and_then(|x| x.pets.get(slot)).cloned() else { return false };
+        if self.leashed_pet(t, slot).is_none() {
+            return false;
+        }
+        let h = self.towers[t].pos;
+        let r = self.range(t);
+        if (p[0] - h[0]).powi(2) + (p[1] - h[1]).powi(2) > r * r {
+            return false;
+        }
+        let areas: Vec<i32> = pet.areas.iter().copied().filter(|&a| a != 4 && a != 6).collect();
+        let water = areas.contains(&1) && self.water_at(p);
+        let land = (areas.is_empty() || areas.contains(&AREA_LAND)) && (self.land_clear(p, pet.radius) || (self.water_at(p) && self.frozen_water_at(p)));
+        if !water && !land {
+            return false;
+        }
+        // (OverlapsOtherEntity as can_place: towers, not sub-towers; the pet itself is a sub-tower.)
+        !self.towers.iter().filter(|o| o.sub.is_none()).any(|o| {
+            let rr = pet.radius + self.tower_defs[o.def].1.radius;
+            rr * rr > (o.pos[0] - p[0]).powi(2) + (o.pos[1] - p[1]).powi(2)
+        })
+    }
+
+    /// BeastHandlerLeash.ApplyCustomInputData, Move (VERIFIED-DECOMP @0x180cfa7d0): the slot's pet
+    /// (not destroyed) turns to face the point when rotateWhenMoved (RotateTower((Rotation(point -
+    /// pet) - rotation) x Deg2Rad)), takes the terrain height and area there, is positioned there,
+    /// the handler turns to it (RotateToLeashedTower @0x180d00ae0, rotateToLeashedTower),
+    /// timesOfLastMoves[slot] = Simulation.time, then Tower.OnPlace (its CreateEffectOnPlace).
+    /// False when the point isn't valid (the input stays).
+    pub fn move_pet(&mut self, t: usize, slot: usize, p: [f32; 2]) -> bool {
+        if self.pet_move_state(t, slot).is_none() || !self.pet_move_ok(t, slot, p) {
+            return false;
+        }
+        let Some(pi) = self.leashed_pet(t, slot) else { return false };
+        let turn = |tw: &mut Tower, d: [f32; 2]| {
+            // (Vector2.Rotation in the game's frame: its y is the clone's -y.)
+            let want = RAD2DEG * crt_atan2(d[0], -d[1]);
+            let cur = tw.game_rot.unwrap_or(0.0);
+            let new = cur + (want - cur) * DEG2RAD * RAD2DEG;
+            tw.game_rot = Some(new);
+            tw.angle = (new - 90.0) * DEG2RAD;
+        };
+        let spec = self.towers[pi].sub.as_ref().map(|s| s.spec.clone());
+        if spec.as_ref().is_some_and(|s| s.rotate_moved) {
+            let q = self.towers[pi].pos;
+            turn(&mut self.towers[pi], [p[0] - q[0], p[1] - q[1]]);
+        }
+        self.towers[pi].pos = p;
+        if self.tier(t).is_some_and(|x| x.leash_rotate) {
+            let h = self.towers[t].pos;
+            turn(&mut self.towers[t], [p[0] - h[0], p[1] - h[1]]);
+        }
+        let id = self.towers[t].id;
+        let now = self.sim_elapsed as i64;
+        self.pet_moves.entry(id).or_insert([-999_999_999; 2])[slot] = now;
+        if let Some((Some(name), scale)) = spec.and_then(|s| s.place_fx.clone()) {
+            self.place_fx.push((p, name, scale));
+        }
+        true
     }
 
     /// Replaces tower `t`'s pets with its current tier's (Beast Handler).
@@ -11781,6 +11878,12 @@ impl Game {
     }
 
     fn use_ability_effects(&mut self, t: usize, a: &crate::data::Ability) {
+        // FinalStrike.Activate / StartCountdown (VERIFIED-DECOMP @0x180e2f340 / @0x180e30520):
+        // countingFrom = Simulation.time, currentMissileIndex -1; the Pre-Emptive Strike launcher
+        // is paused until EndCountdown.
+        if a.final_strike.is_some() && self.towers[t].fstrike.is_none() {
+            self.towers[t].fstrike = Some((self.sim_elapsed, -1, -1));
+        }
         // CreateEffectOnAbilityModel: its effect on the tower (display only).
         for (name, scale) in &a.fx {
             self.place_fx.push((self.towers[t].pos, name.clone(), *scale));
@@ -15091,6 +15194,11 @@ impl Game {
             // 60, no strike for the MOAB entering at rt 82.)
             // OnBloonEnterTrack (VERIFIED-DECOMP @0x180d5e670): a Paragon's (its ParagonTower
             // active) at any bloon; another's only at a MOAB-class one (TypedTagsBitmask 0x2000).
+            // (Nor one paused by its Final Strike countdown: OnBloonEnterTrack returns while
+            // RootObject.IsPaused; recording map_lotusisland_sub_paragon_040_r40 rt 700-1627.)
+            if self.towers[t].fstrike.is_some() {
+                continue;
+            }
             if self.towers[t].paragon.is_some() {
                 if self.sim_elapsed < self.towers[t].paragon_active_at {
                     continue;
@@ -15117,6 +15225,98 @@ impl Game {
                 pr.target = Some(target);
                 pr.target_obj = obj;
                 pr.pos = at;
+            }
+        }
+    }
+
+    /// FinalStrike.Process / UpdateMissileLaunching (VERIFIED-DECOMP @0x180e30120 / @0x180e30c60):
+    /// once countdownFrames have passed since countingFrom, a missile when none has gone yet or
+    /// launchRateFrames have passed since the last: currentMissileIndex -1 / 0 / 1 targets Strong
+    /// / First / Close over the whole map (BloonManager, IsBloonValid @0x180e2f9f0: not
+    /// destroyed, not BloonModel.isInvulnerable, on the map); none, no launch. LaunchMissile
+    /// (@0x180e2fa80): the projectile from the tower + throwOffset turned by its rotation
+    /// (AddDisplaySpaceHeight), at the bloon; after the third, EndCountdown (the launcher goes
+    /// on again). STAND-IN: the Strong pick's two LINQ steps are taken as the Strong target type.
+    fn final_strike_step(&mut self) {
+        for t in 0..self.towers.len() {
+            let Some((from, idx, last)) = self.towers[t].fstrike else { continue };
+            let Some(fs) = self.tier(t).and_then(|tr| tr.abilities.iter().find_map(|a| a.final_strike.clone())) else {
+                self.towers[t].fstrike = None;
+                continue;
+            };
+            let now = self.sim_elapsed;
+            let countdown = (fs.countdown * FPS) as i32 as u64;
+            if now - from < countdown {
+                continue;
+            }
+            let rate = (fs.launch_rate * FPS) as i32 as i64;
+            if !(last < 0 || now as i64 - last >= rate) {
+                continue;
+            }
+            let mode = match idx {
+                -1 => TargetMode::Strong,
+                0 => TargetMode::First,
+                1 => TargetMode::Close,
+                _ => {
+                    self.towers[t].fstrike = None;
+                    continue;
+                }
+            };
+            let tp = self.towers[t].pos;
+            // (STAND-IN: BloonModel.isInvulnerable isn't exported; no ordinary bloon has it.)
+            let valid = |_: &Self, b: &Bloon| b.hp > 0 && on_map(b.pos, 0.0);
+            let target = if mode == TargetMode::Close {
+                self.closest_target(tp, 999_999_999.0, |b| valid(self, b), |b| b.pos).map(|i| self.bloons[i].id)
+            } else {
+                self.typed_target_from(tp, 999_999_999.0, mode, &valid)
+            };
+            let Some(target) = target else { continue };
+            let [ex, ey, ez] = fs.offset;
+            let (sa, ca) = crt_sin_cos(DEG2RAD * -self.towers[t].game_rot.unwrap_or(0.0));
+            let (ox, oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
+            let at = [tp[0] + ox, tp[1] - (oy - ez / TAN60)];
+            let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
+            let start = self.projectiles.len();
+            self.emit(at, 0.0, &fs.emission, &fs.projectile, None, tiers, owner);
+            let obj = self.bloons.iter().find(|b| b.id == target).map(|b| b.obj);
+            for pr in &mut self.projectiles[start..] {
+                pr.target = Some(target);
+                pr.target_obj = obj;
+            }
+            let idx = idx + 1;
+            self.towers[t].fstrike = if idx > 1 { None } else { Some((from, idx, now as i64)) };
+        }
+    }
+
+    /// CreateProjectilesOnTrackOnExpire.Expired (VERIFIED-DECOMP @0x180caa930): the targetable
+    /// path segments whose point is within `range` of the shot (PathManager.GetPathSegmentsInRange:
+    /// paths in order, segments ascending), then `count` times syncedRandom.Next(0, n - 1) (never
+    /// the last: the game's own off-by-one) picks one, which is taken out, and the projectile is
+    /// emitted at its point (recording map_lotusisland_sub_paragon_040_r40 rt 1643: the Navarch's
+    /// five Fallouts from its Aftershock). STAND-IN: useRotation (false here) isn't applied.
+    fn track_expire_emit(&mut self, at: [f32; 2], te: &crate::data::TrackExpire, tiers: [u8; 3], owner: u64) {
+        let r2 = te.range * te.range;
+        let mut segs: Vec<[f32; 2]> = Vec::new();
+        for (pi, sg) in self.track_segs.iter().enumerate() {
+            for (k, q) in sg.iter().enumerate() {
+                let ok = self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false);
+                if ok && (q[0] - at[0]).powi(2) + (q[1] - at[1]).powi(2) < r2 {
+                    segs.push(*q);
+                }
+            }
+        }
+        for _ in 0..te.count {
+            if segs.is_empty() {
+                return;
+            }
+            let hi = segs.len() as i64 - 1;
+            let k = (self.synced_double() * hi as f64) as usize;
+            let q = segs.remove(k);
+            let start = self.projectiles.len();
+            self.emit(q, 0.0, &te.emission, &te.projectile, None, tiers, owner);
+            for pr in &mut self.projectiles[start..] {
+                pr.pos = q;
+                pr.prev = q;
             }
         }
     }
@@ -15550,7 +15750,9 @@ impl Game {
             }
             let extra: Vec<crate::data::Attack> = self.towers[t].temp.iter().map(|x| x.attack.clone()).collect();
             let extra_slots: Vec<usize> = self.towers[t].temp.iter().map(|x| x.slot).collect();
-            let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 
+            // (FinalStrike.StartCountdown pauses the tower's Attacks till EndCountdown: recording
+            // map_lotusisland_sub_paragon_040_r40, the Navarch throws nothing from rt 700.)
+            let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some()
                 // ParagonTower's pause starts after its first frame: an attack with a target in range
                 // then throws once (recordings boomerang_paragon_r63 / r90: at the purchase, then
                 // 120 frames later).
@@ -15897,7 +16099,7 @@ impl Game {
                 let fresh_attack = self.towers[t].paragon.is_some() && self.sim_elapsed < self.towers[t].paragon_active_at
                     && !self.towers[t].paragon_kept.contains(&attack.model_name);
                 let paused = paused && (self.towers[t].paragon.is_none() || self.towers[t].paragon_kept.contains(&attack.model_name)
-                    || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0);
+                    || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some());
                 // At zero Sandbox health, bloons keep moving but neither base nor temporary
                 // ability attacks may start or release shots. Timers above still advance.
                 // PauseOtherAttacks.Process, in its own attack's turn: durationFrames + lastFiredAt
@@ -21419,6 +21621,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // too: recording sub_paragon_r40 rt 675, a Paragon strike spent on its Black still
             // leaves its TargetDamage.)
             let expired = pr.pierce > 0.0 || (pr.spec.keep_spent && pr.frames_left <= 0.0);
+            if let (true, Some(te)) = (expired, pr.spec.track_expire.clone()) {
+                self.track_expire_emit(pr.pos, &te, pr.tiers, pr.owner);
+            }
             let order = pr.spec.on_exhaust.iter().enumerate().filter(|e| e.1.expire).chain(pr.spec.on_exhaust.iter().enumerate().filter(|e| !e.1.expire));
             for (k, ex) in order {
                 if pr.exhaust_done & (1 << k) != 0 || (!self.rounds_active() && !ex.between_rounds) || (ex.expire && !expired) {
@@ -22696,6 +22901,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // (ComancheDefence acts in its tower's turn, before its HeliMovement; the helis it makes
         // act and move from the next frame: recording heli_004, made at 878, first shot 879.)
         self.comanche_defence();
+        self.final_strike_step();
         self.move_helis();
         self.moab_shove_step();
         self.fly_patterns();
@@ -25198,6 +25404,40 @@ mod beast_tests {
             }
             assert_eq!(pet(&g), Some(p0));
         }
+    }
+
+    #[test]
+    fn beast_pet_move() {
+        let mut g = game();
+        g.cash = 1e7;
+        let bh = g.tower_defs.iter().position(|(n, _)| n == "BeastHandler").unwrap();
+        let t = place_near(&mut g, bh, 300.0);
+        assert!(g.upgrade(t, 1));
+        g.start_round();
+        for _ in 0..5 {
+            g.step();
+        }
+        let t = g.towers.iter().position(|o| o.tiers == [0, 1, 0] && o.sub.is_none()).unwrap();
+        assert_eq!(g.pet_move_state(t, 0), Some(0.0), "the Microraptor can move");
+        let h = g.towers[t].pos;
+        let r = g.range(t);
+        // Out of the handler's range: refused.
+        assert!(!g.move_pet(t, 0, [h[0] + r + 5.0, h[1]]));
+        let spot = (1..40).flat_map(|i| (0..16).map(move |k| (i, k))).map(|(i, k)| {
+            let a = k as f32 / 16.0 * std::f32::consts::TAU;
+            let d = r * i as f32 / 40.0;
+            [h[0] + d * a.cos(), h[1] + d * a.sin()]
+        }).find(|&q| g.pet_move_ok(t, 0, q)).expect("a valid spot");
+        assert!(g.move_pet(t, 0, spot));
+        let pi = g.leashed_pet(t, 0).unwrap();
+        assert_eq!(g.towers[pi].pos, spot);
+        assert!(g.pet_move_state(t, 0).unwrap() > 0.9, "cooling down");
+        for _ in 0..120 {
+            g.step();
+        }
+        assert_eq!(g.pet_move_state(t, 0), Some(0.0));
+        let pi = g.leashed_pet(t, 0).unwrap();
+        assert_eq!(g.towers[pi].pos, spot, "it stays there");
     }
 
     #[test]

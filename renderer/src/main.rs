@@ -1024,6 +1024,10 @@ async fn game_main() {
     let mut hidden_parts: Vec<usize> = Vec::new();
     // "Set Target": the tower whose aim point the next map click sets.
     let mut picking: Option<usize> = None;
+    // A Beast Handler pet move in progress: (handler id, leash slot) and whether its helper
+    // message is up.
+    let mut pet_pick: Option<(u64, usize)> = None;
+    let mut pet_pick_was = false;
     // A tower-targeted ability (Overclock) waiting for the player to click a tower.
     let mut ability_pick: Option<String> = None;
     // OverclockInput: the helper message shows InvalidTarget after a click on a banned tower.
@@ -1974,6 +1978,10 @@ async fn game_main() {
         if ability_pick.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right) || placing.is_some()) {
             ability_pick = None;
         }
+        pet_pick = pet_pick.filter(|&(id, slot)| placing.is_none() && game.towers.iter().position(|t| t.id == id).is_some_and(|t| game.pet_move_state(t, slot).is_some()));
+        if pet_pick.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right)) {
+            pet_pick = None;
+        }
         if item_pick.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right) || placing.is_some()) {
             item_pick = None;
         }
@@ -2036,6 +2044,15 @@ async fn game_main() {
             }
             if !keep {
                 ability_pick = None;
+            }
+        } else if let Some((id, slot)) = pet_pick.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
+            // DeployInput (VERIFIED-DECOMP IsPositionValid @0x180a59dd0): a valid point applies the
+            // custom input (BeastHandlerLeash.ApplyCustomInputData) and the mode ends; an invalid
+            // one keeps it.
+            if let Some(t) = game.towers.iter().position(|t| t.id == id) {
+                if game.move_pet(t, slot, mouse_world) {
+                    pet_pick = None;
+                }
             }
         } else if let Some(t) = picking.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
             if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Point{tower:game.towers[t].id,at:mouse_world});}else if game.is_necro(t){game.necro_select(t, mouse_world);}else{game.towers[t].point = Some(mouse_world);game.towers[t].point_z = 0.0;}
@@ -3762,6 +3779,12 @@ async fn game_main() {
                 }
                 pick_was = ability_pick.clone();
             }
+            // A pet move's DeployCIData.helperMsg ("Select Point In Range"), localized, while it lasts.
+            if pet_pick.is_some() != pet_pick_was {
+                pet_pick_was = pet_pick.is_some();
+                let msg = if pet_pick_was { h.menus.loc.get("Select Point In Range").cloned().unwrap_or_else(|| "Select Point In Range".into()) } else { String::new() };
+                h.helper.set(&msg, -1.0);
+            }
             // OverclockInput.CursorUp on a tower not in the list: SetHelperMessage(InvalidTarget, -1).
             if std::mem::take(&mut ability_invalid) {
                 let msg = h.menus.loc.get("InvalidTarget").cloned().unwrap_or_else(|| "Invalid Target".into());
@@ -3841,6 +3864,12 @@ async fn game_main() {
                         }
                     }
                     hud::Action::SetPoint => picking = selected,
+                    // STAND-IN: co-op has no pet move action yet, so the button does nothing there.
+                    hud::Action::MovePet(slot) => {
+                        if coop_runtime.is_none() {
+                            pet_pick = selected.and_then(|t| game.towers.get(t)).map(|t| (t.id, slot));
+                        }
+                    }
                     hud::Action::DefaultPoint => {
                         if let Some(t) = selected {
                             if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::DefaultPoint});}else{game.towers[t].point = None;}

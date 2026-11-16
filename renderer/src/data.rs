@@ -679,6 +679,9 @@ pub struct Tier {
     /// BeastHandlerLeashModel pets (towerModel / towerModelSecond), as permanent sub-towers.
     #[serde(default)]
     pub pets: Vec<std::sync::Arc<SubTowerSpec>>,
+    /// BeastHandlerLeashModel.rotateToLeashedTower: a pet move turns the handler to the pet.
+    #[serde(default)]
+    pub leash_rotate: bool,
     pub range: f32,
     /// OverrideCamoDetectionModel.detectCamo (Monkey Sense): it and its sub-towers see camo.
     #[serde(default)]
@@ -1487,6 +1490,27 @@ pub struct Barrage {
 }
 
 #[derive(Deserialize, Clone)]
+pub struct TrackExpire {
+    pub projectile: Proj,
+    pub emission: Emission,
+    pub count: u32,
+    pub range: f32,
+    #[serde(default)]
+    pub use_rotation: bool,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct FinalStrike {
+    /// Seconds before the first missile, and between missiles.
+    pub countdown: f32,
+    pub launch_rate: f32,
+    /// throwOffsetX / Y / Z.
+    pub offset: [f32; 3],
+    pub projectile: Proj,
+    pub emission: Emission,
+}
+
+#[derive(Deserialize, Clone)]
 pub struct Takedown {
     /// TargetGrapplableModel.hooks, and hooks a ZOMG / BAD needs (others need one).
     pub hooks: u32,
@@ -1990,6 +2014,9 @@ pub struct Proj {
     /// ProjectileBlockerCollisionReboundModel: bounces off blocker areas' edges.
     #[serde(default)]
     pub blocker_rebound: Option<BlockerRebound>,
+    /// CreateProjectilesOnTrackOnExpireModel: projectiles on path segments near it as it expires.
+    #[serde(default)]
+    pub track_expire: Option<Box<TrackExpire>>,
     /// CreateProjectileOnExhaustFractionModel: sub-projectiles spawned where it ends.
     #[serde(default)]
     pub on_exhaust: Vec<Exhaust>,
@@ -2297,6 +2324,9 @@ pub struct Ability {
     /// MOAB / ZOMG Takedown (MoabTakedownModel + TargetGrapplableModel).
     #[serde(default)]
     pub takedown: Option<Takedown>,
+    /// FinalStrikeModel (the Navarch's Final Strike).
+    #[serde(default)]
+    pub final_strike: Option<FinalStrike>,
     pub name: String,
     /// Seconds.
     pub cooldown: f32,
@@ -2672,6 +2702,12 @@ pub struct AirPattern {
 
 #[derive(Deserialize)]
 pub struct SubTowerSpec {
+    /// BeastHandlerPetModel.canMove: the handler's TSM move button moves it.
+    #[serde(default)]
+    pub can_move: bool,
+    /// BeastHandlerPetModel.rotateWhenMoved: a move turns it to face the new point.
+    #[serde(default)]
+    pub rotate_moved: bool,
     /// TowerCreateParagonTowerModel.isAirBasedTower: made at z 250 (the Dark Phoenix).
     #[serde(default)]
     pub air_based: bool,

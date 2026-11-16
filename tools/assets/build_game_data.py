@@ -1144,6 +1144,17 @@ def main():
             # (@0x180caa3e0) shuffles the path segments within `range` of its target.
             for ce in pb.get("CreateProjectilesOnTrackOnExhaustFractionModel", []):
                 out["track_exhaust_range"] = ce["f"].get("range", 0.0)
+            # CreateProjectilesOnTrackOnExpireModel (the Navarch's Aftershock: its Fallout):
+            # Expired (VERIFIED-DECOMP @0x180caa930) picks `count` targetable path segments within
+            # `range` of the shot (syncedRandom.Next(0, n - 1), removed as picked) and emits the
+            # projectile at each segment's point, at it; with useRotation they take its rotation.
+            for ce in pb.get("CreateProjectilesOnTrackOnExpireModel", []):
+                cf = ce["f"]
+                if deref(cf.get("projectile")) and depth < 4:
+                    out["track_expire"] = {"projectile": projectile(deref(cf["projectile"]), depth + 1),
+                                           "emission": emission(deref(cf.get("emission"))),
+                                           "count": cf.get("count", 0), "range": cf.get("range", 0.0),
+                                           "use_rotation": bool(cf.get("useRotation"))}
             for ce in pb.get("CreateProjectileOnExhaustPierceModel", []):
                 cf = ce["f"]
                 if deref(cf.get("projectile")):
@@ -1823,6 +1834,15 @@ def main():
                                                       if y and y["type"] == "CreateRopeEffectModel"), None)}
                     if takedown:
                         out["takedown"] = takedown
+                # FinalStrikeModel (the Navarch's Final Strike, VERIFIED-DECOMP FinalStrike.*): a
+                # countdown of countdownFrames, then three missiles launchRateFrames apart (Strong,
+                # First, Close), each the projectile thrown from the tower + throwOffset turned by its
+                # rotation at a bloon.
+                if x["type"] == "FinalStrikeModel":
+                    out["final_strike"] = {"countdown": xf.get("countdown", 0.0), "launch_rate": xf.get("launchRate", 0.0),
+                                           "offset": [xf.get("throwOffsetX", 0.0), xf.get("throwOffsetY", 0.0), xf.get("throwOffsetZ", 0.0)],
+                                           "projectile": projectile(deref(xf["projectileModel"])),
+                                           "emission": emission(deref(xf.get("emissionModel")))}
                 if x["type"] == "ActivateAttackModel" and not takedown:
                     out["activate"].append({"lifespan": xf.get("lifespan", 0.0), "one_shot": bool(xf.get("isOneShot")),
                                             "process_on_activate": bool(xf.get("processOnActivate")),
@@ -2359,6 +2379,7 @@ def main():
         # BeastHandlerLeashModel: the pet(s) this tier leashes (towerModel / towerModelSecond),
         # spawned as permanent sub-towers inside the handler's range (HYPOTHESIS P-PET).
         pets = []
+        leash_rotate = False
         paragon_towers = []
         for b in items(tobj["f"]["behaviors"]):
             # TowerCreateTowerModel (Corvus's Spirit, Lord Phoenix's PermaPhoenix): a permanent
@@ -2386,6 +2407,8 @@ def main():
                 if sp:
                     pets += [sp] * int(b["f"].get("count", 1))
             if b and b["type"] == "BeastHandlerLeashModel":
+                # rotateToLeashedTower (+0x4c): RotateToLeashedTower turns the handler to a moved pet.
+                leash_rotate = bool(b["f"].get("rotateToLeashedTower"))
                 for key in ("towerModel", "towerModelSecond"):
                     sp = sub_tower(deref(b["f"].get(key)), None)
                     if sp:
@@ -2579,7 +2602,7 @@ def main():
                 "range_links": [[prefab_name(b["f"].get("displayPath")), b["f"].get("displayRadius", 0.0)]
                                 for b in items(f["behaviors"]) if b and b["type"] == "LinkDisplayScaleToTowerRangeModel"
                                 and prefab_name(b["f"].get("displayPath")) and b["f"].get("displayRadius")],
-                "attacks": attacks, "pets": pets, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
+                "attacks": attacks, "pets": pets, "leash_rotate": leash_rotate, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
                 "round_start_rate": round_start_rate, "vigilante": vigilante, "bank": bank, "supports": supports,
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
                 # SpiritOfTheForestModel (Druid x-x-4+): vines along the track; each zone's
@@ -2789,6 +2812,10 @@ def main():
                 "credit_parent": any(b["type"] == "CreditPopsToParentTowerModel" for b in bs),
                 "id": f.get("baseId") or f["_name"],
                 "with_parent": any(b["type"] == "TowerExpireOnParentDestroyedModel" for b in bs),
+                # BeastHandlerPetModel.canMove (+0x34: its TSM move button) and rotateWhenMoved (+0x35:
+                # BeastHandlerLeash.ApplyCustomInputData @0x180cfa7d0 turns it to the new point).
+                "can_move": any(b["type"] == "BeastHandlerPetModel" and b["f"].get("canMove") for b in bs),
+                "rotate_moved": any(b["type"] == "BeastHandlerPetModel" and b["f"].get("rotateWhenMoved") for b in bs),
                 "on_destroy": on_destroy,
                 # TowerModel.ignoreTowerForSelection: Phoenixes can't be clicked; Sentries can.
                 "selectable": not f.get("ignoreTowerForSelection", False),

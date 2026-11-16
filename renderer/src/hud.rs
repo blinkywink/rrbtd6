@@ -58,6 +58,8 @@ pub enum Action {
     Target(TargetMode),
     /// "Set Target": the next click on the map sets the selected tower's aim point.
     SetPoint,
+    /// A Beast Handler move button (leash slot): pick the pet's new point.
+    MovePet(usize),
     /// Back to the default target (Mermonkey's Select Default).
     DefaultPoint,
     Close,
@@ -1231,16 +1233,24 @@ impl Hud {
             // Beast Handler (TSMThemeBeastHandler): a move button per leashed pet whose
             // BeastHandlerPetModel.canMove (Piranha, Microraptor; not the Gyrfalcon)
             // (UpdateMoveButtonVisibility, CanMovePet), and the select point button with the
-            // tower's SelectPointInput. STAND-IN: moving pets isn't simulated, so the buttons do
-            // nothing and show the prefab's icons and no cooldown.
+            // tower's SelectPointInput. UpdateFromSimInfo (@0x180b8d9b0): a button is interactable
+            // 120 frames after its last move; meanwhile its cooldownFade fills 1 - elapsed / 120.
+            // Clicked, the pet's DeployInput (Game::move_pet) asks for a point.
             if theme_id == "BeastHandler" {
-                let pets = game.tier(t).map_or(&[][..], |x| &x.pets[..]);
-                let moves = |i: usize| pets.get(i).is_some_and(|p| p.name != "Gyrfalcon");
                 let g = format!("{th}/ButtonGroup");
-                self.tsm.set_active(&format!("{g}/MoveButton"), moves(0));
-                self.tsm.set_active(&format!("{g}/MoveButtonSecond"), moves(1));
-                self.tsm.set_active(&format!("{g}/MoveButton/CooldownEffect"), false);
-                self.tsm.set_active(&format!("{g}/MoveButtonSecond/CooldownEffect"), false);
+                for (slot, key) in [(0usize, "MoveButton"), (1, "MoveButtonSecond")] {
+                    let state = game.pet_move_state(t, slot);
+                    let b = format!("{g}/{key}");
+                    self.tsm.set_active(&b, state.is_some());
+                    let fill = state.unwrap_or(0.0);
+                    self.tsm.set_active(&format!("{b}/CooldownEffect"), fill > 0.0);
+                    if let Some(i) = self.tsm.find_mut(&format!("{b}/CooldownEffect")).and_then(|n| n.img.as_mut()) {
+                        i.fill_amount = fill;
+                    }
+                    if state == Some(0.0) && self.tsm.clicked(&b) {
+                        out.push(Action::MovePet(slot));
+                    }
+                }
                 let select = format!("{g}/SelectPointButton");
                 self.tsm.set_active(&select, game.uses_point(t));
                 if game.uses_point(t) && self.tsm.clicked(&select) {
