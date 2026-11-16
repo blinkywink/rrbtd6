@@ -1148,6 +1148,32 @@ static class SegProbeRangePatch
     }
 }
 
+// TargetSupplierSharedRange.PressTheGridsTogether (with segprobe): "SP frame | min:inRange:canSeeCamo:lineOfSight ..."
+// (read-only postfix: the pressed list Advanced Intel's attack targets on).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.TargetSupplierSharedRange), "PressTheGridsTogether")]
+static class SharedPressProbe
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.TargetSupplierSharedRange __instance,
+        Il2CppSystem.Collections.Generic.List<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.PathSegmentInRange> __result)
+    {
+        var w = Recorder.Out;
+        var sc = Recorder.Sc;
+        if (sc == null || !sc.segprobe) return;
+        try
+        {
+            var sb = new StringBuilder($"SP {Recorder.Recorded} |");
+            if (__result != null)
+                for (int i = 0; i < __result.Count; i++)
+                {
+                    var r = __result[i];
+                    sb.Append($" {Recorder.F(r.segment.min)}:{(r.inRange ? 1 : 0)}{(r.canSeeCamo ? 1 : 0)}{(r.lineOfSight ? 1 : 0)}");
+                }
+            if (w != null) w.WriteLine(sb.ToString()); else Recorder.PreLines.Add(sb.ToString());
+        }
+        catch (System.Exception e) { w?.WriteLine($"SP err {e.GetType().Name} {e.Message}"); }
+    }
+}
+
 // Area.Intersects(from, to, ...) returning true (with segprobe): "AI frame area from(x y) to(x y) ip(x y) edge p0 p1".
 [HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Track.Area), nameof(Il2CppAssets.Scripts.Simulation.Track.Area.Intersects),
     new[] { typeof(Il2CppAssets.Scripts.Simulation.SMath.Vector2), typeof(Il2CppAssets.Scripts.Simulation.SMath.Vector2),

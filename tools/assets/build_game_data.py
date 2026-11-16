@@ -1667,6 +1667,11 @@ def main():
             # in range of any other tower.
             shared_range = any(x and x["type"].endswith("SharedRangeModel") and x["f"].get("isSharedRangeEnabled")
                                for x in items(af["behaviors"]))
+            # TargetSupplierSharedRange.PressTheGridsTogether (VERIFIED-DECOMP @0x180df0320): a pressed
+            # segment has line of sight only with shareLineOfSight or the attack's own sight of it.
+            shared_los = any(x and x["type"].endswith("SharedRangeModel") and x["f"].get("isSharedRangeEnabled") and x["f"].get("shareLineOfSight")
+                             for x in items(af["behaviors"]))
+            # (Silas's shared-range attacks also have specificTowerType IceMonkey: NOT exported yet.)
             # RotateToTargetModel.additionalRotation: the tower turns this far past its target
             # (Buccaneer: -90, broadside on).
             extra_rotation = next((x["f"].get("additionalRotation", 0) for x in items(af["behaviors"])
@@ -1702,7 +1707,7 @@ def main():
             if grap is not None:
                 require_tags = list(require_tags) + ["Moabs"]
                 exclude_tags = list(exclude_tags) + ["Boss"] + (["Bad"] if grap.get("badHooksRequired", 0) > 100 else [])
-            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range,
+            return {"hand": hand, "necro": necro, "brew": attack_brew, "pool_fallback": pool_fallback, "min_range": min_range, "extra_rotation": extra_rotation, "shared_range": shared_range, "shared_los": shared_los,
                     # (Attack.InitTargetPathSegments @0x180daeef0: with addsToSharedGrid its segments in
                     # range (sharedGridRange when it is non-zero, else its range) go to the
                     # SharedTowerGrid that Advanced Intel's TargetSupplierSharedRange presses.)
@@ -2239,20 +2244,24 @@ def main():
               for k2, m2, a2 in extra:
                   supports.append(dict(supports[-1], kind=k2, mult=m2, add=a2, id=supports[-1]["id"] + "_" + k2))
               # MonkeySubParagonSupportModel (Navarch): Filter (@0x180d3dee0) takes a Tower whose
-              # baseId is MonkeySub or whose TowerModel IsHero. INFERRED from recording
-              # map_lotusisland_sub_paragon_quincy_r40 (its MutatorTower.Mutate isn't located): a hero's
-              # projectiles get damage x (1 + heroBonusDamageMultiplier) and pierce x (1 +
-              # heroBonusPierceMultiplier), its weapons' rate x heroRateMultiplier (Quincy: 1 -> 6, 3 -> 9,
-              # 57 -> 74 frames); a Sub's the same form with the sub multipliers (not recorded yet).
+              # baseId is MonkeySub or whose TowerModel IsHero. Its MutatorTower.Mutate
+              # (VERIFIED-DISASM @0x180d45640): every ProjectileModel's DamageModel not named
+              # FirstStrike gets damage += damage x (hero ? heroBonusDamage : subBonusDamage)
+              # (DamageModifierForTag additives untouched), every projectile pierce += pierce x
+              # (hero ? heroBonusPierce : subBonusPierce); a hero (HeroModel) also gets xpScale x
+              # heroXpMultiplier and every weapon SetRate(rate x heroRateMultiplier); Subs no rate.
+              # Kind "subparagon": mult = the damage bonus, add = the pierce bonus.
               if b["type"] == "MonkeySubParagonSupportModel" and supports and supports[-1]["kind"] == "subparagon":
                   base = supports.pop()
-                  for who, d, pc, r in (("sub", sf.get("subBonusDamageMultiplier", 0.0), sf.get("subBonusPierceMultiplier", 0.0), None),
-                                        ("hero", sf.get("heroBonusDamageMultiplier", 0.0), sf.get("heroBonusPierceMultiplier", 0.0), sf.get("heroRateMultiplier", 1.0))):
+                  for who, d, pc, r, xpm in (("sub", sf.get("subBonusDamageMultiplier", 0.0), sf.get("subBonusPierceMultiplier", 0.0), None, None),
+                                             ("hero", sf.get("heroBonusDamageMultiplier", 0.0), sf.get("heroBonusPierceMultiplier", 0.0),
+                                              sf.get("heroRateMultiplier", 1.0), sf.get("heroXpMultiplier", 1.0))):
                       filt = {"bases": ["MonkeySub"], "heroes": False} if who == "sub" else {"bases": [], "heroes": True}
-                      supports.append(dict(base, kind="damage_mult", mult=1.0 + d, add=0.0, id="SubParagon_" + who + "_damage", **filt))
-                      supports.append(dict(base, kind="pierce_xm", mult=1.0 + pc, add=0.0, id="SubParagon_" + who + "_pierce", **filt))
+                      supports.append(dict(base, kind="subparagon", mult=d, add=pc, id="SubParagon_" + who, **filt))
                       if r is not None:
                           supports.append(dict(base, kind="rate", mult=r, add=0.0, id="SubParagon_" + who + "_rate", **filt))
+                      if xpm is not None:
+                          supports.append(dict(base, kind="hero_xp", mult=xpm, add=0.0, id="SubParagon_" + who + "_xp", **filt))
           return supports
         supports = supports_of(items(f["behaviors"]))
         tiers = items(f["tiers"])

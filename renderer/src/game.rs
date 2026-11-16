@@ -3050,6 +3050,10 @@ pub struct Buff {
     pub pierce_add: f32,
     /// CallToArmsMutator: every projectile's pierce x this, sub-projectiles too.
     pub pierce_x: f32,
+    /// MonkeySubParagonSupport's MutatorTower (VERIFIED-DISASM @0x180d45640): (damage bonus,
+    /// pierce bonus, stacks); every projectile, sub-projectiles too: a DamageModel not named
+    /// FirstStrike damage += damage x bonus (tag additives untouched), pierce += pierce x bonus.
+    pub sub_paragon: Option<(f32, f32, u32)>,
     /// Shinobi Tactics: (multiplier, stacks); each stack adds (1 - multiplier) x the original
     /// pierce to every projectile.
     pub pierce_pct: Option<(f32, u32)>,
@@ -3095,6 +3099,7 @@ impl Default for Buff {
             vig_range: 0.0,
             rate_mult: 1.0,
             pierce_x: 1.0,
+            sub_paragon: None,
             pierce_add: 0.0,
             pierce_pct: None,
             speed_mult: 0.0,
@@ -3235,7 +3240,7 @@ impl Buff {
     /// The projectile as fired under these buffs (None if unchanged). Damage-type support reaches
     /// sub-projectiles too (explosions); pierce and speed only the shot itself.
     fn projectile(&self, p: &Proj) -> Option<Proj> {
-        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_x == 1.0 && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.speed_add == 0.0 && self.ricochet.is_none() && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
+        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_x == 1.0 && self.sub_paragon.is_none() && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.speed_add == 0.0 && self.ricochet.is_none() && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
             return None;
         }
         let mut q = p.clone();
@@ -3281,6 +3286,23 @@ impl Buff {
                 }
             }
             px(&mut q, self.pierce_x);
+        }
+        if let Some((dm, pm, n)) = self.sub_paragon {
+            fn sp(p: &mut Proj, dm: f32, pm: f32) {
+                if p.damage_model && !p.first_strike_dm {
+                    p.damage += p.damage * dm;
+                }
+                p.pierce += p.pierce * pm;
+                for c in &mut p.on_contact {
+                    sp(&mut c.projectile, dm, pm);
+                }
+                for e in &mut p.on_exhaust {
+                    sp(&mut e.projectile, dm, pm);
+                }
+            }
+            for _ in 0..n {
+                sp(&mut q, dm, pm);
+            }
         }
         q.radius *= self.radius_mult;
         if let Some(fc) = &self.fan {
@@ -8200,7 +8222,19 @@ impl Game {
         if x <= 0.0 {
             return;
         }
-        self.towers[t].xp += x * h.xp_scale;
+        // MonkeySubParagonSupport's MutatorTower (VERIFIED-DISASM @0x180d45640): a hero in a
+        // Navarch's range has HeroModel.xpScale x heroXpMultiplier (recording
+        // map_lotusisland_sub_paragon_quincy_r40, HX at rt 904: 1220 xp -> four levels).
+        let mut scale = h.xp_scale;
+        let first = self.towers[t].placed_step + 1 >= self.steps as u64;
+        for (sp, n) in self.supports_at_ex(self.towers[t].def, self.towers[t].pos, Some(t), first) {
+            if sp.kind == "hero_xp" {
+                for _ in 0..n {
+                    scale *= sp.mult;
+                }
+            }
+        }
+        self.towers[t].xp += x * scale;
         let mut leveled = false;
         while let Some(next) = h.levels.iter().find(|l| l.level == self.towers[t].tiers[0] + 1) {
             if self.towers[t].xp < next.xp {
@@ -13385,8 +13419,7 @@ impl Game {
                             }
                         }
                         "pierce_pct" => b.pierce_pct = Some((sp.mult, n)),
-                        // (Sub Paragon support, INFERRED: every projectile's pierce x mult.)
-                        "pierce_xm" => b.pierce_x *= sp.mult.powi(n as i32),
+                        "subparagon" => b.sub_paragon = Some((sp.mult, sp.add, n)),
                         "speed" => b.speed_mult += sp.mult * k,
                         "speed_add" => b.speed_add += sp.add * k,
                         "ricochet" => b.ricochet = sp.retarget.clone(),
@@ -14725,7 +14758,7 @@ impl Game {
                 sor.hash(&mut h);
             }
             if let Some(b) = self.buffs.get(t) {
-                (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_x.to_bits(), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.vig_range.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits(), b.speed_add.to_bits(), b.ricochet.is_some()).hash(&mut h);
+                (b.rate_mult.to_bits(), b.pierce_add.to_bits(), b.pierce_x.to_bits(), b.sub_paragon.map(|(d, p, n)| (d.to_bits(), p.to_bits(), n)), b.pierce_pct.map(|(m, n)| (m.to_bits(), n)), b.range_mult.to_bits(), b.range_add.to_bits(), b.vig_range.to_bits(), b.damage_add.to_bits(), b.speed_mult.to_bits(), b.speed_add.to_bits(), b.ricochet.is_some()).hash(&mut h);
             }
             h.finish()
         };
@@ -16229,15 +16262,15 @@ impl Game {
                     // TargetSupplierSharedRange.GetTargets (VERIFIED-DECOMP @0x180deff90) sets the attack's
                     // visible segments to PressTheGridsTogether's (@0x180df0320) and takes
                     // Attack.GetVisibleTargets: a bloon counts by its segment, not its own spot and
-                    // radius. INFERRED: a segment another tower has in range (its point within that
-                    // tower's range, the line from it clear; recording
-                    // map_lotusisland_sub_paragon_quincy_r40 rt 577: no shot at a MOAB 70.8 from Quincy's
-                    // 50, whose segment is out of it; bloons there exact all 3600 frames). OPEN: the
-                    // game's first shot at rt 844 (segment 65, 36.8 from Quincy) where this allows 817
-                    // (segment 63, 49.1): PressTheGridsTogether keeps a segment only when some valid
-                    // tower's PathSegmentInRange there has inRange (+0x18; camo +0x19, line of sight
-                    // +0x1a with shareLineOfSight), so Quincy's inRange is stricter than this.
-                    let shared_in = || seg_ok && seg_q.is_some_and(|sq| shared.iter().any(|&(q, rr, los)| (sq[0] - q[0]).powi(2) + (sq[1] - q[1]).powi(2) <= rr * rr && self.los_clear(los, q, sq)));
+                    // radius: a segment another tower has in range (its point within that tower's
+                    // range, the line from it clear; recording map_lotusisland_sub_paragon_quincy_r40
+                    // rt 577: no shot at a MOAB 70.8 from Quincy's 50, whose segment is out of it).
+                    // PressTheGridsTogether (VERIFIED-DECOMP @0x180df0320) walks the attack's own
+                    // full-sight segments: inRange when some grid entry there has inRange; line of
+                    // sight only when shareLineOfSight (+0x6b) or the attack's own entry has it, and
+                    // some grid entry has inRange and line of sight (SimRecorder SP lines: the Navarch
+                    // at (-112, 66) can't see segments 63 / 64, so its first shot is at 65, rt 844).
+                    let shared_in = || seg_ok && (attack.shared_los || seg_clear) && seg_q.is_some_and(|sq| shared.iter().any(|&(q, rr, los)| (sq[0] - q[0]).powi(2) + (sq[1] - q[1]).powi(2) <= rr * rr && self.los_clear(los, q, sq)));
                     if (!seg_in && !shared_in()) || dd < attack.min_range * attack.min_range {
                         continue;
                     }

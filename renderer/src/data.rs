@@ -1152,6 +1152,10 @@ pub struct Attack {
     /// any other tower count as in range.
     #[serde(default)]
     pub shared_range: bool,
+    /// Target*SharedRangeModel.shareLineOfSight: pressed segments take line of sight from the
+    /// grid alone (else also the attack's own sight of the segment).
+    #[serde(default)]
+    pub shared_los: bool,
     /// AttackModel.addsToSharedGrid / sharedGridRange (0: its own range).
     #[serde(default)]
     pub adds_shared: bool,
