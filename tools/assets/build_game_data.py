@@ -1790,7 +1790,14 @@ def main():
                                         "bad": tg.get("badHooksRequired", 9999999), "mult": mt.get("multiplier", 1.0),
                                         "add": mt.get("additive", 0.0), "exclude": excl,
                                         "turn": next((y["f"].get("additionalRotation", 0) for y in items(a["f"].get("behaviors")) if y and y["type"] == "RotateToTargetModel"), 0),
-                                        "eject": next(([w["f"].get("ejectX", 0.0), w["f"].get("ejectY", 0.0), w["f"].get("ejectZ", 0.0)] for w in items(a["f"].get("weapons")) if w), [0.0, 0.0, 0.0])}
+                                        "eject": next(([w["f"].get("ejectX", 0.0), w["f"].get("ejectY", 0.0), w["f"].get("ejectZ", 0.0)] for w in items(a["f"].get("weapons")) if w), [0.0, 0.0, 0.0]),
+                                        # CreateRopeEffectModel on the hook (display only): [chain prefab,
+                                        # hook prefab, spriteSpacing, spriteOffset].
+                                        "rope": next(([prefab_name(y["f"].get("assetId")), prefab_name(y["f"].get("endAssetId")),
+                                                       y["f"].get("spriteSpacing", 12.0), y["f"].get("spriteOffset", 12.0)]
+                                                      for w in items(a["f"].get("weapons")) if w
+                                                      for y in items((deref(w["f"]["projectile"]) or {"f": {}})["f"].get("behaviors"))
+                                                      if y and y["type"] == "CreateRopeEffectModel"), None)}
                     if takedown:
                         out["takedown"] = takedown
                 if x["type"] == "ActivateAttackModel" and not takedown:

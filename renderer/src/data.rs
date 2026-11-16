@@ -1413,6 +1413,9 @@ pub struct Takedown {
     /// FilterWithTagsModel (inclusive): tags never hooked.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// CreateRopeEffectModel (display only): chain prefab, hook prefab, spriteSpacing, spriteOffset.
+    #[serde(default)]
+    pub rope: Option<(Option<String>, Option<String>, f32, f32)>,
     /// The ability attack's RotateToTarget additionalRotation and its weapon's eject point.
     #[serde(default)]
     pub turn: f32,

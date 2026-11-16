@@ -42,6 +42,10 @@ effect names, model behaviours the data builder never reads).
   `toggle_fx`: the Wrath cyclone while active, the plain one otherwise): the plain one now loops on the
   Paragon, swapped by degree. STAND-IN: Primordial Wrath isn't simulated, so the Wrath cyclone never shows.
 
+- **MOAB Takedown hooks** (`CreateRopeEffectModel`, takedown `rope`): the hooks weren't drawn at all;
+  now chain links every 12 from 12 out along the tower-to-hook line and the hook at its end (Buccaneer
+  x-4-x MonkeyPirateHook, x-5-x PirateLordHook). STAND-IN: from the tower's centre, not its eject point.
+
 ## Audit entries that aren't gaps
 
 - `CreateEffectOnExpireModel`: read for projectiles (`expire_fx`) and sub-towers (`expire_fx`); the

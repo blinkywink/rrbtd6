@@ -833,6 +833,8 @@ async fn game_main() {
     // Loaded when a projectile (or orbit) first shows them, not all at startup.
     let mut proj_displays: HashMap<String, ProjDisplay> = HashMap::new();
     let mut proj_tried: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // MOAB Takedown ropes' chain links and hooks (models/extra/<name>), loaded when first drawn.
+    let mut rope_models: HashMap<String, Option<render3d::Model>> = HashMap::new();
     async fn load_proj(dir: std::path::PathBuf) -> Option<ProjDisplay> {
         let _trace=load_work::Trace::new("projectile",&dir);
         if let Some(j) = std::fs::read_to_string(dir.join("layers.json")).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()) {
@@ -2809,6 +2811,38 @@ async fn game_main() {
                     if let Some(d) = display {
                         proj_displays.insert(n, d);
                     }
+                }
+            }
+            // MOAB / ZOMG Takedown hooks (CreateRopeEffectModel): chain links every spriteSpacing
+            // from spriteOffset along the line from the tower to the hook, and the hook at its end,
+            // facing along the line. STAND-IN: the chain leaves the tower's centre, not its eject.
+            for h in &game.hooks {
+                let Some(t) = game.towers.iter().position(|o| o.id == h.owner) else { continue };
+                let Some((chain, hook, spacing, offset)) = game.tier(t).and_then(|tr| tr.abilities.iter().find_map(|a| a.takedown.as_ref().and_then(|k| k.rope.clone()))) else { continue };
+                let from = game.towers[t].pos;
+                let (dx, dy) = (h.pos[0] - from[0], h.pos[1] - from[1]);
+                let len = (dx * dx + dy * dy).sqrt();
+                if len < 1e-3 {
+                    continue;
+                }
+                let heading = dy.atan2(dx);
+                let y = if h.z > 0.0 { h.z } else { 10.0 };
+                for name in [&chain, &hook].into_iter().flatten() {
+                    if !rope_models.contains_key(name) {
+                        let m = load_work::complete_asset(render3d::Model::load(&root.join("models").join("extra").join(name)));
+                        rope_models.insert(name.clone(), m);
+                    }
+                }
+                if let Some(Some(m)) = chain.as_ref().and_then(|c| rope_models.get(c)) {
+                    let mut d = offset;
+                    while d < len && spacing > 0.0 {
+                        let (x, z) = (from[0] + dx / len * d, from[1] + dy / len * d - y * tilt);
+                        m.draw_at([x, y, z], std::f32::consts::FRAC_PI_2 - heading, &mut scratch);
+                        d += spacing;
+                    }
+                }
+                if let Some(Some(m)) = hook.as_ref().and_then(|c| rope_models.get(c)) {
+                    m.draw_at([h.pos[0], y, h.pos[1] - y * tilt], std::f32::consts::FRAC_PI_2 - heading, &mut scratch);
                 }
             }
             for p in &game.projectiles {
