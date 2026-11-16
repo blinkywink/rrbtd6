@@ -11265,9 +11265,15 @@ impl Game {
             // a frame between rounds came in between).
             let timed_out = s.spec.lifespan > 0.0 && ((s.spec.lifespan * 60.0) as i64) <= self.round_clock - s.born;
             if timed_out || (round_end && s.spec.round_end) || rounds_up {
+                let air_destroy = s.spec.air_destroy_fx.clone();
                 if let Some((Some(fx), k)) = s.spec.expire_fx.clone() {
                     let p = self.towers[t].pos;
                     self.place_fx.push((p, fx, k));
+                }
+                // CreateEffectOnAirUnitDestroyModel: where its air unit is (drones), display only.
+                if let Some(fx) = air_destroy {
+                    let p = self.towers[t].air.as_ref().map_or(self.towers[t].pos, |a| a.pos);
+                    self.place_fx.push((p, fx, 1.0));
                 }
                 gone.push(t);
             }

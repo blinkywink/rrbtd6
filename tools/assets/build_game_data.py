@@ -2781,6 +2781,10 @@ def main():
                 "expire_fx": next(([prefab_name((deref(b["f"].get("effectModel")) or {}).get("f", {}).get("assetId")),
                                     (deref(b["f"].get("effectModel")) or {}).get("f", {}).get("scale", 1.0)]
                                    for b in bs if b["type"].endswith("CreateEffectOnExpireModel")), None),
+                # CreateEffectOnAirUnitDestroyModel (drones, the Gyrfalcon): an effect where its air unit
+                # goes. Display only.
+                "air_destroy_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))
+                                        for b in bs if b["type"] == "CreateEffectOnAirUnitDestroyModel"), None),
                 # OrbitingTowerModel (Adora's Ball of Light, Dark Phoenix): circles its parent.
                 "orbit_tower": next(({"radius": b["f"].get("radius", 0.0), "rate": b["f"].get("rotationDegreesPerFrame", 0.0), "offset": b["f"].get("offset", 0.0)}
                                      for b in bs if b["type"] == "OrbitingTowerModel"), None),

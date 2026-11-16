@@ -2714,6 +2714,9 @@ pub struct SubTowerSpec {
     pub place_fx: Option<(Option<String>, f32)>,
     #[serde(default)]
     pub expire_fx: Option<(Option<String>, f32)>,
+    /// CreateEffectOnAirUnitDestroyModel: the effect where its air unit goes (display only).
+    #[serde(default)]
+    pub air_destroy_fx: Option<String>,
 }
 
 /// OverclockModel: the picked tower's weapon intervals x `rate` (a Village's range x

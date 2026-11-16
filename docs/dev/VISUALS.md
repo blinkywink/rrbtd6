@@ -62,6 +62,8 @@ effect names, model behaviours the data builder never reads).
 - Monkey Fan Club (Dart 040 / 050): the transformation cloud on each fan as it turns and as it turns back
   (effectModel, endDisplayModel), and the pulse circles on each fan meanwhile (effectId). Not yet: the leader's
   own pulse (effectLeaderId, exported).
+- Drones (Drone, Drone Swarm, Gyrfalcon) play their `CreateEffectOnAirUnitDestroyModel` effect (SellEffect)
+  where the air unit is when they expire (sub-tower `air_destroy_fx`).
 - Heli x-3-x+ keeps Downdraft's gust on its helicopter (`CreateEffectOnAirUnitModel`, tier `air_fx`).
 - Beast Handler pets now play their tier's BeastUpgradeFx when the handler upgrades (sub-towers' own
   `upgrade_fx`). (`TranceGroundEffect`, Mermonkey x-x-3:
