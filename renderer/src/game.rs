@@ -6675,11 +6675,17 @@ impl Game {
     /// through 292-333 of the 276.6-345.8 flagged tunnel and lose it only from 334.3 (HANDOFF).
     #[allow(dead_code)]
     fn bloon_nontarget(&self, b: &Bloon) -> bool {
+        self.bloon_nontarget_at(b, b.dist)
+    }
+
+    /// `bloon_nontarget` as Bloon.Process left it at distance `dist` (a bloon that hasn't moved
+    /// yet this frame at the asker's turn: its frame-start distance).
+    fn bloon_nontarget_at(&self, b: &Bloon, dist: f32) -> bool {
         let Some((ds, inv, minv)) = self.track_inv.get(b.path as usize) else { return false };
         if ds.is_empty() {
             return false;
         }
-        let k = ds.partition_point(|&d| d <= b.dist).saturating_sub(1);
+        let k = ds.partition_point(|&d| d <= dist).saturating_sub(1);
         let flags = if self.defs[b.kind].is_moab { minv } else { inv };
         // (Point i AND i + 1, DistanceToExtraPointInfoBloon @0x180f6dc40: recording
         // map_kartsndarts_dart_205_r40, a Ceramic at 344.99 between the tunnel's last flagged point
@@ -7554,6 +7560,15 @@ impl Game {
         // (recording ninja_032 rt 3175: a shuriken passes over a Black blown back from its spot).
         // (A tranced one still is: recording mermonkey_004 rt 604, a trident on a totem's MOAB.)
         if b.wind.is_some() || b.held {
+            return false;
+        }
+        // (Nor a nonTargetable one, as BloonManager's targetting skips it: recording
+        // map_quad_ace_204_r40 rt 340, Neva-Miss darts pass the bloons in Quad's tunnels.)
+        // (A bloon made after the projectile hasn't moved yet at its turn: its flag from its
+        // frame-start distance; rt 432, a Black at 212.885 just out of TopToBottom's stretch
+        // was still in it as the dart looked.)
+        let nd = if b.born > pr.born { b.prev_dist } else { b.dist };
+        if !pr.spec.ignore_nontarget && self.bloon_nontarget_at(b, nd) {
             return false;
         }
         // (A bloon made after the projectile hasn't moved yet when its TrackTarget looks: its
