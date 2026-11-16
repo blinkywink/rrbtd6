@@ -3637,6 +3637,8 @@ pub struct Game {
     track_seg_inv: Vec<Vec<u8>>,
     /// Per track: Path.pointInfos rotations (every CacheDistance), when imported.
     track_rot: Vec<Vec<f32>>,
+    /// Each track's quick-table point.z (`MapPath.quick_z`).
+    track_qz: Vec<Vec<f32>>,
     /// Per track: the tracks its entry splitter routes back to, and that splitter's index.
     track_entry: Vec<(Vec<usize>, usize)>,
     spawn_tracks: Vec<usize>,
@@ -5576,7 +5578,7 @@ impl Game {
         // name).
         let mut tracks: Vec<crate::data::MapPath> = d.map.paths.iter().filter(|p| p.active && p.points.len() > 1).cloned().collect();
         if tracks.is_empty() {
-            tracks.push(crate::data::MapPath { name: String::new(), active: true, id: 0, entry: Vec::new(), exit: Vec::new(), exit_splitter: 0, entry_splitter: 0, points: d.map.path.clone(), dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), quick_rot: Vec::new(), no_target: Vec::new(), spawn: None, leak: None, until_leak: None, invuln: Vec::new(), moab_invuln: Vec::new(), hidden: false });
+            tracks.push(crate::data::MapPath { name: String::new(), active: true, id: 0, entry: Vec::new(), exit: Vec::new(), exit_splitter: 0, entry_splitter: 0, points: d.map.path.clone(), dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), quick_rot: Vec::new(), quick_z: Vec::new(), no_target: Vec::new(), spawn: None, leak: None, until_leak: None, invuln: Vec::new(), moab_invuln: Vec::new(), hidden: false });
         }
         // Reverse mode (ReverseModel): bloons run every track end to start, so each track is
         // flipped and its splitters swap roles; the old end tracks become the spawn tracks.
@@ -5584,6 +5586,8 @@ impl Game {
             for t in &mut tracks {
                 // (The imported spawn / leak distances are the forward path's.)
                 (t.spawn, t.leak, t.until_leak) = (None, None, None);
+                // (STAND-IN: the forward quick table's heights don't fit the reversed path.)
+                t.quick_z.clear();
                 t.points.reverse();
                 std::mem::swap(&mut t.entry, &mut t.exit);
                 std::mem::swap(&mut t.entry_splitter, &mut t.exit_splitter);
@@ -5831,6 +5835,7 @@ impl Game {
             track_inv: tracks.iter().map(Game::path_inv).collect(),
             track_segs: tracks.iter().map(|p| Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick).segments()).collect(),
             track_rot: tracks.iter().map(|p| p.quick_rot.clone()).collect(),
+            track_qz: tracks.iter().map(|p| p.quick_z.clone()).collect(),
             track_seg_ok: tracks.iter().map(Game::path_seg_ok).collect(),
             track_seg_inv: tracks.iter().map(Game::path_seg_invs).collect(),
             tracks: tracks.iter().map(|p| Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick)).collect(),
@@ -6595,6 +6600,10 @@ impl Game {
             // is set; recording alch_005 rt 31, a potion at a MOAB spawned at 30 arcs up to 120.)
             b.height = if moab { 120.0 } else { 20.0 };
         }
+        if let Some(i) = self.bloons.len().checked_sub(1) {
+            let b = &self.bloons[i];
+            self.bloons[i].height = self.track_height(b.path, b.dist, moab);
+        }
         id
     }
 
@@ -6693,6 +6702,15 @@ impl Game {
     /// skips it). NOT YET USED: recording map_kartsndarts_dart_205_r40 has the 2-0-5 hold a Ceramic
     /// through 292-333 of the 276.6-345.8 flagged tunnel and lose it only from 334.3 (HANDOFF).
     #[allow(dead_code)]
+    /// Bloon.Position.z on the track (Path.DistanceToPointInfoBloon @0x180f6e030): the quick
+    /// table's point.z at its distance plus 20, 120 for MOAB-class (recording
+    /// map_mesa_sky_024_r40: a Black at 69.3 on Mesa's 49.3 track).
+    fn track_height(&self, path: u8, dist: f32, moab: bool) -> f32 {
+        let base = if moab { 120.0 } else { 20.0 };
+        let Some(qz) = self.track_qz.get(path as usize).filter(|v| !v.is_empty()) else { return base };
+        base + qz[((dist / CACHE_DISTANCE) as u32 as usize).min(qz.len() - 1)]
+    }
+
     fn bloon_nontarget(&self, b: &Bloon) -> bool {
         self.bloon_nontarget_at(b, b.dist)
     }
@@ -18728,7 +18746,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     fn move_bloon_track(&mut self, i: usize, zones: &[([f32; 2], f32, crate::data::Zone)], shoves: &[([f32; 2], crate::data::MoabShove)], leak_voice: &mut bool) -> bool {
         // (Bloon.Move sets it; a carried bloon doesn't move on the track, so it keeps its z.)
         if self.bloons[i].wind.is_none() {
-            self.bloons[i].height = if self.defs[self.bloons[i].kind].is_moab { 120.0 } else { 20.0 };
+            let b = &self.bloons[i];
+            self.bloons[i].height = self.track_height(b.path, b.dist, self.defs[b.kind].is_moab);
         }
         let mut mult = self.bloons[i].speed_mult(&self.defs[self.bloons[i].kind]);
         if mult > 0.0 && !zones.is_empty() {

@@ -492,6 +492,10 @@ pub struct MapPath {
     /// QuickPointInfo.rotation per cache step (game frame, degrees; imported).
     #[serde(default)]
     pub quick_rot: Vec<f32>,
+    /// Path.pointInfos' point.z per cache step (imported; empty: 0): a bloon's Position.z is it
+    /// plus 20 (120 for MOAB-class).
+    #[serde(default)]
+    pub quick_z: Vec<f32>,
     /// PointInfo.disablePathTargeting per point (imported from the game's map dump).
     #[serde(default)]
     pub no_target: Vec<bool>,
@@ -632,6 +636,9 @@ pub struct Upgrade {
 
 #[derive(Deserialize, Clone)]
 pub struct Tier {
+    /// CreateEffectOnAirUnitModel: an effect kept on the tower's air unit (display only).
+    #[serde(default)]
+    pub air_fx: Option<String>,
     /// CreateEffectOnUpgradeModel: the effect this tier plays when bought (display only).
     #[serde(default)]
     pub upgrade_fx: Option<String>,

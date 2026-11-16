@@ -2504,6 +2504,10 @@ def main():
                 # Handler's BeastUpgradeFx, Etienne's radar pulse; most towers the generic ones).
                 "upgrade_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))
                                     for b in items(f["behaviors"]) if b and b["type"] == "CreateEffectOnUpgradeModel"), None),
+                # CreateEffectOnAirUnitModel: an effect kept on the tower's air unit (Heli x-3-x+'s
+                # DowndraftGust). Display only.
+                "air_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))
+                                for b in items(f["behaviors"]) if b and b["type"] == "CreateEffectOnAirUnitModel"), None),
                 "range_links": [[prefab_name(b["f"].get("displayPath")), b["f"].get("displayRadius", 0.0)]
                                 for b in items(f["behaviors"]) if b and b["type"] == "LinkDisplayScaleToTowerRangeModel"
                                 and prefab_name(b["f"].get("displayPath")) and b["f"].get("displayRadius")],

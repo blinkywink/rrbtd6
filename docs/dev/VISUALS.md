@@ -57,6 +57,7 @@ effect names, model behaviours the data builder never reads).
 
 - `MalevolenceFx` / `MalevolenceSpellCast` (Corvus) exported to effects/, not drawn: the clone doesn't
   simulate the Malevolence spell (its display shows while that attack isn't paused).
+- Heli x-3-x+ keeps Downdraft's gust on its helicopter (`CreateEffectOnAirUnitModel`, tier `air_fx`).
 - Beast Handler pets now play their tier's BeastUpgradeFx when the handler upgrades (sub-towers' own
   `upgrade_fx`). (`TranceGroundEffect`, Mermonkey x-x-3:
   a weapon's EjectEffectModel, played per shot; now at range / displayRadius too.)

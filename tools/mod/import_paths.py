@@ -99,6 +99,9 @@ def load_dump(path):
             cur.setdefault("quick", []).extend((float(f[2]), -float(f[3])))
             # QuickPointInfo.rotation (degrees, game frame): a bloon's rotation on the path.
             cur.setdefault("quick_rot", []).append(float(f[5]))
+            # Its point.z: Path.DistanceToPointInfoBloon adds the bloon's 20 (or 120) to it for
+            # Bloon.Position.z (Mesa's raised track: 49.3).
+            cur.setdefault("quick_z", []).append(float(f[4]))
     return paths
 
 
@@ -121,6 +124,10 @@ def patch(m, dumped):
             m["paths"][best]["quick"] = dp["quick"]
         if dp.get("quick_rot"):
             m["paths"][best]["quick_rot"] = dp["quick_rot"]
+        if any(dp.get("quick_z", [])):
+            m["paths"][best]["quick_z"] = dp["quick_z"]
+        else:
+            m["paths"][best].pop("quick_z", None)
         if dp.get("no_target"):
             m["paths"][best]["no_target"] = dp["no_target"]
         for k in ("invuln", "moab_invuln"):
