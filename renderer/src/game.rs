@@ -19139,6 +19139,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             if (b.unplaced || (self.phase == 0 && b.born >= now4)) && b.wind.is_none() {
                 continue;
             }
+            // (BloonManager.GetClosestTarget @0x180fc9bf0 skips a nonTargetable one: recording
+            // map_kartsndarts_quincy_l10_r40 rt 1069, Quincy's arrows find no bounce in the tunnel.)
+            if self.bloon_nontarget(b) {
+                continue;
+            }
             // (Path.Process files the bloons after the CollisionChecker: in the collision pass a
             // bloon is still on the segment of its distance before its latest move; later in the
             // frame, on its frame-start one (recordings quincy_r04 rt 649 / boomerang_500).)

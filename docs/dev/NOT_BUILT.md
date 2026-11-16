@@ -79,6 +79,30 @@ under the tier "Paragon". The ones only Paragons have show where they differ mos
   `MonkeySubParagonSupportModel`), Spike Factory (`SpikeaggedonModel`, `SpikeParagonDamageZoneModel`), Druid
   (`PrimordialWrathModel`), Boomerang (`OverchargeModel`), Tack (`EruptionModel`), Sniper (its ability and
   `TargetSniperParagonTargetingModel`), Buccaneer (`MultiHookManagerModel`).
+- **Primordial Wrath** (Druid Paragon; research 2026-11-16, decompiles in research/dumps/decomp/PrimordialWrath/):
+  a toggle (`PrimordialWrath.active` +0x88). CanUseAbility (@0x180e4f000): always while active, else when the
+  owner's cash >= `cashPerSecondMin`. Process (@0x180e4f980), only while active and rounds are on: cash below
+  `cashPerSecondMin` turns it off (vtable 0x8c8); else every 61 frames (`depletionTimer` reaches 0x3d) removes
+  cash x `depletionPercent` clamped to [`cashPerSecondMin`, `cashPerSecondMax`] (Simulation.RemoveCash, type 2).
+  Activate (@0x180e4e1b0) flips `active`, plays `wrathActiveSound` / `wrathInactiveSound`. Turning on: spawns
+  `effectTowerModel` at the tower (Simulation.SpawnEffect), adds `buffMutator` to the tower
+  (Tower.AddParagonMutator), creates the `cashModZone` behaviour (range delegate, upgrade hooks), resets
+  `depletionTimer`, then each child tower (TowerManager.GetChildTowers: the trees, `treeSubtowerId`) gets
+  `effectSubtowerModel` and `subTowerMutator`. Turning off: removes `buffMutator`, destroys the zone, spawns the
+  `effectEnd*` models and removes the sub-tower mutators. The mutators carry `wrathProjectileDisplay` /
+  `wrathSubtowerProjectileDisplay` and the buffs (`rangeMultiplier`, `attackSpreadMultiplier`,
+  `damageMultiplierPerThreshold` per `buffRbeThreshold` RBE, + `extraRbePerBossSkull`, up to `maxMultiplier`);
+  AddDebuff (@0x180e4ef30) gives towers in its zone (`InitializeZone` @0x180e4f680, `ZoneRange`) the
+  `cashGenMutator` (a Paragon mutator on paragons). Display: its ToggleEffectWhileAbilityActiveModel already
+  draws the inactive cyclone (docs/dev/VISUALS.md); the Wrath cyclone needs `active`.
+- **Corvus' spellbook** (research 2026-11-16, decompiles in research/dumps/decomp/Malevolence/): the clone has
+  no Corvus spells. Malevolence is a continuous spell (Simulation.Corvus.Spells.Continuous.Malevolence) run by
+  the player's CorvusManager: state (+0x78) 1 = starting, 2 = paused, 3 = toggled off, 4 = running. ToggleOn
+  (@0x180fbe6a0) has Corvus absorb a spirit (TriggerCorvusToAbsorbSpirit), cancels the other continuous spell
+  (CancelContinuousSpell) and unpauses its attacks; ToggleOff (@0x180fbe610) releases the spirit; Process
+  (@0x180fbe560) pauses the spell attacks (PauseAttacks @0x180fbe1c0) when CorvusManager.IsSpellActive says
+  it isn't. Its display `MalevolenceFx` (exported) is a LinkDisplayScaleToTowerRange display with
+  hideIfAttackPausedId "Malevolence": shown, range-scaled, while that attack runs.
 
 ## Trophy Store and small gaps
 
