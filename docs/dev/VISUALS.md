@@ -55,7 +55,10 @@ effect names, model behaviours the data builder never reads).
 
 ## Left
 
-- `MalevolenceFx` (Corvus) not exported (no prefab path found). (`TranceGroundEffect`, Mermonkey x-x-3:
+- `MalevolenceFx` / `MalevolenceSpellCast` (Corvus) exported to effects/, not drawn: the clone doesn't
+  simulate the Malevolence spell (its display shows while that attack isn't paused).
+- Beast Handler pets now play their tier's BeastUpgradeFx when the handler upgrades (sub-towers' own
+  `upgrade_fx`). (`TranceGroundEffect`, Mermonkey x-x-3:
   a weapon's EjectEffectModel, played per shot; now at range / displayRadius too.)
 - Paragon degree displays (`ParagonAssetSwapModel`), Beast Handler pet upgrade effects
   (`BeastUpgradeFx` on the pets), `ToggleEffectWhileAbilityActiveModel` (Druid), `MagicBarrierDisplayModel`

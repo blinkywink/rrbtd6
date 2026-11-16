@@ -12587,6 +12587,20 @@ impl Game {
             Some(n) => self.place_fx.push((self.towers[t].pos, n, 1.0)),
             None => self.upgrade_fx.push((self.towers[t].pos, fx)),
         }
+        // Its sub-towers' own tier upgrade effect, on each (Beast Handler's pets: BeastUpgradeFx).
+        let id = self.towers[t].id;
+        let pets: Vec<([f32; 2], String)> = self
+            .towers
+            .iter()
+            .filter(|o| o.sub.as_ref().is_some_and(|s| s.parent == id))
+            .filter_map(|o| {
+                let n = o.sub.as_ref()?.spec.tier.upgrade_fx.clone()?;
+                (!matches!(n.as_str(), "UpgradeEffect" | "UpgradeEffectTier5" | "HeroUpgradeEffect" | "HeroUpgradeEffectLv20")).then_some((o.pos, n))
+            })
+            .collect();
+        for (p, n) in pets {
+            self.place_fx.push((p, n, 1.0));
+        }
         true
     }
 
