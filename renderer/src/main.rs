@@ -762,6 +762,8 @@ async fn game_main() {
     // plays it through instead of freezing on its first frames.
     // The bool: a throw came while it played, so it plays again from its end.
     let mut attack_phase: HashMap<u64, (f32, f32, bool)> = HashMap::new();
+    // Per tower: (throws seen, attack_t last frame), to pick among several attack clips.
+    let mut throw_count: HashMap<u64, (u32, f32)> = HashMap::new();
     let mut prefetch = anim::Prefetch::default();
     let retire_predictions=std::env::var_os("RRBTD6_NO_PREDICTIVE_RETIRE").is_none();
     let mut prediction_key=None;
@@ -787,6 +789,13 @@ async fn game_main() {
     let mut air_models: HashMap<String, Option<anim::AnimModel>> = HashMap::new();
     // Monkey Fan Club fans by prefab name (models/fans/<name>).
     let mut fan_models: HashMap<String, Option<anim::AnimModel>> = HashMap::new();
+    // A tier's extra displays with a mesh (models/extra/<name>: Mermonkey's bases, Arctic Wind's
+    // snow, Superstorm's cloud), loaded when first seen; the meshless ones play as effects.
+    let mut extra_models: HashMap<String, Option<anim::AnimModel>> = HashMap::new();
+    // Live effect extras: tag -> (tower id, prefab name).
+    let mut extra_fx_live: HashMap<u64, (u64, String)> = HashMap::new();
+    // Per extra display name: (has a mesh in models/extra, has an effect in effects/), looked up once.
+    let mut extra_kind: HashMap<String, (bool, bool)> = HashMap::new();
     let outline_scale: f32 = std::env::var("RRBTD6_OUTLINE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.7);
     mark("tower index");
     // Loads tower def `d`'s base models if not yet loaded.
@@ -2266,6 +2275,14 @@ async fn game_main() {
                         air_models.insert(m.clone(), prefetch.load(&root.join("models").join("air").join(m)));
                     }
                 }
+                for ex in game.tier_of(t).map(|tr| tr.extras.as_slice()).unwrap_or(&[]) {
+                    let kind = *extra_kind.entry(ex.name.clone()).or_insert_with(|| {
+                        (root.join("models").join("extra").join(&ex.name).join("meta.json").is_file(), root.join("effects").join(&ex.name).join("effect.json").is_file())
+                    });
+                    if !extra_models.contains_key(&ex.name) && kind.0 {
+                        extra_models.insert(ex.name.clone(), prefetch.load(&root.join("models").join("extra").join(&ex.name)));
+                    }
+                }
                 if let Some(s) = &t.sub {
                     for m in [&s.spec.base, &s.spec.model].into_iter().flatten() {
                         if !sub_models.contains_key(m) {
@@ -2488,6 +2505,16 @@ async fn game_main() {
                 let mut pick = idle_picks.get(&t.id).copied().unwrap_or((usize::MAX, 0.0));
                 let attacked = t.attack_t < f32::MAX;
                 let prev_phase = attack_phase.get(&t.id).copied();
+                // Throws so far (a new one restarts attack_t): which attack clip plays when there
+                // are several (Artillery Battery's three, MAD's left and right).
+                let throws = {
+                    let e = throw_count.entry(t.id).or_insert((0u32, f32::MAX));
+                    if attacked && t.attack_t < e.1 {
+                        e.0 = e.0.wrapping_add(1);
+                    }
+                    e.1 = if attacked { t.attack_t } else { f32::MAX };
+                    e.0
+                };
                 let mut body_phase: Option<(f32, f32, bool)> = None;
                 // (seconds into the attack clip of length `dur`, throw pending): it runs on from
                 // the last frame; a throw restarts it only once it has finished, one that came
@@ -2504,7 +2531,7 @@ async fn game_main() {
                     if p >= dur && pending { (p - dur, false) } else { (p, pending) }
                 };
                 let last_pose = std::cell::Cell::new((0usize, 0.0f32));
-                let mut pose = |m: &mut anim::AnimModel, body: bool, yaw: f32| match m.attack_clip() {
+                let mut pose = |m: &mut anim::AnimModel, body: bool, yaw: f32| match m.attack_clip_n(throws) {
                     _ if shown(m).is_some() => {
                         let (c, at) = shown(m).unwrap();
                         last_pose.set((c, at));
@@ -2525,6 +2552,19 @@ async fn game_main() {
                         m.meshes(c, at, pos, yaw, outline_scale, blink, sel_outline)
                     }
                 };
+                // The tier's extra displays with a mesh (TowerModel DisplayModels besides its body):
+                // on the tower, idling, scaled to range / displayRadius where linked.
+                if let Some(tr) = game.tier_of(t) {
+                    for ex in &tr.extras {
+                        let Some(m) = extra_models.get_mut(&ex.name).and_then(|m| m.as_mut()) else { continue };
+                        let link = tr.range_links.iter().find(|(n, _)| *n == ex.name).map(|(_, r)| *r).filter(|r| *r > 0.0);
+                        let k = ex.scale * link.map_or(1.0, |r| game.range(ti) / r);
+                        m.tilt = (k != 1.0).then_some((0.0, 0.0, k));
+                        let c = m.idle_clip();
+                        m.draw(&shaders, c, t.idle_t, pos, yaw, outline_scale, false, None);
+                        m.tilt = None;
+                    }
+                }
                 let body_dir = (fan_model.is_none() && tier_model.is_some()).then(|| tier_index[t.def].get(&key).cloned()).flatten();
                 if let Some(m) = fan_model.or(tier_model).or(tower_anims[t.def].as_mut()) {
                     let (body, outline) = pose(m, true, yaw);
@@ -3041,6 +3081,44 @@ async fn game_main() {
                     on.insert(tw.id);
                     if while_fx_live.insert(tw.id, tw.pos).is_none() {
                         particles.spawn_tagged(fx, [tw.pos[0], 0.0, tw.pos[1]], WHILE_FX_TAG | tw.id);
+                    }
+                    // LinkDisplayScaleToTowerRangeModel: the loop at range / displayRadius (Inferno
+                    // Ring with more range).
+                    if let Some(r) = game.tier(t).and_then(|tr| tr.range_links.iter().find(|(n, _)| n == fx).map(|(_, r)| *r)).filter(|r| *r > 0.0) {
+                        particles.set_scale(WHILE_FX_TAG | tw.id, game.range(t) / r);
+                    }
+                }
+                // A tier's meshless extra displays (Mermonkey's bases, Hot Spot's glow): looping
+                // effects on the tower, scaled to range / displayRadius where linked.
+                {
+                    const EXTRA_FX_TAG: u64 = 1 << 60;
+                    let mut want: HashMap<u64, (u64, String, [f32; 2], f32)> = HashMap::new();
+                    for t in 0..game.towers.len() {
+                        let tw = &game.towers[t];
+                        let Some(tr) = game.tier(t) else { continue };
+                        for (k, ex) in tr.extras.iter().enumerate() {
+                            if !extra_kind.get(&ex.name).is_some_and(|k| !k.0 && k.1) {
+                                continue;
+                            }
+                            let link = tr.range_links.iter().find(|(n, _)| *n == ex.name).map(|(_, r)| *r).filter(|r| *r > 0.0);
+                            let scale = ex.scale * link.map_or(1.0, |r| game.range(t) / r);
+                            want.insert(EXTRA_FX_TAG | (tw.id << 4) | k as u64, (tw.id, ex.name.clone(), tw.pos, scale));
+                        }
+                    }
+                    let stale: Vec<u64> = extra_fx_live.iter().filter(|(tag, (_, n))| want.get(*tag).is_none_or(|w| w.1 != *n)).map(|(tag, _)| *tag).collect();
+                    for tag in stale {
+                        extra_fx_live.remove(&tag);
+                        particles.kill(tag);
+                    }
+                    for (tag, (id, name, p, scale)) in want {
+                        if !extra_fx_live.contains_key(&tag) {
+                            if !particles.spawn_tagged(&name, [p[0], 0.0, p[1]], tag) {
+                                continue;
+                            }
+                            extra_fx_live.insert(tag, (id, name));
+                        }
+                        particles.set_pos(tag, [p[0], 0.0, p[1]]);
+                        particles.set_scale(tag, scale);
                     }
                 }
                 let gone: Vec<(u64, [f32; 2])> = while_fx_live.iter().filter(|(id, _)| !on.contains(id)).map(|(id, p)| (*id, *p)).collect();

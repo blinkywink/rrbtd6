@@ -346,6 +346,30 @@ for tower in TOWERS:
                 if cand and g not in plan["projectiles"]:
                     plan["projectiles"][g] = {"name": os.path.splitext(os.path.basename(cand[0][0]))[0],
                                               "prefab": cand[0][0], "mapping": "geraldo-item"}
+    # Every projectile display the game data uses for this tower, nested ones included (sub-projectiles,
+    # pets, sentries' death blasts, Windlash arrows...) that the walk above doesn't reach: resolved by
+    # the catalog's prefab name, preferring the tower's own folder.
+    game_json = "local_extracted/game/game.json"
+    if os.path.exists(game_json):
+        tt = (json.load(open(game_json, encoding="utf-8")).get("tower_tiers") or {}).get(tower)
+        found = set()
+
+        def walk_disp(o):
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    if k == "display" and isinstance(v, str) and len(v) == 32 and all(ch in "0123456789abcdef" for ch in v):
+                        found.add(v)
+                    walk_disp(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk_disp(v)
+        walk_disp(tt)
+        for g in sorted(found - set(plan["projectiles"])):
+            nm = guids.get(g) or catalog_prefabs.get(g)
+            cand = sorted(by_base.get(nm, []), key=lambda c: (f"/Monkeys/{tower}/" not in c[0], c[0])) if nm else []
+            if cand:
+                plan["projectiles"][g] = {"name": os.path.splitext(os.path.basename(cand[0][0]))[0],
+                                          "prefab": cand[0][0], "mapping": "game-json-nested"}
     json.dump(plan, open(f"local_extracted/display_plans/{tower}.json", "w"), indent=1)
     print(tower, len(plan["towers"]), "tower tiers;", len(plan["projectiles"]), "projectile displays;",
           "missing towers", missing, "unknown projectile guids", sorted(unknown))

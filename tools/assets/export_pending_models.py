@@ -34,6 +34,9 @@ FIELDS = {
     ("MonkeyFanClubModel", "towerOriginDisplay"),
     ("MoabTakedownModel", "displayAtEjectId"),
     ("TargetSelectedPointModel", "display"),
+    # A tower's extra displays (TowerModel.behaviors DisplayModel besides its body): Mermonkey's base,
+    # Arctic Wind's snow, Ball Lightning's base, Superstorm's cloud, the Paragon platforms.
+    ("DisplayModel", "display"),
     ("SpiritOfTheForestModel", None),
     ("RosaliaMovementModel", None),
     ("JungleVineEffectModel", None),

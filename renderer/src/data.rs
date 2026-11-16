@@ -626,6 +626,16 @@ pub struct Upgrade {
 
 #[derive(Deserialize, Clone)]
 pub struct Tier {
+    /// CreateEffectOnUpgradeModel: the effect this tier plays when bought (display only).
+    #[serde(default)]
+    pub upgrade_fx: Option<String>,
+    /// The tower's extra displays (display only): prefab name and scale.
+    #[serde(default)]
+    pub extras: Vec<TierExtra>,
+    /// LinkDisplayScaleToTowerRangeModel: (prefab name, displayRadius): that display drawn at
+    /// range / displayRadius.
+    #[serde(default)]
+    pub range_links: Vec<(String, f32)>,
     /// MagusPerfectusGraveyardStateManagerModel: max mana and each state's attack names.
     #[serde(default)]
     pub magus: Option<Magus>,
@@ -2139,6 +2149,9 @@ pub struct Eat {
 /// AbilityModel: a button that, off cooldown, turns on extra attacks and / or a rate boost.
 #[derive(Deserialize, Clone)]
 pub struct Ability {
+    /// CreateEffectOnAbilityModel: the effect prefabs played on the tower as it's used, (name, scale).
+    #[serde(default)]
+    pub fx: Vec<(String, f32)>,
     /// AbilityModel.activateOnRoundEnd: used by itself as each round ends.
     #[serde(default)]
     pub round_end: bool,
@@ -3291,4 +3304,12 @@ pub struct GalvChain {
     pub magnet_props: u32,
     pub projectile: Proj,
     pub emission: Emission,
+}
+
+/// A TowerModel DisplayModel besides the tower's body (Mermonkey's base, Arctic Wind's snow).
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct TierExtra {
+    pub name: String,
+    #[serde(default = "one_f32")]
+    pub scale: f32,
 }

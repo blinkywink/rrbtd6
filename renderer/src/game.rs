@@ -11575,6 +11575,10 @@ impl Game {
     }
 
     fn use_ability_effects(&mut self, t: usize, a: &crate::data::Ability) {
+        // CreateEffectOnAbilityModel: its effect on the tower (display only).
+        for (name, scale) in &a.fx {
+            self.place_fx.push((self.towers[t].pos, name.clone(), *scale));
+        }
         // Darkshift.Activate (VERIFIED-DECOMP @0x180e21420) with no point picked: StartDarkshift at
         // teleportPos (0, 0) (recording super_004: the scripted Activate at 120 sends the Dark
         // Champion to the origin at 135).
@@ -12534,7 +12538,12 @@ impl Game {
             (false, 5) => "UpgradeEffectTier5",
             _ => "UpgradeEffect",
         };
-        self.upgrade_fx.push((self.towers[t].pos, fx));
+        // (The tier's own CreateEffectOnUpgradeModel effect where it has one: Beast Handler's
+        // BeastUpgradeFx, Etienne's radar pulse.)
+        match self.tier(t).and_then(|tr| tr.upgrade_fx.clone()).filter(|n| !matches!(n.as_str(), "UpgradeEffect" | "UpgradeEffectTier5" | "HeroUpgradeEffect" | "HeroUpgradeEffectLv20")) {
+            Some(n) => self.place_fx.push((self.towers[t].pos, n, 1.0)),
+            None => self.upgrade_fx.push((self.towers[t].pos, fx)),
+        }
         true
     }
 

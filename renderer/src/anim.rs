@@ -764,7 +764,51 @@ impl AnimModel {
 
     /// The throw clip: "Attack", "CrossbowAttack", "JuggernautAttack", ...
     pub fn attack_clip(&self) -> Option<usize> {
-        self.clips.iter().position(|c| c.name.ends_with("Attack"))
+        self.attack_clip_n(0)
+    }
+
+    /// The attack clips: those named "...Attack"; else any clip with "Attack" in its name that
+    /// isn't an idle (Dartling's "RocketAttack1-4", "MAD@AttackR / L", Engineer's
+    /// "XXXLTrap@AttackL / R", Mortar's "Artillery@Attack1-3", Druid's "DruidAttackaLightning"),
+    /// sorted by name.
+    pub fn attack_clips(&self) -> Vec<usize> {
+        let exact: Vec<usize> = (0..self.clips.len()).filter(|&c| self.clips[c].name.ends_with("Attack")).collect();
+        if !exact.is_empty() {
+            return exact;
+        }
+        let mut v: Vec<usize> = (0..self.clips.len())
+            .filter(|&c| {
+                let n = self.clips[c].name.to_ascii_lowercase();
+                n.contains("attack") && !n.contains("idle") && self.clips[c].role != "attack_idle"
+            })
+            .collect();
+        v.sort_by(|a, b| self.clips[*a].name.cmp(&self.clips[*b].name));
+        v.dedup_by(|a, b| self.clips[*a].name == self.clips[*b].name);
+        // Only one family alternates: the first name's stem without a trailing number or side
+        // (Attack1-3, AttackL / R, AttackLeft / Middle / Right), not unrelated attacks (Beast
+        // Handler's AttackContribute vs AttackStick).
+        fn stem(n: &str) -> &str {
+            let n = n.trim_end_matches(|c: char| c.is_ascii_digit());
+            for suf in ["Left", "Right", "Middle", "Mid", "Both", "LH", "RH", "L", "R"] {
+                if let Some(x) = n.strip_suffix(suf) {
+                    return x.trim_end_matches(|c: char| c.is_ascii_digit());
+                }
+            }
+            n
+        }
+        if let Some(&first) = v.first() {
+            let s0 = stem(&self.clips[first].name).to_string();
+            v.retain(|&c| stem(&self.clips[c].name) == s0);
+        }
+        v
+    }
+
+    /// The attack clip for the tower's `n`th throw: several alternate in turn (AlternateAnimationModel
+    /// cycles the animator's attack states). STAND-IN: the animator's state-to-clip order isn't
+    /// exported; the clips are taken in name order.
+    pub fn attack_clip_n(&self, n: u32) -> Option<usize> {
+        let v = self.attack_clips();
+        (!v.is_empty()).then(|| v[n as usize % v.len()])
     }
 
     /// A Beast Handler pet's strike: "AttackRake", "Launch", "Snatch" (their animators have no

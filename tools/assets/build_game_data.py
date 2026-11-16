@@ -1752,7 +1752,12 @@ def main():
                    "supports": [], "loan": None,
                    # activateOnRoundEnd: it goes off by itself as each round ends (Jungle's Bounty).
                    "round_end": bool(bf.get("activateOnRoundEnd")),
-                   "sounds": behavior_sounds(items(bf.get("behaviors")), "CreateSoundOnAbilityModel", SOUND_KEYS)}
+                   "sounds": behavior_sounds(items(bf.get("behaviors")), "CreateSoundOnAbilityModel", SOUND_KEYS),
+                   # CreateEffectOnAbilityModel: the prefab played on the tower as it's used, [name, scale].
+                   "fx": [[prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")),
+                           (deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("scale", 1.0)]
+                          for x in items(bf.get("behaviors")) if x and x["type"] == "CreateEffectOnAbilityModel"
+                          and prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))]}
             for x in items(bf.get("behaviors")):
                 if not x:
                     continue
@@ -2471,6 +2476,20 @@ def main():
                 # OverrideCamoDetectionModel (Monkey Sense): FirstUpdate gives the tower and its
                 # sub-towers a camo-detection mutator (Tower.AddMutatorIncludeSubTowers).
                 "detect_camo": any(b and b["type"] == "OverrideCamoDetectionModel" and b["f"].get("detectCamo") for b in items(f["behaviors"])),
+                # Display only. The tower's extra displays (TowerModel DisplayModels besides its body:
+                # Mermonkey's base, Arctic Wind's snow, Ball Lightning's base, Superstorm's cloud) and
+                # LinkDisplayScaleToTowerRangeModel: a display (by prefab name) scaled to range /
+                # displayRadius (those extras, the Inferno Ring loop).
+                "extras": [{"name": prefab_name(b["f"].get("display")), "scale": b["f"].get("scale", 1.0)}
+                           for b in items(f["behaviors"]) if b and b["type"] == "DisplayModel"
+                           and b["f"].get("display") and b["f"].get("display") != f.get("display") and prefab_name(b["f"].get("display"))],
+                # CreateEffectOnUpgradeModel: the effect this tier plays as it's bought (Beast
+                # Handler's BeastUpgradeFx, Etienne's radar pulse; most towers the generic ones).
+                "upgrade_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))
+                                    for b in items(f["behaviors"]) if b and b["type"] == "CreateEffectOnUpgradeModel"), None),
+                "range_links": [[prefab_name(b["f"].get("displayPath")), b["f"].get("displayRadius", 0.0)]
+                                for b in items(f["behaviors"]) if b and b["type"] == "LinkDisplayScaleToTowerRangeModel"
+                                and prefab_name(b["f"].get("displayPath")) and b["f"].get("displayRadius")],
                 "attacks": attacks, "pets": pets, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
                 "round_start_rate": round_start_rate, "vigilante": vigilante, "bank": bank, "supports": supports,
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
