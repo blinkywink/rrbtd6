@@ -3631,6 +3631,9 @@ pub struct Game {
     /// @0xf8b930: not disablePathTargeting at the segment's centre). Without the imported flags
     /// (other maps) the old stand-in: the segment's point is on the map.
     track_seg_ok: Vec<Vec<bool>>,
+    /// Each segment's invulnerable flags (`Game::path_seg_inv`): with cantTargetMoab a bloon-
+    /// invulnerable segment isn't listed either (Path.IsSegmentInRange).
+    track_seg_inv: Vec<Vec<u8>>,
     /// Per track: Path.pointInfos rotations (every CacheDistance), when imported.
     track_rot: Vec<Vec<f32>>,
     /// Per track: the tracks its entry splitter routes back to, and that splitter's index.
@@ -5811,6 +5814,7 @@ impl Game {
             track_segs: tracks.iter().map(|p| Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick).segments()).collect(),
             track_rot: tracks.iter().map(|p| p.quick_rot.clone()).collect(),
             track_seg_ok: tracks.iter().map(Game::path_seg_ok).collect(),
+            track_seg_inv: tracks.iter().map(Game::path_seg_invs).collect(),
             tracks: tracks.iter().map(|p| Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick)).collect(),
             track_exit,
             track_entry,
@@ -6683,6 +6687,24 @@ impl Game {
         flags.get(k).copied().unwrap_or(false) && flags.get(k + 1).copied().unwrap_or(false)
     }
 
+    /// PathSegment.bloonsInvulnerable (bit 0) / moabsInvulnerable (bit 1) of a segment centred at
+    /// `centre`: point i and point i + 1 both flagged (as `bloon_nontarget`).
+    pub(crate) fn path_seg_inv(p: &crate::data::MapPath, centre: f32) -> u8 {
+        if p.dists.is_empty() {
+            return 0;
+        }
+        let k = p.dists.partition_point(|&d| d <= centre).saturating_sub(1);
+        let f = |v: &[bool]| v.get(k).copied().unwrap_or(false) && v.get(k + 1).copied().unwrap_or(false);
+        f(&p.invuln) as u8 | ((f(&p.moab_invuln) as u8) << 1)
+    }
+
+    /// Each segment's `path_seg_inv` (`track_seg_inv`).
+    pub(crate) fn path_seg_invs(p: &crate::data::MapPath) -> Vec<u8> {
+        let tr = Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick);
+        let len = tr.length();
+        (0..tr.segments().len()).map(|i| { let lo = i as f32 * 7.0; Game::path_seg_inv(p, lo + ((len.min(lo + 7.0)) - lo) * 0.5) }).collect()
+    }
+
     /// A path's 7-long segments that can be targeted (`track_seg_ok`).
     pub(crate) fn path_seg_ok(p: &crate::data::MapPath) -> Vec<bool> {
         let tr = Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick);
@@ -6692,6 +6714,15 @@ impl Game {
             .map(|i| {
                 let lo = i as f32 * 7.0;
                 let centre = lo + ((len.min(lo + 7.0)) - lo) * 0.5;
+                // PathSegment.GatherPathInfoData (VERIFIED-DECOMP @0x180f6ce20): its flags from
+                // DistanceToExtraPointInfoBloon at the centre; Path.IsSegmentInRange
+                // (@0x180f6fa50) never lists one invulnerable to bloons and MOABs both (recording
+                // map_quad_druid_204_r40 rt 2335: no bolt bounce on to a bloon at 497.08 on
+                // TopToBottom, its segment 497-504 at Quad's exit).
+                let inv = Game::path_seg_inv(p, centre);
+                if inv == 3 {
+                    return false;
+                }
                 if p.no_target.len() == p.dists.len() && !p.dists.is_empty() {
                     // The point the centre falls on (last point at or before it).
                     let k = p.dists.iter().rposition(|&d| d <= centre).unwrap_or(0);
@@ -6971,6 +7002,9 @@ impl Game {
                 // it): recording druid_420_strong rt 2625, a lightning pop's copy behind the entrance
                 // left for its parent.)
                 .filter(|(_, b)| !b.held && !b.hit_by(&shared) && b.wind_end != sim_now && (!b.unplaced || b.wind.is_some()))
+                // (Nor a nonTargetable one (Targetting.GetTargets skips it): recording
+                // map_quad_druid_204_r40 rt 1011, no split on to a bloon in Quad's tunnel.)
+                .filter(|(_, b)| !self.bloon_nontarget(b))
                 .filter(|(_, b)| !(b.camo(&self.defs[b.kind]) && (filters_camo || !camo)))
                 // (BloonManager.GetTargets (VERIFIED-DISASM @0x180fcacc0): a bracket per path
                 // segment within range + 40, flagged PathSegment.IsInRange (@0x180f6ced0: its
@@ -6989,7 +7023,9 @@ impl Game {
                         return (b.pos[0] - from[0]).powi(2) + (b.pos[1] - from[1]).powi(2) <= rr * rr;
                     }
                     let kk = (b.prev_dist / 7.0).max(0.0) as usize;
-                    let seg_in = self.track_segs.get(b.path as usize).and_then(|sg| sg.get(kk)).is_some_and(|sp| (sp[0] - from[0]).powi(2) + (sp[1] - from[1]).powi(2) <= r2);
+                    // (PathManager.GetPathSegmentsInRange lists only targetable segments.)
+                    let ok = self.track_seg_ok.get(b.path as usize).and_then(|v| v.get(kk)).copied().unwrap_or(false);
+                    let seg_in = ok && self.track_segs.get(b.path as usize).and_then(|sg| sg.get(kk)).is_some_and(|sp| (sp[0] - from[0]).powi(2) + (sp[1] - from[1]).powi(2) <= r2);
                     if seg_in {
                         return true;
                     }
@@ -7031,10 +7067,19 @@ impl Game {
                 match (x.wind.is_some(), y.wind.is_some()) {
                     (true, true) => carried_key(x).cmp(&carried_key(y)),
                     (a, b) if a != b => a.cmp(&b),
-                    _ => (if last { sy.total_cmp(&sx) } else { sx.total_cmp(&sy) }).then(rank(x).cmp(&rank(y))),
+                    // (BloonManager.GetTargets' brackets unsorted: path by path in PathManager order,
+                    // each path's segments entrance first; on one path that is Last's order.
+                    // Recording map_quad_druid_204_r40 rt 1229: a bolt takes Blue 536 and Yellow 666
+                    // on the first path over Black 888 on the fourth, further from its exit.)
+                    _ => {
+                        let _ = (last, sx, sy);
+                        let kx = (x.wind_seg.unwrap_or(x.prev_dist) / 7.0).max(0.0) as usize;
+                        let ky = (y.wind_seg.unwrap_or(y.prev_dist) / 7.0).max(0.0) as usize;
+                        (x.path, kx).cmp(&(y.path, ky)).then(rank(x).cmp(&rank(y)))
+                    }
                 }
             });
-            if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM bounce rt {} uid {} from {:?} shared {:?} cands {:?}", self.round_clock, self.projectiles[k].uid, from, (shared.small.clone(), shared.big.len()), cands.iter().map(|(_, b)| { let kk = (b.prev_dist / 7.0).max(0.0) as usize; let sp = self.track_segs.get(b.path as usize).and_then(|sg| sg.get(kk)).copied().unwrap_or([0.0; 2]); (b.id, b.pos[0], b.wind.is_some(), b.prev_dist, ((sp[0] - from[0]).powi(2) + (sp[1] - from[1]).powi(2)).sqrt(), range) }).collect::<Vec<_>>()); }
+            if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM bounce rt {} uid {} from {:?} shared {:?} cands {:?}", self.round_clock, self.projectiles[k].uid, from, (shared.small.clone(), shared.big.len()), cands.iter().map(|(_, b)| { let kk = (b.prev_dist / 7.0).max(0.0) as usize; let sp = self.track_segs.get(b.path as usize).and_then(|sg| sg.get(kk)).copied().unwrap_or([0.0; 2]); (b.id, b.pos[0], b.wind.is_some(), b.prev_dist, ((sp[0] - from[0]).powi(2) + (sp[1] - from[1]).powi(2)).sqrt(), range, b.path, seg(b)) }).collect::<Vec<_>>()); }
             let ids: Vec<u64> = cands.iter().take(n).map(|(_, b)| b.id).collect();
             let layers: Vec<u64> = cands.iter().take(n).map(|(_, b)| b.layer).collect();
             if ids.is_empty() {
@@ -7105,7 +7150,10 @@ impl Game {
                     return None;
                 }
                 let b = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id))?;
-                b.hit_by(&pr.hit).then(|| (k, [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]]))
+                // (So is one on a nonTargetable bloon (Projectile.IsCollisionValid): recording
+                // map_quad_druid_204_r40 rt 2476, bolt 5150 sits on a Pink in Quad's exit stretch
+                // and goes at 2479.)
+                (b.hit_by(&pr.hit) || (!pr.spec.ignore_nontarget && self.bloon_nontarget(b))).then(|| (k, [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]]))
             })
             .collect();
         for (k, at) in refused {
@@ -15596,7 +15644,9 @@ impl Game {
                     // (int)(distance / 7)), not by the bloon's own distance.
                     // (Filed by the distance it had when the frame began: see target_index_mut.)
                     let seg_idx = (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize;
-                    let seg_ok = self.track_seg_ok.get(b.path as usize).and_then(|v| v.get(seg_idx)).copied().unwrap_or(false);
+                    // (With cantTargetMoab a bloon-invulnerable segment isn't listed: Path.IsSegmentInRange.)
+                    let seg_ok = self.track_seg_ok.get(b.path as usize).and_then(|v| v.get(seg_idx)).copied().unwrap_or(false)
+                        && !(no_moab && self.track_seg_inv.get(b.path as usize).and_then(|v| v.get(seg_idx)).is_some_and(|f| f & 1 != 0));
                     // Attack.GetPathSegmentsInRangeFast (VERIFIED-DISASM @0xdcbbb0) lists the targetable
                     // segments (PathSegment.canTargetSegment) within range, + 40 when the attack can
                     // hit MOABs, each with whether its point is within range + 2 and whether the line
@@ -18389,9 +18439,14 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 continue;
             }
             let rank = self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);
+            // (Path.Process, near the top of Simulation.process (after the CollisionChecker), works
+            // the leader out from where the bloons were as the frame began: probe
+            // pending/maptowers_probe (PR lines) and recording map_kartsndarts_engineer_204_r40
+            // rt 2833, a Sentry processed after Black 2259 moved past Green 2015 still takes 2015.)
+            let bd = b.prev_dist;
             if let Some(l) = lead.get_mut(b.path as usize) {
-                if l.is_none_or(|(_, dist, r)| if last { b.dist < dist } else { b.dist > dist } || (b.dist == dist && rank < r)) {
-                    *l = Some((bi, b.dist, rank));
+                if l.is_none_or(|(_, dist, r)| if last { bd < dist } else { bd > dist } || (bd == dist && rank < r)) {
+                    *l = Some((bi, bd, rank));
                 }
             }
         }
@@ -18399,7 +18454,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // paths' bests (the TargetType's comparer; INFERRED: distance until leak, First the
         // least, Last the most). Recording map_quad_dart_205_r40 rt 1191: the 2-0-5 takes Black
         // 997 (420.9 along its path) over 1137 (268.7 along another).
-        let until = |i: usize| -> f32 { let b = &self.bloons[i]; self.leak_dist(b.path as usize) - b.dist };
+        let until = |i: usize| -> f32 { let b = &self.bloons[i]; self.leak_dist(b.path as usize) - b.prev_dist };
         let mut best: Option<usize> = None;
         for (p, l) in lead.iter().enumerate() {
             if let Some((bi, _, _)) = *l {
@@ -19881,7 +19936,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let mut out = Vec::new();
         for (pi, sg) in self.track_segs.iter().enumerate() {
             for (k, q) in sg.iter().enumerate() {
-                let ok = self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false);
+                let ok = self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false)
+                    && !(no_moab && self.track_seg_inv.get(pi).and_then(|v| v.get(k)).is_some_and(|f| f & 1 != 0));
                 if ok && on_map(*q, 0.0) && (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2) <= reach * reach && self.los_clear(los, pos, *q) {
                     out.push((pi as u8, k));
                 }

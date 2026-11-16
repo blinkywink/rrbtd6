@@ -580,6 +580,7 @@ impl Game {
         self.track_segs.push(track.segments());
         self.track_rot.push(p.quick_rot.clone());
         self.track_seg_ok.push(Game::path_seg_ok(&p));
+        self.track_seg_inv.push(Game::path_seg_invs(&p));
         self.tracks.push(track);
         self.logic.paths.push(p);
         let paths = &self.logic.paths;

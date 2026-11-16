@@ -106,6 +106,10 @@ public class Scenario
     /// Read-only: log Attack.GetPathSegmentsInRangeFast's PathSegmentInRange flags between
     /// recorded frames segprobe_from..segprobe_to (SG lines).
     public bool segprobe { get; set; } = false;
+    /// Read-only: at the start of recorded frames proclist_from..proclist_to, Simulation.process
+    /// in order (PR lines: "PR index type id destroyed").
+    public int proclist_from { get; set; } = -1;
+    public int proclist_to { get; set; } = -1;
     public int segprobe_from { get; set; } = 0;
     public int segprobe_to { get; set; } = 0;
     /// "victory" / "defeat": at recorded frame end_frame open that end screen as InGame does
@@ -1225,6 +1229,18 @@ static class SimulatePatch
         if (w == null || Recorder.Sc == null || Recorder.Recorded >= Recorder.Sc.frames) return;
         try
         {
+            int rf = Recorder.Recorded;
+            if (Recorder.Sc.proclist_from >= 0 && rf >= Recorder.Sc.proclist_from && rf <= Recorder.Sc.proclist_to)
+            {
+                var pl = __instance.process.list;
+                for (int k = 0; k < pl.Count; k++)
+                {
+                    var o = pl[k];
+                    if (o == null) { w.WriteLine($"PR {k} null"); continue; }
+                    string tn = o.GetIl2CppType().Name;
+                    w.WriteLine($"PR {k} {tn} {o.Id.Id} {o.IsDestroyed}");
+                }
+            }
             var bs = __instance.factory.GetFactory<Bloon>().up.list;
             for (int k = 0; k < bs.Count; k++)
             {
