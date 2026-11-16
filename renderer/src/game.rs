@@ -11373,6 +11373,16 @@ impl Game {
     }
 
     /// The ability is used on a spot the player picks (Darkshift).
+    /// The point input's helper message key (GetHelperMessage): Darkshift / Redeploy their
+    /// model's helperMessageLocsKey; Mega Mine (PlaceProjectileAt.GetCustomInputData
+    /// @0x180e4dcf0: DeployCIData.helperMsg) the literal "MortarMessage".
+    pub fn ability_point_helper(&self, name: &str) -> Option<String> {
+        (0..self.towers.len()).find_map(|t| {
+            let a = self.tier(t)?.abilities.iter().find(|a| a.name == name)?;
+            a.darkshift.as_ref().map(|d| d.helper.clone()).or_else(|| a.place_at.as_ref().map(|_| "MortarMessage".to_string()))
+        })
+    }
+
     pub fn ability_targets_point(&self, name: &str) -> bool {
         (0..self.towers.len()).any(|t| self.tier(t).is_some_and(|tr| tr.abilities.iter().any(|a| a.name == name && (a.darkshift.is_some() || a.place_at.is_some()))))
     }
@@ -25621,6 +25631,28 @@ mod beast_tests {
         }
         assert!(seen, "round 40 sends a MOAB");
         assert!(longest <= 60, "a MOAB lasted {longest} frames");
+    }
+
+    /// Point inputs' helper messages: Darkshift's helperMessageLocsKey by tier, Mega Mine's
+    /// "MortarMessage"; and "{INPUT_TYPE}" reads "Click" in the PC texts.
+    #[test]
+    fn point_ability_helpers() {
+        let mut g = game();
+        g.cash = 1e9;
+        let sup = g.tower_defs.iter().position(|(x, _)| x == "SuperMonkey").unwrap();
+        let t = place_near(&mut g, sup, 260.0);
+        for _ in 0..3 {
+            assert!(g.upgrade(t, 2));
+        }
+        let name = g.tier(t).unwrap().abilities.iter().find(|a| a.darkshift.is_some()).unwrap().name.clone();
+        assert_eq!(g.ability_point_helper(&name).as_deref(), Some("DarkKnightDarkshift"));
+        assert!(g.upgrade(t, 2));
+        let name = g.tier(t).unwrap().abilities.iter().find(|a| a.darkshift.is_some()).unwrap().name.clone();
+        assert_eq!(g.ability_point_helper(&name).as_deref(), Some("DarkChampionDarkshift"));
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let loc = crate::menus::load_loc(&root.join("local_extracted/text/English.xml"));
+        assert_eq!(loc.get("DarkKnightDarkshift").map(String::as_str), Some("Click to Darkshift within range"));
+        assert_eq!(loc.get("MortarMessage").map(String::as_str), Some("Click to set target"));
     }
 
     /// P-SUBCOMMANDER: Sub Commander doubles damage and adds 4 pierce for Subs in range,

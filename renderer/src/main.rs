@@ -3718,10 +3718,12 @@ async fn game_main() {
                         pick_saved = selected.and_then(|t| game.towers.get(t)).map(|t| t.id);
                         selected = None;
                         // OverclockInput.GetHelperMessage: "Select a Monkey" (TapTowerAbilityBehavior.
-                        // GetCustomInputData). HYPOTHESIS P-POINTINPUTMSG: none for the point inputs
-                        // (Darkshift, Mega Mine) until their CustomInput classes are read.
+                        // GetCustomInputData). The point inputs: RepositionTowerInput / RedeployInput /
+                        // DeployInput.GetHelperMessage (@0x180a3ee30 / @0x180a59b20) return their
+                        // CIData's helperMsg (Game::ability_point_helper), localized.
                         let tap = game.ability_targets_tower(name) && !game.ability_targets_point(name);
-                        let msg = if tap { h.menus.loc.get("Select a Monkey").cloned().unwrap_or_else(|| "Select a Monkey".into()) } else { String::new() };
+                        let key = if tap { Some("Select a Monkey".to_string()) } else { game.ability_point_helper(name).filter(|k| !k.is_empty()) };
+                        let msg = key.map(|k| h.menus.loc.get(&k).cloned().unwrap_or(k)).unwrap_or_default();
                         h.helper.set(&msg, -1.0);
                     }
                     (Some(_), None) => {

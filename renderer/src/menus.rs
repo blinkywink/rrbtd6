@@ -302,6 +302,17 @@ pub(crate) fn load_loc(path: &Path) -> HashMap<String, String> {
         let unescape = |t: &str| t.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&");
         out.entry(unescape(id)).or_insert_with(|| unescape(text));
     }
+    // LocsTextReplacer (Main.<LoadLocs>d__32, @0x1805007a0): "{INPUT_TYPE}" in any text is
+    // GetText of the input word, "Click" in the PC build (its closure gets "Tap", then "Click";
+    // INFERRED: the mobile builds keep "Tap"). (SHERIFF_NAME, the other replacer, names a hero the
+    // clone doesn't have.)
+    let word_key = if cfg!(any(target_os = "ios", target_os = "android")) { "Tap" } else { "Click" };
+    let word = out.get(word_key).cloned().unwrap_or_else(|| word_key.to_string());
+    for v in out.values_mut() {
+        if v.contains("{INPUT_TYPE}") {
+            *v = v.replace("{INPUT_TYPE}", &word);
+        }
+    }
     out
 }
 

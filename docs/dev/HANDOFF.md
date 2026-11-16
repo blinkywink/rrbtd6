@@ -376,7 +376,7 @@ the game code / recordings), or it hides problems later.
   the GrayscaleUI material (uitree::with_gray). Test vagrant_buff_icon. Not checked on screen.
   BuffPrefab also has TextMaxReached (red, same rect as Text): "x" + unavailableBuffCount when
   availableBuffCount is 0 and unavailable >= 1 (no clone query has unavailable counts yet).
-  OPEN: Overcharge GetBuffs (paragon), roundsRemaining text (TimedMutator +0x20).
+  CLOSED (2026-11-16): Overcharge GetBuffs (MoveNext @0x180e65430: one active query, availableBuffCount = currentStack (+0x78), indicator from OverchargeModel.GetBuffIndicatorModel, when stacks > 0): the model's only OverchargeModel (mutationId ParagonOvercharge, BuffIconOvercharge) is referenced by no tower in the game data, so it never shows. OPEN: roundsRemaining text (TimedMutator +0x20 roundsRemaining; BuffIcon.Show shows it when availableBuffCount < 1): which mutators are added with roundsRemaining > 0 isn't found yet (Tower.AddMutator is virtual, 133 callers of AddMutatorIncludeSubTowers alone).
   BuffQuery: indicator +0, timedMutator +8, tower +0x10, canEventuallyBuff +0x18, canCurrentlyBuff
   +0x19, availableBuffCount +0x1c, unavailableBuffCount +0x20. GroupStackableBuffs: a stackable
   (+0x38) FullName adds 1 per query with availableBuffCount 0, up to maxStackSize (+0x3c).
@@ -449,7 +449,7 @@ the game code / recordings), or it hides problems later.
   mode stays, empty ground does nothing; Enter/ExitCustomMode keep and restore the selection and show the cancel
   button. The pulse (initialEffect) and the buff display (OverclockBuff / UltraBoostBuff / TakeAimBuffedFx) play.
   DONE (commit 76c51f4): TakeAim.Activate's Tower.AddMutatorIncludeSubTowers (@0x180e5cf10) reaches child towers
-  (`include_subs`). OPEN: the point inputs' (Darkshift, Mega Mine) own GetHelperMessage texts; the buff icon over the tower (BuffManager,
+  (`include_subs`). DONE (2026-11-16): the point inputs' helper texts: RepositionTowerInput / RedeployInput.GetHelperMessage (@0x180a3ee30) return their CIData's helperMsg, Darkshift.GetCustomInputData (@0x180e21b30) / Redeploy (@0x180e522c0) set it to the model's helperMessageLocsKey (DarkKnightDarkshift x-x-3, DarkChampionDarkshift x-x-4/5, "Heli Pilot Redeploy Message"; exported as darkshift.helper); DeployInput (@0x180a59b20) reads DeployCIData.helperMsg, which PlaceProjectileAt (@0x180e4dcf0, Mega Mine) sets to "MortarMessage". Texts' "{INPUT_TYPE}" is LocsTextReplacer's (Main.<LoadLocs>d__32 @0x1805007a0): GetText("Click") on PC (menus::load_loc; INFERRED "Tap" on mobile). Test point_ability_helpers. Not checked on screen. Still OPEN: the buff icon over the tower (BuffManager,
   buffIconName) as for the Alchemist item below.
 - Sandbox: clicks on its menus still reach the menu behind (the bloon menu overlays the monkey
   purchase menu); nothing behind it should be clickable anywhere (the top area already blocks).

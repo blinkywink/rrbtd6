@@ -1896,14 +1896,19 @@ def main():
                     out["immunity"] = xf.get("lifespan", 0.0)
                 # RedeployModel (Heli Pilot): the pad moves to any picked spot.
                 if x["type"] == "RedeployModel":
-                    out["darkshift"] = {"radius": 0.0, "restrict": False}
+                    # (Redeploy.GetCustomInputData @0x180e522c0: RedeployCIData.helperMsg is the
+                    # model's helperMessageLocsKey.)
+                    out["darkshift"] = {"radius": 0.0, "restrict": False, "helper": xf.get("helperMessageLocsKey") or ""}
                 # DarkshiftModel (Dark Knight): the tower teleports to a picked spot within radius.
                 if x["type"] == "DarkshiftModel":
                     # (StartDarkshift @0x180e22bd0: frameToMove = now + towerSpawnDelay frames;
                     # Process moves it on that frame, EndDarkshift.)
                     out["darkshift"] = {"radius": xf.get("placementZoneAssetRadius", 0.0),
                                         "restrict": bool(xf.get("restrictToTowerRadius")),
-                                        "delay": int(round(xf.get("towerSpawnDelay", 0.0) * 60))}
+                                        "delay": int(round(xf.get("towerSpawnDelay", 0.0) * 60)),
+                                        # (Darkshift.GetCustomInputData @0x180e21b30: RepositionTowerCIData.
+                                        # helperMsg = helperMessageLocsKey, RepositionTowerInput's message.)
+                                        "helper": xf.get("helperMessageLocsKey") or ""}
                 # TakeAimModel (Desperado): range x rangeModifier on a picked tower.
                 if x["type"] == "TakeAimModel":
                     out["overclock"] = {"frames": xf.get("lifespanFrames", 0), "rate": 1.0, "village_range": 1.0,

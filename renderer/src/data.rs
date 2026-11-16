@@ -2741,6 +2741,9 @@ pub struct Darkshift {
     /// Darkshift: frames from the activation to the move (0 for Redeploy: at once).
     #[serde(default)]
     pub delay: u32,
+    /// The input's helper message (a localization key): the model's helperMessageLocsKey.
+    #[serde(default)]
+    pub helper: String,
 }
 
 #[derive(Deserialize, Clone)]
