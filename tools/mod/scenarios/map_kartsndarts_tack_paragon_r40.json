@@ -1,0 +1,1 @@
+{"name": "map_kartsndarts_tack_paragon_r40", "map": "KartsNDarts", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "cash": 10000000, "towers": [{"id": "TackShooter-500", "x": 16.0, "y": 42.0, "upgrades": [{"frame": 60, "path": 3}]}, {"id": "TackShooter-050", "x": 16.0, "y": 58.0}, {"id": "TackShooter-005", "x": 32.0, "y": 58.0}], "quit": true, "seed": 777123}

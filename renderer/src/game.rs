@@ -300,6 +300,13 @@ pub struct Bloon {
     /// (recording map_kartsndarts_druid_052_r40 rt 481: a MOAB's Ceramic in the tunnel is still
     /// met by the thorns after the one that popped it).
     pub cell_kind: usize,
+    /// Its distance at that Process (with `cell_kind`: the nonTargetable flag it left; NaN before
+    /// its first Process, when the flag is still Initialise's 0: recording
+    /// map_quad_ninja_paragon_r40 rt 184, a MOAB's copies held in Quad's entrance stretch are hit
+    /// before they first move).
+    pub cell_dist: f32,
+    /// It has run Bloon.Process (moved on the track) since it was made.
+    pub processed: bool,
     /// A Windlash carry ended by a re-hit: the carried spot, where the next frame's collision
     /// pass still meets the bloon (its grid entry not moved yet).
     pub coll_hold: Option<[f32; 2]>,
@@ -4469,7 +4476,7 @@ macro_rules! collide_pass {
                 // damage and no pierce spent.)
                 // (Bloon.Process sets the flag: a degrade's first child keeps its parent's
                 // until it moves; rt 481, a MOAB's Ceramic in the tunnel is still met.)
-                || (!pr.spec.ignore_nontarget && $s.bloon_nontarget_kind(b, b.cell_kind))
+                || (!pr.spec.ignore_nontarget && $s.bloon_nontarget_now(b))
                 || pr.spec.exclude_bloons.iter().any(|x| $s.names[b.kind].starts_with(x.as_str()))
                 // FilterMutatedTarget.FilterBloon (VERIFIED-DISASM @0x180c20240): recording
                 // ice_005, icicles never hit a bloon carrying Ice:Icicles.
@@ -4608,7 +4615,12 @@ macro_rules! collide_pass {
             if let Some(w) = &pr.spec.wrath {
                 dmg += ($s.active_rbe / w.threshold * w.damage).clamp(0.0, w.max);
             }
-            if ring_out {
+            // Bloon.PreCheckDamageOutcome (VERIFIED-DECOMP @0x180fd4160): no damage to a
+            // nonTargetable bloon (a projectile with ignoreNonTargetable still meets it; recording
+            // map_quad_ace_204_r40 rt 1627, the Spectre's bomb blast spends pierce on a Red copy
+            // made in Quad's entrance stretch and leaves it whole).
+            let nt_block = $s.bloon_nontarget_now(&$s.bloons[i]);
+            if ring_out || nt_block {
                 dmg = 0.0;
             }
             // CollideReducePierceForBloonState.Collide (collisionPass -1, before every pass-0
@@ -4679,6 +4691,9 @@ macro_rules! collide_pass {
                 if cr[4] != 0.0 {
                     dmg = cr[1] * dmg + cr[2];
                 }
+            }
+            if nt_block {
+                dmg = 0.0;
             }
             $kids.clear();
             // CreateProjectileOnContact.Collide runs in the collision pass, before the hit's
@@ -6661,7 +6676,7 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
-        self.bloons.push(Bloon { held: false, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
+        self.bloons.push(Bloon { held: false, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
         if self.defs[kind].rotate_to_follow_path {
@@ -6728,13 +6743,31 @@ impl Game {
         self.bloon_nontarget_at(b, b.dist)
     }
 
+    /// Bloon.nonTargetable as the collision pass sees it: as its last Process left it (`cell_kind` /
+    /// `cell_dist`); a bloon made since (a pop's copy, or a layer of one) has the flag SetPath gave
+    /// it at the distance it was placed at, its distance now; INFERRED: one held at the spawn point
+    /// was placed further on, past the stretch (recordings map_quad_ninja_paragon_r40 rt 184,
+    /// map_quad_ace_204_r40 rt 1628, map_quad_tack_502_r40 rt 146).
+    fn bloon_nontarget_now(&self, b: &Bloon) -> bool {
+        if b.processed {
+            return self.bloon_nontarget_kind(b, b.cell_kind, b.cell_dist);
+        }
+        if self.held_at_spawn(b.kind, b.path, b.dist - 0.001) == b.dist {
+            return false;
+        }
+        self.bloon_nontarget_kind(b, b.kind, b.dist)
+    }
+
     /// `bloon_nontarget` with the flags of model `kind` (MOAB-class: moabsInvulnerable).
-    fn bloon_nontarget_kind(&self, b: &Bloon, kind: usize) -> bool {
+    fn bloon_nontarget_kind(&self, b: &Bloon, kind: usize, dist: f32) -> bool {
+        if dist.is_nan() {
+            return false;
+        }
         let Some((ds, inv, minv)) = self.track_inv.get(b.path as usize) else { return false };
         if ds.is_empty() {
             return false;
         }
-        let k = ds.partition_point(|&d| d <= b.dist).saturating_sub(1);
+        let k = ds.partition_point(|&d| d <= dist).saturating_sub(1);
         let flags = if self.defs[kind].is_moab { minv } else { inv };
         flags.get(k).copied().unwrap_or(false) && flags.get(k + 1).copied().unwrap_or(false)
     }
@@ -13498,6 +13531,8 @@ impl Game {
         let parent_grow = (self.defs[kind].layer_number < ceiling).then_some(b.grow_t);
         let parent_cell = b.cell_pos;
         let parent_cell_kind = b.cell_kind;
+        let parent_cell_dist = b.cell_dist;
+        let parent_processed = b.processed;
         let parent_hold = b.coll_hold;
         // (Popped in a Process after its move this frame: refiled from its frame-start spot.)
         // (A chain of degrades in one hit keeps the first one's.)
@@ -14002,8 +14037,21 @@ impl Game {
                 }
             }
             child.cell_pos = self.ghost_cell.take().unwrap_or(parent_cell);
-            if n == 0 {
+            if n == 0 && parent_processed {
                 child.cell_kind = parent_cell_kind;
+                child.cell_dist = parent_cell_dist;
+                child.processed = parent_processed;
+            } else {
+                // (A copy, or a layer of one made earlier in this cascade: Bloon.Damage works the
+                // whole result out and makes only the bloons left, each placed with its spaced
+                // distance; recording map_quad_ace_204_r40 rt 1627, a Zebra's Red at 193.45.)
+                // (Bloon.SetPath (VERIFIED-DECOMP @0x180fd5050) sets nonTargetable from the spaced
+                // distance it's made at, before any hold at the spawn point: recording
+                // map_quad_ninja_paragon_r40 rt 184, a MOAB's copies made at 201-214 then held at
+                // 158.52 are hit; map_quad_tack_502_r40 rt 146, ones made at 182-196 in Quad's
+                // entrance stretch aren't.)
+                child.cell_kind = child.kind;
+                child.cell_dist = d0;
             }
             if n == 0 && parent_at && child.wind.is_none() {
                 child.pos = pp0;
@@ -18684,6 +18732,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     /// it leaked and was removed (the next bloon is now at `i`).
     #[allow(clippy::type_complexity)]
     fn move_bloon(&mut self, i: usize, zones: &[([f32; 2], f32, crate::data::Zone)], shoves: &[([f32; 2], crate::data::MoabShove)], leak_voice: &mut bool) -> bool {
+        // (Bloon.Process: a pop's copy made this frame isn't in the process list's walk yet, its
+        // first Process is next frame's.)
+        if self.bloons[i].born / 4 < self.sim_elapsed || self.bloons[i].lineage.is_none() {
+            self.bloons[i].processed = true;
+        }
         // (WindlashBehavior.Process comes after the bloon's own move: see windlash_step.)
         // (Its last frame while it carries the bloon: the behaviour goes before ProcessStage1 and
         // the bloon, still off its track, doesn't move; recording sky_300 rt 3350.)
@@ -18789,6 +18842,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             let b = &self.bloons[i];
             self.bloons[i].height = self.track_height(b.path, b.dist, self.defs[b.kind].is_moab);
         }
+
         let mut mult = self.bloons[i].speed_mult(&self.defs[self.bloons[i].kind]);
         if mult > 0.0 && !zones.is_empty() {
             let d = &self.defs[self.bloons[i].kind];
@@ -22080,7 +22134,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // since the last pass are all in it.
         for b in &mut self.bloons {
             if !b.fresh {
-                b.cell_kind = b.kind;
+                if b.processed {
+                    // (Process clears nonTargetable first and sets it only on the track.)
+                    b.cell_kind = b.kind;
+                    b.cell_dist = if b.off_track() { f32::NAN } else { b.dist };
+                }
                 b.cell_pos = b.cell_next.take().unwrap_or(b.prev);
                 b.prev = b.pos;
                 b.prev_dist = b.dist;

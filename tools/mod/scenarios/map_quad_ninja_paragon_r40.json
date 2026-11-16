@@ -1,0 +1,1 @@
+{"name": "map_quad_ninja_paragon_r40", "map": "Quad", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "cash": 10000000, "towers": [{"id": "NinjaMonkey-500", "x": -98.0, "y": -32.0, "upgrades": [{"frame": 60, "path": 3}]}, {"id": "NinjaMonkey-050", "x": -82.0, "y": -32.0}, {"id": "NinjaMonkey-005", "x": -98.0, "y": -48.0}], "quit": true, "seed": 777123}
