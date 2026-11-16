@@ -4441,6 +4441,10 @@ macro_rules! collide_pass {
                 // canCollisionBeBlockedByMapLos, Map.IsTargetLineClear from the shot to the
                 // bloon (recording bomb_100: a blast misses a Yellow behind the entrance trees).
                 || (pr.spec.los_blocked && !$s.line_clear(pp, 0.0, bp))
+                // (And a nonTargetable bloon only for ignoreNonTargetable: recording
+                // map_kartsndarts_dart_205_r40 rt 438, darts pass a Ceramic in the tunnel, no
+                // damage and no pierce spent.)
+                || (!pr.spec.ignore_nontarget && $s.bloon_nontarget(b))
                 || pr.spec.exclude_bloons.iter().any(|x| $s.names[b.kind].starts_with(x.as_str()))
                 // FilterMutatedTarget.FilterBloon (VERIFIED-DISASM @0x180c20240): recording
                 // ice_005, icicles never hit a bloon carrying Ice:Icicles.
@@ -6650,7 +6654,10 @@ impl Game {
         }
         let k = ds.partition_point(|&d| d <= b.dist).saturating_sub(1);
         let flags = if self.defs[b.kind].is_moab { minv } else { inv };
-        flags.get(k).copied().unwrap_or(false)
+        // (Point i AND i + 1, DistanceToExtraPointInfoBloon @0x180f6dc40: recording
+        // map_kartsndarts_dart_205_r40, a Ceramic at 344.99 between the tunnel's last flagged point
+        // and the 345.75 unflagged one is a target again at rt 437.)
+        flags.get(k).copied().unwrap_or(false) && flags.get(k + 1).copied().unwrap_or(false)
     }
 
     /// A path's 7-long segments that can be targeted (`track_seg_ok`).
@@ -15544,6 +15551,13 @@ impl Game {
                     if b.off_track() {
                         continue;
                     }
+                    // Bloon.isNonTargetable (Targetting.GetTargets skips it): on a stretch of
+                    // PointInfo.bloonsInvulnerable (moabsInvulnerable for MOAB-class). Recording
+                    // map_kartsndarts_dart_205_r40: the tunnel's MOAB is a target, its Ceramic isn't
+                    // (no throw at rt 428, the target again at 437 as it leaves).
+                    if self.bloon_nontarget(b) {
+                        continue;
+                    }
                     let d = &self.defs[b.kind];
                     let p = b.pos;
                     let dd = (p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2);
@@ -18341,7 +18355,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let mut lead: Vec<Option<(usize, f32, u32)>> = vec![None; self.tracks.len()];
         for (bi, b) in self.bloons.iter().enumerate() {
             let d = &self.defs[b.kind];
-            if (b.camo(d) && !camo) || (no_moab && d.tags.iter().any(|t| t == "Moabs")) || b.off_track() {
+            if (b.camo(d) && !camo) || (no_moab && d.tags.iter().any(|t| t == "Moabs")) || b.off_track() || self.bloon_nontarget(b) {
                 continue;
             }
             let rank = self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);

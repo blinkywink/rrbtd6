@@ -1860,6 +1860,9 @@ pub struct Proj {
     /// ProjectileModel.canCollisionBeBlockedByMapLos.
     #[serde(default)]
     pub los_blocked: bool,
+    /// ProjectileModel.ignoreNonTargetable.
+    #[serde(default)]
+    pub ignore_nontarget: bool,
     pub damage: f32,
     pub immune: u32,
     /// DamageModel.ignoreImmunityDestroy: survives hitting a bloon it can't damage (else that

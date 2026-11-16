@@ -670,6 +670,9 @@ def main():
             "vs_blocker_radius": f.get("vsBlockerRadius", 0.0), "ignore_blockers": f.get("ignoreBlockers", False),
             # ProjectileModel.canCollisionBeBlockedByMapLos: a hit needs a clear line to the bloon.
             "los_blocked": bool(f.get("canCollisionBeBlockedByMapLos", False)),
+            # ProjectileModel.ignoreNonTargetable: Projectile.IsCollisionValid lets it hit a
+            # nonTargetable bloon (one on an invulnerable stretch of track).
+            "ignore_nontarget": bool(f.get("ignoreNonTargetable", False)),
             "damage": dmg.get("damage", 0.0), "immune": dmg.get("immuneBloonProperties", 0),
             "ring_inner": ring[0]["f"].get("innerRingRadius", 0.0) if ring else 0.0,
             # DamageModel.distributeToChildren / overrideDistributeBlocker.
