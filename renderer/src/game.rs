@@ -369,11 +369,10 @@ pub struct Bloon {
     pub wind_model: Option<Box<crate::data::Wind>>,
     /// The MoveWithWind behaviour's place in the process list (Game::create_seq as it was attached).
     pub wind_seq: u64,
-    /// NecromancerZone: (inside the zone, subscribed to its OnBloonDegrade). HYPOTHESIS
-    /// P-GRAVESUB: BloonEnter subscribes; a degrade the zone hears uses the subscription up, and
-    /// every bloon a pop makes (the first child too) enters afresh on the zone's next Process
-    /// (recordings wizard_004 rt 2384: a Pink whose last pop the zone heard isn't counted again
-    /// that frame; wizard_005 needs the first child's fresh Enter).
+    /// NecromancerZone: (inside the zone, subscribed to its OnBloonDegrade). BloonEnter subscribes
+    /// (the bloon object's delegate, so a degrade's first child stays subscribed; copies enter on
+    /// the zone's next Process); the graveyard manager skips a repeat of its last (Id, layerId)
+    /// (`Game::grave_last`).
     pub grave_zone: (bool, bool),
     /// The factory object it lives in (see `Game::fact`): a degraded bloon's first child keeps
     /// its parent's.
@@ -3641,6 +3640,9 @@ pub struct Game {
     spawn_route: Option<crate::map_routes::SpawnRoute>,
     /// Removeables and map events (map_logic.rs).
     pub logic: map_logic::LogicState,
+    /// Inactive, not hidden paths' segment centres and targetable flags, by path id (still
+    /// targetable segments while the path is in `logic.dormant`).
+    idle_segs: Vec<(i64, Vec<[f32; 2]>, Vec<bool>)>,
     /// Splitter.Rout counters, one per exit splitter.
     routs: Vec<usize>,
     /// `map.areas` in the game's order: the base land area (GatherMapBaseArea runs before
@@ -3808,6 +3810,8 @@ pub struct Game {
     next_id: u64,
     /// Bloon.layerId counter.
     next_layer: u64,
+    /// SimNecromancerGraveyardManager's last (bloon Id, layerId) taken (NecromancerZone.OnBloonDegrade).
+    grave_last: Option<(u64, u64)>,
     pub game_over: bool,
     /// The mode's last round was beaten (the Victory screen); `freeplay` then continues.
     pub won: bool,
@@ -5551,7 +5555,7 @@ impl Game {
         // name).
         let mut tracks: Vec<crate::data::MapPath> = d.map.paths.iter().filter(|p| p.active && p.points.len() > 1).cloned().collect();
         if tracks.is_empty() {
-            tracks.push(crate::data::MapPath { name: String::new(), active: true, id: 0, entry: Vec::new(), exit: Vec::new(), exit_splitter: 0, entry_splitter: 0, points: d.map.path.clone(), dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), quick_rot: Vec::new(), no_target: Vec::new(), spawn: None, leak: None, until_leak: None, invuln: Vec::new(), moab_invuln: Vec::new() });
+            tracks.push(crate::data::MapPath { name: String::new(), active: true, id: 0, entry: Vec::new(), exit: Vec::new(), exit_splitter: 0, entry_splitter: 0, points: d.map.path.clone(), dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), quick_rot: Vec::new(), no_target: Vec::new(), spawn: None, leak: None, until_leak: None, invuln: Vec::new(), moab_invuln: Vec::new(), hidden: false });
         }
         // Reverse mode (ReverseModel): bloons run every track end to start, so each track is
         // flipped and its splitters swap roles; the old end tracks become the spawn tracks.
@@ -5590,6 +5594,23 @@ impl Game {
             crate::map_routes::SpawnRoute::new(s, |id| tracks.iter().position(|t| t.id == id))
         });
         let logic = map_logic::LogicState::new(&d.map, tracks.clone(), splitter_ids.clone(), reversed);
+        // PathManager.GetPathSegmentsInRange (VERIFIED-DECOMP @0x180f6ba10) takes the segments of
+        // every path not (isHidden and not isActive): an inactive path's too (recording
+        // map_workshop_spike_204_r40: the Spike Factory's piles land on P3-Extra, no bloons on it).
+        let idle_segs: Vec<(i64, Vec<[f32; 2]>, Vec<bool>)> = d
+            .map
+            .paths
+            .iter()
+            .filter(|p| !p.active && !p.hidden && p.points.len() > 1)
+            .map(|p| {
+                let mut q = p.clone();
+                if reversed {
+                    q.points.reverse();
+                }
+                let tr = Track::with_info(q.points.clone(), &q.dists, &q.speeds, &q.quick);
+                (p.id, tr.segments(), Game::path_seg_ok(&q))
+            })
+            .collect();
         // The chosen difficulty, else Medium, else the old single-mode start values.
         let mode = d.modes.get(&d.mode).or(d.modes.get("Medium")).cloned().unwrap_or(crate::data::Mode {
             cash: d.start.cash,
@@ -5796,6 +5817,7 @@ impl Game {
             spawn_tracks,
             spawn_route,
             logic,
+            idle_segs,
             routs: vec![0; n_splitters],
             track: match tracks.first() {
                 Some(p) if p.points == d.map.path => Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick),
@@ -5953,6 +5975,7 @@ impl Game {
             rng: 0x9E37_79B9_7F4A_7C15,
             next_id: 1,
             next_layer: 0,
+            grave_last: None,
             game_over: false,
         };
         game.power_tower_defs = power_tower_names.into_iter().filter_map(|(pid, name)| Some((pid, game.tower_defs.iter().position(|(n, _)| *n == name)?))).collect();
@@ -13265,8 +13288,14 @@ impl Game {
         // every degrade is heard, subscribed or not; recording wizard_025: its pool fills as if
         // so, and an undead goes at rt 1853.)
         let grave_t5 = self.towers.iter().any(|tw| tw.tiers[2] >= 5 && self.tower_defs[tw.def].0 == "WizardMonkey");
-        let grave_heard = top && (grave_t5 || self.bloons[i].grave_zone.1);
-        let grave_id = self.bloons[i].id;
+        // NecromancerZone.OnBloonDegrade (VERIFIED-DECOMP @0x180d4c220): the graveyard manager
+        // keeps the last (bloon Id, layerId) it took and skips a degrade with the same pair, so a
+        // bloon degraded twice in one frame counts twice (a new layer each time; recording
+        // map_sunkencolumns_wizard_024_r40 rt 1599: Yellow 1038 to Green to Red, two gathers),
+        // and a layer already counted not again (wizard_004 rt 2384).
+        let grave_key = (self.bloons[i].id, self.bloons[i].layer);
+        let grave_heard = top && (grave_t5 || self.bloons[i].grave_zone.1) && self.grave_last != Some(grave_key);
+        let parent_grave = self.bloons[i].grave_zone;
         if top {
             self.pop_nested = false;
             self.pop_first_id = self.next_id;
@@ -13589,6 +13618,10 @@ impl Game {
                 // (The first child keeps the behaviour and its zone; a copy's is new.)
                 (ch.galv_zone, ch.galv_zone_skip, ch.galv_seq) = if n == 0 { parent_galv_zone.clone() } else { (Vec::new(), 1, self.create_seq) };
                 ch.chill = parent_chill;
+                // (The first child is the bloon object: still subscribed to the zone's degrades.)
+                if n == 0 {
+                    ch.grave_zone = parent_grave;
+                }
                 ch.wl = parent_wl.clone().map(|mut w| {
                     if n > 0 {
                         w.interval = 0;
@@ -13817,10 +13850,8 @@ impl Game {
             self.track_pops(kind, hit_camo, popped);
             // Bloon.Degrade raises OnBloonDegrade once per Damage, with the DamageResult.
             if grave_heard {
+                self.grave_last = Some(grave_key);
                 self.necro_gather(popped as i64, pp0);
-                if let Some(b) = self.bloons.iter_mut().find(|b| b.id == grave_id) {
-                    b.grave_zone.1 = false;
-                }
             }
         }
         if top && self.pop_nested {
@@ -14231,7 +14262,7 @@ impl Game {
             let los = self.tier(t).and_then(|tr| tr.attacks.iter().chain(tr.abilities.iter().flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter())).find(|a| a.model_name == key).map(Los::of))
                 .or_else(|| self.towers[t].temp.iter().find(|x| x.attack.model_name == key).map(|x| Los::of(&x.attack)))
                 .map_or(Los { through_walls, ..Default::default() }, |l| Los { through_walls, ..l });
-            let mut pts: Vec<[f32; 2]> = self.visible_segments(c, range, no_moab, los).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
+            let mut pts: Vec<[f32; 2]> = self.visible_points(c, range, no_moab, los);
             // (The list is the Close one: squared distance from the tower, a stable OrderBy;
             // recording ninja_002: with it the shuffle gives the game's -134.1, -99.1, -113.1,
             // -92.1, -106.1 Caltrops in turn.)
@@ -14277,8 +14308,7 @@ impl Game {
     fn first_visible_track_point(&mut self, tower: [f32; 2], c: [f32; 2], range: f32, off: f32, no_moab: bool, los: Los) -> Option<(f32, [f32; 2], u64)> {
         let d2 = |q: [f32; 2]| (q[0] - tower[0]) * (q[0] - tower[0]) + (q[1] - tower[1]) * (q[1] - tower[1]);
         let mut best: Option<([f32; 2], f32)> = None;
-        for (pi, k) in self.visible_segments(c, range, no_moab, los) {
-            let q = self.track_segs[pi as usize][k];
+        for q in self.visible_points(c, range, no_moab, los) {
             if best.is_none_or(|(_, b)| d2(q) < b) {
                 best = Some((q, d2(q)));
             }
@@ -19828,6 +19858,24 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     /// within range (+ 2 unless the attack filters MOABs out) with a clear line from the tower,
     /// paths in order, segments ascending. (PathSegment.bloonsInvulnerable isn't imported.)
     /// (Line of sight as `seg_line_clear`: from the tower and from its eject point.)
+    /// `visible_segments`' points plus those of the inactive paths' segments (`idle_segs`), for
+    /// the track-point targeters (a TrackTargetSupplier's list, TargetTrackOrDefault).
+    fn visible_points(&self, pos: [f32; 2], range: f32, no_moab: bool, los: Los) -> Vec<[f32; 2]> {
+        let mut out: Vec<[f32; 2]> = self.visible_segments(pos, range, no_moab, los).into_iter().map(|(pi, k)| self.track_segs[pi as usize][k]).collect();
+        let reach = if no_moab { range } else { range + 2.0 };
+        for (id, sg, ok) in &self.idle_segs {
+            if !self.logic.dormant.iter().any(|p| p.id == *id) {
+                continue;
+            }
+            for (k, q) in sg.iter().enumerate() {
+                if ok.get(k).copied().unwrap_or(false) && on_map(*q, 0.0) && (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2) <= reach * reach && self.los_clear(los, pos, *q) {
+                    out.push(*q);
+                }
+            }
+        }
+        out
+    }
+
     fn visible_segments(&self, pos: [f32; 2], range: f32, no_moab: bool, los: Los) -> Vec<(u8, usize)> {
         let reach = if no_moab { range } else { range + 2.0 };
         let mut out = Vec::new();

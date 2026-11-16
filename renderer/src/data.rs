@@ -495,6 +495,9 @@ pub struct MapPath {
     pub invuln: Vec<bool>,
     #[serde(default)]
     pub moab_invuln: Vec<bool>,
+    /// Path.isHidden (from the dump): an inactive hidden path has no segments to target.
+    #[serde(default)]
+    pub hidden: bool,
     /// Path.spawnDistance / leakDistance from the game's map dump (-1: none); without them the
     /// clone works them out from where the path crosses the map's edge.
     #[serde(default)]

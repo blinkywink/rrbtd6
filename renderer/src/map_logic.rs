@@ -99,7 +99,7 @@ pub struct LogicState {
     pool: Vec<Area>,
     /// The active paths' data (parallel to `Game::tracks`), and paths not yet on the map.
     paths: Vec<MapPath>,
-    dormant: Vec<MapPath>,
+    pub(crate) dormant: Vec<MapPath>,
     splitter_ids: Vec<i64>,
     spawner: Option<crate::map_routes::SpawnerDef>,
     reversed: bool,

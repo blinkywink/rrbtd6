@@ -76,6 +76,9 @@ def load_dump(path):
             # (The name can hold spaces: Quarry's "PathStandard 1"; the flags start at "active=".)
             k = next((j for j, t in enumerate(f) if t.startswith("active=")), 2)
             cur = {"id": " ".join(f[1:k]), "points": []}
+            # Path.isHidden: PathManager.GetPathSegmentsInRange (@0x180f6ba10) leaves out a path
+            # only when it is hidden and not active.
+            cur["hidden"] = "hidden=True" in f[k:]
             # Path.spawnDistance / leakDistance (-1: none), as the game has them.
             for t in f[k:]:
                 if t.startswith(("spawn=", "leak=", "untilLeak=")):
@@ -125,6 +128,10 @@ def patch(m, dumped):
                 m["paths"][best][k] = dp[k]
             else:
                 m["paths"][best].pop(k, None)
+        if dp.get("hidden"):
+            m["paths"][best]["hidden"] = True
+        else:
+            m["paths"][best].pop("hidden", None)
         for k, mk in (("spawn", "spawn"), ("leak", "leak"), ("untilLeak", "until_leak")):
             if k in dp:
                 m["paths"][best][mk] = dp[k]
