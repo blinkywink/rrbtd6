@@ -1,0 +1,1 @@
+{"name": "map_kartsndarts_dart_205_r40_seg", "map": "KartsNDarts", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 445, "seed": 777123, "towers": [{"id": "DartMonkey-205", "x": 16.0, "y": 42.0}], "quit": true, "cash": 10000000, "segprobe": true, "segprobe_from": 420, "segprobe_to": 440}

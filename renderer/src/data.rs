@@ -489,6 +489,12 @@ pub struct MapPath {
     /// PointInfo.disablePathTargeting per point (imported from the game's map dump).
     #[serde(default)]
     pub no_target: Vec<bool>,
+    /// PointInfo.bloonsInvulnerable / moabsInvulnerable per point (from the dump; empty: none):
+    /// Bloon.Process sets nonTargetable from the point at its distance.
+    #[serde(default)]
+    pub invuln: Vec<bool>,
+    #[serde(default)]
+    pub moab_invuln: Vec<bool>,
     /// Path.spawnDistance / leakDistance from the game's map dump (-1: none); without them the
     /// clone works them out from where the path crosses the map's edge.
     #[serde(default)]

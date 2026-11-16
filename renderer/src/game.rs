@@ -3623,6 +3623,9 @@ pub struct Game {
     map_speed: f32,
     /// Path.maximumDistanceUntilLeak per track, when imported (`leak_dist`).
     track_until: Vec<Option<f32>>,
+    /// Per track: point distances and PointInfo.bloonsInvulnerable / moabsInvulnerable (empty
+    /// when the path has none), for Bloon.nonTargetable (`bloon_nontarget`).
+    track_inv: Vec<(Vec<f32>, Vec<bool>, Vec<bool>)>,
     /// Per track: each PathSegment's point (the path point at its centre).
     track_segs: Vec<Vec<[f32; 2]>>,
     /// Per track, per segment: PathSegment.canTargetSegment (GatherPathInfoData, VERIFIED-DISASM
@@ -5544,7 +5547,7 @@ impl Game {
         // name).
         let mut tracks: Vec<crate::data::MapPath> = d.map.paths.iter().filter(|p| p.active && p.points.len() > 1).cloned().collect();
         if tracks.is_empty() {
-            tracks.push(crate::data::MapPath { name: String::new(), active: true, id: 0, entry: Vec::new(), exit: Vec::new(), exit_splitter: 0, entry_splitter: 0, points: d.map.path.clone(), dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), quick_rot: Vec::new(), no_target: Vec::new(), spawn: None, leak: None, until_leak: None });
+            tracks.push(crate::data::MapPath { name: String::new(), active: true, id: 0, entry: Vec::new(), exit: Vec::new(), exit_splitter: 0, entry_splitter: 0, points: d.map.path.clone(), dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), quick_rot: Vec::new(), no_target: Vec::new(), spawn: None, leak: None, until_leak: None, invuln: Vec::new(), moab_invuln: Vec::new() });
         }
         // Reverse mode (ReverseModel): bloons run every track end to start, so each track is
         // flipped and its splitters swap roles; the old end tracks become the spawn tracks.
@@ -5779,6 +5782,7 @@ impl Game {
             track_ends: tracks.iter().map(Game::path_ends).collect(),
             map_speed: d.map.bloon_speed,
             track_until: tracks.iter().map(|p| p.until_leak).collect(),
+            track_inv: tracks.iter().map(Game::path_inv).collect(),
             track_segs: tracks.iter().map(|p| Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick).segments()).collect(),
             track_rot: tracks.iter().map(|p| p.quick_rot.clone()).collect(),
             track_seg_ok: tracks.iter().map(Game::path_seg_ok).collect(),
@@ -6154,6 +6158,11 @@ impl Game {
             return;
         }
         self.voice_warned.clear();
+        // Spawner.StartRound (VERIFIED-DECOMP @0x180f753e0): Splitter.Reset on the spawn junction,
+        // then PathManager.Reset (@0x180f6c840): every path's entry and exit router's
+        // nextPathIndex back to 0 (recording map_balance_dart_205_r40 rt 656: round 41's first
+        // Black off PathRHStart takes PathRHSplit1 although round 40's MOAB took it before).
+        self.routs.iter_mut().for_each(|r| *r = 0);
         self.thrive_round_start();
         // Ability.OnRoundStartSim (VERIFIED-DISASM @0x180dfacd0): activationsThisRound = 0.
         for tw in &mut self.towers {
@@ -6507,6 +6516,7 @@ impl Game {
         let last = if self.freeplay_groups.is_empty() { self.rounds.len().max(1) } else { i32::MAX as usize };
         let round=n.clamp(1,last);
         self.round = round - 1;
+        self.logic_round_set();
         if self.sandbox || round > self.end_round { self.start_freeplay(); }
         self.start_round();
     }
@@ -6616,6 +6626,31 @@ impl Game {
         let t = Track::new(p.points.clone());
         let (spawn, leak) = t.entry_exit();
         (spawn.filter(|_| p.entry.is_empty()), leak.filter(|_| p.exit.is_empty()))
+    }
+
+    /// A path's point distances and invulnerable flags (`track_inv`).
+    pub(crate) fn path_inv(p: &crate::data::MapPath) -> (Vec<f32>, Vec<bool>, Vec<bool>) {
+        if p.invuln.len() == p.dists.len() || p.moab_invuln.len() == p.dists.len() {
+            (p.dists.clone(), p.invuln.clone(), p.moab_invuln.clone())
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        }
+    }
+
+    /// Bloon.nonTargetable (Bloon.Process @0x180fb5be0, after its move: Path.DistanceToExtraPointInfoBloon
+    /// @0x180f6dc40 at the quick table's point index, point i's flag AND point i+1's; bloonsInvulnerable,
+    /// or moabsInvulnerable for an isMoab bloon; index -1 leaves it; Path.FindBestBloon @0x180f8d160
+    /// skips it). NOT YET USED: recording map_kartsndarts_dart_205_r40 has the 2-0-5 hold a Ceramic
+    /// through 292-333 of the 276.6-345.8 flagged tunnel and lose it only from 334.3 (HANDOFF).
+    #[allow(dead_code)]
+    fn bloon_nontarget(&self, b: &Bloon) -> bool {
+        let Some((ds, inv, minv)) = self.track_inv.get(b.path as usize) else { return false };
+        if ds.is_empty() {
+            return false;
+        }
+        let k = ds.partition_point(|&d| d <= b.dist).saturating_sub(1);
+        let flags = if self.defs[b.kind].is_moab { minv } else { inv };
+        flags.get(k).copied().unwrap_or(false)
     }
 
     /// A path's 7-long segments that can be targeted (`track_seg_ok`).
@@ -7565,18 +7600,20 @@ impl Game {
         self.line_clear([pos[0] + r[0], pos[1] - r[1]], z, q)
     }
 
-    /// A tower's Position.z where it stands (InputManager.QueryPlacementPosition @0x180f83240:
-    /// Map.GetTerrainHeight(p, 0, 1) @0x180f5b0b0, the first active area holding p, unplaceable
-    /// and type 5 skipped, its height + renderHeightOffset; 0 off every area), the z
+    /// A tower's Position.z where it stands (Map.GetTerrainHeight @0x180f5b0b0: the first active
+    /// area holding p, type 5 skipped, its height + renderHeightOffset; 0 off every area), the z
     /// Attack.GetPathSegmentsInRange (@0x180dad8f0) checks lines of sight from, so blockers no
     /// taller don't block (recording map_sunkencolumns_dart_205_r40 rt 564: a 2-0-5 on 50-high
     /// LandRight, itself a blocker, shoots past the 50-high Blocking areas). STAND-IN: the entity
     /// height term (vtable 0x228) the origin adds is taken as 0, and z is taken where the tower is
     /// now, not kept from its placement.
     pub(crate) fn terrain_z(&self, p: [f32; 2]) -> f32 {
-        // (The clone's base land is areas[0]; the game's BaseArea, height 0, is last.)
+        // Unplaceable areas count (recording map_coveredgarden_dart_205_r40: the probe's RT line puts
+        // a tower inside WindowLowerLeft, type 3, at z 200; skipping them is QueryPlacementPosition's
+        // (@0x180f83240) preview, not the tower's). The clone's base land is areas[0]; the game's
+        // BaseArea (height 0) is last.
         for a in self.areas.iter().skip(1) {
-            if a.kind == 5 || a.kind == 3 {
+            if a.kind == 5 {
                 continue;
             }
             if Self::in_area(p, a) {
@@ -23510,6 +23547,7 @@ mod tests {
             g.towers[t].flip = true;
         }
         g.round = meta.get("round").and_then(|r| r.parse::<usize>().ok()).unwrap_or(1) - 1;
+        g.logic_round_set();
         // (Past the mode's last round the game plays on as freeplay: SetRound(89) on Hard.)
         if g.round >= g.end_round {
             g.freeplay = true;

@@ -71,6 +71,8 @@ pub enum Action {
     /// RotateAreaAction: `area` turns `rotation` degrees (Unity's sense) over `duration` seconds
     /// about `pivot` (clone frame), with the towers on it.
     RotateArea { id: i64, area: i64, rotation: f32, duration: f32, pivot: [f32; 2] },
+    /// CycleAreasAction: one of `ids` off (invert) or on, the rest the other way, turning with the round.
+    CycleAreas { ids: Vec<i64>, invert: bool, from_start: bool, per: i32 },
     /// A newer export's kind: does nothing, and the map still loads.
     #[serde(other)]
     Other,
@@ -110,6 +112,10 @@ pub struct LogicState {
     spins: Vec<(i64, i64, [f32; 2], f32, i64, Vec<i64>, f32)>,
     /// While logic_start runs: each caught-up event's trigger count.
     catch_up: Option<Vec<(i64, i32)>>,
+    /// CycleAreasAction.lastRotationIndex per action (keyed by its first area id).
+    cycle_last: Vec<(i64, i32)>,
+    /// While logic_round_end runs.
+    in_round_end: bool,
 }
 
 impl LogicState {
@@ -122,6 +128,8 @@ impl LogicState {
             round_skip: Vec::new(),
             spins: Vec::new(),
             catch_up: None,
+            cycle_last: Vec::new(),
+            in_round_end: false,
             pool: map.areas.clone(),
             paths,
             dormant: map.paths.iter().filter(|p| !p.active && p.points.len() > 1).cloned().collect(),
@@ -216,7 +224,30 @@ impl Game {
     pub(super) fn logic_round_end(&mut self) {
         let round = self.round as i32;
         let hits = self.logic_after_round_hits(|r, at, nth, primes, missed, skip| LogicState::after_round_cond(r, at, nth, primes, missed, skip), round);
+        self.logic.in_round_end = true;
         self.logic_trigger_at(|e, i, _| hits.contains(&(e, i)));
+        self.logic.in_round_end = false;
+    }
+
+    /// AfterRoundTrigger.OnRoundSet (VERIFIED-DECOMP @0x180f7a500): the round set (a later start,
+    /// sandbox Set Round) checks TriggerCond(1), the round index now (recording
+    /// map_coveredgarden_dart_205_r40: the game set to round 40 has cycled its windows to round
+    /// index 39's).
+    /// (A RotateAreaAction turns at once here too, to the trigger count: recording
+    /// map_geared_dart_205_r40, no spin before round 40's end.)
+    pub(crate) fn logic_round_set(&mut self) {
+        let round = self.round as i32;
+        let hits = self.logic_after_round_hits(|r, at, nth, primes, missed, skip| LogicState::after_round_cond(r, at, nth, primes, missed, skip), round);
+        let counts: Vec<(i64, i32)> = hits
+            .iter()
+            .filter_map(|&(e, i)| match self.logic.def.events[e].triggers[i] {
+                Trigger::AfterRound { round: at, nth, primes, .. } => Some((self.logic.def.events[e].id, LogicState::after_round_count(round, at, nth, primes))),
+                _ => None,
+            })
+            .collect();
+        self.logic.catch_up = Some(counts);
+        self.logic_trigger_at(|e, i, _| hits.contains(&(e, i)));
+        self.logic.catch_up = None;
     }
 
     /// StartRoundTrigger.OnRoundStart (TriggerCond): `round` is the round starting, counted from the
@@ -395,6 +426,38 @@ impl Game {
                 let at = self.steps as i64 + 1;
                 self.logic.spins[k].5.push(at);
             }
+            Action::CycleAreas { ids, invert, from_start, per } => {
+                // PerformAction (VERIFIED-DECOMP @0x180f7b680): index = GetCurrentRound (+ 1 -
+                // startRound with fromStartingRound) / roundsPerRotate; unchanged, nothing; else
+                // area (k + index) % n for k = 0.. : k = 0 destroyed with invert (else made if
+                // missing), the rest made if missing (else destroyed). INFERRED: the areas run the
+                // other way round from the scene's list, (k - index) % n (recording
+                // map_coveredgarden_dart_205_r40: round 40 starts without WindowUpperLeft, list
+                // index 1, and round 41 drops WindowLowerLeft, index 0, under the tower: its z 200
+                // -> 0 in the probe's RT lines).
+                if ids.is_empty() {
+                    return;
+                }
+                // (At a round's end GetCurrentRound is already the next round's index.)
+                let cur = self.round as i32 + self.logic.in_round_end as i32;
+                let r = cur + if from_start { 1 - self.start_round as i32 } else { 0 };
+                let idx = r / per.max(1);
+                let key = ids[0];
+                match self.logic.cycle_last.iter_mut().find(|c| c.0 == key) {
+                    Some(c) if c.1 == idx => return,
+                    Some(c) => c.1 = idx,
+                    None => self.logic.cycle_last.push((key, idx)),
+                }
+                let n = ids.len() as i32;
+                for k in 0..n {
+                    let id = ids[(k - idx).rem_euclid(n) as usize];
+                    if (k == 0) == invert {
+                        self.logic_destroy_area(id);
+                    } else {
+                        self.logic_create_area(id);
+                    }
+                }
+            }
             Action::Path { id, active } => {
                 if active {
                     self.logic_activate_path(id);
@@ -513,6 +576,7 @@ impl Game {
         // 132.49 - radius x 1.25, 106.24, like any path's.)
         self.track_ends.push(Game::path_ends(&p));
         self.track_until.push(p.until_leak);
+        self.track_inv.push(Game::path_inv(&p));
         self.track_segs.push(track.segments());
         self.track_rot.push(p.quick_rot.clone());
         self.track_seg_ok.push(Game::path_seg_ok(&p));

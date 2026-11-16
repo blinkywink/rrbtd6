@@ -85,6 +85,9 @@ def load_dump(path):
             cur["points"].append([float(f[1]), -float(f[2])])
             cur.setdefault("dists", []).append(float(f[4]))
             cur.setdefault("speeds", []).append(float(f[5]))
+            # PointInfo.bloonsInvulnerable / moabsInvulnerable: Bloon.nonTargetable on that stretch.
+            cur.setdefault("invuln", []).append(f[6] == "True")
+            cur.setdefault("moab_invuln", []).append(f[7] == "True")
             # PointInfo.disablePathTargeting (newer dumps): segments centred there can't be targeted.
             if len(f) > 9:
                 cur.setdefault("no_target", []).append(f[9] == "True")
@@ -117,6 +120,11 @@ def patch(m, dumped):
             m["paths"][best]["quick_rot"] = dp["quick_rot"]
         if dp.get("no_target"):
             m["paths"][best]["no_target"] = dp["no_target"]
+        for k in ("invuln", "moab_invuln"):
+            if any(dp.get(k, [])):
+                m["paths"][best][k] = dp[k]
+            else:
+                m["paths"][best].pop(k, None)
         for k, mk in (("spawn", "spawn"), ("leak", "leak"), ("untilLeak", "until_leak")):
             if k in dp:
                 m["paths"][best][mk] = dp[k]

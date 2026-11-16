@@ -179,6 +179,10 @@ def map_logic(by, components, nodes, parts):
                 wp = world_pos(nodes, pg if pg is not None else area["go"])
                 out.append({"kind": "RotateArea", "id": a["id"], "area": area["id"], "rotation": f["rotation"],
                             "duration": f["duration"], "pivot": [wp[0], wp[2]]})
+            elif k == "CycleAreasAction":
+                # roundsPerRotate 0 in the scene; the model divides by it, so taken as 1.
+                out.append({"kind": "CycleAreas", "ids": ids(f.get("areas")), "invert": bool(f.get("invert")),
+                            "from_start": bool(f.get("fromStartingRound")), "per": max(1, int(f.get("roundsPerRotate") or 0))})
             elif k == "TriggerMapActionsAction" and depth < 8 and comp_id(f.get("mapActions")) in by:
                 out += actions(ids(by[comp_id(f["mapActions"])]["fields"].get("actions")), depth + 1)
         return out
