@@ -43,6 +43,17 @@ def load_areas(path):
     return areas
 
 
+def load_base_type(path):
+    """The AreaType of the map's BaseArea (GatherMapBaseArea; last in Map.areas): what
+    Map.GetAreaAtPoint gives where no scene area is (land on most maps, water on Erosion /
+    Polyphemus, unplaceable on SunkenColumns)."""
+    for line in open(path, encoding="utf-8"):
+        f = line.split()
+        if f and f[0] == "area" and len(f) > 7 and f[7] == "AreaModel_BaseArea":
+            return int(f[4])
+    return None
+
+
 def patch_areas(m, areas):
     # The game's own outline points (exact) and Map.areas' order (the dump lists them in the
     # simulation's order: ProjectileBlockerCollisionRebound takes the first blocker area crossed).
@@ -154,6 +165,9 @@ def main():
         m = json.load(open(mp, encoding="utf-8"))
         patch(m, dumped)
         patch_areas(m, load_areas(dump))
+        bt = load_base_type(dump)
+        if bt is not None:
+            m["base_type"] = bt
         json.dump(m, open(mp, "w", encoding="utf-8"))
         print("patched", mp)
     gp = os.path.join(ROOT, "local_extracted", "game", "game.json")
@@ -166,6 +180,9 @@ def main():
         if g["map"].get("key") == key:
             patch(g["map"], dumped)
             patch_areas(g["map"], load_areas(dump))
+            bt = load_base_type(dump)
+            if bt is not None:
+                g["map"]["base_type"] = bt
         json.dump(g, open(gp, "w", encoding="utf-8"), indent=1)
         print("patched", gp)
 

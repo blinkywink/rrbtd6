@@ -5944,9 +5944,12 @@ impl Game {
             blockers: d.map.areas.iter().flat_map(|a| a.blockers.iter().map(move |&c| (c, a.is_disabled))).collect(),
             blocker_grid: blocker_grid(&d.map.areas),
             areas: {
+                // (GatherMapBaseArea's type: water on Erosion, unplaceable on SunkenColumns;
+                // recording map_sunkencolumns_engineer_204_r40, RandomPosition skips a point
+                // in no scene area.)
                 let base = Area {
                     id: 0,
-                    kind: AREA_LAND,
+                    kind: d.map.base_type.unwrap_or(AREA_LAND),
                     points: vec![[-WORLD_X, -WORLD_Z], [WORLD_X, -WORLD_Z], [WORLD_X, WORLD_Z], [-WORLD_X, WORLD_Z]],
                     height: 0.0,
                     render_offset: 0.0,
@@ -8100,8 +8103,10 @@ impl Game {
         if !on_map(p, -r) {
             return false;
         }
-        // The first area containing the point decides; the base land area is first.
-        let Some(area) = self.areas.iter().find(|a| a.kind != AREA_SKIPPED && Self::in_area(p, a)) else {
+        // The first area containing the point decides (Map.GetAreaAtPoint: the scene's areas in
+        // order, the base land last; recording map_sunkencolumns_engineer_204_r40: a Sentry spot on
+        // 50-high LandRight, over WaterRight at 1, is placeable).
+        let Some(area) = self.areas.iter().skip(1).find(|a| a.kind != AREA_SKIPPED && Self::in_area(p, a)).or_else(|| self.areas.first().filter(|a| Self::in_area(p, a))) else {
             return true;
         };
         if area.kind != AREA_LAND {
@@ -8123,8 +8128,8 @@ impl Game {
         // the circle doesn't cross (recording map_erosion_engineer_204_r40: RandomPosition skips
         // (102, 101.42), 0.6 inside LandArea (2) by PathEdge4 below it, so the second Sentry goes
         // to the next offset).
-        let own = self.areas.iter().skip(1).find(|a| a.kind != AREA_SKIPPED && Self::in_area(p, a));
-        if let Some(own) = own {
+        {
+            let own = area;
             let r75 = r * 0.75;
             if Self::circle_crosses_area(p, r75, own) {
                 let ok = self.areas.iter().any(|o| {
@@ -8136,15 +8141,11 @@ impl Game {
                 }
             }
         }
-        // BlockedByBlockerZone: full radius, non-strict. The flag that inverts the test sits at
-        // BlockerModel.isDisabled's offset (INFERRED); it is false on Monkey Meadow.
-        for &(c, disabled) in &self.blockers {
-            let d2 = (c[0] - p[0]).powi(2) + (c[1] - p[1]).powi(2);
-            let blocked = if disabled { d2 >= (c[2] - r) * (c[2] - r) } else { (c[2] + r) * (c[2] + r) >= d2 };
-            if blocked {
-                return false;
-            }
-        }
+        // Map.BlockedByBlockerZone (@0x180f4fd80) walks Map.blockerZones, which only scene
+        // BlockerZone components add (UnityToSimulation.AddBlockerZone @0x181580b50, inverse:
+        // blocked outside the zone), not areas' blockerCircles (those are MapBlockers, for
+        // projectiles): recording map_sunkencolumns_engineer_204_r40, a Sentry lands inside
+        // LandRight's 49-radius circle. STAND-IN: no scene BlockerZones are exported (none known).
         true
     }
 
@@ -17415,9 +17416,20 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     // its throw starts: recordings druid_300 rt 724-726 (the thorns over the
                     // lightning's earlier throw), druid_205 rt 172 (the thorns' own release under the
                     // lightning's later one).)
-                    let newest = (attack_w0..attack_w0 + attack.weapons.len())
-                        .find(|&k| (k == w && started.is_some()) || tw.weapons.get(k).is_some_and(|x| x.anim >= 0))
-                        .unwrap_or(w);
+                    // (The latest to start wins, ties to the lower index: Attack.target is what the
+                    // last throw found; recording map_erosion_druid_204_r40 rt 2411, the thorns' throw
+                    // turns the tower off the lightning's two frames older one.)
+                    let mut newest = w;
+                    let mut newest_t = i64::MIN;
+                    for k in attack_w0..attack_w0 + attack.weapons.len() {
+                        let t0 = if k == w && started.is_some() { Some(now_t) } else { tw.weapons.get(k).filter(|x| x.anim >= 0).map(|x| x.anim) };
+                        if let Some(t0) = t0 {
+                            if t0 > newest_t {
+                                newest_t = t0;
+                                newest = k;
+                            }
+                        }
+                    }
                     // (The attack's Target is that weapon's: a later weapon releasing during its throw
                     // shoots at it; recording druid_300 rt 725/726, the lightning lands on the thorns'
                     // Pink.)

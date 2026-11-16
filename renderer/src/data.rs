@@ -401,6 +401,9 @@ pub struct FreeplayGroup {
 #[derive(Deserialize)]
 pub struct MapData {
     pub path: Vec<[f32; 2]>,
+    /// The BaseArea's AreaType (from the SimRecorder map dump; land when absent).
+    #[serde(default)]
+    pub base_type: Option<i32>,
     /// Every track (one per entrySplitter) with its active flag; empty in older exports.
     #[serde(default)]
     pub paths: Vec<MapPath>,
