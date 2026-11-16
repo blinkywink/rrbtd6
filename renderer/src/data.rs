@@ -639,6 +639,9 @@ pub struct Tier {
     /// CreateEffectOnAirUnitModel: an effect kept on the tower's air unit (display only).
     #[serde(default)]
     pub air_fx: Option<String>,
+    /// CreateEffectOnRoundEndModel: an effect on the tower as each round ends (display only).
+    #[serde(default)]
+    pub round_end_fx: Option<String>,
     /// CreateEffectOnUpgradeModel: the effect this tier plays when bought (display only).
     #[serde(default)]
     pub upgrade_fx: Option<String>,
@@ -2366,6 +2369,9 @@ pub struct FanClub {
     pub end_fx: Option<String>,
     #[serde(default)]
     pub fan_fx: Option<String>,
+    /// MonkeyFanClubModel.effectLeaderId: on the tower that used it instead (display only).
+    #[serde(default)]
+    pub leader_fx: Option<String>,
     /// MonkeyFanClub.Mutator (VERIFIED-DISASM @0xe61060) sets each fan's projectile radius to
     /// projectileRadius and its weapons' eject point to ejectX / Y / Z.
     #[serde(default)]

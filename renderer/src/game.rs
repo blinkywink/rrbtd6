@@ -3800,6 +3800,8 @@ pub struct Game {
     pub hit_texts: Vec<[f32; 2]>,
     /// Upgrades bought this frame, for the upgrade effect: (tower position, effect prefab).
     pub upgrade_fx: Vec<([f32; 2], &'static str)>,
+    /// Towers that used Monkey Fan Club and are still fans (display: the leader's effect).
+    pub fan_leaders: Vec<u64>,
     /// Paragon purchases for the renderer's sacrifice effects (display only).
     pub sacrifices: Vec<Sacrifice>,
     /// Towers placed this frame: (position, placement effect prefab, scale).
@@ -6013,6 +6015,7 @@ impl Game {
             text_fx: Vec::new(),
             overlays: d.overlays.clone(),
             upgrade_fx: Vec::new(),
+            fan_leaders: Vec::new(),
             sacrifices: Vec::new(),
             place_fx: Vec::new(),
             effect_seq: 0,
@@ -12029,6 +12032,10 @@ impl Game {
                 }
                 fans.push(o);
             }
+            let leader = self.towers[t].id;
+            if !self.fan_leaders.contains(&leader) {
+                self.fan_leaders.push(leader);
+            }
             for o in fans {
                 if let Some(fx) = fc.start_fx.clone() {
                     self.place_fx.push((self.towers[o].pos, fx, 1.0));
@@ -15499,6 +15506,8 @@ impl Game {
                         // (The fan club's end effect as it turns back, display only.)
                         let end = fc.end_fx.clone();
                         tw.fan = None;
+                        let id = tw.id;
+                        self.fan_leaders.retain(|&l| l != id);
                         if let Some(fx) = end {
                             self.place_fx.push((tw.pos, fx, 1.0));
                         }
@@ -23244,6 +23253,14 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
     }
     fn finish_round(&mut self){
         self.logic_round_end();
+        // CreateEffectOnRoundEndModel: its effect on each such tower (the Rare Quincy Action Figure),
+        // display only.
+        let round_fx: Vec<([f32; 2], String)> = (0..self.towers.len())
+            .filter_map(|t| Some((self.towers[t].pos, self.tier(t)?.round_end_fx.clone()?)))
+            .collect();
+        for (p, fx) in round_fx {
+            self.place_fx.push((p, fx, 1.0));
+        }
             // BurstWeaponBehavior.OnRoundEnd (VERIFIED-DISASM @0xc75370): lastEmission = now -
             // intervalFrames on the weapon's clock and the burst full again (recording
             // desperado_001: the round's last single shot isn't followed up; the next round opens

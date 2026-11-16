@@ -60,8 +60,9 @@ effect names, model behaviours the data builder never reads).
 - Projectile emit effects (`ProjectileCreateEffectOnEmitModel`, `emit_fx`): Herald of Everfrost's hailstorm,
   the Sub's airburst muzzle flash.
 - Monkey Fan Club (Dart 040 / 050): the transformation cloud on each fan as it turns and as it turns back
-  (effectModel, endDisplayModel), and the pulse circles on each fan meanwhile (effectId). Not yet: the leader's
-  own pulse (effectLeaderId, exported).
+  (effectModel, endDisplayModel), the pulse circles on each fan meanwhile (effectId), and the leader's own
+  pulse on the tower that used it (effectLeaderId; `Game::fan_leaders`).
+- The Rare Quincy Action Figure plays its round-end effect (`CreateEffectOnRoundEndModel`, tier `round_end_fx`).
 - Drones (Drone, Drone Swarm, Gyrfalcon) play their `CreateEffectOnAirUnitDestroyModel` effect (SellEffect)
   where the air unit is when they expire (sub-tower `air_destroy_fx`).
 - Heli x-3-x+ keeps Downdraft's gust on its helicopter (`CreateEffectOnAirUnitModel`, tier `air_fx`).

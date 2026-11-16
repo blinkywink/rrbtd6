@@ -3157,7 +3157,9 @@ async fn game_main() {
                             want.insert(EXTRA_FX_TAG | (tw.id << 4) | k as u64, (tw.id, name, tw.pos, scale));
                         }
                         // A Monkey Fan Club fan's effect (MonkeyFanClubModel.effectId) while it's a fan.
-                        if let Some(name) = tw.fan.as_ref().and_then(|(fc, _)| fc.fan_fx.clone()) {
+                        // (The tower that used it: its leader effect, MonkeyFanClubModel.effectLeaderId.)
+                        let leader = game.fan_leaders.contains(&tw.id);
+                        if let Some(name) = tw.fan.as_ref().and_then(|(fc, _)| if leader { fc.leader_fx.clone().or(fc.fan_fx.clone()) } else { fc.fan_fx.clone() }) {
                             if *extra_kind.entry(name.clone()).or_insert_with(|| (false, root.join("effects").join(&name).join("effect.json").is_file())) == (false, true) {
                                 want.insert(EXTRA_FX_TAG | (tw.id << 4) | 6, (tw.id, name, tw.pos, 1.0));
                             }

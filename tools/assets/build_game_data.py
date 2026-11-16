@@ -1971,7 +1971,8 @@ def main():
                                        # endDisplayModel's effect (as it turns back), effectId (on each fan).
                                        "start_fx": prefab_name((deref(xf.get("effectModel")) or {"f": {}})["f"].get("assetId")),
                                        "end_fx": prefab_name((deref((deref(xf.get("endDisplayModel")) or {"f": {}})["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")),
-                                       "fan_fx": prefab_name(xf.get("effectId"))}
+                                       "fan_fx": prefab_name(xf.get("effectId")),
+                                       "leader_fx": prefab_name(xf.get("effectLeaderId"))}
                 # CreateProjectileOnAbilityActivateModel: a projectile fired from the tower on use.
                 if x["type"] == "CreateProjectileOnAbilityActivateModel" and deref(xf.get("projectile")) and xf.get("chance", 1.0) >= 1.0:
                     out.setdefault("on_activate", []).append({"projectile": projectile(deref(xf["projectile"])),
@@ -2550,6 +2551,10 @@ def main():
                 # Handler's BeastUpgradeFx, Etienne's radar pulse; most towers the generic ones).
                 "upgrade_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))
                                     for b in items(f["behaviors"]) if b and b["type"] == "CreateEffectOnUpgradeModel"), None),
+                # CreateEffectOnRoundEndModel: an effect on the tower as each round ends (the Rare Quincy
+                # Action Figure). Display only.
+                "round_end_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))
+                                      for b in items(f["behaviors"]) if b and b["type"] == "CreateEffectOnRoundEndModel"), None),
                 # CreateEffectOnAirUnitModel: an effect kept on the tower's air unit (Heli x-3-x+'s
                 # DowndraftGust). Display only.
                 "air_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))
