@@ -2551,6 +2551,12 @@ def main():
                 # Handler's BeastUpgradeFx, Etienne's radar pulse; most towers the generic ones).
                 "upgrade_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))
                                     for b in items(f["behaviors"]) if b and b["type"] == "CreateEffectOnUpgradeModel"), None),
+                # CreateEffectOnParentOnAttackModel: [effect, scale] on the parent tower as this one attacks
+                # (the Trance Totem's siren spiral on its Mermonkey). Display only.
+                "parent_attack_fx": next(([prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")),
+                                           (deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("scale", 1.0)]
+                                          for b in [x for a in items(f["behaviors"]) if a for x in [a] + (items(a["f"].get("behaviors")) if a["type"] == "AttackModel" else [])]
+                                          if b and b["type"] == "CreateEffectOnParentOnAttackModel"), None),
                 # CreateEffectOnRoundEndModel: an effect on the tower as each round ends (the Rare Quincy
                 # Action Figure). Display only.
                 "round_end_fx": next((prefab_name((deref(b["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))

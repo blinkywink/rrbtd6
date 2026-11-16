@@ -15992,7 +15992,8 @@ impl Game {
                 // sharedGridRange when that is non-zero (else its own range).
                 let shared: Vec<([f32; 2], f32, Los)> = if attack.shared_range {
                     let mut v = Vec::new();
-                    for o in (0..self.towers.len()).filter(|&o| o != t && self.towers[o].sub.is_none()) {
+                    // (The tower's own addsToSharedGrid attacks are in the grid too.)
+                    for o in (0..self.towers.len()).filter(|&o| self.towers[o].sub.is_none()) {
                         let Some(tr) = self.tier(o) else { continue };
                         let ob = self.buffs.get(o).cloned().unwrap_or_default();
                         for a in tr.attacks.iter().filter(|a| a.adds_shared) {
@@ -16192,11 +16193,30 @@ impl Game {
                     let mut aim_at = b.pos;
                     let mut aim_off = [0.0f32; 2];
                     let mut aim_circle: Option<u8> = None;
-                    // HYPOTHESIS P-SHAREDGRID: with isSharedRangeEnabled the attack targets the
-                    // segments TargetSupplierSharedRange.PressTheGridsTogether (@0xe0ee30) keeps,
-                    // the plain ones only: no MOAB reaches in by its collision circles (recording
-                    // sub_400: a MOAB is first a target when its segment's point is in range).
-                    let seg_in = plain || (!attack.shared_range && !d.circles.is_empty() && moab_near && {
+                    // With isSharedRangeEnabled the attack's visible segments are the ones
+                    // TargetSupplierSharedRange.PressTheGridsTogether (VERIFIED-DECOMP @0x180df0320)
+                    // keeps: inRange when some grid entry there is (PathSegment.IsInRange: its point
+                    // within that attack's range + 2), line of sight when shareLineOfSight or the
+                    // attack's own sight of it, and some such entry has line of sight too.
+                    let (g_in, g_los) = if attack.shared_range {
+                        match seg_q.filter(|_| seg_ok) {
+                            Some(sq) => {
+                                let near = |&(q, rr, _): &([f32; 2], f32, Los)| (sq[0] - q[0]).powi(2) + (sq[1] - q[1]).powi(2) <= (rr + 2.0) * (rr + 2.0);
+                                let g_in = shared.iter().any(near);
+                                (g_in, g_in && (attack.shared_los || seg_clear) && shared.iter().any(|e| near(e) && self.los_clear(e.2, e.0, sq)))
+                            }
+                            None => (false, false),
+                        }
+                    } else {
+                        (false, false)
+                    };
+                    // Targetting.GetTargets (VERIFIED-DECOMP @0x180fdbe70): a segment entry without
+                    // both inRange and line of sight still gives a MOAB-class bloon through
+                    // CanHitMoab (@0x180fdb200), which with usingSharedRange skips the circle's
+                    // distance test: a circle whose line from the tower is clear (recording
+                    // map_lotusisland_sub_paragon_subs_r40 rt 853: the 2-0-0 Sub, 90 from the MOAB).
+                    let seg_in = if attack.shared_range { g_in && g_los } else { plain };
+                    let seg_in = seg_in || (!d.circles.is_empty() && if attack.shared_range { g_in } else { moab_near } && {
                         // CollisionGroupData.precalculatedOffset: the offset turned by the bloon's
                         // rotation (Bloon.SetRotation, VERIFIED-DISASM @0xfd5260; Vector2.Rotate as
                         // game_dir), game frame (y flipped here). Recording dart_502: on a curve the
@@ -16227,8 +16247,8 @@ impl Game {
                             // In range + its radius, and seen: the segment's line is clear, or (map
                             // given unless attackThroughWalls) the line to the circle itself.
                             .find(|c| {
-                                (c[0] - pos[0]).powi(2) + (c[1] - pos[1]).powi(2) < (range + c[2]) * (range + c[2])
-                                    && (seg_clear || self.line_clear(pos, self.terrain_z(pos), [c[0], c[1]]))
+                                (attack.shared_range || (c[0] - pos[0]).powi(2) + (c[1] - pos[1]).powi(2) < (range + c[2]) * (range + c[2]))
+                                    && ((!attack.shared_range && seg_clear) || self.line_clear(pos, self.terrain_z(pos), [c[0], c[1]]))
                             })
                             .map(|c| {
                                 aim_at = [c[0], c[1]];
@@ -16286,19 +16306,13 @@ impl Game {
                         continue;
                     }
                     let dd = (p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2);
-                    // TargetSupplierSharedRange.GetTargets (VERIFIED-DECOMP @0x180deff90) sets the attack's
-                    // visible segments to PressTheGridsTogether's (@0x180df0320) and takes
-                    // Attack.GetVisibleTargets: a bloon counts by its segment, not its own spot and
-                    // radius: a segment another tower has in range (its point within that tower's
-                    // range, the line from it clear; recording map_lotusisland_sub_paragon_quincy_r40
-                    // rt 577: no shot at a MOAB 70.8 from Quincy's 50, whose segment is out of it).
-                    // PressTheGridsTogether (VERIFIED-DECOMP @0x180df0320) walks the attack's own
-                    // full-sight segments: inRange when some grid entry there has inRange; line of
-                    // sight only when shareLineOfSight (+0x6b) or the attack's own entry has it, and
-                    // some grid entry has inRange and line of sight (SimRecorder SP lines: the Navarch
-                    // at (-112, 66) can't see segments 63 / 64, so its first shot is at 65, rt 844).
-                    let shared_in = || seg_ok && (attack.shared_los || seg_clear) && seg_q.is_some_and(|sq| shared.iter().any(|&(q, rr, los)| (sq[0] - q[0]).powi(2) + (sq[1] - q[1]).powi(2) <= rr * rr && self.los_clear(los, q, sq)));
-                    if (!seg_in && !shared_in()) || dd < attack.min_range * attack.min_range {
+                    // (A shared-range attack's segments are the pressed ones: seg_in above.
+                    // TargetSupplierSharedRange.GetTargets (VERIFIED-DECOMP @0x180deff90) sets them
+                    // through Attack.SetVisiblePathSegments and takes Attack.GetVisibleTargets: a
+                    // bloon counts by its segment, not its own spot and radius; recording
+                    // map_lotusisland_sub_paragon_quincy_r40 rt 577: no shot at a MOAB 70.8 from
+                    // Quincy's 50, whose segment is out of it.)
+                    if !seg_in || dd < attack.min_range * attack.min_range {
                         continue;
                     }
                     any_target = true;
@@ -24117,6 +24131,9 @@ mod tests {
         let mut camos: Vec<usize> = Vec::new();
         let mut flips: Vec<usize> = Vec::new();
         let mut upgrades: Vec<(usize, usize, usize)> = Vec::new();
+        // SimRecorder's `# place k frame`: tower k placed between recorded frames frame and
+        // frame + 1 (InputManager.CreateTowerAt, as at the start) instead of before the first.
+        let mut late: Vec<(usize, usize)> = Vec::new();
         // Per frame (roundTime): bloons (type, distance) and weapons (tower id, index, lastEmission).
         let mut frames: Vec<(i64, Vec<(String, f32)>, Vec<(u64, usize, i64)>)> = Vec::new();
         // Per frame: positions of bloons (0) and projectiles (1), in the game's frame.
@@ -24165,6 +24182,7 @@ mod tests {
                 Some("#") if f.get(1) == Some(&"camo") => camos.push(f[2].parse().unwrap()),
                 Some("#") if f.get(1) == Some(&"flip") => flips.push(f[2].parse().unwrap()),
                 Some("#") if f.get(1) == Some(&"upgrade") => upgrades.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap())),
+                Some("#") if f.get(1) == Some(&"place") => late.push((f[2].parse().unwrap(), f[3].parse().unwrap())),
                 Some("F") => {
                     if first_time.is_none() {
                         first_time = f[1].parse::<i64>().ok();
@@ -24232,7 +24250,8 @@ mod tests {
         // (Only where the map's logic turns areas: elsewhere a first W line can be a sub-tower's,
         // recording beast_010's beast.)
         let start_w: Vec<[f32; 2]> = if g.logic_turns_areas() { first_w.iter().filter(|w| w.1 == 0).map(|w| w.2).collect() } else { Vec::new() };
-        for (ti, (id, x, y)) in towers.iter().enumerate() {
+        let place_tower = |g: &mut Game, ti: usize| {
+            let (id, x, y) = &towers[ti];
             let (xv, yv): (f32, f32) = match start_w.get(ti).filter(|_| start_w.len() == towers.len()) {
                 Some(w) if (w[0] - *x).abs() > 0.5 || (-w[1] - *y).abs() > 0.5 => (w[0], -w[1]),
                 _ => (*x, *y),
@@ -24287,6 +24306,11 @@ mod tests {
             // InputManager.CreateTowerAt as SimRecorder calls it leaves Tower.worth at 0
             // (logged); bought upgrades add to it.
             g.towers[t].invested = 0.0;
+        };
+        for ti in 0..towers.len() {
+            if !late.iter().any(|l| l.0 == ti) {
+                place_tower(&mut g, ti);
+            }
         }
         for &(k, level, xp) in &hero_levels {
             let t = g.towers.iter().enumerate().filter(|(_, t)| t.sub.is_none()).nth(k).map(|(i, _)| i).unwrap();
@@ -24340,6 +24364,11 @@ mod tests {
         let (mut lists_diff, mut first_list): (usize, Option<(i64, Vec<(String, f32)>, Vec<(String, f32)>)>) = (0, None);
         let (mut places_diff, mut first_place): (usize, Option<(i64, Vec<(u8, u32, u32)>, Vec<(u8, u32, u32)>)>) = (0, None);
         for (fi, (rt, bloons, weapons)) in frames.iter().enumerate() {
+            for &(k, at) in &late {
+                if at == fi {
+                    place_tower(&mut g, k);
+                }
+            }
             // SimRecorder's `# ability N`: every ability, cooldown ignored, between recorded frames
             // N and N + 1 (Ability.Activate(true) on each).
             for &(k, path, at) in &upgrades {

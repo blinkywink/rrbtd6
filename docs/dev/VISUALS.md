@@ -62,6 +62,9 @@ effect names, model behaviours the data builder never reads).
 - Monkey Fan Club (Dart 040 / 050): the transformation cloud on each fan as it turns and as it turns back
   (effectModel, endDisplayModel), the pulse circles on each fan meanwhile (effectId), and the leader's own
   pulse on the tower that used it (effectLeaderId; `Game::fan_leaders`).
+- Mermonkey x-x-4 / x-x-5's Trance Totem: as it attacks, its siren spiral plays on the Mermonkey
+  (`CreateEffectOnParentOnAttackModel` on the totem's attack, tier `parent_attack_fx`; main.rs watches the
+  totem's attack_t restart).
 - The Rare Quincy Action Figure plays its round-end effect (`CreateEffectOnRoundEndModel`, tier `round_end_fx`).
 - Drones (Drone, Drone Swarm, Gyrfalcon) play their `CreateEffectOnAirUnitDestroyModel` effect (SellEffect)
   where the air unit is when they expire (sub-tower `air_destroy_fx`).

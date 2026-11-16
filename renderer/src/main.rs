@@ -796,6 +796,8 @@ async fn game_main() {
     let mut extra_fx_live: HashMap<u64, (u64, String)> = HashMap::new();
     // Per extra display name: (has a mesh in models/extra, has an effect in effects/), looked up once.
     let mut extra_kind: HashMap<String, (bool, bool)> = HashMap::new();
+    // Per sub-tower with a parent-attack effect: its attack_t last frame (a new throw restarts it).
+    let mut parent_fx_seen: HashMap<u64, f32> = HashMap::new();
     let outline_scale: f32 = std::env::var("RRBTD6_OUTLINE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.7);
     mark("tower index");
     // Loads tower def `d`'s base models if not yet loaded.
@@ -3109,6 +3111,17 @@ async fn game_main() {
             }
             for (p, fx, k) in game.place_fx.drain(..) {
                 particles.spawn(&fx, [p[0], 0.0, p[1]], k);
+            }
+            // CreateEffectOnParentOnAttackModel: as a sub-tower attacks (a new throw restarts its
+            // attack_t), its effect on the parent tower (the Trance Totem's spiral on its Mermonkey).
+            for t in 0..game.towers.len() {
+                let tw = &game.towers[t];
+                let Some((Some(fx), k)) = game.tier(t).and_then(|tr| tr.parent_attack_fx.clone()) else { continue };
+                let Some(parent) = tw.sub.as_ref().and_then(|s| game.towers.iter().find(|o| o.id == s.parent)) else { continue };
+                let last = parent_fx_seen.insert(tw.id, tw.attack_t).unwrap_or(f32::MAX);
+                if tw.attack_t < f32::MAX && tw.attack_t < last {
+                    particles.spawn(&fx, [parent.pos[0], 0.0, parent.pos[1]], k);
+                }
             }
             // Simulation.CreateTextEffect (Lead to Gold's "$50"): the prefab with its text set,
             // removed after its lifespan.

@@ -639,6 +639,9 @@ pub struct Tier {
     /// CreateEffectOnAirUnitModel: an effect kept on the tower's air unit (display only).
     #[serde(default)]
     pub air_fx: Option<String>,
+    /// CreateEffectOnParentOnAttackModel: (effect, scale) on the parent tower as this one attacks.
+    #[serde(default)]
+    pub parent_attack_fx: Option<(Option<String>, f32)>,
     /// CreateEffectOnRoundEndModel: an effect on the tower as each round ends (display only).
     #[serde(default)]
     pub round_end_fx: Option<String>,

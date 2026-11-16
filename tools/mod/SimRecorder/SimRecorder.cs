@@ -49,6 +49,10 @@ public class TowerSpec
     /// Upgrades bought between recorded frames: after frame `frame`, path `path` (0-2); a path
     /// already at tier 5 with the paragon's towers placed buys the paragon.
     public List<UpgradeSpec> upgrades { get; set; } = new();
+    /// Placed between recorded frames instead of at the start: after frame `place_frame`
+    /// (InputManager.CreateTowerAt, as at the start; -1 = at the start). List such towers last
+    /// (the upgrade indices count placed towers in creation order).
+    public int place_frame { get; set; } = -1;
 }
 
 public class UpgradeSpec
@@ -310,6 +314,7 @@ public class Recorder : MelonMod
                 if (Sc.fast) Il2CppAssets.Scripts.Simulation.TimeManager.FastForwardActive = true;
                 foreach (var t in Sc.towers)
                 {
+                    if (t.place_frame >= 0) continue;
                     // This match's own (mutated) model, as the placement UI uses.
                     var model = sim.model.GetTowerFromId(t.id);
                     var ok = sim.GetInputManager(InGame.instance.bridge.GetInputId()).CreateTowerAt(new Il2CppAssets.Scripts.Simulation.SMath.Vector2(t.x, t.y), model, ObjectId.Invalid, false, true, true, false, -1, false, -1);
@@ -414,6 +419,7 @@ public class Recorder : MelonMod
                     if (Sc.towers[k].flip) Out.WriteLine($"# flip {k}");
                     if (Sc.towers[k].point.Count == 2) Out.WriteLine($"# point {k} {F(Sc.towers[k].point[0])} {F(Sc.towers[k].point[1])}");
                     foreach (var u in Sc.towers[k].upgrades) Out.WriteLine($"# upgrade {k} {u.path} {u.frame}");
+                    if (Sc.towers[k].place_frame >= 0) Out.WriteLine($"# place {k} {Sc.towers[k].place_frame}");
                 }
                 if (Sc.fx || Sc.shots.Count > 0)
                 {
@@ -1318,6 +1324,19 @@ static class SimulatePatch
                     MelonLogger.Msg($"SimRecorder paragon investment {info.totalInvestment} degree {pt.GetCurrentDegree()} at frame {Recorder.Recorded}");
                 }
             });
+        // Towers with a place_frame go in between frames, as the start's placement does.
+        for (int k = 0; k < Recorder.Sc.towers.Count; k++)
+            if (Recorder.Sc.towers[k].place_frame == Recorder.Recorded)
+            {
+                var ps = Recorder.Sc.towers[k];
+                Part("place", () =>
+                {
+                    var model = __instance.model.GetTowerFromId(ps.id);
+                    var ok = __instance.GetInputManager(InGame.instance.bridge.GetInputId()).CreateTowerAt(new Il2CppAssets.Scripts.Simulation.SMath.Vector2(ps.x, ps.y), model, ObjectId.Invalid, false, true, true, false, -1, false, -1);
+                    MelonLogger.Msg($"SimRecorder placed {ps.id} at {ps.x},{ps.y} frame {Recorder.Recorded}: {ok}");
+                    Recorder.Out?.WriteLine($"# placed {ps.id} {Recorder.Recorded} {ok}");
+                });
+            }
         // Upgrades go in between frames too, through the same call the upgrade buttons make.
         for (int k = 0; k < Recorder.Sc.towers.Count; k++)
             foreach (var u in Recorder.Sc.towers[k].upgrades)
