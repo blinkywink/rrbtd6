@@ -2534,6 +2534,9 @@ def main():
                                                        "mult": d.get("multiplier", 1.0), "add": d.get("additive", 0.0),
                                                        "tag_mods": [tag_mod(m) for m in items(d.get("damageModifierModels"))
                                                                     if m and m["type"] == "DamageModifierForTagModel" and m["f"].get("tag")],
+                                                       # (DamageOverTime.OnDestroy @0x180fe5480: with damageOnDestroy the
+                                                       # behaviour's removal (BloonExit) ticks once more at once.)
+                                                       "on_destroy": bool(d.get("damageOnDestroy", False)),
                                                        "id": z.get("mutatorId") or z.get("_name", "")})(
                                                (deref(b["f"].get(k)) or {}).get("f", {}),
                                                ((deref((deref(b["f"].get(k)) or {}).get("f", {}).get("behaviorModel")) or {}).get("f") or {}))

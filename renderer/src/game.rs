@@ -3562,6 +3562,9 @@ pub struct Game {
     lt_shared: FastMap<u64, Vec<u64>>,
     /// Spirit of the Forest zones' Zoned<Bloon>.inZone by (tower id, zone): the bloons that entered.
     spirit_in: FastMap<(u64, usize), FastSet<u64>>,
+    /// DamageOverTime.OnDestroy's ticks from this frame's zone exits: (bloon id, damage, its tag
+    /// modifiers, immunities, owner, distribute), dealt in the tower's turn (`exit_ticks`).
+    exit_ticks: Vec<(u64, f32, std::sync::Arc<[TagMod]>, u32, u64, (bool, bool))>,
     /// The copies (degrade children past the first) made in the current top-level Damage.
     copies_now: FastSet<u64>,
     /// The PostDegrade lastTick of the bloon the current Damage first hit (see `copies_now`).
@@ -5848,6 +5851,7 @@ impl Game {
             fm_pending: Vec::new(),
             lt_shared: Default::default(),
             spirit_in: Default::default(),
+            exit_ticks: Vec::new(),
             copies_now: Default::default(),
             copy_root_tick: None,
             fm_pool: Vec::new(),
@@ -14476,6 +14480,22 @@ impl Game {
                             keep: false,
                         });
                     } else if !inside && was && has {
+                        // DamageOverTime.OnDestroy (VERIFIED-DECOMP @0x180fe5480): the behaviour going
+                        // with its mutator runs CheckTick (lastTick -999999999 first only with
+                        // damageOnDestroy, false for these zones), so a tick that is due lands now,
+                        // in the tower's turn before the bloon moves (recording
+                        // map_kartsndarts_druid_052_r40 rt 542: a Yellow leaving the Far and Medium
+                        // zones takes their due ticks, 3 layers, and its Red then steps 0.52). Only
+                        // the first mutator of an id has a behaviour (ApplyMutation's limiter).
+                        let rc = self.round_clock;
+                        let first = self.bloons[i].effects.iter().position(|e| e.id == *id);
+                        if let Some(e) = first.map(|f| &self.bloons[i].effects[f]).filter(|e| e.owner == owner && e.added != self.sim_elapsed) {
+                            if let EffectKind::Dot { damage, interval, tick, immune, ref mods, .. } = e.kind {
+                                if rc - tick as i64 >= interval as i32 as i64 {
+                                    self.exit_ticks.push((self.bloons[i].id, damage, mods.clone(), immune, owner, e.distribute));
+                                }
+                            }
+                        }
                         self.bloons[i].effects.retain(|e| !(e.id == *id && e.owner == owner));
                     }
                 }
@@ -22331,7 +22351,6 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         }
         self.comanche_decide();
         self.forget_untouched();
-        self.spirit_of_the_forest(None, None);
         self.collect_zones();
         self.auto_abilities();
 
@@ -22447,23 +22466,19 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let mut cand = std::mem::take(&mut self.grid_cand);
         let sim_now = self.sim_elapsed;
         let mut due_retargets: Vec<u64> = Vec::new();
-        let first_new_id = self.next_id;
         // The collision pass (CollisionChecker.Process), as a macro so InstantDamageEmission can run it
         // again for its own projectiles after the towers act.
         collide_pass!(None::<&[u64]>, self, p, kids, exhausted, subs, contacts, cand, sim_now);
         self.proj_cursor = usize::MAX;
         self.grid_on = false;
         self.grid_cand = cand;
-        // The Spirit of the Forest zones run (Zoned.Run, BloonEnter) in their tower's turn, after the
-        // collision pass: a copy a pop made in it enters the zones it is in this frame (recording
-        // map_kartsndarts_druid_052_r40 rt 481: the MOAB's Ceramics have the Medium zone's
-        // DamageOverTime at -999999999 by the frame's end, so it ticks at 482). The clone's zone pass
-        // runs before the collision pass, so those copies enter here.
-        for i in 0..self.bloons.len() {
-            if self.bloons[i].id >= first_new_id {
-                self.spirit_of_the_forest(Some(i), None);
-            }
-        }
+        // The Spirit of the Forest zones (Zoned.Run: BloonEnter / BloonExit) run in their tower's turn,
+        // after the collision pass and before the bloons move: a copy a pop made in the pass enters
+        // the zones it is in this frame, and a bloon popped in the pass never enters (recording
+        // map_kartsndarts_druid_052_r40 rt 481: the MOAB's Ceramics have the Medium zone's DoT at
+        // -999999999 by the frame's end; rt 2743: a Zebra that came into the Far zone with its last
+        // move is popped first, so its Blues carry no DoT).
+        self.spirit_of_the_forest(None, None);
         // Out of pierce, a shot is exhausted in Projectile.CollideBloon, in the collision pass:
         // its projectiles are made then, before any tower acts, and come before that frame's
         // throws (recording boomerang_paragon_r98: a MOAB Press blast gets a lower id than the
@@ -22483,6 +22498,32 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         self.plist_mark = self.path_lists.iter().map(Vec::len).collect();
         self.fact_mark = self.fact.len();
         self.phase = 1;
+        // The zone exits' DamageOverTime.OnDestroy ticks (`exit_ticks`): in the Spirit's turn, before
+        // the bloons move; Bloon.Damage's PreCheckDamageOutcome as for any tick.
+        for (id, damage, mods, immune, owner, distribute) in std::mem::take(&mut self.exit_ticks) {
+            let Some(i) = self.bloons.iter().position(|b| b.id == id) else { continue };
+            if immune & self.bloons[i].properties(&self.defs[self.bloons[i].kind]) != 0 || self.bloon_nontarget(&self.bloons[i]) {
+                continue;
+            }
+            let dmg = dot_damage(damage, &mods, &self.defs[self.bloons[i].kind].tags);
+            let tally0 = self.damage_tally;
+            self.distribute = distribute;
+            let n = self.damage(i, dmg.round() as i32, &mut kids);
+            self.distribute = (true, false);
+            let dealt = self.damage_tally - tally0;
+            if dealt > 0 {
+                if let Some(ti) = self.towers.iter().position(|t| t.id == owner) {
+                    self.rage_add(ti, dmg.round());
+                }
+            }
+            if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
+                tw.pops += n;
+                tw.sun_destroyed(self.last_destroyed);
+                tw.damage += dealt;
+                self.stats.pops += n;
+                self.stats.damage += dealt;
+            }
+        }
         // Bloons processed during the tower phase (they come before a newer Attack in the process
         // list), with what their Process produced; the rest are processed after the towers.
         let mut dots = Vec::new();
