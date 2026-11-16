@@ -33,6 +33,12 @@ effect names, model behaviours the data builder never reads).
   Psi, D&D Monke, the Nautic Siege Core... STAND-IN: the animator's state-to-clip order (AlternateAnimationModel states,
   originState) isn't exported, so clips go in name order.
 
+- **Paragon degree swaps** (`ParagonAssetSwapModel`, `ParagonAssetSwapPerDegreeModel`; paragon `swaps`,
+  `per_degree`, `Game::paragon_display`): at its display level a Paragon's extras and shots use the
+  swapped art from models/extra: Bomb's add-on and cluster / ISAB missiles, Sniper's platform, Glaive
+  Dominus' glaives, Ascended Shadow's shurikens, the Tack Paragon's meteors. The Druid Paragon's cyclone
+  levels (RootOfAllNatureCycloneT3-T5, Wrath T4) aren't exported yet.
+
 ## Audit entries that aren't gaps
 
 - `CreateEffectOnExpireModel`: read for projectiles (`expire_fx`) and sub-towers (`expire_fx`); the

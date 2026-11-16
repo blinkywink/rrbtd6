@@ -2276,11 +2276,13 @@ async fn game_main() {
                     }
                 }
                 for ex in game.tier_of(t).map(|tr| tr.extras.as_slice()).unwrap_or(&[]) {
-                    let kind = *extra_kind.entry(ex.name.clone()).or_insert_with(|| {
-                        (root.join("models").join("extra").join(&ex.name).join("meta.json").is_file(), root.join("effects").join(&ex.name).join("effect.json").is_file())
+                    // (A Paragon's at its display level: ParagonAssetSwapModel.)
+                    let name = game.paragon_display(t, &ex.name).unwrap_or_else(|| ex.name.clone());
+                    let kind = *extra_kind.entry(name.clone()).or_insert_with(|| {
+                        (root.join("models").join("extra").join(&name).join("meta.json").is_file(), root.join("effects").join(&name).join("effect.json").is_file())
                     });
-                    if !extra_models.contains_key(&ex.name) && kind.0 {
-                        extra_models.insert(ex.name.clone(), prefetch.load(&root.join("models").join("extra").join(&ex.name)));
+                    if !extra_models.contains_key(&name) && kind.0 {
+                        extra_models.insert(name.clone(), prefetch.load(&root.join("models").join("extra").join(&name)));
                     }
                 }
                 if let Some(s) = &t.sub {
@@ -2556,7 +2558,8 @@ async fn game_main() {
                 // on the tower, idling, scaled to range / displayRadius where linked.
                 if let Some(tr) = game.tier_of(t) {
                     for ex in &tr.extras {
-                        let Some(m) = extra_models.get_mut(&ex.name).and_then(|m| m.as_mut()) else { continue };
+                        let name = game.paragon_display(t, &ex.name).unwrap_or_else(|| ex.name.clone());
+                        let Some(m) = extra_models.get_mut(&name).and_then(|m| m.as_mut()) else { continue };
                         let link = tr.range_links.iter().find(|(n, _)| *n == ex.name).map(|(_, r)| *r).filter(|r| *r > 0.0);
                         let k = ex.scale * link.map_or(1.0, |r| game.range(ti) / r);
                         m.tilt = (k != 1.0).then_some((0.0, 0.0, k));
@@ -2835,7 +2838,21 @@ async fn game_main() {
                 let (y, z) = if (n > 0 || p.spec.cash.is_some()) && p.vel == [0.0, 0.0] { (1.0, p.pos[1] - tilt) } else { (10.0, z) };
                 // RotateModel spins the display (boomerangs) instead of facing the flight direction.
                 let heading = if p.spec.spin != 0.0 { (p.spec.spin * p.age / FPS).to_radians() } else { game.track_heading(p).unwrap_or_else(|| p.vel[1].atan2(p.vel[0])) };
-                match display.and_then(|g| proj_index.get(g)).and_then(|n| proj_displays.get(n)) {
+                // A Paragon's shot at its display level (ParagonAssetSwapModel: Bomb's cluster
+                // missiles, Glaive Dominus' glaives, Ascended Shadow's shurikens, the meteors), the
+                // art from models/extra.
+                let swapped = display
+                    .and_then(|g| proj_index.get(g))
+                    .and_then(|n| game.towers.iter().find(|o| o.id == p.owner).and_then(|o| game.paragon_display(o, n)))
+                    .map(|sw| format!("extra:{sw}"));
+                if let Some(key) = swapped.as_ref().filter(|k| !proj_tried.contains(*k)) {
+                    proj_tried.insert(key.clone());
+                    if let Some(d) = load_work::complete_asset(load_proj(root.join("models").join("extra").join(&key["extra:".len()..]))) {
+                        proj_displays.insert(key.clone(), d);
+                    }
+                }
+                let chosen = swapped.as_ref().and_then(|k| proj_displays.get(k));
+                match chosen.or_else(|| display.and_then(|g| proj_index.get(g)).and_then(|n| proj_displays.get(n))) {
                     // A plain sprite is a stand-in for a particle-only prefab: skipped when its
                     // real particle effect plays (real sprite prefabs load as Layers).
                     Some(ProjDisplay::Sprite { .. }) if display.and_then(|g| proj_index.get(g)).is_some_and(|n| proj_fx.contains_key(n)) => continue,
@@ -3097,12 +3114,13 @@ async fn game_main() {
                         let tw = &game.towers[t];
                         let Some(tr) = game.tier(t) else { continue };
                         for (k, ex) in tr.extras.iter().enumerate() {
-                            if !extra_kind.get(&ex.name).is_some_and(|k| !k.0 && k.1) {
+                            let name = game.paragon_display(tw, &ex.name).unwrap_or_else(|| ex.name.clone());
+                            if !extra_kind.get(&name).is_some_and(|k| !k.0 && k.1) {
                                 continue;
                             }
                             let link = tr.range_links.iter().find(|(n, _)| *n == ex.name).map(|(_, r)| *r).filter(|r| *r > 0.0);
                             let scale = ex.scale * link.map_or(1.0, |r| game.range(t) / r);
-                            want.insert(EXTRA_FX_TAG | (tw.id << 4) | k as u64, (tw.id, ex.name.clone(), tw.pos, scale));
+                            want.insert(EXTRA_FX_TAG | (tw.id << 4) | k as u64, (tw.id, name, tw.pos, scale));
                         }
                     }
                     let stale: Vec<u64> = extra_fx_live.iter().filter(|(tag, (_, n))| want.get(*tag).is_none_or(|w| w.1 != *n)).map(|(tag, _)| *tag).collect();
