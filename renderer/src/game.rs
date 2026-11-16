@@ -9239,7 +9239,7 @@ impl Game {
                         // target is snatched, or only hit if it has passed that segment or can't be,
                         // and so with what's around it, Targetting.GetTargets with Close around it,
                         // while pierce is left: amount less each held bloon's cost.)
-                        let dseg = self.bird_dest_segment(pi);
+                        let dseg = self.bird_dest_segment(t, pi);
                         let mut tagged: Vec<u64> = Vec::new();
                         let can_all = {
                             let x = &self.bloons[self.bloons.iter().position(|o| o.id == b).unwrap()];
@@ -9397,8 +9397,10 @@ impl Game {
         }
     }
 
-    /// GetDestinationPathSegment: of Attack.GetPathSegmentsInRange, the largest distanceUntilLeak.
-    fn bird_dest_segment(&self, pi: usize) -> Option<(u8, usize)> {
+    /// GetDestinationPathSegment (VERIFIED-DECOMP @0x180dc3fe0): of Attack.GetPathSegmentsInRange,
+    /// the largest distanceUntilLeak, strictly.
+    fn bird_dest_segment(&self, t: usize, pi: usize) -> Option<(u8, usize)> {
+        let _ = t;
         let range = self.range(pi);
         let p = self.towers[pi].pos;
         let mut best: Option<((u8, usize), f32)> = None;
@@ -9451,7 +9453,10 @@ impl Game {
             // TargetCheck @0xdc7a30: not before the segment, within the range of the bird.
             .filter(|b| near.is_none_or(|(r, seg)| {
                 seg.is_none_or(|(p, k)| self.seg_span(p as usize, k).is_none_or(|(_, max)| max <= b.dist))
-                    && (b.pos[0] - pos[0]).powi(2) + (b.pos[1] - pos[1]).powi(2) <= r * r
+                    // (Its Position at the bird's turn: a bloon newer than the bird hasn't moved
+                    // yet; recording map_cornfield_beast_204_r40 rt 2873, a Black 31.4 from the bird
+                    // after its move, 32.4 before, isn't taken at keep range 32.)
+                    && { let bp = Self::gyr_at(b, stamp); (bp[0] - pos[0]).powi(2) + (bp[1] - pos[1]).powi(2) <= r * r }
             }))
             // (On one segment, the first in the path's list.)
             .min_by(|x, y| key(x).total_cmp(&key(y)).then_with(|| self.path_rank.get(&x.id).map(|r| r.1).cmp(&self.path_rank.get(&y.id).map(|r| r.1))))
@@ -17461,8 +17466,12 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 self.emit_aim = Some(target);
                                 self.emit(from, dir, emission, &spec, crit, tiers, owner);
                                 // EjectEffectModel: the muzzle effect at the eject point (visual).
+                                // (LinkDisplayScaleToTowerRangeModel: at range / displayRadius where
+                                // the tier links it: Mermonkey x-x-3's trance ground ring.)
                                 for (fx, k) in &weapon.eject_fx {
-                                    self.place_fx.push((from, fx.clone(), *k));
+                                    let link = self.tier(t).and_then(|tr| tr.range_links.iter().find(|(n, _)| n == fx).map(|(_, r)| *r)).filter(|r| *r > 0.0);
+                                    let k = *k * link.map_or(1.0, |r| self.range(t) / r);
+                                    self.place_fx.push((from, fx.clone(), k));
                                 }
                                 // MultiEmissionModel: its secondary projectile, at the same eject
                                 // point (recording ice_250: Absolute Zero's pierce-999 pulse with
@@ -23914,6 +23923,11 @@ mod tests {
             let mut pc: Vec<(u8, u32, u32)> = g.bloons.iter().map(|b| (0, bits(b.pos[0]), bits(-b.pos[1]))).chain(g.projectiles.iter().map(|p| (1, bits(p.pos[0]), bits(-p.pos[1])))).chain(g.towers.iter().flat_map(|t| t.orbit.iter().flat_map(|o| o.glaives.iter())).map(|p| (1, bits(p[0]), bits(-p[1])))).chain(g.hooks.iter().map(|h| (1, bits(h.pos[0]), bits(-h.pos[1]))))
                 .chain((0..g.towers.len()).filter(|&i| g.tier(i).and_then(|tr| tr.air.as_ref()).is_some_and(|a| (has_pm && !a.patterns.is_empty()) || (has_hm && a.heli.is_some())))
                     .filter_map(|i| g.towers[i].air.as_ref().map(|a| (2, bits(a.pos[0]), bits(-a.pos[1])))))
+                // (A grapple pet's AirUnit (the Condor's PathMovement, no pattern): the bird,
+                // at its pet's spot until it first flies: recording map_cornfield_beast_204_r40
+                // PM 849 (-10, -2) at rt 1, (-10, -32) after.)
+                .chain((0..g.towers.len()).filter(|&i| has_pm && g.tier(i).is_some_and(|tr| tr.air.as_ref().is_some_and(|a| a.patterns.is_empty() && a.heli.is_none()) && tr.grapple.is_some()))
+                    .map(|i| { let tw = &g.towers[i]; let first = tw.sub.as_ref().is_some_and(|s| s.age < 2.0); let p = if first { tw.pos } else { tw.air.as_ref().map_or(tw.pos, |a| a.pos) }; (2, bits(p[0]), bits(-p[1])) }))
                 .collect();
             pg.sort();
             pc.sort();

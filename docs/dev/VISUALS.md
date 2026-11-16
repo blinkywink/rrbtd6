@@ -55,8 +55,8 @@ effect names, model behaviours the data builder never reads).
 
 ## Left
 
-- `MalevolenceFx` (Corvus) not exported (no prefab path found); `TranceGroundEffect` (Mermonkey x-x-3,
-  Trance Totem) has a range link but nothing spawns it yet.
+- `MalevolenceFx` (Corvus) not exported (no prefab path found). (`TranceGroundEffect`, Mermonkey x-x-3:
+  a weapon's EjectEffectModel, played per shot; now at range / displayRadius too.)
 - Paragon degree displays (`ParagonAssetSwapModel`), Beast Handler pet upgrade effects
   (`BeastUpgradeFx` on the pets), `ToggleEffectWhileAbilityActiveModel` (Druid), `MagicBarrierDisplayModel`
   (D&D Monke), `CreateRopeEffectModel` (Buccaneer hooks), `PointLineEffectModel` (Skywarden): exported art,
