@@ -1235,6 +1235,15 @@ fn cell_span(r: f32) -> i32 {
     ((r / GAME_GRID_CELL) as f64 + 0.5) as i32
 }
 
+/// The path point a distance is on, as Path.DistanceToPointInfo (@0x180f6e0d0) finds it: the
+/// quick table's entry (uint)(distance / CACHE_DISTANCE), so the last point at or before that
+/// entry's distance (recording map_kartsndarts_druid_052_r40 rt 500 / 501: a Green at 344.80695 is
+/// on point 141, the entry 344.80 being short of point 142 at 344.80457).
+fn quick_point(ds: &[f32], dist: f32) -> usize {
+    let dd = (dist / CACHE_DISTANCE) as u32 as f32 * CACHE_DISTANCE;
+    ds.partition_point(|&d| d <= dd).saturating_sub(1)
+}
+
 /// CollisionGrid query enumerator (VERIFIED-DISASM @0x1825db980): every bloon in the query's
 /// own cell counts, and every bloon in a cell whose circumscribed square lies inside the query's
 /// box; elsewhere distance <= query radius + bloon radius.
@@ -6781,7 +6790,7 @@ impl Game {
         if ds.is_empty() {
             return false;
         }
-        let k = ds.partition_point(|&d| d <= dist).saturating_sub(1);
+        let k = quick_point(ds, dist);
         let flags = if self.defs[kind].is_moab { minv } else { inv };
         flags.get(k).copied().unwrap_or(false) && flags.get(k + 1).copied().unwrap_or(false)
     }
@@ -6793,7 +6802,7 @@ impl Game {
         if ds.is_empty() {
             return false;
         }
-        let k = ds.partition_point(|&d| d <= dist).saturating_sub(1);
+        let k = quick_point(ds, dist);
         let flags = if self.defs[b.kind].is_moab { minv } else { inv };
         // (Point i AND i + 1, DistanceToExtraPointInfoBloon @0x180f6dc40: recording
         // map_kartsndarts_dart_205_r40, a Ceramic at 344.99 between the tunnel's last flagged point
@@ -6807,7 +6816,7 @@ impl Game {
         if p.dists.is_empty() {
             return 0;
         }
-        let k = p.dists.partition_point(|&d| d <= centre).saturating_sub(1);
+        let k = quick_point(&p.dists, centre);
         let f = |v: &[bool]| v.get(k).copied().unwrap_or(false) && v.get(k + 1).copied().unwrap_or(false);
         f(&p.invuln) as u8 | ((f(&p.moab_invuln) as u8) << 1)
     }
@@ -22438,12 +22447,23 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let mut cand = std::mem::take(&mut self.grid_cand);
         let sim_now = self.sim_elapsed;
         let mut due_retargets: Vec<u64> = Vec::new();
+        let first_new_id = self.next_id;
         // The collision pass (CollisionChecker.Process), as a macro so InstantDamageEmission can run it
         // again for its own projectiles after the towers act.
         collide_pass!(None::<&[u64]>, self, p, kids, exhausted, subs, contacts, cand, sim_now);
         self.proj_cursor = usize::MAX;
         self.grid_on = false;
         self.grid_cand = cand;
+        // The Spirit of the Forest zones run (Zoned.Run, BloonEnter) in their tower's turn, after the
+        // collision pass: a copy a pop made in it enters the zones it is in this frame (recording
+        // map_kartsndarts_druid_052_r40 rt 481: the MOAB's Ceramics have the Medium zone's
+        // DamageOverTime at -999999999 by the frame's end, so it ticks at 482). The clone's zone pass
+        // runs before the collision pass, so those copies enter here.
+        for i in 0..self.bloons.len() {
+            if self.bloons[i].id >= first_new_id {
+                self.spirit_of_the_forest(Some(i), None);
+            }
+        }
         // Out of pierce, a shot is exhausted in Projectile.CollideBloon, in the collision pass:
         // its projectiles are made then, before any tower acts, and come before that frame's
         // throws (recording boomerang_paragon_r98: a MOAB Press blast gets a lower id than the
@@ -22760,7 +22780,19 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             };
             set_ticks(self, true);
             let Some(i) = self.bloons.iter().position(|b| b.id == id) else { continue };
+            // (A tick that does nothing (immune, or refused below) doesn't degrade the bloon: its later
+            // behaviours' lastTick go back to now, as after an ordinary hit; recording
+            // map_kartsndarts_druid_052_r40 rt 501, the refused first ticks don't come again.)
             if immune & self.bloons[i].properties(&self.defs[self.bloons[i].kind]) != 0 {
+                set_ticks(self, false);
+                continue;
+            }
+            // DamageOverTime.DealDamage (VERIFIED-DECOMP @0x180fe51a0) calls Bloon.Damage with
+            // ignoreNonTargetable false, so PreCheckDamageOutcome (@0x180fb5650) gives a
+            // nonTargetable bloon nothing (recording map_kartsndarts_druid_052_r40 rt 482: the
+            // Spirit of the Forest zones don't tick on the MOAB's Ceramics in the tunnel).
+            if self.bloon_nontarget(&self.bloons[i]) {
+                set_ticks(self, false);
                 continue;
             }
             let kind0 = self.bloons[i].kind;
