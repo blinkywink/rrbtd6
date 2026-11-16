@@ -18469,7 +18469,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // paths' bests (the TargetType's comparer; INFERRED: distance until leak, First the
         // least, Last the most). Recording map_quad_dart_205_r40 rt 1191: the 2-0-5 takes Black
         // 997 (420.9 along its path) over 1137 (268.7 along another).
-        let until = |i: usize| -> f32 { let b = &self.bloons[i]; self.leak_dist(b.path as usize) - b.prev_dist };
+        // (Compared by the leaders' PathSegment.distanceUntilLeak, the segment each is filed on:
+        // VERIFIED-DISASM CompareBracketFirst @0x180dacb90 / Last compare the bracket's segment
+        // +0x38 = distanceUntilLeak; PathManager.FindGlobalBest @0x180f6a7d0 runs them per path.
+        // recording map_quad_ace_204_r40 rt 2534, Red 14259 on BottomtoTop segment 29 (288.74)
+        // leads Yellow 13949 on TopToBottom segment 34 (289.63), though the Yellow's own
+        // distance until leak is less.)
+        let until = |i: usize| -> f32 { let b = &self.bloons[i]; self.seg_until_leak(b.path, (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize) };
         let mut best: Option<usize> = None;
         for (p, l) in lead.iter().enumerate() {
             if let Some((bi, _, _)) = *l {
