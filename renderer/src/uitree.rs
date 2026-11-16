@@ -939,7 +939,7 @@ thread_local! {
 }
 
 /// Runs `f` with the GrayscaleUI material bound (if it compiled).
-fn with_gray(f: impl FnOnce()) {
+pub(crate) fn with_gray(f: impl FnOnce()) {
     GRAY.with(|g| {
         let m = g.get_or_init(|| load_material(ShaderSource::Glsl { vertex: GRAY_VS, fragment: GRAY_FS }, MaterialParams {
             pipeline_params: PipelineParams {

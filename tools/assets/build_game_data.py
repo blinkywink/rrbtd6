@@ -1531,6 +1531,11 @@ def main():
                                 "vagrant": next(([x["f"].get("noTowersRateBonus", 0.0), x["f"].get("towerRangeBonusReduction", 0.0),
                                                   x["f"].get("bloonInRangeAttackSpeedBuff", 0.0), x["f"].get("maxBloonAttackSpeedBuff", 0.0)]
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "VagrantWeaponBehaviorModel"), None),
+                                # Its BuffIndicatorModel (VagrantWeaponBehaviorModel.GetBuffIndicatorModel:
+                                # none when the names are empty): (iconName, buffName).
+                                "vagrant_icon": next(([x["f"].get("buffLocsName"), x["f"].get("buffLocsFullName") or x["f"].get("buffLocsName")]
+                                                      for x in items(w["f"].get("behaviors")) if x and x["type"] == "VagrantWeaponBehaviorModel"
+                                                      and x["f"].get("buffLocsName")), None),
                                 "crit_roll": next(([x["f"].get("damageAdditive", 0.0), x["f"].get("damageMultiplier", 1.0), x["f"].get("chance", 0.0), x["f"].get("bonusPerDistance", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] in ("CritRollModel", "CritRollWithDistanceModel")), None),
                                 "standoff": next(([x["f"].get("maxRateIncrease", 0.0), x["f"].get("rateDecreasePerBloon", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "StandoffModel"), None),
                                 # TheBlazingSunModel: [maxStacks, stacksToBurn, attackSpeedPerStack, debuffExpiresAfterFrames].
@@ -2574,6 +2579,12 @@ def main():
                                        "damage": b["f"].get("damageBuff", 0), "ceramic": b["f"].get("ceramicDamageBuff", 0),
                                        "moab": b["f"].get("moabDamageBuff", 0)}
                                       for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "TradeEmpireBuffModel"), None),
+                # BuffIconPerTowerInRangeModel (Druid Jungle's Bounty): one icon counting the towers
+                # (baseId in towerIdFilter) in its Zoned<Tower>, range rangeOverride if > 0.
+                "tower_count_icon": next(({"icon": b["f"].get("buffLocsName") or "", "buff_name": b["f"].get("buffLocsFullName") or "",
+                                           "range": b["f"].get("rangeOverride", 0.0),
+                                           "filter": [x for x in (deref(b["f"].get("towerIdFilter")) or []) if isinstance(x, str)]}
+                                          for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "BuffIconPerTowerInRangeModel"), None),
                 # DiscountZoneModel (TowerManager.GetZoneDiscount @0x180c2bd90 reads every field).
                 "discount_zones": [{"mult": b["f"].get("discountMultiplier", 0.0), "stack_limit": b["f"].get("stackLimit", 0),
                                     "group": b["f"].get("stackName") or "", "affect_self": bool(b["f"].get("affectSelf")),

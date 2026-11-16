@@ -659,7 +659,7 @@ impl Hud {
     /// BuffManager.prefab over the selected tower at screen `at`: 100-unit icons in rows of up to
     /// four (GridLayoutGroup: cell 100, spacing 12 x 30, lower-centre, filling upward) whose
     /// bottom sits 200 units above the tower, with "x2"... for stacked buffs.
-    pub fn draw_buffs(&mut self, at: Vec2, buffs: &[(String, u32)]) {
+    pub fn draw_buffs(&mut self, at: Vec2, buffs: &[(String, u32, bool)]) {
         if buffs.is_empty() {
             return;
         }
@@ -667,16 +667,23 @@ impl Hud {
         let (cell, sx, sy) = (100.0 * s, 12.0 * s, 30.0 * s);
         let per_row = 4;
         let style = TmpStyle::default();
-        for (i, (icon, n)) in buffs.iter().enumerate() {
+        for (i, (icon, n, active)) in buffs.iter().enumerate() {
             let (row, col) = (i / per_row, i % per_row);
             let in_row = (buffs.len() - row * per_row).min(per_row) as f32;
             let w = in_row * cell + (in_row - 1.0) * sx;
             let x = at.x - w / 2.0 + col as f32 * (cell + sx);
             let y = at.y - 200.0 * s - cell - row as f32 * (cell + sy);
+            // BuffIcon.Show: the Active image (at 0, 0), or for a buff that can't act now the
+            // Inactive one (BuffPrefab: 11.7 lower, GrayscaleUI material).
             if let Some(sp) = self.sprites.get(icon) {
-                draw_texture_ex(&sp.tex, x, y, WHITE, DrawTextureParams { dest_size: Some(vec2(cell, cell)), ..Default::default() });
+                let params = DrawTextureParams { dest_size: Some(vec2(cell, cell)), ..Default::default() };
+                if *active {
+                    draw_texture_ex(&sp.tex, x, y, WHITE, params);
+                } else {
+                    crate::uitree::with_gray(|| draw_texture_ex(&sp.tex, x, y + 11.7 * s, WHITE, params));
+                }
             }
-            // BuffIcon.Show: "x" + the count (none for a non-stackable buff, 0 here).
+            // BuffIcon.Show: "x" + availableBuffCount when it's 1 or more.
             if *n > 0 {
                 self.fonts.draw("Btd6FontTitleSDF", &TextBox { gradient: None,
                     text: &format!("x{n}"),

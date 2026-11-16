@@ -358,8 +358,25 @@ the game code / recordings), or it hides problems later.
   availableBuffCount = the count of its zone list (behaviour +0x70, list +0xa8), nothing when 0;
   Filter @0x180d04d70: a Tower whose baseId is in towerIdFilter; GetTowerRange @0x180d04ef0:
   rangeOverride if > 0 else the tower's TowerModel.range), VagrantWeaponBehavior (Desperado
-  BuffIconWanderer / Shotgun / Rifle), Overcharge (BuffIconOvercharge, ParagonOvercharge). OPEN: port
-  them (the zone list's membership rule first: find what fills +0x70 / +0xa8).
+  BuffIconWanderer / Shotgun / Rifle), Overcharge (BuffIconOvercharge, ParagonOvercharge).
+  DONE (2026-11-16): BuffIconPerTowerInRange (Druid x-4+-x; game.json tier `tower_count_icon`): its
+  towerZone is a Zoned<Tower> (+0x70), counted live as Zoned<Bloon> tests (centre distance^2 <=
+  range^2); the query's availableBuffCount is the count, and GroupStackableBuffs stores a new
+  FullName with it (adds 1 only for queries with availableBuffCount 0; buff_icons now carries it).
+  BuffIcon.Show (@0x180a41020): "x" + availableBuffCount when >= 1 (just the number with dontShowX,
+  not modelled), else roundsRemaining for a timed one, else empty. Test druid_banana_farm_icon.
+  READ (2026-11-16): VagrantWeaponBehavior.GetBuffs (MoveNext @0x180c97370): one query per Vagrant
+  weapon with an indicator (BuffIconWanderer / Shotgun / Rifle, stackable false, max 0):
+  n = max(0, Math.Round(noTowersRateBonus / towerRangeBonusReduction) - its tower zone's count)
+  (0.45 / 0.09 = 5), availableBuffCount n, canCurrentlyBuff n > 0, canEventuallyBuff n == 0: the icon
+  always shows, INACTIVE at 0 (BuffIcon.Show: inactiveObj instead of activeObj). DONE (2026-11-16):
+  ported (weapon `vagrant_icon`, count from Tower.vagrant_zone / vagrant_counts; f32 ratio rounded
+  half-to-even); Game::buff_icons_shown carries the stored query's canCurrentlyBuff and the HUD
+  draws an inactive icon as BuffManager.prefab's BuffPrefab/Inactive: the Image 11.7 lower with
+  the GrayscaleUI material (uitree::with_gray). Test vagrant_buff_icon. Not checked on screen.
+  BuffPrefab also has TextMaxReached (red, same rect as Text): "x" + unavailableBuffCount when
+  availableBuffCount is 0 and unavailable >= 1 (no clone query has unavailable counts yet).
+  OPEN: Overcharge GetBuffs (paragon), roundsRemaining text (TimedMutator +0x20).
   BuffQuery: indicator +0, timedMutator +8, tower +0x10, canEventuallyBuff +0x18, canCurrentlyBuff
   +0x19, availableBuffCount +0x1c, unavailableBuffCount +0x20. GroupStackableBuffs: a stackable
   (+0x38) FullName adds 1 per query with availableBuffCount 0, up to maxStackSize (+0x3c).

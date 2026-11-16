@@ -719,6 +719,8 @@ pub struct Tier {
     pub cashback: Option<Cashback>,
     #[serde(default)]
     pub discount_zones: Vec<DiscountZone>,
+    #[serde(default)]
+    pub tower_count_icon: Option<TowerCountIcon>,
     /// FlagshipAttackSpeedIncreaseModel.attackSpeedIncrease.
     #[serde(default)]
     pub flagship: Option<f32>,
@@ -1188,6 +1190,9 @@ pub struct Weapon {
     /// bloonInRangeAttackSpeedBuff, maxBloonAttackSpeedBuff.
     #[serde(default)]
     pub vagrant: Option<[f32; 4]>,
+    /// The Vagrant's buff icon (iconName, buffName).
+    #[serde(default)]
+    pub vagrant_icon: Option<(String, String)>,
     /// SpinModel.rotationPerSecond (0: none).
     #[serde(default)]
     pub spin: f32,
@@ -1350,6 +1355,18 @@ pub struct DiscountZone {
     pub icon: Option<String>,
     pub buff_name: String,
     pub buff_max: i32,
+}
+
+/// BuffIconPerTowerInRangeModel: an icon over its own tower counting the towers its
+/// Zoned<Tower> holds (BuffIconPerTowerInRange.GetBuffs MoveNext @0x180d11ab0).
+#[derive(Deserialize, Clone)]
+pub struct TowerCountIcon {
+    pub icon: String,
+    pub buff_name: String,
+    /// rangeOverride (GetTowerRange @0x180d04ef0: used when > 0, else TowerModel.range).
+    pub range: f32,
+    /// towerIdFilter (Filter @0x180d04d70: the tower's baseId).
+    pub filter: Vec<String>,
 }
 
 /// CashbackZoneModel (Favored Trades): towers in range sell for more.

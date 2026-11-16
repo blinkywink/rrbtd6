@@ -3511,7 +3511,7 @@ async fn game_main() {
             if let (Some(t), Some(h)) = (selected.filter(|&t| t < game.towers.len()), hud.as_mut()) {
                 let p = game.towers[t].pos;
                 let at = render3d::to_screen(&cam, [p[0], 0.0, p[1]], vw, vh);
-                h.draw_buffs(at, &game.buff_icons(t));
+                h.draw_buffs(at, &game.buff_icons_shown(t));
             }
             // Collected cash: CashUp.prefab, "+${0}" in the title font, yellow (1, 0.85, 0) with
             // a black outline, popping in then rising and fading over its 1 s lifespan.

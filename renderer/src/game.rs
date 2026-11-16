@@ -13123,19 +13123,25 @@ impl Game {
     /// TryGetValue), so they sit in that list's order whatever the tower's mutator order, and a
     /// FullName missing from it isn't shown.
     pub fn buff_icons(&self, t: usize) -> Vec<(String, u32)> {
-        let mut queries: Vec<(String, String, i32, u32)> = self
+        self.buff_icons_shown(t).into_iter().map(|(i, n, _)| (i, n)).collect()
+    }
+
+    /// `buff_icons` with each icon's canCurrentlyBuff (BuffIcon.Show: the Active image, else
+    /// the Inactive one in GrayscaleUI).
+    pub fn buff_icons_shown(&self, t: usize) -> Vec<(String, u32, bool)> {
+        let mut queries: Vec<(String, String, i32, u32, u32, bool)> = self
             .supports_at(self.towers[t].def, self.towers[t].pos, Some(t))
             .into_iter()
-            .filter_map(|(sp, n)| Some((sp.icon?, sp.buff_name, sp.buff_max, n)))
+            .filter_map(|(sp, n)| Some((sp.icon?, sp.buff_name, sp.buff_max, n, 0, true)))
             .collect();
         // Alchemist brews on it (their mutators' indicators).
         for b in &self.towers[t].brews {
             if let Some(icon) = &b.brew.buff_icon {
-                queries.push((icon.clone(), b.brew.buff_name.clone(), 0, 1));
+                queries.push((icon.clone(), b.brew.buff_name.clone(), 0, 1, 0, true));
             }
         }
         if let (Some(_), Some((icon, name))) = (self.towers[t].overclock, &self.towers[t].overclock_icon) {
-            queries.push((icon.clone(), name.clone(), 0, 1));
+            queries.push((icon.clone(), name.clone(), 0, 1, 0, true));
         }
         // Discount zones: Tower.AddDiscountZoneBuffs (MoveNext @0x180c2f200): for each path, if
         // the owner is -1 (single player: recordings' IN lines), the model isn't a paragon,
@@ -13168,7 +13174,7 @@ impl Game {
                             }
                             seen.push((o, z.group.clone()));
                             if let Some(icon) = &z.icon {
-                                queries.push((icon.clone(), z.buff_name.clone(), z.buff_max, 1));
+                                queries.push((icon.clone(), z.buff_name.clone(), z.buff_max, 1, 0, true));
                             }
                         }
                     }
@@ -13189,13 +13195,51 @@ impl Game {
                 let Some(icon) = &cb.icon else { continue };
                 let r = self.range(o);
                 if (tw.pos[0] - p[0]).powi(2) + (tw.pos[1] - p[1]).powi(2) <= r * r {
-                    queries.push((icon.clone(), cb.buff_name.clone(), cb.buff_max, 1));
+                    queries.push((icon.clone(), cb.buff_name.clone(), cb.buff_max, 1, 0, true));
                 }
             }
         }
-        // (FullName, icon, kept maxStackSize, count)
-        let mut groups: Vec<(String, String, i32, u32)> = Vec::new();
-        for (icon, name, max, copies) in queries {
+        // AddOtherBuffs (MoveNext @0x180c2f870): the tower's own behaviours' GetBuffs. A
+        // BuffIconPerTowerInRange yields one active query whose availableBuffCount is its
+        // Zoned<Tower>'s count (none at 0): towers whose baseId is in towerIdFilter with their
+        // centre within its range (Zoned tests distance^2 <= range^2, as for bloons), range
+        // rangeOverride if > 0 else the tower's TowerModel.range.
+        // Weapon behaviours first: VagrantWeaponBehavior.GetBuffs (MoveNext @0x180c97370), one per
+        // Vagrant weapon with an indicator: n = max(0, Math.Round(noTowersRateBonus /
+        // towerRangeBonusReduction) - the towers in its zone), availableBuffCount n,
+        // canCurrentlyBuff n > 0 (shown inactive at 0).
+        if let Some(tr) = self.tier(t) {
+            for w in tr.attacks.iter().flat_map(|a| a.weapons.iter()) {
+                let (Some(v), Some((icon, name))) = (w.vagrant, w.vagrant_icon.as_ref()) else { continue };
+                let towers = self.towers[t].vagrant_zone.map_or_else(|| self.vagrant_counts(t, self.towers[t].pos).0, |z| z.0) as i32;
+                let n = ((v[0] / v[1]) as f64).round_ties_even() as i32 - towers;
+                let n = n.max(0) as u32;
+                queries.push((icon.clone(), name.clone(), 0, 1, n, n > 0));
+            }
+        }
+        if let Some(ci) = self.tier(t).and_then(|tr| tr.tower_count_icon.clone()) {
+            let p = self.towers[t].pos;
+            let r = if ci.range > 0.0 { ci.range } else { self.range(t) };
+            let n = self
+                .towers
+                .iter()
+                .filter(|o| {
+                    let id = o.sub.as_ref().map_or(self.tower_defs[o.def].0.as_str(), |s| s.spec.id.as_str());
+                    let (dx, dy) = (o.pos[0] - p[0], o.pos[1] - p[1]);
+                    ci.filter.iter().any(|f| f == id) && dx * dx + dy * dy <= r * r
+                })
+                .count() as u32;
+            if n > 0 {
+                queries.push((ci.icon.clone(), ci.buff_name.clone(), 0, 1, n, true));
+            }
+        }
+        // (FullName, icon, kept maxStackSize, count, the stored query's canCurrentlyBuff)
+        let mut groups: Vec<(String, String, i32, u32, bool)> = Vec::new();
+        // GroupStackableBuffs (@0x180a42c00): a new FullName is stored with its query's
+        // availableBuffCount; a later query with a larger maxStackSize replaces only the stored
+        // indicator; a query with availableBuffCount 0 whose indicator stacks then adds 1 (up to
+        // the stored maxStackSize). BuffIcon.Show writes "x" + availableBuffCount when it's 1+.
+        for (icon, name, max, copies, avail, active) in queries {
             let full = format!("{icon}{name}");
             let k = match groups.iter().position(|g| g.0 == full) {
                 Some(k) => {
@@ -13205,22 +13249,22 @@ impl Game {
                     k
                 }
                 None => {
-                    groups.push((full, icon, max, 0));
+                    groups.push((full, icon, max, avail, active));
                     groups.len() - 1
                 }
             };
-            if max > 1 {
+            if max > 1 && avail == 0 {
                 for _ in 0..copies {
                     groups[k].3 = (groups[k].3 + 1).min(groups[k].2.max(0) as u32);
                 }
             }
         }
-        let mut slotted: Vec<(usize, String, u32)> = groups
+        let mut slotted: Vec<(usize, String, u32, bool)> = groups
             .into_iter()
-            .filter_map(|g| Some((self.buff_order.iter().position(|f| *f == g.0)?, g.1, g.3)))
+            .filter_map(|g| Some((self.buff_order.iter().position(|f| *f == g.0)?, g.1, g.3, g.4)))
             .collect();
         slotted.sort_by_key(|g| g.0);
-        slotted.into_iter().map(|g| (g.1, g.2)).collect()
+        slotted.into_iter().map(|g| (g.1, g.2, g.3)).collect()
     }
 
     fn compute_buffs(&self) -> Vec<Buff> {
@@ -24744,6 +24788,59 @@ mod beast_tests {
         }
         assert_eq!(disc(&g, 0), 0.0);
         assert!(disc(&g, 1) > 0.0);
+    }
+
+    /// BuffIconPerTowerInRange: a 0-4-0 Druid's icon counts the Banana Farms in its range
+    /// (BuffIcon.Show: "x" + availableBuffCount).
+    #[test]
+    fn druid_banana_farm_icon() {
+        let mut g = game();
+        g.cash = 1e7;
+        let druid = g.tower_defs.iter().position(|(n, _)| n == "Druid").unwrap();
+        let farm = g.tower_defs.iter().position(|(n, _)| n == "BananaFarm").unwrap();
+        let d = place_near(&mut g, druid, 300.0);
+        for _ in 0..4 {
+            assert!(g.upgrade(d, 1));
+        }
+        let count = |g: &Game| g.buff_icons(d).into_iter().find(|(i, _)| i == "BuffIconDruidBananaFarm").map(|(_, n)| n);
+        assert_eq!(count(&g), None);
+        let (pos, r) = (g.towers[d].pos, g.range(d));
+        let mut farms = 0;
+        for k in 0..16 {
+            let a = k as f32 * std::f32::consts::TAU / 16.0;
+            let p = [pos[0] + a.cos() * (r - 2.0), pos[1] + a.sin() * (r - 2.0)];
+            if farms < 2 && g.can_place(farm, p) && g.place(farm, p) {
+                farms += 1;
+            }
+        }
+        assert_eq!(farms, 2);
+        assert_eq!(count(&g), Some(2));
+    }
+
+    /// VagrantWeaponBehavior.GetBuffs: a 0-0-1 Desperado alone shows BuffIconWanderer x5
+    /// (Math.Round(0.45 / 0.09) - 0 towers); with five towers in its range, inactive with no count.
+    #[test]
+    fn vagrant_buff_icon() {
+        let mut g = game();
+        g.cash = 1e7;
+        let des = g.tower_defs.iter().position(|(n, _)| n == "Desperado").unwrap();
+        let dart = g.tower_defs.iter().position(|(n, _)| n == "DartMonkey").unwrap();
+        let d = place_near(&mut g, des, 300.0);
+        assert!(g.upgrade(d, 2));
+        let icon = |g: &Game| g.buff_icons_shown(d).into_iter().find(|(i, _, _)| i == "BuffIconWanderer");
+        assert_eq!(icon(&g), Some(("BuffIconWanderer".to_string(), 5, true)));
+        let (pos, r) = (g.towers[d].pos, g.range(d));
+        let mut n = 0;
+        for k in 0..24 {
+            let a = k as f32 * std::f32::consts::TAU / 24.0;
+            let p = [pos[0] + a.cos() * (r - 4.0), pos[1] + a.sin() * (r - 4.0)];
+            if n < 5 && g.can_place(dart, p) && g.place(dart, p) {
+                n += 1;
+            }
+        }
+        assert_eq!(n, 5);
+        g.towers[d].vagrant_zone = None;
+        assert_eq!(icon(&g), Some(("BuffIconWanderer".to_string(), 0, false)));
     }
 
     /// BuffIndicatorUi.Awake / UpdatePlacedTowerBuffs: the icons over a tower sit in
