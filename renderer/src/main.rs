@@ -3156,6 +3156,12 @@ async fn game_main() {
                             let scale = ex.scale * link.map_or(1.0, |r| game.range(t) / r);
                             want.insert(EXTRA_FX_TAG | (tw.id << 4) | k as u64, (tw.id, name, tw.pos, scale));
                         }
+                        // A Monkey Fan Club fan's effect (MonkeyFanClubModel.effectId) while it's a fan.
+                        if let Some(name) = tw.fan.as_ref().and_then(|(fc, _)| fc.fan_fx.clone()) {
+                            if *extra_kind.entry(name.clone()).or_insert_with(|| (false, root.join("effects").join(&name).join("effect.json").is_file())) == (false, true) {
+                                want.insert(EXTRA_FX_TAG | (tw.id << 4) | 6, (tw.id, name, tw.pos, 1.0));
+                            }
+                        }
                         // CreateEffectOnAirUnitModel: kept on the air unit (Heli Downdraft's gust).
                         if let (Some(name), Some(a)) = (tr.air_fx.clone(), tw.air.as_ref()) {
                             if *extra_kind.entry(name.clone()).or_insert_with(|| (false, root.join("effects").join(&name).join("effect.json").is_file())) == (false, true) {

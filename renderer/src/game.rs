@@ -7287,6 +7287,10 @@ impl Game {
             if std::env::var_os("RRBTD6_POLOG").is_some() {
                 eprintln!("POLOG {} {} {} {} {}", self.round_clock, sp.uid, obj, sp.spec.pid, self.proj_obj_emit.get(obj as usize).copied().unwrap_or(0));
             }
+            // (ProjectileCreateEffectOnEmitModel, as in emit.)
+            for (fx, k) in &sp.spec.emit_fx {
+                self.place_fx.push((sp.pos, fx.clone(), *k));
+            }
             self.projectiles.push(sp);
         }
         // (A Target already in its collidedWith (GalvanizedBehavior's chain lightning): the hit is
@@ -12020,6 +12024,9 @@ impl Game {
                 fans.push(o);
             }
             for o in fans {
+                if let Some(fx) = fc.start_fx.clone() {
+                    self.place_fx.push((self.towers[o].pos, fx, 1.0));
+                }
                 self.towers[o].fan = Some((fc.clone(), fc.lifespan * FPS));
             }
         }
@@ -15480,10 +15487,15 @@ impl Game {
                         tw.look = None;
                     }
                 }
-                if let Some((_, f)) = &mut tw.fan {
+                if let Some((fc, f)) = &mut tw.fan {
                     *f -= 1.0;
                     if *f <= 0.0 {
+                        // (The fan club's end effect as it turns back, display only.)
+                        let end = fc.end_fx.clone();
                         tw.fan = None;
+                        if let Some(fx) = end {
+                            self.place_fx.push((tw.pos, fx, 1.0));
+                        }
                     }
                 }
                 if let Some((_, _, f)) = &mut tw.morph {
@@ -22093,6 +22105,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             let su = spec.effects.iter().any(|e| e.single_first).then(|| self.single_free.pop().unwrap_or(false));
             if let Some(f) = su {
                 self.single_obj.insert(self.next_uid, f);
+            }
+            // ProjectileCreateEffectOnEmitModel: its effect where it's emitted (display only:
+            // Herald's hailstorm, the Sub's airburst flash, Silas' blast).
+            for (fx, k) in &spec.emit_fx {
+                self.place_fx.push((pos, fx.clone(), *k));
             }
             self.projectiles.push(Projectile {
                 adora: None,

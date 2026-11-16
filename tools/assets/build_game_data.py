@@ -770,6 +770,8 @@ def main():
             "contact_fx": fx_list(items(f["behaviors"]), "CreateEffectOnContactModel"),
             "exhaust_fx": fx_list(items(f["behaviors"]), "CreateEffectOnExhaustedModel", "CreateEffectOnExhaustFractionModel"),
             "expire_fx": fx_list(items(f["behaviors"]), "CreateEffectOnExpireModel"),
+            # ProjectileCreateEffectOnEmitModel: an effect where it's emitted. Display only.
+            "emit_fx": fx_list(items(f["behaviors"]), "ProjectileCreateEffectOnEmitModel"),
             # CreateLightningEffectModel (Druid lightning): a bolt (one of displayPaths, display GUIDs)
             # drawn along each jump for lifeSpan seconds (visual only).
             "bolts": next(({"displays": [d for d in (deref(x["f"].get("displayPaths")) or []) if isinstance(d, str)],
@@ -1964,7 +1966,12 @@ def main():
                                        "pierce": xf.get("bonusPierce", 0.0), "damage": xf.get("bonusDamage", 0),
                                        "projectile_radius": xf.get("projectileRadius", 0.0),
                                        "eject": [xf.get("ejectX", 0.0), xf.get("ejectY", 0.0), xf.get("ejectZ", 0.0)],
-                                       "display": prefab_name(xf.get("towerDisplay"))}
+                                       "display": prefab_name(xf.get("towerDisplay")),
+                                       # Display only: effectModel (each fan as it turns), the
+                                       # endDisplayModel's effect (as it turns back), effectId (on each fan).
+                                       "start_fx": prefab_name((deref(xf.get("effectModel")) or {"f": {}})["f"].get("assetId")),
+                                       "end_fx": prefab_name((deref((deref(xf.get("endDisplayModel")) or {"f": {}})["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")),
+                                       "fan_fx": prefab_name(xf.get("effectId"))}
                 # CreateProjectileOnAbilityActivateModel: a projectile fired from the tower on use.
                 if x["type"] == "CreateProjectileOnAbilityActivateModel" and deref(xf.get("projectile")) and xf.get("chance", 1.0) >= 1.0:
                     out.setdefault("on_activate", []).append({"projectile": projectile(deref(xf["projectile"])),

@@ -2035,6 +2035,9 @@ pub struct Proj {
     pub exhaust_fx: Vec<(String, f32)>,
     #[serde(default)]
     pub expire_fx: Vec<(String, f32)>,
+    /// ProjectileCreateEffectOnEmitModel: effects where it's emitted (display only).
+    #[serde(default)]
+    pub emit_fx: Vec<(String, f32)>,
     /// CreateLightningEffectModel: bolt displays drawn along each jump, for `life` seconds.
     #[serde(default)]
     pub bolts: Option<Bolts>,
@@ -2356,6 +2359,13 @@ pub struct Ability {
 /// +`damage`, and immuneBloonProperties `immune`.
 #[derive(Deserialize, Clone)]
 pub struct FanClub {
+    /// Display only: the effect on each fan as it turns, as it turns back, and on it meanwhile.
+    #[serde(default)]
+    pub start_fx: Option<String>,
+    #[serde(default)]
+    pub end_fx: Option<String>,
+    #[serde(default)]
+    pub fan_fx: Option<String>,
     /// MonkeyFanClub.Mutator (VERIFIED-DISASM @0xe61060) sets each fan's projectile radius to
     /// projectileRadius and its weapons' eject point to ejectX / Y / Z.
     #[serde(default)]
