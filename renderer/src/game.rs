@@ -13122,6 +13122,9 @@ impl Game {
                 if !sp.bases.is_empty() && !sp.bases.iter().any(|b| b == name) {
                     continue;
                 }
+                if sp.heroes && !self.tower_tiers[def].as_ref().is_some_and(|tt| tt.hero.is_some()) {
+                    continue;
+                }
                 if sp.min_tiers != [0; 3] && !skip.is_some_and(|t| (0..3).all(|k| self.towers[t].tiers[k] >= sp.min_tiers[k])) {
                     continue;
                 }
@@ -13382,6 +13385,8 @@ impl Game {
                             }
                         }
                         "pierce_pct" => b.pierce_pct = Some((sp.mult, n)),
+                        // (Sub Paragon support, INFERRED: every projectile's pierce x mult.)
+                        "pierce_xm" => b.pierce_x *= sp.mult.powi(n as i32),
                         "speed" => b.speed_mult += sp.mult * k,
                         "speed_add" => b.speed_add += sp.add * k,
                         "ricochet" => b.ricochet = sp.retarget.clone(),
@@ -15922,10 +15927,10 @@ impl Game {
                 let (camo, range) = (attack.camo || buff.camo, buff.attack_range(attack));
                 // STAND-IN P-SHARED: Advanced Intel shares the ranges of all other placed towers
                 // (not sub-towers), each at its own buffed range.
-                let shared: Vec<([f32; 2], f32)> = if attack.shared_range {
+                let shared: Vec<([f32; 2], f32, Los)> = if attack.shared_range {
                     (0..self.towers.len())
                         .filter(|&o| o != t && self.towers[o].sub.is_none())
-                        .map(|o| (self.attack_pos(o), self.range(o)))
+                        .map(|o| (self.attack_pos(o), self.range(o), self.tier(o).and_then(|tr| tr.attacks.first()).map_or(Los::default(), Los::of)))
                         .collect()
                 } else {
                     Vec::new()
@@ -16212,7 +16217,18 @@ impl Game {
                         continue;
                     }
                     let dd = (p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2);
-                    let shared_in = || shared.iter().any(|&(q, rr)| (p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) <= (rr + d.radius).powi(2));
+                    // TargetSupplierSharedRange.GetTargets (VERIFIED-DECOMP @0x180deff90) sets the attack's
+                    // visible segments to PressTheGridsTogether's (@0x180df0320) and takes
+                    // Attack.GetVisibleTargets: a bloon counts by its segment, not its own spot and
+                    // radius. INFERRED: a segment another tower has in range (its point within that
+                    // tower's range, the line from it clear; recording
+                    // map_lotusisland_sub_paragon_quincy_r40 rt 577: no shot at a MOAB 70.8 from Quincy's
+                    // 50, whose segment is out of it; bloons there exact all 3600 frames). OPEN: the
+                    // game's first shot at rt 844 (segment 65, 36.8 from Quincy) where this allows 817
+                    // (segment 63, 49.1): PressTheGridsTogether keeps a segment only when some valid
+                    // tower's PathSegmentInRange there has inRange (+0x18; camo +0x19, line of sight
+                    // +0x1a with shareLineOfSight), so Quincy's inRange is stricter than this.
+                    let shared_in = || seg_ok && seg_q.is_some_and(|sq| shared.iter().any(|&(q, rr, los)| (sq[0] - q[0]).powi(2) + (sq[1] - q[1]).powi(2) <= rr * rr && self.los_clear(los, q, sq)));
                     if (!seg_in && !shared_in()) || dd < attack.min_range * attack.min_range {
                         continue;
                     }

@@ -838,6 +838,9 @@ pub struct Support {
     pub sets: Vec<u32>,
     #[serde(default)]
     pub bases: Vec<String>,
+    /// Only heroes (MonkeySubParagonSupport.Filter: TowerModel.IsHero).
+    #[serde(default)]
+    pub heroes: bool,
     #[serde(default = "five")]
     pub tier_cap: u32,
     /// FilterInTowerTiersModel: the least tier on each path a tower it buffs must have.

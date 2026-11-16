@@ -2161,7 +2161,9 @@ def main():
                          "BananaCentralBuffModel": "income", "CentralMarketBuffModel": "income",
                          # SupportStackingRangeModel (SelfStackingSupportCompounding, Mermonkey 0-0-2+):
                          # each such tower's MutatorTower multiplies range x (1 + rangeMultiplier).
-                         "SupportStackingRangeModel": "range_x"}
+                         "SupportStackingRangeModel": "range_x",
+                         # MonkeySubParagonSupportModel: split into Sub / hero entries below.
+                         "MonkeySubParagonSupportModel": "subparagon"}
 
         def supports_of(behaviors):
           supports = []
@@ -2231,6 +2233,21 @@ def main():
                                "buff_name": sf.get("buffLocsName") or "", "buff_max": sf.get("maxStackSize") or 0})
               for k2, m2, a2 in extra:
                   supports.append(dict(supports[-1], kind=k2, mult=m2, add=a2, id=supports[-1]["id"] + "_" + k2))
+              # MonkeySubParagonSupportModel (Navarch): Filter (@0x180d3dee0) takes a Tower whose
+              # baseId is MonkeySub or whose TowerModel IsHero. INFERRED from recording
+              # map_lotusisland_sub_paragon_quincy_r40 (its MutatorTower.Mutate isn't located): a hero's
+              # projectiles get damage x (1 + heroBonusDamageMultiplier) and pierce x (1 +
+              # heroBonusPierceMultiplier), its weapons' rate x heroRateMultiplier (Quincy: 1 -> 6, 3 -> 9,
+              # 57 -> 74 frames); a Sub's the same form with the sub multipliers (not recorded yet).
+              if b["type"] == "MonkeySubParagonSupportModel" and supports and supports[-1]["kind"] == "subparagon":
+                  base = supports.pop()
+                  for who, d, pc, r in (("sub", sf.get("subBonusDamageMultiplier", 0.0), sf.get("subBonusPierceMultiplier", 0.0), None),
+                                        ("hero", sf.get("heroBonusDamageMultiplier", 0.0), sf.get("heroBonusPierceMultiplier", 0.0), sf.get("heroRateMultiplier", 1.0))):
+                      filt = {"bases": ["MonkeySub"], "heroes": False} if who == "sub" else {"bases": [], "heroes": True}
+                      supports.append(dict(base, kind="damage_mult", mult=1.0 + d, add=0.0, id="SubParagon_" + who + "_damage", **filt))
+                      supports.append(dict(base, kind="pierce_xm", mult=1.0 + pc, add=0.0, id="SubParagon_" + who + "_pierce", **filt))
+                      if r is not None:
+                          supports.append(dict(base, kind="rate", mult=r, add=0.0, id="SubParagon_" + who + "_rate", **filt))
           return supports
         supports = supports_of(items(f["behaviors"]))
         tiers = items(f["tiers"])
