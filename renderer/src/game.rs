@@ -193,8 +193,14 @@ impl Track {
         let t = (d - self.dists[i]) / span;
         (1.0 - t) * self.speeds[i] + t * self.speeds[i + 1]
     }
+    /// Path.totalPathLength: the game's own point distances when imported (3D: KartsNDarts'
+    /// tunnel dips to z -42, so its 2D length is 35 short and it has 5 segments fewer; recording
+    /// map_kartsndarts_druid_052_r40, Spirit of the Forest's draws per segment).
     pub fn length(&self) -> f32 {
-        *self.cum.last().unwrap()
+        match self.dists.last() {
+            Some(&d) if self.quick.len() > 1 => d,
+            _ => *self.cum.last().unwrap(),
+        }
     }
     /// Path.InitEntryExits (VERIFIED-DISASM @0xf8d9b0): along the path's points every
     /// CacheDistance (0.01), the first and the last one on the map (Path.IsPointOnMap: x in
@@ -7604,8 +7610,12 @@ impl Game {
         // (A bloon made after the projectile hasn't moved yet at its turn: its flag from its
         // frame-start distance; rt 432, a Black at 212.885 just out of TopToBottom's stretch
         // was still in it as the dart looked.)
+        // (TrackTarget.IsBloonValid (VERIFIED-DECOMP @0x180d12ff0), which keeps its current
+        // Target, doesn't look at it: FilterBloon, the angle, line of sight unless ignoreBlockers;
+        // only a new Target, through BloonManager, can't be one. Recording map_quad_tack_502_r40
+        // rt 635, a fireball keeps a Black that has gone into Quad's exit stretch.)
         let nd = if b.born > pr.born { b.prev_dist } else { b.dist };
-        if !pr.spec.ignore_nontarget && self.bloon_nontarget_at(b, nd) {
+        if pr.seek != Some(b.id) && !pr.spec.ignore_nontarget && self.bloon_nontarget_at(b, nd) {
             return false;
         }
         // (A bloon made after the projectile hasn't moved yet when its TrackTarget looks: its
@@ -7814,7 +7824,15 @@ impl Game {
         if self.towers[t].spirit_v.is_some() {
             return;
         }
-        let segs: Vec<[f32; 2]> = self.track_segs.iter().flat_map(|sg| sg.iter().step_by(2).copied()).collect();
+        // (Not a bloonsInvulnerable one: recording map_kartsndarts_druid_052_r40, no draws for the
+        // tunnel's segments.)
+        let inv = &self.track_seg_inv;
+        let segs: Vec<[f32; 2]> = self
+            .track_segs
+            .iter()
+            .enumerate()
+            .flat_map(|(pi, sg)| sg.iter().enumerate().step_by(2).filter(move |(k, _)| inv.get(pi).and_then(|v| v.get(*k)).is_none_or(|f| f & 1 == 0)).map(|(_, q)| *q))
+            .collect();
         let mut pos = Vec::new();
         for q in segs {
             let (x, gy) = (q[0], -q[1]);
