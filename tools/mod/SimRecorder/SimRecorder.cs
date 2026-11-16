@@ -820,6 +820,7 @@ public class Recorder : MelonMod
         {
             var am = ars[k].areaModel;
             m.WriteLine($"area {k} {am.isBlocker} {F(am.height)} {(int)am.type} {am.isDisabled} {ars[k].isActive} {ars[k].name}");
+            m.WriteLine($"areaflags {k} prohibitTrackPlacement {am.prohibitTrackPlacement} ignoreZAxisTowerCollision {am.ignoreZAxisTowerCollision} renderHeightOffset {F(am.renderHeightOffset)}");
             var pb = new StringBuilder("poly");
             var pts = am.polygon.points;
             for (int j = 0; j < pts.Length; j++) pb.Append(' ').Append(F(pts[j].x)).Append(',').Append(F(pts[j].y));
@@ -878,6 +879,30 @@ public class Recorder : MelonMod
             m.WriteLine($"getinline_movenext 0x{fp - gbase + 0x180000000:x} {System.Runtime.InteropServices.Marshal.PtrToStringAnsi(Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_name(klass))}");
         }
         catch (Exception e) { m.WriteLine("getinline_movenext error " + e.Message); }
+        // GetInRange's CollisionState (a shared generic): its MoveNext / Initialize addresses, and
+        // GetInRange's own, from the classes.
+        try
+        {
+            var st = grid.GetInRange(0f, 0f, 10f, 0f, -1f);
+            IntPtr klass = Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(st.Pointer);
+            long gbase = System.Diagnostics.Process.GetCurrentProcess().Modules.Cast<System.Diagnostics.ProcessModule>().First(x => x.ModuleName == "GameAssembly.dll").BaseAddress.ToInt64();
+            foreach (var (mn, ac) in new[] { ("MoveNext", 0), ("Initialize", -1), ("Reset", 0) })
+            {
+                IntPtr mi = ac >= 0 ? Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_method_from_name(klass, mn, ac) : Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_method_from_name(klass, mn, -1);
+                if (mi == IntPtr.Zero) { m.WriteLine($"collisionstate_method {mn} missing"); continue; }
+                long fp = System.Runtime.InteropServices.Marshal.ReadIntPtr(mi).ToInt64();
+                m.WriteLine($"collisionstate_method {mn} 0x{fp - gbase + 0x180000000:x}");
+            }
+            IntPtr gk = Il2CppInterop.Runtime.IL2CPP.il2cpp_object_get_class(grid.Pointer);
+            foreach (var mn in new[] { "GetInRange", "Fill", "GetBucket", "GetBucketIndex" })
+            {
+                IntPtr mi = Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_method_from_name(gk, mn, -1);
+                if (mi == IntPtr.Zero) { m.WriteLine($"grid_method {mn} missing"); continue; }
+                long fp = System.Runtime.InteropServices.Marshal.ReadIntPtr(mi).ToInt64();
+                m.WriteLine($"grid_method {mn} 0x{fp - gbase + 0x180000000:x}");
+            }
+        }
+        catch (Exception e) { m.WriteLine("collisionstate_method error " + e.Message); }
         // Factory`1's methods for WindlashBehavior (shared generics, no static address).
         try
         {

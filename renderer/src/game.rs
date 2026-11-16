@@ -1244,9 +1244,9 @@ fn quick_point(ds: &[f32], dist: f32) -> usize {
     ds.partition_point(|&d| d <= dd).saturating_sub(1)
 }
 
-/// CollisionGrid query enumerator (VERIFIED-DISASM @0x1825db980): every bloon in the query's
-/// own cell counts, and every bloon in a cell whose circumscribed square lies inside the query's
-/// box; elsewhere distance <= query radius + bloon radius.
+/// CollisionGrid query enumerator (CollisionState.MoveNext, VERIFIED-DISASM @0x1824b4110): every
+/// bloon in the query's own cell counts, and every bloon in a bucket whose box (centre +-
+/// extent) lies inside the query's box; elsewhere distance <= query radius + bloon radius.
 fn grid_hit(q: [f32; 2], qr: f32, b: [f32; 2], b_cell: [f32; 2], br: f32) -> bool {
     let rr = qr + br;
     let dd = (b[0] - q[0]).powi(2) + (b[1] - q[1]).powi(2);
@@ -1263,15 +1263,19 @@ fn grid_hit(q: [f32; 2], qr: f32, b: [f32; 2], b_cell: [f32; 2], br: f32) -> boo
     if qc == bc {
         return true;
     }
-    // Cell centre in game space; extent sqrt(200) (Constants).
-    // HYPOTHESIS P-CELLCIRCLE: and the cell's circumscribed circle (half its diagonal) inside the
-    // query's circle, not just its box (recording mortar_500 rt 755: a 111 Shockwave doesn't take
-    // a Rainbow whose cell fits the box, its far corner 136 away).
+    // Bucket.centre is grid-local ((i + 0.5) x 10, (j + 0.5) x 10 from the grid's corner, as
+    // the CollisionGrid ctor makes it; the map dumps' blocker buckets show it: bucket 1 at
+    // (15, 5) holds a blocker at (-185.5, -167.1)), while the query's x / y are world space, so
+    // MoveNext's box test (VERIFIED-DISASM @0x1824b4110: x - radius < centre.x - extent and
+    // centre.x + extent < x + radius, the same in y; extent sqrt(200)) is against cells shifted
+    // by (-202, -168) (recording map_erosion_mortar_502_r40 rt 1114: a 111 Shockwave at
+    // (122.08, 113.62) takes Blacks 137 and 154 away in cells (21, 19) / (20, 18), but not one
+    // 120 away in (22, 21)).
     let ext = 200f32.sqrt();
-    let cx = -202.0 + bc.0 as f32 * GAME_GRID_CELL + GAME_GRID_CELL * 0.5;
-    let cy = -168.0 + bc.1 as f32 * GAME_GRID_CELL + GAME_GRID_CELL * 0.5;
+    let cx = bc.0 as f32 * GAME_GRID_CELL + GAME_GRID_CELL * 0.5;
+    let cy = bc.1 as f32 * GAME_GRID_CELL + GAME_GRID_CELL * 0.5;
     let (gx, gy) = (q[0], -q[1]);
-    if gx - qr < cx - ext && cx + ext < gx + qr && gy - qr < cy - ext && cy + ext < gy + qr && (cx - gx).hypot(cy - gy) + ext * 0.5 <= qr {
+    if gx - qr < cx - ext && cx + ext < gx + qr && gy - qr < cy - ext && cy + ext < gy + qr {
         return true;
     }
     false
@@ -2802,6 +2806,8 @@ pub struct Projectile {
     single_used: Option<bool>,
     /// An instant shot's Target when it is a spot, not a bloon (Wall of Fire's track point).
     instant_pos: Option<[f32; 2]>,
+    /// The z of a point Target (instant_pos), which Instant.Process puts the shot at.
+    instant_z: Option<f32>,
     /// A plain Line emission's bloons (CollisionGrid.GetInLine, nearest the start first), collided
     /// in the instant pass the frame it is made.
     line_hits: Option<Vec<u64>>,
@@ -4601,11 +4607,12 @@ macro_rules! collide_pass {
             // DamageInRingRadius.Collide (VERIFIED-DISASM @0xcb1950): Damage.Collide only when
             // the bloon is at least Projectile+0x150 x innerRingRadius from the projectile (Shockwave).
             // Vector3Boxed.Distance (@0xf466b0) is 3D: the bloon's Position.z (`height`, 20 / a MOAB 120)
-            // over the blast's 0 (P lines: Position.z 0, though made from a shell at ejectZ) (recordings mortar_300 / 400 whole: the flat cutoff between 18.2 and
+            // over the blast's (its shell's Position.z, the terrain height where it landed: 0 on
+            // Tutorial, 8.9 on Erosion; recording map_erosion_mortar_502_r40 rt 3034) (recordings mortar_300 / 400 whole: the flat cutoff between 18.2 and
             // 22.8 for 57 x 0.5, between 36.8 and 39.3 for 87 x 0.5; mortar_502 rt 35, a MOAB 44.2
             // away takes the Shockwave). HYPOTHESIS P-RINGZ: a new object not yet moved (height 0
             // here) is at its parent's 20 (RING_DZ).
-            let ring_out = pr.spec.ring_inner > 0.0 && { let dz = if b.height > 0.0 { b.height } else { RING_DZ }; let (dx, dy) = (b.pos[0] - pr.pos[0], b.pos[1] - pr.pos[1]); (dx * dx + dy * dy + dz * dz).sqrt() } < pr.spec.radius * pr.spec.ring_inner;
+            let ring_out = pr.spec.ring_inner > 0.0 && { let dz = if b.height > 0.0 { b.height } else { RING_DZ } - pr.z; let (dx, dy) = (b.pos[0] - pr.pos[0], b.pos[1] - pr.pos[1]); (dx * dx + dy * dy + dz * dz).sqrt() } < pr.spec.radius * pr.spec.ring_inner;
             let immune = !ring_out && pr.spec.immune & b.properties(d) != 0;
             // HYPOTHESIS P-CRITTEXT: ShowTextOnHit's "Crit!" shows on crit shots only.
             let crit_text = (pr.crit.is_some() && pr.spec.hit_text).then_some(b.pos);
@@ -6967,9 +6974,11 @@ impl Game {
     /// A circle touches an area: its centre is inside it, or it crosses the outline or a hole's
     /// edge (STAND-IN for Area.Intersects with holes).
     fn circle_hits_area(c: [f32; 2], r: f32, a: &Area) -> bool {
-        if Self::in_area(c, a) {
-            return true;
-        }
+        Self::in_area(c, a) || Self::circle_crosses_area(c, r, a)
+    }
+
+    /// Area.Intersects with a circle: it crosses the outline or a hole's edge.
+    fn circle_crosses_area(c: [f32; 2], r: f32, a: &Area) -> bool {
         let crosses = |poly: &[[f32; 2]]| {
             (0..poly.len()).any(|i| {
                 let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
@@ -8106,6 +8115,25 @@ impl Game {
             let dh = o.height - area.height;
             if (0.0..=5.0).contains(&dh) && Self::circle_hits_area(p, r * 0.75, o) {
                 return false;
+            }
+        }
+        // Map.CanPlace (@0x180f513d0): when the 0.75 x radius circle crosses the edge of the area
+        // holding the point (the first scene area, the base land last), the point must also be in
+        // another active area of a placeable type, its height within -5..=5 of that one's, that
+        // the circle doesn't cross (recording map_erosion_engineer_204_r40: RandomPosition skips
+        // (102, 101.42), 0.6 inside LandArea (2) by PathEdge4 below it, so the second Sentry goes
+        // to the next offset).
+        let own = self.areas.iter().skip(1).find(|a| a.kind != AREA_SKIPPED && Self::in_area(p, a));
+        if let Some(own) = own {
+            let r75 = r * 0.75;
+            if Self::circle_crosses_area(p, r75, own) {
+                let ok = self.areas.iter().any(|o| {
+                    let dh = o.height - own.height;
+                    !std::ptr::eq(o, own) && o.kind == AREA_LAND && (-5.0..=5.0).contains(&dh) && Self::in_area(p, o) && !Self::circle_crosses_area(p, r75, o)
+                });
+                if !ok {
+                    return false;
+                }
             }
         }
         // BlockedByBlockerZone: full radius, non-strict. The flag that inverts the test sits at
@@ -16900,6 +16928,12 @@ impl Game {
                 if let Some(rp) = attack.random_pos.filter(|_| !attack.weapons.is_empty() && (self.sandbox || self.round_active || !self.bloons.is_empty())) {
                     let key = attack.model_name.clone();
                     best = self.random_pos_target(t, &key, rp).map(|q| (0.0, q, 0));
+                    // (CheckPositions' Target is at Map.GetTerrainHeight there: recording
+                    // map_erosion_engineer_204_r40, a Sentry thrown onto 10-high land eases in
+                    // over the 3D distance to it.)
+                    if let Some((_, q, _)) = best {
+                        aim_z = self.terrain_z(q);
+                    }
                     if track_draws.is_none() && (only_temp.is_none() || rerun_attack.is_some()) {
                         let mut k = 0;
                         for a in tier.attacks.iter() {
@@ -18077,10 +18111,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 let gx = (cs * dr - sn * 0.0) + target[0];
                                 let gy = (sn * dr + cs * 0.0) + gy;
                                 target = [gx, -gy];
-                                // (Then a new Target at Map.GetTerrainHeight there, @0xc4b720:
-                                // recording engineer_040, a spread foam timed to z 0. STAND-IN:
-                                // no area heights, 0 on the track.)
-                                aim_z = 0.0;
+                                // (Then a new Target at Map.GetTerrainHeight there (@0xc4b720, no
+                                // bloon): recording engineer_040, a spread foam timed to z 0;
+                                // map_erosion_mortar_502_r40, shells at z 10 / 8.9 where they land.)
+                                aim_z = self.terrain_z(target);
                             }
                             // Launch from the weapon's eject point. HYPOTHESIS P-EJECT: x is to the
                             // tower's right and y forward, as for sprites facing +y.
@@ -18433,6 +18467,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 // Fire at the eject point at 30, on its track spot from 31).
                                 for pr in &mut self.projectiles[start..] {
                                     pr.instant_pos = Some(target);
+                                    // (The point Target's z: a RandomTargetSpread one at the terrain's
+                                    // height; recording map_erosion_mortar_502_r40, P lines z 10 / 8.9.)
+                                    pr.instant_z = Some(aim_z);
                                 }
                             } else if proj.instant || emission.kind == "AtTarget" || emission.kind == "InstantDamage" {
                                 let bfound = self.bloons.iter().find(|b| b.id == target_id).map(|b| (b.pos, b.obj));
@@ -22493,6 +22530,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 rod_next: 0,
                 single_used: su,
                 instant_pos: None,
+                instant_z: None,
                 line_hits: None,
                 line_spent: false,
                 target_cache: None,
@@ -23077,6 +23115,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // one at 20).)
             let tz = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.height).filter(|_| !pr.spec.instant_keep_z);
             if let Some(z) = tz {
+                pr.z = z;
+            } else if let (None, Some(z)) = (pr.target, pr.instant_z) {
                 pr.z = z;
             }
             if let Some(q) = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| {
