@@ -3122,6 +3122,17 @@ async fn game_main() {
                             let scale = ex.scale * link.map_or(1.0, |r| game.range(t) / r);
                             want.insert(EXTRA_FX_TAG | (tw.id << 4) | k as u64, (tw.id, name, tw.pos, scale));
                         }
+                        // ToggleEffectWhileAbilityActiveModel: the "not active" effect (the Druid
+                        // Paragon's cyclone, by degree). STAND-IN: Primordial Wrath isn't simulated,
+                        // so its active effect never shows.
+                        for (ai, ab) in tr.abilities.iter().enumerate() {
+                            let Some(base) = ab.toggle_fx.as_ref().and_then(|(_, off)| off.clone()) else { continue };
+                            let name = game.paragon_display(tw, &base).unwrap_or(base);
+                            if !extra_kind.entry(name.clone()).or_insert_with(|| (false, root.join("effects").join(&name).join("effect.json").is_file())).1 {
+                                continue;
+                            }
+                            want.insert(EXTRA_FX_TAG | (tw.id << 4) | (8 + ai as u64).min(15), (tw.id, name, tw.pos, 1.0));
+                        }
                     }
                     let stale: Vec<u64> = extra_fx_live.iter().filter(|(tag, (_, n))| want.get(*tag).is_none_or(|w| w.1 != *n)).map(|(tag, _)| *tag).collect();
                     for tag in stale {

@@ -37,7 +37,10 @@ effect names, model behaviours the data builder never reads).
   `per_degree`, `Game::paragon_display`): at its display level a Paragon's extras and shots use the
   swapped art from models/extra: Bomb's add-on and cluster / ISAB missiles, Sniper's platform, Glaive
   Dominus' glaives, Ascended Shadow's shurikens, the Tack Paragon's meteors. The Druid Paragon's cyclone
-  levels (RootOfAllNatureCycloneT3-T5, Wrath T4) aren't exported yet.
+  levels (RootOfAllNatureCycloneT3-T5, Wrath T4) are exported as effects (export_particles.py; NoiseModule
+  unsupported). The cyclone comes from Primordial Wrath's `ToggleEffectWhileAbilityActiveModel` (ability
+  `toggle_fx`: the Wrath cyclone while active, the plain one otherwise): the plain one now loops on the
+  Paragon, swapped by degree. STAND-IN: Primordial Wrath isn't simulated, so the Wrath cyclone never shows.
 
 ## Audit entries that aren't gaps
 

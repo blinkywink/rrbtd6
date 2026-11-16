@@ -2155,6 +2155,9 @@ pub struct Eat {
 /// AbilityModel: a button that, off cooldown, turns on extra attacks and / or a rate boost.
 #[derive(Deserialize, Clone)]
 pub struct Ability {
+    /// ToggleEffectWhileAbilityActiveModel: (effect while active, effect otherwise), display only.
+    #[serde(default)]
+    pub toggle_fx: Option<(Option<String>, Option<String>)>,
     /// CreateEffectOnAbilityModel: the effect prefabs played on the tower as it's used, (name, scale).
     #[serde(default)]
     pub fx: Vec<(String, f32)>,

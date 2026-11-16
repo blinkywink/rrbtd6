@@ -1758,6 +1758,11 @@ def main():
                    # activateOnRoundEnd: it goes off by itself as each round ends (Jungle's Bounty).
                    "round_end": bool(bf.get("activateOnRoundEnd")),
                    "sounds": behavior_sounds(items(bf.get("behaviors")), "CreateSoundOnAbilityModel", SOUND_KEYS),
+                   # ToggleEffectWhileAbilityActiveModel: [effect while active, effect otherwise]
+                   # (the Druid Paragon's cyclone and its Wrath cyclone). Display only.
+                   "toggle_fx": next(([prefab_name((deref(x["f"].get("effectActiveModel")) or {"f": {}})["f"].get("assetId")),
+                                       prefab_name((deref(x["f"].get("effectNotActiveModel")) or {"f": {}})["f"].get("assetId"))]
+                                      for x in items(bf.get("behaviors")) if x and x["type"] == "ToggleEffectWhileAbilityActiveModel"), None),
                    # CreateEffectOnAbilityModel: the prefab played on the tower as it's used, [name, scale].
                    "fx": [[prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")),
                            (deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("scale", 1.0)]
