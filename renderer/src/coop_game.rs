@@ -494,6 +494,9 @@ impl Runtime{
         let mut action=replica.ability(&peer,0,&name).unwrap();if let Action::Ability{at:point,..}=&mut action{*point=Some(at);}
         assert!(native.activate_ability_at(&name,at));
         assert_eq!(replica.begin(&mut peer,&Frame{number:2,actions:vec![input(0,2,action)]}).unwrap(),vec![true]);
+        assert_eq!(native.coop_digest(),peer.coop_digest());
+        // (The move waits the Darkshift's delay.)
+        for _ in 0..120{native.step();peer.step();}
         assert_eq!(native.coop_digest(),peer.coop_digest());assert_eq!(peer.towers[t].pos,at);
     }
     #[test]fn targeted_mega_mine_matches_single_player(){

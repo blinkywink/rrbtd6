@@ -23,6 +23,7 @@ pub fn setup(game:&mut Game,round:usize,degree:u32){
         }
         let t=game.towers.iter().position(|t|t.id==ids[0]).unwrap();
         assert!(game.buy_paragon(t,0.0),"cannot create benchmark paragon {name}");
+        game.remove_sacrificed();
         let t=game.towers.iter().position(|t|t.id==ids[0]).unwrap();
         let base=&game.tower_tiers[def].as_ref().unwrap().paragon.as_ref().unwrap().tier;
         game.towers[t].paragon=Some((degree,std::sync::Arc::new(game.paragon_tier(base,degree))));

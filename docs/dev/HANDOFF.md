@@ -125,9 +125,7 @@ Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
 (+ pending/_desperado_g 5/5), and 0 for ace, alch, bucc, dartling, druid, farm, heli, mermonkey, mortar,
 spike, super, village. Alchemist 34/34. Druid 34/34 (2026-11-09). Mermonkey 34/34, Banana Farm 25/25, Monkey Village 25/25, Spike Factory 24/25, Super Monkey 28/34 (2026-11-10; heli / ace / super re-recorded, old ones in pending/<set>_old). Full run 2026-11-10: every set above at full count (mortar 25/25, bucc 34/34). Monkey Ace 25/25 (2026-11-10): add `ace` to the regression run.
-Unit tests (`cargo test --profile game -p btd6-game`, 2026-11-16): 5 already failing at 9538de1 and
-before (coop targeted_darkshift..., paragon_degree_and_upgrade, sub_commander, necromancer_graveyard,
-round_bench presets_have_exact_round_degree_and_paragon_counts); OPEN: look at them.
+Unit tests (`cargo test -p btd6-game --release`, 2026-11-16): all 237 pass. Fixed the 5 that failed: paragon_degree_and_upgrade / round_bench (sacrificed towers stay until the end of the next step: tests step, the bench calls Game::remove_sacrificed), sub_commander (supports reach towers from the frame after their tower's first; Sub Commander's pierce is `pierce_all`), necromancer_graveyard (a new Necromancer attack has no track points until a round event: the test uses set_round), targeted_darkshift (co-op Darkshift now waits ds.delay through Tower.shift like single player; it teleported at once).
 compare.sh now builds once and runs recordings in parallel (RRBTD6_JOBS, default 12): the whole
 regression takes ~1.5 min. Run `sh tools/rec/compare.sh --root dart boomerang` and the sets you touched before each
 checkpoint that changes `renderer/src/game.rs`.

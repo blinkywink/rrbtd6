@@ -42,7 +42,9 @@ impl Game{
             let from=self.towers[t].pos;
             if ds.restrict&&(p[0]-from[0]).hypot(p[1]-from[1])>ds.radius{return false;}
             self.towers[t].pos=[f32::MAX;2];let ok=self.can_place(self.towers[t].def,p);self.towers[t].pos=from;
-            if !ok{return false;}self.towers[t].pos=p;
+            if !ok{return false;}
+            // (As activate_ability_at: the move waits the ability's delay, Tower.shift.)
+            if ds.delay>0{self.towers[t].shift=Some((self.sim_elapsed+ds.delay as u64,p));}else{self.towers[t].pos=p;}
         }else{
             if point.is_some()||target.is_some(){return false;}
             self.towers[t].ability_cd.insert(ability.name.clone(),ability.cooldown*FPS);self.use_ability(t,&ability);return true;

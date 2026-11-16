@@ -23051,6 +23051,12 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             }
             self.finish_round();
         }
+        self.remove_sacrificed();
+        self.in_step = false;
+    }
+    /// Removes the towers a Paragon purchase sacrificed (with their sub-towers): the end of the
+    /// step after the purchase.
+    pub fn remove_sacrificed(&mut self) {
         if !self.sacrificed.is_empty() {
             let gone = std::mem::take(&mut self.sacrificed);
             let mut i = 0;
@@ -23065,7 +23071,6 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             }
             self.buffs = self.compute_buffs();
         }
-        self.in_step = false;
     }
     /// Simulation.AreRoundsActive (VERIFIED-DISASM @0xa75170): the map's spawner condition first
     /// (sandbox: always; time runs there whether or not anything was sent), else a round is on or
@@ -24534,8 +24539,9 @@ mod tests {
             let t = place_near(&mut g, dart, d);
             assert!(g.upgrade(t, 0));
         }
-        g.round = 9;
-        g.start_round();
+        // (A new NecromancerTargetTrackWithinRange has no track points until a round event:
+        // OnRoundSet here.)
+        g.set_round(10);
         let mut stored = 0.0f32;
         let mut undead = false;
         for _ in 0..3000 {
@@ -25562,11 +25568,17 @@ mod beast_tests {
             }
         }
         assert_eq!(placed.len(), 2);
-        g.towers[placed[0]].tiers = [0, 0, 5];
-        g.buffs = g.compute_buffs();
+        g.cash = 1e9;
+        for _ in 0..5 {
+            assert!(g.upgrade(placed[0], 2));
+        }
+        // (A support reaches towers from the frame after its tower's first: step twice.)
+        g.step();
+        g.step();
         for &t in &placed {
             assert_eq!(g.buffs[t].damage_mult, 2.0);
-            assert_eq!(g.buffs[t].pierce_add, 4.0);
+            // (SubCommanderSupport: +4 on every ProjectileModel of the tower, `pierce_all`.)
+            assert_eq!(g.buffs[t].pierce_all, 4.0);
         }
     }
 
@@ -25742,6 +25754,8 @@ mod beast_tests {
         let cash = g.cash;
         assert!(g.upgrade(a, 0));
         assert_eq!(g.cash, cash - cost);
+        assert_eq!(g.towers.iter().filter(|t| t.sub.is_none()).count(), 3, "the others still act in the next frame");
+        g.step();
         assert_eq!(g.towers.iter().filter(|t| t.sub.is_none()).count(), 1, "the others were sacrificed");
         assert_eq!(g.towers[0].paragon.as_ref().unwrap().0, 1, "three tier 5s, no pops: degree 1");
         assert!(g.next_upgrade(0, 2).is_none() && !g.upgrade(0, 2), "a Paragon takes no path upgrades");
