@@ -1771,6 +1771,9 @@ pub struct Sacrifice {
 }
 
 pub struct Tower {
+    /// Position.z set apart from the terrain where it stands (a tower the recorder forced in with
+    /// TowerManager.CreateTower at z 0).
+    pub z_fixed: Option<f32>,
     pub id: u64,
     /// RandomPosition per attack (by model name).
     pub randpos: Vec<(String, RandPosState)>,
@@ -7927,7 +7930,7 @@ impl Game {
         if los.through_walls {
             return true;
         }
-        let z = self.terrain_z(pos);
+        let z = self.stand_z(pos);
         if !self.line_clear(pos, z, q) {
             return false;
         }
@@ -7949,6 +7952,14 @@ impl Game {
     /// LandRight, itself a blocker, shoots past the 50-high Blocking areas). STAND-IN: the entity
     /// height term (vtable 0x228) the origin adds is taken as 0, and z is taken where the tower is
     /// now, not kept from its placement.
+    /// A tower's Position.z from where it stands: its fixed z, else the terrain height there.
+    pub(crate) fn stand_z(&self, p: [f32; 2]) -> f32 {
+        if let Some(z) = self.towers.iter().find(|t| t.pos == p && t.sub.is_none()).and_then(|t| t.z_fixed) {
+            return z;
+        }
+        self.terrain_z(p)
+    }
+
     pub(crate) fn terrain_z(&self, p: [f32; 2]) -> f32 {
         // Unplaceable areas count (recording map_coveredgarden_dart_205_r40: the probe's RT line puts
         // a tower inside WindowLowerLeft, type 3, at z 200; skipping them is QueryPlacementPosition's
@@ -8511,6 +8522,7 @@ impl Game {
             takedown_throws: Vec::new(),
             aim_rots: Vec::new(),
             ent_rots: Vec::new(),
+            z_fixed: None,
             face_ids: Vec::new(),
             ability_round: HashMap::new(),
             temp: Vec::new(),
@@ -10976,6 +10988,7 @@ impl Game {
             takedown_throws: Vec::new(),
             aim_rots: Vec::new(),
             ent_rots: Vec::new(),
+            z_fixed: None,
             face_ids: Vec::new(),
             ability_round: HashMap::new(),
             temp: Vec::new(),
@@ -15408,7 +15421,7 @@ impl Game {
             // (recording bucc_040 rt 120: tower -209.33203, hook at (-1.82026, -0.7643168), z 3.5).
             let pos = self.towers[t].pos;
             let bp = self.bloons[i].pos;
-            let aim_from = [pos[0], aim_origin_y(pos[1], self.terrain_z(pos), DISPLAY_TOWER_HEIGHT)];
+            let aim_from = [pos[0], aim_origin_y(pos[1], self.stand_z(pos), DISPLAY_TOWER_HEIGHT)];
             let tr = RAD2DEG * crt_atan2(bp[0] - aim_from[0], -(bp[1] - aim_from[1])) + td.turn;
             self.towers[t].game_rot = Some(tr);
             self.towers[t].angle = (tr - 90.0) * DEG2RAD;
@@ -16466,7 +16479,7 @@ impl Game {
                             match at {
                                 Some(q) => {
                                     let tp = self.towers[t].pos;
-                                    let from = [tp[0], aim_origin_y(tp[1], self.terrain_z(tp), DISPLAY_TOWER_HEIGHT)];
+                                    let from = [tp[0], aim_origin_y(tp[1], self.stand_z(tp), DISPLAY_TOWER_HEIGHT)];
                                     let r = RAD2DEG * crt_atan2(q[0] - from[0], -(q[1] - from[1])) + attack.extra_rotation;
                                     self.towers[t].game_rot = Some(r);
                                     self.towers[t].angle = (r - 90.0) * DEG2RAD;
@@ -16780,7 +16793,7 @@ impl Game {
                             // given unless attackThroughWalls) the line to the circle itself.
                             .find(|c| {
                                 (attack.shared_range || (c[0] - pos[0]).powi(2) + (c[1] - pos[1]).powi(2) < (range + c[2]) * (range + c[2]))
-                                    && ((!attack.shared_range && seg_clear) || self.line_clear(pos, self.terrain_z(pos), [c[0], c[1]]))
+                                    && ((!attack.shared_range && seg_clear) || self.line_clear(pos, self.stand_z(pos), [c[0], c[1]]))
                             })
                             .map(|c| {
                                 aim_at = [c[0], c[1]];
@@ -17060,7 +17073,7 @@ impl Game {
                         if attack.min_range > 0.0 && (b.pos[0] - pos[0]).powi(2) + (b.pos[1] - pos[1]).powi(2) < attack.min_range * attack.min_range {
                             continue;
                         }
-                        if !attack.through_walls && !self.line_clear(pos, self.terrain_z(pos), b.pos) {
+                        if !attack.through_walls && !self.line_clear(pos, self.stand_z(pos), b.pos) {
                             continue;
                         }
                         any_target = true;
@@ -17368,7 +17381,7 @@ impl Game {
                     if let Some((_, _, id)) = best.filter(|b| b.2 != 0) {
                         if let Some(b) = self.bloons.iter().find(|b| b.id == id) {
                             let tp = self.towers[t].pos;
-                            let from = [tp[0], aim_origin_y(tp[1], self.terrain_z(tp), DISPLAY_TOWER_HEIGHT)];
+                            let from = [tp[0], aim_origin_y(tp[1], self.stand_z(tp), DISPLAY_TOWER_HEIGHT)];
                             let q = b.prev;
                             let r = RAD2DEG * crt_atan2(q[0] - from[0], -(q[1] - from[1])) + attack.extra_rotation;
                             self.towers[t].game_rot = Some(r);
@@ -17602,7 +17615,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     if let Some(Some((_, p, _))) = young_best {
                         self.air_rotate_to(t, 0, buff.attack_range(attack), Some(p));
                     }
-                    let stand_z = self.terrain_z(self.towers[t].pos);
+                    let stand_z = self.stand_z(self.towers[t].pos);
                     let tw = &mut self.towers[t];
                     // EmissionsPerRoundFilter.Process (VERIFIED-DECOMP @0x180c75cb0): each round's
                     // `count` bananas come due at (int)(i x duration / (count - 1) + start) (one:
@@ -18014,7 +18027,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 }
                                 break 'shot;
                             }
-                            let stand_z = self.terrain_z(self.towers[t].pos);
+                            let stand_z = self.stand_z(self.towers[t].pos);
                             let tw = &mut self.towers[t];
                             // Towers without RotateToTargetModel keep their placement facing and fire
                             // along it (HYPOTHESIS P-NOROTATE: full-circle arcs start at that facing).
@@ -20833,7 +20846,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // (TowerCreateParagonTower.Process @0x180da3fe0: an isAirBasedTower is made at z 250;
         // recording wizard_paragon_r40 rt 327, the Dark Phoenix's balls at 257 fly over the trees.)
         // Else its Position.z where it stands (terrain_z).
-        if self.towers[t].sub.as_ref().is_some_and(|s| s.spec.circle.is_some() || s.spec.air_based) { 250.0 } else { self.terrain_z(self.towers[t].pos) }
+        if self.towers[t].sub.as_ref().is_some_and(|s| s.spec.circle.is_some() || s.spec.air_based) { 250.0 } else { self.stand_z(self.towers[t].pos) }
     }
 
     /// Bloon.PercThroughMap (VERIFIED-DISASM @0x180fb54f0): (distanceTraveled + MaxDistUntilSpawn) /
@@ -20937,7 +20950,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             let (sa, ca) = crt_sin_cos(DEG2RAD * -b.rot);
             let (ox, oy) = (ca * c[0] - sa * c[1], ca * c[1] + sa * c[0]);
             let p = [b.pos[0] + ox, b.pos[1] - oy];
-            ((p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2) < (range + c[2]) * (range + c[2]) && (clear || self.line_clear(pos, self.terrain_z(pos), p))).then_some((dd, p))
+            ((p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2) < (range + c[2]) * (range + c[2]) && (clear || self.line_clear(pos, self.stand_z(pos), p))).then_some((dd, p))
         })
     }
 
@@ -24804,6 +24817,10 @@ mod tests {
         let mut map_difficulty: Option<usize> = None;
         // SimRecorder's `# camo k` (camo priority on) and `# upgrade k path frame`.
         let mut camos: Vec<usize> = Vec::new();
+        // SimRecorder's `# forced k`: InputManager.CreateTowerAt refused tower k, so the recorder made
+        // it with TowerManager.CreateTower at (x, y, 0): Position.z 0, no area (probe
+        // map_coveredgarden_quincy_l01_r40_az: AC lines, Quincy at z 0, areaPlacedOn -1).
+        let mut forced: Vec<usize> = Vec::new();
         let mut flips: Vec<usize> = Vec::new();
         let mut upgrades: Vec<(usize, usize, usize)> = Vec::new();
         // SimRecorder's `# place k frame`: tower k placed between recorded frames frame and
@@ -24855,6 +24872,7 @@ mod tests {
                 // `# xpscale <scales> map <mapDifficulty> ...`: the map's XP tier.
                 Some("#") if f.get(1) == Some(&"xpscale") => map_difficulty = f.iter().position(|x| *x == "map").and_then(|i| f.get(i + 1)?.parse().ok()),
                 Some("#") if f.get(1) == Some(&"camo") => camos.push(f[2].parse().unwrap()),
+                Some("#") if f.get(1) == Some(&"forced") => forced.push(f[2].parse().unwrap()),
                 Some("#") if f.get(1) == Some(&"flip") => flips.push(f[2].parse().unwrap()),
                 Some("#") if f.get(1) == Some(&"upgrade") => upgrades.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap())),
                 Some("#") if f.get(1) == Some(&"place") => late.push((f[2].parse().unwrap(), f[3].parse().unwrap())),
@@ -24944,6 +24962,9 @@ mod tests {
             assert!(g.place_at(def, [*x, -*y], false), "can't place {id} at {x},{}", -y);
             g.locked = locked;
             let t = g.towers.iter().rposition(|t| t.sub.is_none()).unwrap();
+            if forced.contains(&ti) {
+                g.towers[t].z_fixed = Some(0.0);
+            }
             // (A hero keeps the level 1 it is placed at.)
             if g.hero_def(def).is_none() {
                 g.towers[t].tiers = [tiers[0], tiers[1], tiers[2]];

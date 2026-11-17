@@ -110,6 +110,8 @@ public class Scenario
     /// Read-only: log Attack.GetPathSegmentsInRangeFast's PathSegmentInRange flags between
     /// recorded frames segprobe_from..segprobe_to (SG lines).
     public bool segprobe { get; set; } = false;
+    /// Read-only: map area changes and the tower re-check they run (AZ / ACP / AC lines).
+    public bool areaprobe { get; set; } = false;
     /// Read-only: each bloon's scales and Radius every recorded frame (BS lines).
     public bool bloonscale { get; set; } = false;
     /// Read-only: at the start of recorded frames proclist_from..proclist_to, Simulation.process
@@ -325,6 +327,8 @@ public class Recorder : MelonMod
                     // harness does.
                     if (!ok && Sc.forcePlace)
                     {
+                        // (The harness gives a forced tower Position.z 0 and no area: "# forced k".)
+                        HeroLevelLines.Add($"# forced {Sc.towers.IndexOf(t)}");
                         var made = sim.towerManager.CreateTower(model, new Il2CppAssets.Scripts.Simulation.SMath.Vector3(t.x, t.y, 0f), InGame.instance.bridge.GetInputId(), ObjectId.Invalid, ObjectId.Invalid, null, false, false, 0f, false, -1, -1);
                         LoggerInstance.Msg($"forced {t.id} at {t.x},{t.y}: {made != null}");
                     }
@@ -1151,6 +1155,66 @@ static class SegProbePatch
             if (w != null) w.WriteLine(sb.ToString()); else Recorder.PreLines.Add(sb.ToString());
         }
         catch (System.Exception e) { w?.WriteLine($"SG err {e.GetType().Name} {e.Message}"); }
+    }
+}
+
+// Map area probe (with areaprobe, read-only): "AC frame create|destroy name id", around
+// Map.FindAndDestroyTowersIfInInvalidLocations "AZ frame pre|post area | tower:z:areaPlacedOn ...",
+// and each Map.CanPlace with a tower "ACP frame tower result foundAreaName:id".
+static class AreaProbe
+{
+    public static bool On => Recorder.Sc != null && Recorder.Sc.areaprobe;
+    public static void Line(string l) { var w = Recorder.Out; if (w != null) w.WriteLine(l); else Recorder.PreLines.Add(l); }
+    public static string Towers()
+    {
+        var sb = new StringBuilder();
+        try
+        {
+            var ts = InGame.instance.bridge.simulation.factory.GetFactory<Il2CppAssets.Scripts.Simulation.Towers.Tower>().up.list;
+            for (int j = 0; j < ts.Count; j++)
+            {
+                var t = ts[j];
+                if (t == null || t.IsDestroyed) continue;
+                sb.Append($" {t.Id.Id}:{Recorder.F(t.Position.Z)}:{t.areaPlacedOn}");
+            }
+        }
+        catch (System.Exception e) { sb.Append($" err {e.GetType().Name}"); }
+        return sb.ToString();
+    }
+    public static string Name(Il2CppAssets.Scripts.Simulation.Track.Area a)
+    {
+        if (a == null) return "null";
+        try { return $"{a.areaModel?.name}:{a.GetAreaID()}"; } catch { return "?"; }
+    }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Track.Map), nameof(Il2CppAssets.Scripts.Simulation.Track.Map.FindAndDestroyTowersIfInInvalidLocations))]
+static class AreaProbeFindPatch
+{
+    static void Prefix(Il2CppAssets.Scripts.Simulation.Track.Area __0) { if (AreaProbe.On) AreaProbe.Line($"AZ {Recorder.Recorded} pre {AreaProbe.Name(__0)} |{AreaProbe.Towers()}"); }
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Track.Area __0) { if (AreaProbe.On) AreaProbe.Line($"AZ {Recorder.Recorded} post {AreaProbe.Name(__0)} |{AreaProbe.Towers()}"); }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Track.Map), nameof(Il2CppAssets.Scripts.Simulation.Track.Map.CreateArea))]
+static class AreaProbeCreatePatch
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Track.Area __result) { if (AreaProbe.On) AreaProbe.Line($"AC {Recorder.Recorded} create {AreaProbe.Name(__result)} |{AreaProbe.Towers()}"); }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Track.Map), nameof(Il2CppAssets.Scripts.Simulation.Track.Map.CanPlace))]
+static class AreaProbeCanPlacePatch
+{
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Towers.Tower __2, object __3, bool __result)
+    {
+        if (!AreaProbe.On || __2 == null) return;
+        string found = "-";
+        try
+        {
+            var r = __3 as Il2CppAssets.Scripts.Simulation.Track.CanPlaceReturnData;
+            if (r != null) found = AreaProbe.Name(r.areaPlacedOn);
+        }
+        catch (System.Exception e) { found = "err " + e.GetType().Name; }
+        AreaProbe.Line($"ACP {Recorder.Recorded} {__2.Id.Id} {(__result ? 1 : 0)} {found} z {Recorder.F(__2.Position.Z)} placed {__2.areaPlacedOn}");
     }
 }
 
