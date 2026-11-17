@@ -669,7 +669,7 @@ impl Hud {
         let (cell, sx, sy) = (100.0 * s, 12.0 * s, 30.0 * s);
         let per_row = 4;
         let style = TmpStyle::default();
-        for (i, (icon, n, active)) in buffs.iter().enumerate() {
+        for (i, (icon, n, active, rounds)) in buffs.iter().enumerate() {
             let (row, col) = (i / per_row, i % per_row);
             let in_row = (buffs.len() - row * per_row).min(per_row) as f32;
             let w = in_row * cell + (in_row - 1.0) * sx;
