@@ -1544,6 +1544,15 @@ static class SimulatePatch
                         w.WriteLine($"AT {t.Id.Id} {ak} {(atb == null ? -1 : atb.Id.Id)} {(atg.IsValid ? 1 : 0)}");
                         // Read-only: Attack.useOnTheMoveTargetting when set: "OM tower attack".
                         if (at.useOnTheMoveTargetting) w.WriteLine($"OM {t.Id.Id} {ak}");
+                        // Read-only: GyrfalconPattern state: "GY tower attack timeOfNextIdleMove targetValid hoveredTower cooldownStartedAt".
+                        var abs = at.attackBehaviors;
+                        for (int q = 0; abs != null && q < abs.Count; q++)
+                        {
+                            var gp = abs[q]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.GyrfalconPattern>();
+                            if (gp == null) continue;
+                            var ct = gp.currentTarget;
+                            w.WriteLine($"GY {t.Id.Id} {ak} {gp.timeOfNextIdleMove} {(ct.IsValid ? 1 : 0)} {(gp.hoveredTower == null ? -1 : gp.hoveredTower.Id.Id)} {gp.cooldownStartedAt}");
+                        }
                         ak++;
                     }
                 }

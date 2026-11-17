@@ -2014,6 +2014,8 @@ pub struct Tower {
     /// !updateThrowCache): while set, TargetTrack's GetTargets (@0x180e0b7d0) remakes its points
     /// at every call.
     pub on_the_move: bool,
+    /// Its place in the process list among the bloons (Game::create_seq when it was made).
+    pub cseq: u64,
     /// StartOfRoundRateBuff.OnRoundStartSim's mutator is on (1) or off (0); a round start
     /// re-adds it, the unique mutator's time refreshed without a model change.
     pub sor_until: u64,
@@ -8520,6 +8522,7 @@ impl Game {
             placed_step: self.steps as u64,
             track_sets: Vec::new(),
             on_the_move: false,
+            cseq: { self.create_seq += 1; self.create_seq },
             sor_until: 0,
             temp_early: u64::MAX,
             grave_spent: (0.0, 0),
@@ -9351,6 +9354,11 @@ impl Game {
             if !st.init {
                 st.init = true;
                 st.stamp = self.sim_elapsed * 4 + 1;
+                // (BeastHandlerLeash.ProcessLeashedTower makes the pet tower in the handler's
+                // Process, after that frame's Spawner emissions: its place in the process list;
+                // recording beast_001's PR lines, Bloon 428 then Tower 436.)
+                self.create_seq += 1;
+                self.towers[t].cseq = self.create_seq;
                 pos = [home[0], home[1] + g.y_offset];
                 st.idle = Some(pos);
                 st.hover = true;
@@ -9392,6 +9400,7 @@ impl Game {
                 }
             }
             // Process: with nothing to do it plans an idle move.
+            let mut idle_started = false;
             if !self.gyr_valid(&st) {
                 if st.next_idle < 0 {
                     let d = self.synced_double();
@@ -9407,6 +9416,7 @@ impl Game {
                     let q = [q[0].clamp(-WORLD_X, WORLD_X), q[1].clamp(-WORLD_Z, WORLD_Z)];
                     st.target = GyrTarget::Point(q);
                     st.next_idle = -1;
+                    idle_started = true;
                 }
             } else {
                 st.next_idle = -1;
@@ -9424,6 +9434,13 @@ impl Game {
             // and hovering, it stays too.)
             let mut stay = in_cooldown || (!self.gyr_valid(&st) && st.hover);
             if !matches!(st.target, GyrTarget::Point(_)) && (st.hover || st.cd_start >= 0) && (dest[0] - pos[0]).hypot(dest[1] - pos[1]) <= snap {
+                stay = true;
+            }
+            // (The idle move's Target is the hovered tower: on the frame it starts, still hovering,
+            // UpdateMovement's check is against the tower's position, so within snapDistance of it
+            // the bird waits a frame; recording map_winterpark_beast_204_r40 rt 820, 4.16 from the
+            // handler.)
+            if idle_started && (home[0] - pos[0]).hypot(home[1] - pos[1]) <= snap {
                 stay = true;
             }
             if st.cd_start >= 0 && !in_cooldown {
@@ -9481,7 +9498,13 @@ impl Game {
                         let mut tagged: Vec<u64> = Vec::new();
                         let can_all = {
                             let x = &self.bloons[self.bloons.iter().position(|o| o.id == b).unwrap()];
-                            dseg.is_some_and(|(p, k)| self.seg_span(p as usize, k).is_some_and(|(_, max)| max <= x.dist))
+                            // (Its distanceTraveled as the bird's Process sees it: one listed after the
+                            // bird hasn't moved yet this frame. Recording map_winterpark_beast_204_r40 rt
+                            // 1188: PR lines put GyrfalconPattern 573 before Bloon 588, a MOAB at 643.66
+                            // before its move to 644.18, short of the segment's 644: only hit.
+                            // beast_001's first Black, 428, is listed before the bird's tower 436.)
+                            let xd = if x.cseq > self.towers[t].cseq { x.prev_dist } else { x.dist };
+                            dseg.is_some_and(|(p, k)| self.seg_span(p as usize, k).is_some_and(|(_, max)| max <= xd))
                                 && !self.defs[x.kind].tags.iter().any(|t| t == "Bad")
                         };
                         let mut left = g.amount as f32;
@@ -9643,7 +9666,12 @@ impl Game {
         let p = self.towers[pi].pos;
         let mut best: Option<((u8, usize), f32)> = None;
         let all = self.track_segs.iter().enumerate().flat_map(|(ti, sg)| sg.iter().enumerate().map(move |(k, q)| (ti as u8, k, *q)));
-        for (ti, k, q) in all.filter(|e| (e.2[0] - p[0]).powi(2) + (e.2[1] - p[1]).powi(2) < range * range) {
+        // (GetDestinationPathSegment @0x180dc3fe0: Attack.GetPathSegmentsInRange (range, less the 40
+        // that adds for an attack able to hit MOABs): only targetable segments; recording
+        // map_winterpark_beast_204_r40 rt 1188.)
+        let ok = |ti: u8, k: usize| self.track_seg_ok.get(ti as usize).and_then(|v| v.get(k)).copied().unwrap_or(false);
+        // (No line of sight: recordings beast_* need the segments behind Tutorial's trees.)
+        for (ti, k, q) in all.filter(|e| ok(e.0, e.1) && (e.2[0] - p[0]).powi(2) + (e.2[1] - p[1]).powi(2) < range * range) {
             let _ = q;
             let v = self.seg_until_leak(ti, k);
             if v > best.map_or(0.0, |b| b.1) {
@@ -10958,6 +10986,7 @@ impl Game {
             placed_step: self.steps as u64,
             track_sets: Vec::new(),
             on_the_move: false,
+            cseq: { self.create_seq += 1; self.create_seq },
             sor_until: 0,
             temp_early: u64::MAX,
             grave_spent: (0.0, 0),
