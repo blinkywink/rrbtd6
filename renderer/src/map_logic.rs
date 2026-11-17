@@ -112,6 +112,9 @@ pub struct LogicState {
     spins: Vec<(i64, i64, [f32; 2], f32, i64, Vec<i64>, f32)>,
     /// While logic_start runs: each caught-up event's trigger count.
     catch_up: Option<Vec<(i64, i32)>>,
+    /// Areas a caught-up RotateAreaAction turned (GotoPostAction: Map.RotateArea with
+    /// updateThrowCache off), with the step: towers on them then are on the move.
+    caught_areas: Vec<(i64, u64)>,
     /// CycleAreasAction.lastRotationIndex per action (keyed by its first area id).
     cycle_last: Vec<(i64, i32)>,
     /// While logic_round_end runs.
@@ -128,6 +131,7 @@ impl LogicState {
             round_skip: Vec::new(),
             spins: Vec::new(),
             catch_up: None,
+            caught_areas: Vec::new(),
             cycle_last: Vec::new(),
             in_round_end: false,
             pool: map.areas.clone(),
@@ -265,7 +269,6 @@ impl Game {
         if self.logic.def.events.is_empty() {
             return;
         }
-        self.logic_spin();
         let lost = std::mem::take(&mut self.logic.lives_lost);
         if lost > 0.0 {
             self.logic_lives_lost(lost, self.start_lives);
@@ -286,10 +289,18 @@ impl Game {
     /// STAND-IN: a tower is on the area when the area is the first holding its centre; pets,
     /// grounded air units, the tower's own created areas and the catch-up at a later start round
     /// (GotoPostAction) aren't modelled.
-    fn logic_spin(&mut self) {
+    /// (After the towers' turn: recording map_geared_spike_204_r40, every throw during a turn
+    /// ejects from where the tower stood before that frame's step.)
+    pub(crate) fn logic_spin(&mut self) {
+        if self.logic.def.events.is_empty() {
+            return;
+        }
         let now = self.steps as i64;
         for k in 0..self.logic.spins.len() {
             let (_, area, pivot, per, dur, _, _) = self.logic.spins[k];
+            // (updateThrowCache on the latest spin's last frame: (frame - its start) + 1 ==
+            // durationFrames.)
+            let last = self.logic.spins[k].5.last().is_some_and(|&s| now - s + 1 == dur);
             self.logic.spins[k].5.retain(|&s| dur > now - s);
             let n = self.logic.spins[k].5.iter().filter(|&&s| s <= now).count();
             if n == 0 {
@@ -298,6 +309,41 @@ impl Game {
             let a = n as f32 * per;
             self.logic.spins[k].6 += a;
             self.logic_turn_area(area, pivot, a, true);
+            if last {
+                self.logic_throw_cache(area);
+            }
+        }
+    }
+
+    /// A tower placed on an area the start's catch-up turned this step: in the game it was placed
+    /// first and GotoPostAction moved it with updateThrowCache off (SimRecorder OM lines: a tower
+    /// on Geared's gear is on the move from rt 1, none on Tutorial). STAND-IN for that order.
+    pub(crate) fn logic_placed_on_caught_area(&mut self, id: u64) {
+        let step = self.steps as u64;
+        let Some(t) = self.towers.iter().position(|x| x.id == id) else { return };
+        let pos = self.towers[t].pos;
+        let area = self.areas.iter().find(|ar| ar.id != 0 && Self::in_area(pos, ar)).map(|ar| ar.id);
+        if area.is_some_and(|a| self.logic.caught_areas.iter().any(|&(c, s)| c == a && s == step)) {
+            self.towers[t].on_the_move = true;
+        }
+    }
+
+    /// Tower.UpdateThrowCache for the towers on `area` (Map.RotateArea's updateThrowCache, the
+    /// spin's last frame): each TrackTargetSupplier's ThrowCacheUpdated (@0x180e09ec0) sets
+    /// generatePoints, so its next Process remakes and reshuffles its points (recording
+    /// map_geared_spike_204_r40: a 10-point shuffle at the end of each turn of the gear).
+    fn logic_throw_cache(&mut self, area: i64) {
+        let on: Vec<usize> = (0..self.towers.len())
+            .filter(|&t| self.areas.iter().find(|ar| ar.id != 0 && Self::in_area(self.towers[t].pos, ar)).is_some_and(|ar| ar.id == area))
+            .collect();
+        for t in on {
+            self.towers[t].on_the_move = false;
+            for set in self.towers[t].track_sets.iter_mut() {
+                set.sig = 0;
+                if let Some(sp) = set.supply.as_mut() {
+                    sp.2 = [9; 3];
+                }
+            }
         }
     }
 
@@ -325,6 +371,8 @@ impl Game {
             }
             let deg = a * (180.0 / std::f32::consts::PI);
             for t in on {
+                // (Tower.PositionTower with updateThrowCache off: on the move.)
+                self.towers[t].on_the_move = true;
                 self.towers[t].pos = turn(self.towers[t].pos);
                 self.towers[t].game_rot = Some(self.towers[t].game_rot.unwrap_or(0.0) + deg);
             }
@@ -423,6 +471,8 @@ impl Game {
                     let a = n as f32 * rad - self.logic.spins[k].6;
                     self.logic.spins[k].6 += a;
                     self.logic_turn_area(area, pivot, a, false);
+                    let step = self.steps as u64;
+                    self.logic.caught_areas.push((area, step));
                     return;
                 }
                 let at = self.steps as i64 + 1;

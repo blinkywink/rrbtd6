@@ -1522,6 +1522,8 @@ static class SimulatePatch
                         var atg = at.target;
                         var atb = atg._bloon;
                         w.WriteLine($"AT {t.Id.Id} {ak} {(atb == null ? -1 : atb.Id.Id)} {(atg.IsValid ? 1 : 0)}");
+                        // Read-only: Attack.useOnTheMoveTargetting when set: "OM tower attack".
+                        if (at.useOnTheMoveTargetting) w.WriteLine($"OM {t.Id.Id} {ak}");
                         ak++;
                     }
                 }

@@ -1997,6 +1997,10 @@ pub struct Tower {
     /// tower's own): the supplier inputs, the support set its points were made under, and
     /// the points, cursor and tiers.
     pub track_sets: Vec<TrackSet>,
+    /// Attack.useOnTheMoveTargetting (Tower.PositionTower @0x180c15230 sets it to
+    /// !updateThrowCache): while set, TargetTrack's GetTargets (@0x180e0b7d0) remakes its points
+    /// at every call.
+    pub on_the_move: bool,
     /// StartOfRoundRateBuff.OnRoundStartSim's mutator is on (1) or off (0); a round start
     /// re-adds it, the unique mutator's time refreshed without a model change.
     pub sor_until: u64,
@@ -8336,6 +8340,18 @@ impl Game {
     /// SimRecorder calls it puts the tower down regardless (recording dart_paragon_deg_r40: two
     /// Darts 6.6 apart).
     pub(crate) fn place_at(&mut self, def: usize, p: [f32; 2], checked: bool) -> bool {
+        let id0 = self.next_id;
+        let placed = self.place_at_inner(def, p, checked);
+        if placed {
+            if let Some(t) = self.towers.iter().rposition(|t| t.sub.is_none() && t.id >= id0) {
+                let id = self.towers[t].id;
+                self.logic_placed_on_caught_area(id);
+            }
+        }
+        placed
+    }
+
+    fn place_at_inner(&mut self, def: usize, p: [f32; 2], checked: bool) -> bool {
         // LockTowerModModel: this difficulty can't buy it.
         if self.locked.iter().any(|x| *x == self.tower_defs[def].0) {
             return false;
@@ -8483,6 +8499,7 @@ impl Game {
             model_clock: Some((self.sim_elapsed as i64, self.round_clock)),
             placed_step: self.steps as u64,
             track_sets: Vec::new(),
+            on_the_move: false,
             sor_until: 0,
             temp_early: u64::MAX,
             grave_spent: (0.0, 0),
@@ -10917,6 +10934,7 @@ impl Game {
             model_clock: Some((self.sim_elapsed as i64, self.round_clock)),
             placed_step: self.steps as u64,
             track_sets: Vec::new(),
+            on_the_move: false,
             sor_until: 0,
             temp_early: u64::MAX,
             grave_spent: (0.0, 0),
@@ -14850,6 +14868,21 @@ impl Game {
             }
         };
         self.towers[t].track_sets[k].args = (c, base, no_moab, through_walls);
+        // (On the move, GetTargets calls GeneratePoints first: recording
+        // map_geared_spike_204_r40, a reshuffle before each throw while the gear's turn hasn't
+        // ended with updateThrowCache.)
+        if self.towers[t].on_the_move {
+            // (The first points were made before the catch-up moved it: Close order.)
+            if self.towers[t].track_sets[k].supply.is_none() {
+                self.towers[t].on_the_move = false;
+                self.track_supply_refresh_one(t, k);
+                self.towers[t].on_the_move = true;
+            }
+            self.towers[t].track_sets[k].sig = 0;
+            if let Some(sp) = self.towers[t].track_sets[k].supply.as_mut() {
+                sp.2 = [9; 3];
+            }
+        }
         self.track_supply_refresh_one(t, k);
         let (pts, cur, _) = self.towers[t].track_sets[k].supply.as_ref().unwrap();
         if pts.is_empty() {
@@ -14939,7 +14972,9 @@ impl Game {
             // recording ninja_002: with it the shuffle gives the game's -134.1, -99.1, -113.1,
             // -92.1, -106.1 Caltrops in turn.)
             let tp = self.towers[t].pos;
-            pts.sort_by(|a, b| ((a[0] - tp[0]) * (a[0] - tp[0]) + (a[1] - tp[1]) * (a[1] - tp[1])).total_cmp(&((b[0] - tp[0]) * (b[0] - tp[0]) + (b[1] - tp[1]) * (b[1] - tp[1]))));
+            // (On the move, Attack.visiblePathSegmentsUnordered: path order, no Close sort;
+            // recording map_geared_spike_204_r40, the shuffles fit Geared's points along the path.)
+            if !self.towers[t].on_the_move { pts.sort_by(|a, b| ((a[0] - tp[0]) * (a[0] - tp[0]) + (a[1] - tp[1]) * (a[1] - tp[1])).total_cmp(&((b[0] - tp[0]) * (b[0] - tp[0]) + (b[1] - tp[1]) * (b[1] - tp[1])))); }
             let n = pts.len();
             for i in 0..n {
                 let j = i + (self.synced_double() * (n - i) as f64) as usize;
@@ -22939,6 +22974,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         self.compute_danger();
         self.grave_zones();
         self.towers_phase(None, &cd_speed, &mut early, round_clock, &mut dots, &mut emits, &zones, &shoves, &mut leak_voice);
+        // RotateAreaAction.Process: map logic after the towers.
+        self.logic_spin();
         // ActivateLightningRodZap.Process: the ability's behaviour after its tower's attacks
         // (recording sky_052 rt 496: the attack takes a Black the zap then destroys).
         for t in 0..self.towers.len() {

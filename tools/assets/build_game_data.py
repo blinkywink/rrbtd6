@@ -1440,6 +1440,10 @@ def main():
                             mtp_filter = True
             track_target = next((x["f"].get("maxOffset", 0.0) for x in items(af["behaviors"])
                                  if x and x["type"] == "TargetTrackModel"), None)
+            # TargetTrackModel.onlyTargetPathsWithBloons (+0x38): GetTargets (@0x180e0b7d0) skips
+            # points whose path segment holds no bloon.
+            track_only_bloons = any(x["f"].get("onlyTargetPathsWithBloons") for x in items(af["behaviors"])
+                                    if x and x["type"] == "TargetTrackModel")
             track_closest = False
             track_default = False
             for x in items(af["behaviors"]):
@@ -1752,7 +1756,7 @@ def main():
                                       for flt in items(y["f"]["filters"]) if flt and flt["type"] == "FilterTargetAngleModel"), 360.0)
                                 if any(y and y["type"].startswith("FighterPilotPattern") for y in items(af["behaviors"])) else None),
                     "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
-                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "fixed_range": bool(af.get("fixedRange")), "track_target": track_target, "track_closest": track_closest, "track_default": track_default,
+                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "fixed_range": bool(af.get("fixedRange")), "track_target": track_target, "track_only_bloons": track_only_bloons, "track_closest": track_closest, "track_default": track_default,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
                     # RotateToTargetAttackOffsetModel: the attack turns itself from its offset spot,
                     # [offsetX, offsetY, additionalRotation, startRotation].
