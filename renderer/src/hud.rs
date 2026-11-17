@@ -661,7 +661,7 @@ impl Hud {
     /// BuffManager.prefab over the selected tower at screen `at`: 100-unit icons in rows of up to
     /// four (GridLayoutGroup: cell 100, spacing 12 x 30, lower-centre, filling upward) whose
     /// bottom sits 200 units above the tower, with "x2"... for stacked buffs.
-    pub fn draw_buffs(&mut self, at: Vec2, buffs: &[(String, u32, bool)]) {
+    pub fn draw_buffs(&mut self, at: Vec2, buffs: &[(String, u32, bool, u32)]) {
         if buffs.is_empty() {
             return;
         }
@@ -685,10 +685,11 @@ impl Hud {
                     crate::uitree::with_gray(|| draw_texture_ex(&sp.tex, x, y + 11.7 * s, WHITE, params));
                 }
             }
-            // BuffIcon.Show: "x" + availableBuffCount when it's 1 or more.
-            if *n > 0 {
+            // BuffIcon.Show (@0x180a41020): "x" + availableBuffCount when it's 1 or more, else
+            // the timed mutator's roundsRemaining when above 0 (just the number), else nothing.
+            if *n > 0 || *rounds > 0 {
                 self.fonts.draw("Btd6FontTitleSDF", &TextBox { gradient: None,
-                    text: &format!("x{n}"),
+                    text: &if *n > 0 { format!("x{n}") } else { rounds.to_string() },
                     rect: Rect::new(x, y - 11.7 * s, cell, 132.1 * s),
                     size: 60.0 * s,
                     color: WHITE,

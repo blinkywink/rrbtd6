@@ -13399,12 +13399,14 @@ impl Game {
     /// TryGetValue), so they sit in that list's order whatever the tower's mutator order, and a
     /// FullName missing from it isn't shown.
     pub fn buff_icons(&self, t: usize) -> Vec<(String, u32)> {
-        self.buff_icons_shown(t).into_iter().map(|(i, n, _)| (i, n)).collect()
+        self.buff_icons_shown(t).into_iter().map(|(i, n, _, _)| (i, n)).collect()
     }
 
     /// `buff_icons` with each icon's canCurrentlyBuff (BuffIcon.Show: the Active image, else
     /// the Inactive one in GrayscaleUI).
-    pub fn buff_icons_shown(&self, t: usize) -> Vec<(String, u32, bool)> {
+    /// Each also has its stored query's TimedMutator.roundsRemaining (0: none): BuffIcon.Show
+    /// (@0x180a41020) writes that number when availableBuffCount is below 1.
+    pub fn buff_icons_shown(&self, t: usize) -> Vec<(String, u32, bool, u32)> {
         let mut queries: Vec<(String, String, i32, u32, u32, bool)> = self
             .supports_at(self.towers[t].def, self.towers[t].pos, Some(t))
             .into_iter()
@@ -13418,6 +13420,14 @@ impl Game {
         }
         if let (Some(_), Some((icon, name))) = (self.towers[t].overclock, &self.towers[t].overclock_icon) {
             queries.push((icon.clone(), name.clone(), 0, 1, 0, true));
+        }
+        // Geraldo's items on it: their mutators' indicators (not stackable), timed in rounds.
+        for &(i, _) in &self.towers[t].items {
+            let Some(it) = self.geraldo_items.get(i) else { continue };
+            if let Some(icon) = it.params.get("buffIconName").and_then(|v| v.as_str()).filter(|v| !v.is_empty()) {
+                let name = it.params.get("buffLocsName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                queries.push((icon.to_string(), name, 0, 1, 0, true));
+            }
         }
         // Ultraboost's permanent mutator: availableBuffCount = its stacks (StackCount), shown "x" + n.
         if let (n @ 1.., Some((icon, name, max))) = (self.towers[t].ultra.0, &self.towers[t].ultra_icon) {
@@ -13539,12 +13549,25 @@ impl Game {
                 }
             }
         }
-        let mut slotted: Vec<(usize, String, u32, bool)> = groups
+        // Geraldo's items (JarOfPickles / SharpeningStone / SeeInvisibilityPotion / Fertilizer
+        // Behavior.Activate, e.g. @0x180fa4700): AddMutatorIncludeSubTowers with roundsRemaining =
+        // the model's rounds, their mutator's BuffIndicatorModel(buffLocsName, buffIconName);
+        // the clone keeps the rounds left in Tower.items.
+        let item_rounds: Vec<(String, u32)> = self.towers[t].items.iter().filter_map(|&(i, left)| {
+            let it = self.geraldo_items.get(i)?;
+            let icon = it.params.get("buffIconName")?.as_str()?;
+            let name = it.params.get("buffLocsName").and_then(|v| v.as_str()).unwrap_or("");
+            Some((format!("{icon}{name}"), left))
+        }).collect();
+        let mut slotted: Vec<(usize, String, u32, bool, u32)> = groups
             .into_iter()
-            .filter_map(|g| Some((self.buff_order.iter().position(|f| *f == g.0)?, g.1, g.3, g.4)))
+            .filter_map(|g| {
+                let rounds = item_rounds.iter().find(|r| r.0 == g.0).map_or(0, |r| r.1);
+                Some((self.buff_order.iter().position(|f| *f == g.0)?, g.1, g.3, g.4, rounds))
+            })
             .collect();
         slotted.sort_by_key(|g| g.0);
-        slotted.into_iter().map(|g| (g.1, g.2, g.3)).collect()
+        slotted.into_iter().map(|g| (g.1, g.2, g.3, g.4)).collect()
     }
 
     fn compute_buffs(&self) -> Vec<Buff> {
@@ -25256,6 +25279,9 @@ mod tests {
         assert!(g.use_item(pickles, g.towers[d].pos), "pickles on the dart");
         g.buffs = g.compute_buffs();
         assert!(g.buffs[d].rate_mult < rate0, "faster with pickles");
+        // Its icon shows the rounds left (BuffIcon.Show: roundsRemaining when no count).
+        let shown = g.buff_icons_shown(d);
+        assert!(shown.iter().any(|(i, n, _, r)| i == "BuffIconJarOfPickles" && *n == 0 && *r == 5), "{shown:?}");
         let rejuv = idx(&g, "RejuvPotion");
         let lives = g.lives;
         assert!(g.use_item(rejuv, [0.0, 0.0]));
@@ -25508,8 +25534,8 @@ mod beast_tests {
         let dart = g.tower_defs.iter().position(|(n, _)| n == "DartMonkey").unwrap();
         let d = place_near(&mut g, des, 300.0);
         assert!(g.upgrade(d, 2));
-        let icon = |g: &Game| g.buff_icons_shown(d).into_iter().find(|(i, _, _)| i == "BuffIconWanderer");
-        assert_eq!(icon(&g), Some(("BuffIconWanderer".to_string(), 5, true)));
+        let icon = |g: &Game| g.buff_icons_shown(d).into_iter().find(|(i, _, _, _)| i == "BuffIconWanderer");
+        assert_eq!(icon(&g), Some(("BuffIconWanderer".to_string(), 5, true, 0)));
         let (pos, r) = (g.towers[d].pos, g.range(d));
         let mut n = 0;
         for k in 0..24 {
@@ -25521,7 +25547,7 @@ mod beast_tests {
         }
         assert_eq!(n, 5);
         g.towers[d].vagrant_zone = None;
-        assert_eq!(icon(&g), Some(("BuffIconWanderer".to_string(), 0, false)));
+        assert_eq!(icon(&g), Some(("BuffIconWanderer".to_string(), 0, false, 0)));
     }
 
     /// BuffIndicatorUi.Awake / UpdatePlacedTowerBuffs: the icons over a tower sit in
