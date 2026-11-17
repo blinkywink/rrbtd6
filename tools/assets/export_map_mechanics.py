@@ -211,7 +211,12 @@ def map_logic(by, components, nodes, parts):
     out = {"removeables": removeables, "events": events}
     if zones:
         out["target_zones"] = zones
-    return out if removeables or events or zones else None
+    # ShipCaptureController (Ship Capture): each side's paths, active while its ship is docked
+    # (ShipCaptureControllerModel.GetLeft/RightShipStatus by round; UpdateActivePaths).
+    ship = next((c for c in components if short(c) == "ShipCaptureController"), None)
+    if ship:
+        out["ship_capture"] = {"left": ids(ship["fields"].get("leftPaths")), "right": ids(ship["fields"].get("rightPaths"))}
+    return out if removeables or events or zones or ship else None
 
 
 def write_spawner(d, components, nodes, scene_order, parts, first_spawner):

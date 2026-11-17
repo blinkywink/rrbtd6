@@ -20,6 +20,9 @@ pub struct LogicDef {
     /// EnablePathTargetZoneActions: position (clone frame), range, enableOnInit.
     #[serde(default)]
     pub target_zones: Vec<TargetZoneDef>,
+    /// ShipCaptureController: each side's path ids.
+    #[serde(default)]
+    pub ship_capture: Option<ShipCaptureDef>,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -61,6 +64,12 @@ pub enum Trigger {
     /// A newer export's kind: never fires, and the map still loads.
     #[serde(other)]
     Other,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ShipCaptureDef {
+    pub left: Vec<i64>,
+    pub right: Vec<i64>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -129,6 +138,11 @@ pub struct LogicState {
     /// Areas a caught-up RotateAreaAction turned (GotoPostAction: Map.RotateArea with
     /// updateThrowCache off), with the step: towers on them then are on the move.
     caught_areas: Vec<(i64, u64)>,
+    /// ShipCaptureController.left/rightShipLastState (ShipState: 0 None, 1 Arriving, 2 Docked,
+    /// 3 Leaving).
+    ship_states: (i32, i32),
+    /// Path ids Map.ChangePathActiveness turned off: not routed to (Splitter.activePaths).
+    inactive: Vec<i64>,
     /// CycleAreasAction.lastRotationIndex per action (keyed by its first area id).
     cycle_last: Vec<(i64, i32)>,
     /// While logic_round_end runs.
@@ -146,6 +160,8 @@ impl LogicState {
             spins: Vec::new(),
             catch_up: None,
             caught_areas: Vec::new(),
+            ship_states: (0, 0),
+            inactive: Vec::new(),
             cycle_last: Vec::new(),
             in_round_end: false,
             pool: map.areas.clone(),
@@ -287,8 +303,46 @@ impl Game {
     /// index 39's).
     /// (A RotateAreaAction turns at once here too, to the trigger count: recording
     /// map_geared_dart_205_r40, no spin before round 40's end.)
+    /// ShipCaptureControllerModel.GetLeftShipStatus / GetRightShipStatus (@0x181131a10 /
+    /// @0x181131a20) for round index `r`.
+    fn ship_status(r: i32, left: bool) -> i32 {
+        let by10 = |k: i32| match k { 0..=3 | 9 => 2, 4..=7 => 3, 8 => 1, _ => 0 };
+        let by15 = |k: i32| match k { 0..=8 | 14 => 2, 9..=12 => 3, 13 => 1, _ => 0 };
+        if r > 38 {
+            let (a, b) = if left { (30, 15) } else { (40, 25) };
+            let v = if r - a < 0 { r - b } else { r - a };
+            by15(v % 15)
+        } else if left {
+            by10((r + 5) % 10)
+        } else {
+            by10(r % 10)
+        }
+    }
+
+    /// ShipCaptureController.UpdateShips -> UpdateActivePaths (@0x180f8f010): a side whose ship's
+    /// state changed has its paths made active iff docked (recording map_shipcapture_dart_205_r40:
+    /// round 40 runs on the right ship's two paths only, TR / BR alternately).
+    fn logic_ship_capture(&mut self, r: i32) {
+        let Some(sc) = self.logic.def.ship_capture.clone() else { return };
+        let (l, rt) = (Self::ship_status(r, true), Self::ship_status(r, false));
+        let (ol, orr) = self.logic.ship_states;
+        if l != ol {
+            for &id in &sc.left {
+                self.logic_action(Action::Path { id, active: l == 2 });
+            }
+        }
+        if rt != orr {
+            for &id in &sc.right {
+                self.logic_action(Action::Path { id, active: rt == 2 });
+            }
+        }
+        self.logic.ship_states = (l, rt);
+    }
+
     pub(crate) fn logic_round_set(&mut self) {
         let round = self.round as i32;
+        // ShipCaptureController.OnRoundSet (@0x180f8eef0): the ships for the round now.
+        self.logic_ship_capture(round);
         let hits = self.logic_after_round_hits(|r, at, nth, primes, missed, skip| LogicState::after_round_cond(r, at, nth, primes, missed, skip), round);
         let counts: Vec<(i64, i32)> = hits
             .iter()
@@ -306,6 +360,8 @@ impl Game {
     /// game's start round with countFromStartRound.
     pub(super) fn logic_round_start(&mut self, start_round: i32) {
         let current = self.round as i32;
+        // ShipCaptureController.OnRoundStart (@0x180f8ef00).
+        self.logic_ship_capture(current);
         self.logic_trigger(|t| matches!(t, Trigger::StartRound { round, nth, primes, from_start }
             if LogicState::after_round(current - if *from_start { start_round } else { 0 }, *round, *nth, *primes)));
     }
@@ -565,7 +621,17 @@ impl Game {
             }
             Action::Path { id, active } => {
                 if active {
+                    let was_off = self.logic.inactive.contains(&id);
+                    self.logic.inactive.retain(|&x| x != id);
                     self.logic_activate_path(id);
+                    if was_off {
+                        self.logic_rebuild_spawn_route();
+                    }
+                } else if self.logic.paths.iter().any(|p| p.id == id) && !self.logic.inactive.contains(&id) {
+                    // (Map.ChangePathActiveness off: Splitter.UpdateActivePaths drops it; bloons on
+                    // it carry on. Recording map_shipcapture_dart_205_r40: the left ship's paths.)
+                    self.logic.inactive.push(id);
+                    self.logic_rebuild_spawn_route();
                 }
             }
             Action::Area { ids, create } => {
@@ -702,12 +768,19 @@ impl Game {
         self.track_exit = paths.iter().map(|q| route(&q.exit, q.exit_splitter)).collect();
         self.track_entry = paths.iter().map(|q| route(&q.entry, q.entry_splitter)).collect();
         self.routs.resize(ids.len().max(self.routs.len()), 0);
-        self.spawn_tracks = (0..paths.len()).filter(|&k| paths[k].entry.is_empty() && !paths[k].name.contains("Boss")).collect();
+        self.logic_rebuild_spawn_route();
+    }
+
+    /// The spawn tracks and the spawner's route over the active paths.
+    fn logic_rebuild_spawn_route(&mut self) {
+        let paths = &self.logic.paths;
+        let off = &self.logic.inactive;
+        self.spawn_tracks = (0..paths.len()).filter(|&k| paths[k].entry.is_empty() && !paths[k].name.contains("Boss") && !off.contains(&paths[k].id)).collect();
         if self.spawn_tracks.is_empty() {
             self.spawn_tracks.push(0);
         }
         self.spawn_route = self.logic.spawner.as_ref().filter(|_| !self.logic.reversed).and_then(|s| {
-            crate::map_routes::SpawnRoute::new(s, |id| self.logic.paths.iter().position(|t| t.id == id))
+            crate::map_routes::SpawnRoute::new(s, |id| if off.contains(&id) { None } else { self.logic.paths.iter().position(|t| t.id == id) })
         });
     }
 }
@@ -738,7 +811,7 @@ mod tests {
     fn selling_takes_the_cash_and_the_areas_and_fires_events() {
         let tree = RemoveableDef { id: 1, name: "Tree".into(), cost: 500, active: true, destroy_area: true, areas: vec![10], hide: vec![3] };
         let event = EventDef { id: 2, once: true, all: false, active: true, triggers: vec![Trigger::RemoveableSold { id: 1 }], actions: vec![Action::Area { ids: vec![11], create: false }] };
-        let mut g = game_with(LogicDef { removeables: vec![tree], events: vec![event], target_zones: vec![] }, vec![area(10, 1.0), area(11, 1.0)]);
+        let mut g = game_with(LogicDef { removeables: vec![tree], events: vec![event], target_zones: vec![], ship_capture: None }, vec![area(10, 1.0), area(11, 1.0)]);
         assert_eq!(g.removeable_at([5.0, 5.0]), Some(0));
         g.cash = 499.0;
         assert!(!g.sell_removeable(0), "not enough cash");
@@ -756,7 +829,7 @@ mod tests {
     fn after_round_fires_at_the_end_of_that_round_index() {
         let hidden = RemoveableDef { id: 1, name: "Late".into(), cost: 1, active: false, destroy_area: false, areas: vec![10], hide: vec![] };
         let event = EventDef { id: 2, once: true, all: false, active: true, triggers: vec![Trigger::AfterRound { round: 39, nth: 0, primes: false, missed: false }], actions: vec![Action::Removeable { id: 1, active: true }] };
-        let mut g = game_with(LogicDef { removeables: vec![hidden], events: vec![event], target_zones: vec![] }, vec![area(10, 1.0)]);
+        let mut g = game_with(LogicDef { removeables: vec![hidden], events: vec![event], target_zones: vec![], ship_capture: None }, vec![area(10, 1.0)]);
         g.round = 38;
         g.logic_round_end();
         assert_eq!(g.removeable_at([5.0, 5.0]), None);
@@ -771,7 +844,7 @@ mod tests {
     fn missed_after_round_fires_once_at_a_later_start() {
         let mk = |missed| EventDef { id: 2, once: true, all: false, active: true, triggers: vec![Trigger::AfterRound { round: 18, nth: 0, primes: false, missed }], actions: vec![Action::Area { ids: vec![10], create: false }] };
         for missed in [false, true] {
-            let mut g = game_with(LogicDef { removeables: vec![], events: vec![mk(missed)], target_zones: vec![] }, vec![area(10, 1.0)]);
+            let mut g = game_with(LogicDef { removeables: vec![], events: vec![mk(missed)], target_zones: vec![], ship_capture: None }, vec![area(10, 1.0)]);
             g.round = 40;
             g.logic_start();
             assert_eq!(g.areas.iter().any(|a| a.id == 10), !missed, "missed {missed}");
@@ -839,7 +912,7 @@ mod tests {
     fn start_round_and_lives_triggers_fire_at_their_moment() {
         let hidden = |id| RemoveableDef { id, name: "Late".into(), cost: 1, active: false, destroy_area: false, areas: vec![10], hide: vec![] };
         let event = |id, trigger, target| EventDef { id, once: true, all: false, active: true, triggers: vec![trigger], actions: vec![Action::Removeable { id: target, active: true }] };
-        let logic = LogicDef { removeables: vec![hidden(1)], events: vec![event(2, Trigger::StartRound { round: 5, nth: 0, primes: false, from_start: false }, 1)], target_zones: vec![] };
+        let logic = LogicDef { removeables: vec![hidden(1)], events: vec![event(2, Trigger::StartRound { round: 5, nth: 0, primes: false, from_start: false }, 1)], target_zones: vec![], ship_capture: None };
         let mut g = game_with(logic, vec![area(10, 1.0)]);
         g.round = 4;
         g.logic_round_start(0);
@@ -848,7 +921,7 @@ mod tests {
         g.logic_round_start(0);
         assert_eq!(g.removeable_at([5.0, 5.0]), Some(0));
 
-        let logic = LogicDef { removeables: vec![hidden(1)], events: vec![event(2, Trigger::LivesLower { lives: 0, percent: Some(0.5) }, 1)], target_zones: vec![] };
+        let logic = LogicDef { removeables: vec![hidden(1)], events: vec![event(2, Trigger::LivesLower { lives: 0, percent: Some(0.5) }, 1)], target_zones: vec![], ship_capture: None };
         let mut g = game_with(logic, vec![area(10, 1.0)]);
         g.lives = 60.0;
         g.logic_lives_lost(10.0, 100.0);

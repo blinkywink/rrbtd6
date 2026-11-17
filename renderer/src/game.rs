@@ -13276,7 +13276,10 @@ impl Game {
     /// map_workshop_dart_205_r40 rt 1728, First takes the Zebra on a belt nearer the end of
     /// Workshop's chain of 15 paths, not the one nearer its own belt's end.
     fn leak_dist(&self, path: usize) -> f32 {
-        if let Some(u) = self.track_until.get(path).copied().flatten() {
+        // (maximumDistanceUntilLeak only with an exit router: recording map_shipcapture_dart_205_r40,
+        // whose paths have none and untilLeak float.MaxValue; First compares their leakDists.)
+        let routed = self.track_exit.get(path).is_some_and(|e| !e.0.is_empty());
+        if let Some(u) = self.track_until.get(path).copied().flatten().filter(|_| routed) {
             return u;
         }
         self.track_ends.get(path).and_then(|e| e.1).unwrap_or_else(|| self.tracks[path].length())
