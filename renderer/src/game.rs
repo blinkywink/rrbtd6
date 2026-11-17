@@ -2863,9 +2863,9 @@ pub struct Projectile {
     /// Cash projectiles (bananas): what collecting it pays.
     pub value: f64,
     pub cash_base: f64,
-    /// Frames since the pierce was last refreshed (RefreshPierceModel) / since the last
-    /// interval sub-projectile (CreateProjectileOnIntervalModel).
+    /// RefreshPierce.lastRefresh: the sim time of the last refresh (the creation time at first).
     refresh_t: f32,
+    /// Frames since the last interval sub-projectile (CreateProjectileOnIntervalModel).
     interval_t: f32,
     /// CreateProjectileOnExhaustFraction.isDone, a bit per `spec.on_exhaust` entry.
     exhaust_done: u32,
@@ -4218,10 +4218,27 @@ macro_rules! collide_pass {
                     pr.clear_hits_next = true;
                 }
             }
+            // RefreshPierce.Process (VERIFIED-DECOMP @0x180cd54b0): intervalFrames (Math.Round(interval
+            // x 60), RefreshPierceModel ctor @0x1811f93d0), times Tower.GetTotalRateModifier (the
+            // tower model's first WeaponModel rate over GameModel's unmutated one's, 1 without a
+            // weapon; @0x180c0ef90) truncated to int when isBuffedByRate and the tower is alive;
+            // once lastRefresh (the creation time) + that <= now, the pierce is the model's again
+            // (recording map_peninsula_mermonkey_204_r40: the 2-0-4 Trance Totem's 0.234 s is 14
+            // frames: refreshes at rt 1699, 1713, 1727, 1741).
             if let Some(iv) = pr.spec.refresh_pierce {
-                pr.refresh_t += 1.0;
-                if pr.refresh_t >= iv * FPS {
-                    pr.refresh_t = 0.0;
+                let mut frames = ((iv * FPS) as f64).round_ties_even() as i32;
+                if pr.spec.refresh_pierce_rate {
+                    if let Some(t) = $s.towers.iter().position(|t| t.id == pr.owner) {
+                        // (The first weapon state: model_rate is its WeaponModel rate.)
+                        let m = $s.towers[t].weapons.first().map_or(1.0f32, |st| {
+                            let br = st.buff_rate;
+                            if br.is_nan() || br == 1.0 { 1.0 } else { (st.model_rate * br) / st.model_rate }
+                        });
+                        frames = (m * frames as f32) as i32;
+                    }
+                }
+                if frames as f32 + pr.refresh_t <= $sim_now as f32 {
+                    pr.refresh_t = $sim_now as f32;
                     // RefreshPierce.Process runs after the CollisionChecker: the pierce is
                     // back for the next frame's hits (recording wizard_040: a spent Wall of
                     // Fire refreshed at 234 hits again on 235).
@@ -4551,7 +4568,11 @@ macro_rules! collide_pass {
                 // Projectile.IsCollisionValid (VERIFIED-DISASM @0xcac350): with
                 // canCollisionBeBlockedByMapLos, Map.IsTargetLineClear from the shot to the
                 // bloon (recording bomb_100: a blast misses a Yellow behind the entrance trees).
-                || (pr.spec.los_blocked && !$s.line_clear(pp, 0.0, bp))
+                // From the projectile's Position (VERIFIED-DECOMP @0x180c8d840: its Vector3, so its
+                // z: only blockers taller than it count; recording map_peninsula_mermonkey_204_r40
+                // rt 1904, a TridentAOE made at z 51 on a tranced Black meets bloons beyond the
+                // 40-high Blocking area).
+                || (pr.spec.los_blocked && !$s.line_clear(pp, pr.z, bp))
                 // (And a nonTargetable bloon only for ignoreNonTargetable: recording
                 // map_kartsndarts_dart_205_r40 rt 438, darts pass a Ceramic in the tunnel, no
                 // damage and no pierce spent.)
@@ -7834,10 +7855,31 @@ impl Game {
                     .bloons
                     .iter()
                     .filter(|b| b.path as usize == pi && (b.wind_seg.unwrap_or(b.prev_dist) / 7.0).max(0.0) as usize == k)
+                    // (A tranced one is on no segment: see closest_target.)
+                    .filter(|b| !b.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq)))
                     .filter_map(|b| valid(b, near).map(|c| (b, c)))
                     .min_by_key(|(b, _)| rank(b))
                 {
                     best = Some((dd.sqrt(), b.id, circle));
+                }
+            }
+        }
+        if best.is_none() && self.bloons.iter().any(|b| b.off_track()) {
+            // (GetClosestTarget's grid pass for off-track bloons: see closest_target; recording
+            // map_peninsula_mermonkey_204_r40 rt 1704, a trident turns for tranced Black 495.)
+            let mut cand: Vec<u32> = Vec::new();
+            if self.has_grid_rank {
+                self.ggrid.query(pr.pos, range, 40.0, &self.grid_offsets, &mut cand);
+            } else {
+                cand.extend(0..self.bloons.len() as u32);
+            }
+            for c in cand {
+                let Some(b) = self.bloons.get(c as usize) else { continue };
+                if !b.off_track() || self.bloon_nontarget(b) || !self.seek_valid(pr, sk, b, also) {
+                    continue;
+                }
+                if grid_hit(pr.pos, range, b.pos, b.cell_pos, self.defs[b.kind].radius) && self.line_clear(pr.pos, 0.0, b.pos) {
+                    return Some((b.id, None));
                 }
             }
         }
@@ -14600,6 +14642,10 @@ impl Game {
                 let cid = self.bloons.last().unwrap().id;
                 self.wind_copy_draws.push((cid, w));
             }
+            let copy_orig = (n > 0).then(|| {
+                let c = self.bloons.last().unwrap();
+                self.tracks[c.path as usize].bloon_pos(c.dist)
+            });
             let child = self.bloons.last_mut().unwrap();
             child.effects = keep;
             // (A tranced parent's children keep its Trance and are made at its Position on the
@@ -14610,6 +14656,18 @@ impl Game {
                 child.pos = pp0;
                 child.prev = pp0;
                 child.height = parent_z;
+                // (A copy (CopyMutatorsFrom) gets a new MermonkeyTrance: Initialise (VERIFIED-DISASM
+                // @0x180fbedcd) sets originalBloonPos = Path.DistanceToPointInfoBloon(its own
+                // distance) and PostDegrade (@0x180fbf390) copies the parent's state but not that;
+                // recording map_peninsula_mermonkey_204_r40 rt 1935, Blue 608, a copy at 322.0525,
+                // heads for its own track point, not its parent's at 330.6525.)
+                if let Some(at) = copy_orig {
+                    for e in child.effects.iter_mut() {
+                        if let EffectKind::Trance(t) = &mut e.kind {
+                            t.orig = at;
+                        }
+                    }
+                }
                 if n > 0 && !(self.pop_after_move || self.pop_in_process) {
                     for e in child.effects.iter_mut() {
                         if let EffectKind::Trance(t) = &mut e.kind {
@@ -14718,6 +14776,17 @@ impl Game {
                     b.prev = prev;
                 } else if b.wind.is_none() {
                     b.dist = dist;
+                    // (The final list's copies are the game's new objects: MermonkeyTrance.Initialise
+                    // takes originalBloonPos at this distance (see damage); recording
+                    // map_peninsula_mermonkey_204_r40 rt 3375, a tranced Zebra's two layers at once,
+                    // its three Pink copies each head for their own track point.)
+                    if k > 0 {
+                        for e in b.effects.iter_mut() {
+                            if let EffectKind::Trance(t) = &mut e.kind {
+                                t.orig = pos;
+                            }
+                        }
+                    }
                 } else if k > 0 {
                     // (A carried parent's copies: spaced in the final list, where the wind has
                     // them; their own draws follow. Recording heli_250 rt 2412: a Zebra's two
@@ -16926,7 +16995,7 @@ impl Game {
                     if self.has_grid_rank {
                         let q = pos;
                         // HYPOTHESIS P-TRANCECELL: a tranced bloon is in the cell it is in now for a
-                        // tower's search, ties by list order (recording mermonkey_003 rt 963 / 1611 /
+                        // tower's search, ties by Path.bloonsList order (recording mermonkey_003 rt 963 / 1611 /
                         // 2115: every off-track pick between circling Leads), though a frame behind
                         // for the CollisionChecker that frame (rt 1548).
                         off.sort_by_cached_key(|&i| {
@@ -16935,7 +17004,10 @@ impl Game {
                                 let (pc, bc) = (grid_cell(q), grid_cell(b.pos));
                                 let (dx, dy) = (bc.0 - pc.0, bc.1 - pc.1);
                                 let r = if dx.abs() <= 64 && dy.abs() <= 64 { self.grid_rank[((dx + 64) * 129 + (dy + 64)) as usize] } else { u16::MAX };
-                                (r, 0, b.order)
+                                // (Ties in a cell in the grid fill's order, Path.bloonsList's:
+                                // recording map_peninsula_mermonkey_204_r40 rt 3133, tranced Zebras
+                                // 2472 and 2307 in one cell, the newer one first in that list taken.)
+                                (r, self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1), b.order)
                             } else {
                                 self.grid_query_key(q, i)
                             }
@@ -20133,6 +20205,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             if (b.unplaced || (self.phase == 0 && b.born >= now4)) && b.wind.is_none() {
                 continue;
             }
+            // (A tranced bloon is on no segment: Path.Process (VERIFIED-DECOMP @0x180f6fe60) files a
+            // bloon only while its offTrackCount (+0x224) is 0; the grid pass below finds it.)
+            if b.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq)) {
+                continue;
+            }
             // (BloonManager.GetClosestTarget @0x180fc9bf0 skips a nonTargetable one: recording
             // map_kartsndarts_quincy_l10_r40 rt 1069, Quincy's arrows find no bounce in the tunnel.)
             if self.bloon_nontarget(b) {
@@ -20181,6 +20258,32 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                         best_d = d2;
                         break;
                     }
+                }
+            }
+        }
+        if best.is_none() && self.bloons.iter().any(|b| b.off_track()) {
+            // GetClosestTarget (@0x180fc9bf0) with PathManager.hasOfftrackBloons and no segment hit:
+            // BloonGrid.GetInRange(q, distance, margin 40, no radius override) in its order, the first
+            // off-track one (offTrackCount >= 1) that isn't destroyed or nonTargetable, passes the
+            // filter and Map.IsTargetLineClear from q (recording map_peninsula_mermonkey_204_r40 rt
+            // 1704: a trident's retarget takes tranced Black 495).
+            let mut cand: Vec<u32> = Vec::new();
+            if self.has_grid_rank {
+                self.ggrid.query(q, distance, 40.0, &self.grid_offsets, &mut cand);
+            } else {
+                cand.extend(0..self.bloons.len() as u32);
+            }
+            for c in cand {
+                let Some(b) = self.bloons.get(c as usize) else { continue };
+                if !b.off_track() || self.bloon_nontarget(b) || !ok(b) {
+                    continue;
+                }
+                let bp = at(b);
+                if !grid_hit(q, distance, bp, b.cell_pos, self.defs[b.kind].radius) {
+                    continue;
+                }
+                if self.line_clear(q, 0.0, bp) {
+                    return Some(c as usize);
                 }
             }
         }
@@ -20633,9 +20736,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             return off;
         }
         // (Its Process: in the grid from the next fill, as a carried one; recording
-        // map_peninsula_mermonkey_204_r40 rt 1623, a tranced copy taken by a trident.)
-        b.unplaced = false;
-        b.fresh = false;
+        // map_peninsula_mermonkey_204_r40 rt 1623, a tranced copy taken by a trident. Only while
+        // in sequence: one past it is back on the track and holds its first step as any copy;
+        // rt 2223, Yellow 1511 copied from a Black whose Trance is cooling down.)
+        if off {
+            b.unplaced = false;
+            b.fresh = false;
+        }
         t.elapsed += 1;
         let dead = centre.is_none();
         // Vector2.Rotate((0, r), deg), game frame, + the tower (the clone's y flipped).
@@ -22847,7 +22954,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 rounds_left: spec.rounds,
                 value,
                 cash_base,
-                refresh_t: 0.0,
+                refresh_t: self.sim_elapsed as f32,
                 check_t: 0,
                 interval_t: 0.0,
                 exhaust_done: 0,

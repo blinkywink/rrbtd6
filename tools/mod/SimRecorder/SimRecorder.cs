@@ -1495,6 +1495,21 @@ static class SimulatePatch
                 var sb = new StringBuilder("L ").Append(i);
                 for (int k = 0; k < l.Count; k++) sb.Append(' ').Append(l[k].Id.Id);
                 w.WriteLine(sb.ToString());
+                // Read-only, frames proclist_from..proclist_to: each path segment's bloons as filed:
+                // "SG path segment id,id".
+                int rf2 = Recorder.Recorded;
+                if (Recorder.Sc.proclist_from >= 0 && rf2 >= Recorder.Sc.proclist_from && rf2 <= Recorder.Sc.proclist_to)
+                {
+                    var segs = paths[i].segments;
+                    for (int k = 0; segs != null && k < segs.Length; k++)
+                    {
+                        var bl = segs[k].bloons;
+                        if (bl == null || bl.Count == 0) continue;
+                        var sg = new StringBuilder("SG ").Append(i).Append(' ').Append(k).Append(' ');
+                        for (int q = 0; q < bl.Count; q++) sg.Append(q == 0 ? "" : ",").Append(bl[q].bloon == null ? -1 : bl[q].bloon.Id.Id).Append(":").Append(Recorder.F(bl[q].distance));
+                        w.WriteLine(sg.ToString());
+                    }
+                }
             }
         });
         Part("weapons", () =>

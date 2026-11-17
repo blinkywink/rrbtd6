@@ -2215,6 +2215,9 @@ pub struct Proj {
     /// RefreshPierceModel.interval: pierce is restored every this many seconds (Druid vines).
     #[serde(default)]
     pub refresh_pierce: Option<f32>,
+    /// RefreshPierceModel.isBuffedByRate: intervalFrames x the tower's GetTotalRateModifier.
+    #[serde(default)]
+    pub refresh_pierce_rate: bool,
     /// RemoveMutatorsFromBloonModel keys: effects whose id starts with one are removed (Tornado).
     #[serde(default)]
     pub remove_effects: Vec<String>,

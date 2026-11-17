@@ -1031,6 +1031,9 @@ def main():
             out["vine_frames"] = int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", (ad or {}).get("f", {}).get("time", 0.0)))[0] * 60.0))[0])
         if pb.get("RefreshPierceModel"):
             out["refresh_pierce"] = pb["RefreshPierceModel"][0]["f"]["interval"]
+            # RefreshPierceModel ctor (VERIFIED-DECOMP @0x1811f93d0): isBuffedByRate (+0x38);
+            # RefreshPierce.Process scales intervalFrames by the tower's GetTotalRateModifier.
+            out["refresh_pierce_rate"] = bool(pb["RefreshPierceModel"][0]["f"].get("isBuffedByRate", False))
         # RemoveMutatorsFromBloonModel: by key (contained in the id), and by mutatorIds ("=id",
         # the whole id: Icicles, the Bloon Solver).
         out["remove_effects"] = [k.strip() for r in pb.get("RemoveMutatorsFromBloonModel", [])
