@@ -162,6 +162,7 @@ public class Recorder : MelonMod
     internal static Scenario Sc;
     internal static StreamWriter Out;
     internal static System.Collections.Generic.List<string> PreLines = new();
+    public static System.Collections.Generic.List<string> LastAreas = new System.Collections.Generic.List<string>();
     internal static StreamWriter FxOut;
     /// `# herolevel` lines made while placing, written with the header.
     internal static readonly List<string> HeroLevelLines = new();
@@ -1402,6 +1403,25 @@ static class SimulatePatch
         Part("round", () => round = sim.GetCurrentRound());
         Part("cash", () => cash = sim.GetCash(-1));
         w.WriteLine($"F {t} {rt} {round} {cash}");
+        // Read-only: map areas whose state changed since the last frame: "AA index name active
+        // blocker height firstpoint" (area count changes too: map logic / scripts toggling areas).
+        Part("areas", () =>
+        {
+            var ars = sim.map.areas;
+            int n = ars == null ? 0 : ars.Count;
+            var cur = new System.Collections.Generic.List<string>(n);
+            for (int k = 0; k < n; k++)
+            {
+                var a = ars[k];
+                var am = a.areaModel;
+                var pts = am?.polygon?.points;
+                cur.Add($"{a.name} {a.isActive} {am?.isBlocker} {Recorder.F(am != null ? am.height : 0f)} {(pts != null && pts.Length > 0 ? Recorder.F(pts[0].x) + "," + Recorder.F(pts[0].y) : "")}");
+            }
+            for (int k = 0; k < n; k++)
+                if (k >= Recorder.LastAreas.Count || Recorder.LastAreas[k] != cur[k]) w.WriteLine($"AA {k} {cur[k]}");
+            if (n != Recorder.LastAreas.Count) w.WriteLine($"AN {n}");
+            Recorder.LastAreas = cur;
+        });
         Part("bloons", () =>
         {
             var bs = sim.factory.GetFactory<Bloon>().up.list;

@@ -183,6 +183,8 @@ def map_logic(by, components, nodes, parts):
                 # roundsPerRotate 0 in the scene; the model divides by it, so taken as 1.
                 out.append({"kind": "CycleAreas", "ids": ids(f.get("areas")), "invert": bool(f.get("invert")),
                             "from_start": bool(f.get("fromStartingRound")), "per": max(1, int(f.get("roundsPerRotate") or 0))})
+            elif k == "EnablePathTargetZoneAction":
+                out.append({"kind": "EnableTargetZone", "id": a["id"]})
             elif k == "TriggerMapActionsAction" and depth < 8 and comp_id(f.get("mapActions")) in by:
                 out += actions(ids(by[comp_id(f["mapActions"])]["fields"].get("actions")), depth + 1)
         return out
@@ -197,7 +199,19 @@ def map_logic(by, components, nodes, parts):
         if triggers and acts:
             events.append({"id": c["id"], "once": bool(f["oneTimeEvent"]), "all": bool(f["allTriggersRequired"]),
                            "active": not f["inactiveByDefault"], "triggers": triggers, "actions": acts})
-    return {"removeables": removeables, "events": events} if removeables or events else None
+    # EnablePathTargetZoneAction (EnablePathTargetZone @0x180f7c900): the path segments whose point
+    # is within `range` of its object become targetable (canTargetSegment); enableOnInit ones at
+    # the map's start (Mushroom Grotto: the track is dark, disablePathTargeting, till lit).
+    zones = []
+    for c in components:
+        if short(c) == "EnablePathTargetZoneAction":
+            wp = world_pos(nodes, c["go"])
+            zones.append({"id": c["id"], "pos": [wp[0], wp[2]], "range": c["fields"].get("range", 0.0),
+                          "init": bool(c["fields"].get("enableOnInit"))})
+    out = {"removeables": removeables, "events": events}
+    if zones:
+        out["target_zones"] = zones
+    return out if removeables or events or zones else None
 
 
 def write_spawner(d, components, nodes, scene_order, parts, first_spawner):

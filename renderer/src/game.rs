@@ -179,10 +179,10 @@ impl Track {
         if self.dists.len() < 2 {
             return 1.0;
         }
-        let i = match self.dists.binary_search_by(|c| c.total_cmp(&d)) {
-            Ok(i) => i,
-            Err(i) => i.saturating_sub(1),
-        };
+        // (The segment is the quick table's, quick_point: just past a point the entry can still
+        // name the one before, so t runs a little over 1; recording map_midnightmansion_dart_205_r40
+        // rt 81, a MOAB 0.0026 past the 10x -> 1x point steps at x 0.999825.)
+        let i = quick_point(&self.dists, d);
         if i + 1 >= self.dists.len() {
             return self.speeds[self.speeds.len() - 1];
         }
@@ -6119,6 +6119,7 @@ impl Game {
             game_over: false,
         };
         game.power_tower_defs = power_tower_names.into_iter().filter_map(|(pid, name)| Some((pid, game.tower_defs.iter().position(|(n, _)| *n == name)?))).collect();
+        game.logic_init_zones();
         game.logic_start();
         game.mod_event("on_new_game",None);
         game

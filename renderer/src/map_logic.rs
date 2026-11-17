@@ -17,6 +17,9 @@ pub struct LogicDef {
     pub removeables: Vec<RemoveableDef>,
     #[serde(default)]
     pub events: Vec<EventDef>,
+    /// EnablePathTargetZoneActions: position (clone frame), range, enableOnInit.
+    #[serde(default)]
+    pub target_zones: Vec<TargetZoneDef>,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -61,6 +64,15 @@ pub enum Trigger {
 }
 
 #[derive(Deserialize, Clone, Debug)]
+pub struct TargetZoneDef {
+    pub id: i64,
+    pub pos: [f32; 2],
+    pub range: f32,
+    #[serde(default)]
+    pub init: bool,
+}
+
+#[derive(Deserialize, Clone, Debug)]
 #[serde(tag = "kind")]
 pub enum Action {
     Path { id: i64, active: bool },
@@ -73,6 +85,8 @@ pub enum Action {
     RotateArea { id: i64, area: i64, rotation: f32, duration: f32, pivot: [f32; 2] },
     /// CycleAreasAction: one of `ids` off (invert) or on, the rest the other way, turning with the round.
     CycleAreas { ids: Vec<i64>, invert: bool, from_start: bool, per: i32 },
+    /// EnablePathTargetZoneAction: the zone `id` of LogicDef::target_zones.
+    EnableTargetZone { id: i64 },
     /// A newer export's kind: does nothing, and the map still loads.
     #[serde(other)]
     Other,
@@ -187,6 +201,40 @@ impl LogicState {
 }
 
 impl Game {
+    /// EnablePathTargetZoneAction.EnablePathTargetZone (@0x180f7c900): every path segment whose
+    /// point is within the zone's range (PathManager.GetPathSegmentsInRange, distance^2 <
+    /// range^2) gets canTargetSegment; then Tower.UpdateThrowCache for every tower (recording
+    /// map_mushroomgrotto_dart_205_r40: the dark track is targetable only where the centre
+    /// mushroom's init zone of 45 reaches).
+    fn logic_enable_zone(&mut self, z: &TargetZoneDef) {
+        let r2 = z.range * z.range;
+        for (pi, sg) in self.track_segs.iter().enumerate() {
+            for (k, q) in sg.iter().enumerate() {
+                if (q[0] - z.pos[0]).powi(2) + (q[1] - z.pos[1]).powi(2) < r2 {
+                    if let Some(v) = self.track_seg_ok.get_mut(pi).and_then(|v| v.get_mut(k)) {
+                        *v = true;
+                    }
+                }
+            }
+        }
+        for t in 0..self.towers.len() {
+            for set in self.towers[t].track_sets.iter_mut() {
+                set.sig = 0;
+                if let Some(sp) = set.supply.as_mut() {
+                    sp.2 = [9; 3];
+                }
+            }
+        }
+    }
+
+    /// MapAction.Init: enableOnInit zones.
+    pub(crate) fn logic_init_zones(&mut self) {
+        let zones: Vec<TargetZoneDef> = self.logic.def.target_zones.iter().filter(|z| z.init).cloned().collect();
+        for z in zones {
+            self.logic_enable_zone(&z);
+        }
+    }
+
     /// StartMapTrigger and the catch-up of AfterRoundTrigger.CheckIfTriggered at a later start round.
     pub(super) fn logic_start(&mut self) {
         let round = self.round as i32;
@@ -445,6 +493,11 @@ impl Game {
     fn logic_action(&mut self, action: Action) {
         match action {
             Action::Other => {}
+            Action::EnableTargetZone { id } => {
+                if let Some(z) = self.logic.def.target_zones.iter().find(|z| z.id == id).cloned() {
+                    self.logic_enable_zone(&z);
+                }
+            }
             Action::RotateArea { id, area, rotation, duration, pivot } => {
                 // Initialise (VERIFIED-DECOMP @0x180f8d390): rotationPerFrame = rotation / duration
                 // x 1/60, durationFrames = (int)(duration x 60); the model's rotation is radians the
@@ -685,7 +738,7 @@ mod tests {
     fn selling_takes_the_cash_and_the_areas_and_fires_events() {
         let tree = RemoveableDef { id: 1, name: "Tree".into(), cost: 500, active: true, destroy_area: true, areas: vec![10], hide: vec![3] };
         let event = EventDef { id: 2, once: true, all: false, active: true, triggers: vec![Trigger::RemoveableSold { id: 1 }], actions: vec![Action::Area { ids: vec![11], create: false }] };
-        let mut g = game_with(LogicDef { removeables: vec![tree], events: vec![event] }, vec![area(10, 1.0), area(11, 1.0)]);
+        let mut g = game_with(LogicDef { removeables: vec![tree], events: vec![event], target_zones: vec![] }, vec![area(10, 1.0), area(11, 1.0)]);
         assert_eq!(g.removeable_at([5.0, 5.0]), Some(0));
         g.cash = 499.0;
         assert!(!g.sell_removeable(0), "not enough cash");
@@ -703,7 +756,7 @@ mod tests {
     fn after_round_fires_at_the_end_of_that_round_index() {
         let hidden = RemoveableDef { id: 1, name: "Late".into(), cost: 1, active: false, destroy_area: false, areas: vec![10], hide: vec![] };
         let event = EventDef { id: 2, once: true, all: false, active: true, triggers: vec![Trigger::AfterRound { round: 39, nth: 0, primes: false, missed: false }], actions: vec![Action::Removeable { id: 1, active: true }] };
-        let mut g = game_with(LogicDef { removeables: vec![hidden], events: vec![event] }, vec![area(10, 1.0)]);
+        let mut g = game_with(LogicDef { removeables: vec![hidden], events: vec![event], target_zones: vec![] }, vec![area(10, 1.0)]);
         g.round = 38;
         g.logic_round_end();
         assert_eq!(g.removeable_at([5.0, 5.0]), None);
@@ -718,7 +771,7 @@ mod tests {
     fn missed_after_round_fires_once_at_a_later_start() {
         let mk = |missed| EventDef { id: 2, once: true, all: false, active: true, triggers: vec![Trigger::AfterRound { round: 18, nth: 0, primes: false, missed }], actions: vec![Action::Area { ids: vec![10], create: false }] };
         for missed in [false, true] {
-            let mut g = game_with(LogicDef { removeables: vec![], events: vec![mk(missed)] }, vec![area(10, 1.0)]);
+            let mut g = game_with(LogicDef { removeables: vec![], events: vec![mk(missed)], target_zones: vec![] }, vec![area(10, 1.0)]);
             g.round = 40;
             g.logic_start();
             assert_eq!(g.areas.iter().any(|a| a.id == 10), !missed, "missed {missed}");
@@ -786,7 +839,7 @@ mod tests {
     fn start_round_and_lives_triggers_fire_at_their_moment() {
         let hidden = |id| RemoveableDef { id, name: "Late".into(), cost: 1, active: false, destroy_area: false, areas: vec![10], hide: vec![] };
         let event = |id, trigger, target| EventDef { id, once: true, all: false, active: true, triggers: vec![trigger], actions: vec![Action::Removeable { id: target, active: true }] };
-        let logic = LogicDef { removeables: vec![hidden(1)], events: vec![event(2, Trigger::StartRound { round: 5, nth: 0, primes: false, from_start: false }, 1)] };
+        let logic = LogicDef { removeables: vec![hidden(1)], events: vec![event(2, Trigger::StartRound { round: 5, nth: 0, primes: false, from_start: false }, 1)], target_zones: vec![] };
         let mut g = game_with(logic, vec![area(10, 1.0)]);
         g.round = 4;
         g.logic_round_start(0);
@@ -795,7 +848,7 @@ mod tests {
         g.logic_round_start(0);
         assert_eq!(g.removeable_at([5.0, 5.0]), Some(0));
 
-        let logic = LogicDef { removeables: vec![hidden(1)], events: vec![event(2, Trigger::LivesLower { lives: 0, percent: Some(0.5) }, 1)] };
+        let logic = LogicDef { removeables: vec![hidden(1)], events: vec![event(2, Trigger::LivesLower { lives: 0, percent: Some(0.5) }, 1)], target_zones: vec![] };
         let mut g = game_with(logic, vec![area(10, 1.0)]);
         g.lives = 60.0;
         g.logic_lives_lost(10.0, 100.0);
