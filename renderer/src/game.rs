@@ -19656,6 +19656,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         }
         let tr = &self.tracks[b.path as usize];
         b.pos = tr.bloon_pos(b.dist);
+        // (Bloon.Move sets the whole Position, z from the new distance, as track_height:
+        // recording map_threeminesaround_alch_204_r40 rt 449, a MOAB at 217.7077 is at z
+        // 121.842, the height there, not the 121.897 of the distance it moved from.)
+        let base = if self.defs[b.kind].is_moab { 120.0 } else { 20.0 };
+        b.height = self.track_qz.get(b.path as usize).filter(|v| !v.is_empty()).map_or(base, |qz| base + qz[((b.dist / CACHE_DISTANCE) as u32 as usize).min(qz.len() - 1)]);
         b.track_mult = tr.speed_mult(b.dist);
         // Bloon.UpdatePositionAlongTrack (VERIFIED-DISASM @0xfd5e80, inlined in Process): a
         // rotateToFollowPath bloon turns Math.LerpAngle(prevRot, the point's rotation,
