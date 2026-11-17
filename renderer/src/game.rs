@@ -20314,7 +20314,12 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // Bloon.Process (VERIFIED-DISASM): it leaks once distance - radius reaches leakDist
         // (the last point on the map), or at the very end of a track without an exit.
         let leak_at = self.track_ends.get(b.path as usize).and_then(|e| e.1);
-        if leak_at.is_some_and(|l| b.dist - self.defs[b.kind].radius >= l) || b.dist >= tr.length() {
+        // Path.IsEndOfMap (VERIFIED-DECOMP @0x180f6f8d0), after the move: a path with no exit router
+        // ends a bloon whose distance equals totalPathLength, or exactly equals leakDist
+        // (recording map_haunted_beast_402_r40 rt 1967 / 2657 / 3105 / 3271: Pinks landing on
+        // Path (1)'s 798.19 leave that frame; others go at 798.19 + their radius).
+        let at_leak = self.track_exit.get(b.path as usize).is_none_or(|e| e.0.is_empty()) && leak_at.is_some_and(|l| b.dist == l);
+        if leak_at.is_some_and(|l| b.dist - self.defs[b.kind].radius >= l) || b.dist >= tr.length() || at_leak {
             // Ability.OnPreLivesLost (VERIFIED-DISASM @0x180dfa8e0): an activateOnPreLeak ability goes
             // off first (Bomb Blitz's Bomb Storm); if that destroys the bloon, it doesn't leak
             // (recording bomb_005: 52 Blacks popped at 1190, cash + 572). HYPOTHESIS P-PRELEAKLOOP:
@@ -25545,6 +25550,11 @@ mod tests {
             fc.sort();
             if fg != fc {
                 frames_diff += 1;
+                if std::env::var("RRBTD6_REC_ALLDIFF").is_ok() {
+                    let og: Vec<_> = fg.iter().filter(|x| !fc.contains(x)).map(|(k, d)| (k.clone(), f32::from_bits(*d))).collect();
+                    let oc: Vec<_> = fc.iter().filter(|x| !fg.contains(x)).map(|(k, d)| (k.clone(), f32::from_bits(*d))).collect();
+                    eprintln!("  bloondiff rt {rt}: game {og:?} clone {oc:?}");
+                }
                 if first_diff.is_none() {
                     first_diff = Some((*rt, fg, fc));
                 }

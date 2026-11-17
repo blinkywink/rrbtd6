@@ -172,7 +172,7 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
-### DONE (part): Beast Handler Great White grab (2026-11-17)
+### DONE: Beast Handler Great White grab (2026-11-17; no-pull branch a STAND-IN)
 PORTED (game.json projectile `great_white`, weapon `gw_limit`; Game::great_white_hit / gw_step / gw_limiter,
 GwEffect, WeaponState gw_*): GreatWhiteLimitProjectile.FilterEmission (no current effect, Simulation.time >=
 limitUntil, no live bite in flight or attached projectile; OnRoundEnd limitUntil = time);
@@ -190,10 +190,10 @@ the birds (fly_birds / hold_bird_bloons) now run before the projectiles' ArriveA
 arrival (a bite at a carried bloon follows and explodes where the bird has it this frame).
 map_spillway_beast_302_r40 MATCH (moved to pending/maptowers). STAND-IN: the no-pull branch
 (bloonFollowProjectileModel latched to a ZOMG+ / boss: LatchToBloon, interval thrashing) does nothing.
-OPEN map_haunted_beast_402_r40: 20 frames from rt 1967: Pink 1103 on Haunted's Path (1) leaves the game's
-bloon list at 798.19 (its untilLeak / leak point; it stays in the L lists that frame, no pop lines) while
-the clone keeps it a frame (dist - radius >= leakDist); Pink 943 at 800.19 stays in both. Look at
-Bloon.Process's leak test for that path (exit splitter / untilLeak) next.
+map_haunted_beast_402_r40 MATCH (moved to pending/maptowers; maptowers 90/90) after Path.IsEndOfMap
+(VERIFIED-DECOMP @0x180f6f8d0): after its move, a bloon on a path with no exit router also ends when its
+distance equals totalPathLength or exactly equals leakDist (four Pinks landing on Path (1)'s 798.19 at
+rt 1967 / 2657 / 3105 / 3271; others leave at 798.19 + radius). B lines' distance is distanceTraveled.
 (Earlier notes, kept:)
 OPEN (pending/maptowers_open): map_haunted_beast_402_r40 (first difference rt 339) and map_spillway_beast_302_r40 (rt 1411). The 3xx / 4xx water pet's bite expires into a ProjectileModel_Explosion (collideOnSubProjectile) whose CreateGreatWhiteEffectModel grabs its Target: rt 338 the Explosion's immediate CollideBloon takes MOAB 348 (HP 200 -> 0, HB 'True') and the MOAB is gone from rt 339; the clone has no Great White at all (not exported; the beast set's 3xx / 4xx recordings never grabbed). Model fields: maxGrabBloonName Bfb, maxPullRbe, maxMoabGrabTime 6, moabDamagePerSecond 120, maxMoabDamagePercentPerSecond, postDragTime 1.1, bloonPopTimeScale 0.2, thrashingProjectileRate 0.6, exit / biting / ready / noGrab animation states and times, playRetreatAnimationAt. To port (VERIFIED-DECOMP addresses via methods_of): CreateGreatWhiteEffect (Collide @0x180ca0a30: not destroyed, DamageModel WillDamage / not WillDestroy checks, UpdateParent, the weapon's GreatWhiteLimitProjectile free (no attached projectile), CanPullBloon @0x180ca0890, then a new Entity with a TransformModel at the bloon, rotation from the parent tower, GreatWhiteEffect behaviour; Exhausted @0x180ca1430, Process @0x180ca1880, UpdateParent @0x180ca18c0), GreatWhiteEffect (Simulation.Behaviors: Initialise, Process, SetGrabbedBloon, UpdatePosition, UpdateThrashingProjectile, FinishPoppingBloon, HasEnded, OnRoundEnd, OnLost) and GreatWhiteLimitProjectile (Weapons.Behaviors: FilterEmission, ProjectilesCreated, cooldown, attached projectile). Record a probe if the grabbed bloon's state needs reading (SimRecorder has no Great White lines yet).
 SPEC READ FROM THE DECOMP (2026-11-17, all VERIFIED-DECOMP; port next):
