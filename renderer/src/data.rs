@@ -722,6 +722,9 @@ pub struct Tier {
     /// throwOffsetSecondX / Y / Z (zero: unused).
     #[serde(default)]
     pub preempt_offset2: [f32; 3],
+    /// PreEmptiveStrikeLauncherModel (animationState, animationStateSecond) (display only).
+    #[serde(default)]
+    pub preempt_anim: [i32; 2],
     /// RotateToDefaultPositionTowerModel: (rotation, onlyOnReachingTier).
     #[serde(default)]
     pub default_rot: Vec<[f32; 2]>,
@@ -2285,6 +2288,9 @@ pub struct Eat {
     /// The Full trap's lifespan (seconds; EatBloonModel.projectile's AgeModel).
     #[serde(default)]
     pub full_lifespan: Option<f32>,
+    /// The Full trap's CashModel / PickupModel (EmitCash overwrites its min / max).
+    #[serde(default)]
+    pub full_cash: Option<Cash>,
 }
 
 /// A temporary tower spawned by a projectile (Sentry): its own tier, gone after `lifespan` seconds.

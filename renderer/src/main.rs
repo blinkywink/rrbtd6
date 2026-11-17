@@ -2556,7 +2556,7 @@ async fn game_main() {
                 let last_pose = std::cell::Cell::new((0usize, 0.0f32));
                 // The animation state the last throw set (Weapon.SetAnimation: the model's
                 // animationStates[n], Artillery Battery's Attack3, Attack1, Attack2), else by name.
-                let mut pose = |m: &mut anim::AnimModel, body: bool, yaw: f32| match (t.anim_state >= 1).then(|| m.state_clip(t.anim_state)).flatten().or_else(|| m.attack_clip_n(throws)) {
+                let mut pose = |m: &mut anim::AnimModel, body: bool, yaw: f32| match if t.anim_state >= 1 && !m.state_in_range(t.anim_state) { None } else { (t.anim_state >= 1).then(|| m.state_clip(t.anim_state)).flatten().or_else(|| m.attack_clip_n(throws)) } {
                     _ if shown(m).is_some() => {
                         let (c, at) = shown(m).unwrap();
                         last_pose.set((c, at));

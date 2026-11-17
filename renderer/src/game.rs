@@ -4367,13 +4367,8 @@ macro_rules! collide_pass {
                 $s.sound(&pr.spec.pickup_sounds, None);
                 $s.cash_pops.push((pr.pos, pr.value));
             } else if $s.projectiles[$p].frames_left <= 0.0 {
-                let pr = $s.projectiles.remove($p);
-                // STAND-IN: a Full trap's payout (EmitCash's cash, not modelled yet) is collected
-                // as it goes rather than lost.
-                if pr.spec.eat.is_some() {
-                    $s.collect_projectile_cash(&pr);
-                    $s.cash_pops.push((pr.pos, pr.value));
-                }
+                // (An uncollected pickup's cash goes with it: the Full trap's AgeModel, 5 s.)
+                $s.projectiles.remove($p);
             } else {
                 $p += 1;
             }
@@ -4607,7 +4602,11 @@ macro_rules! collide_pass {
                     pr.value *= eat.cash_mult as f64;
                     pr.cash_base=pr.value;
                     // STAND-IN pickup reach (a quarter of this: 15 units), like bananas.
-                    pr.spec.cash = Some(crate::data::Cash { min: 0.0, max: 0.0, bonus: 0.0, pickup: Some(60.0),bonus_shared:false });
+                    // (EmitCash: the Full trap is a CashModel + PickupModel projectile, collect radius
+                    // 100, its cash overwritten. INFERRED: eating pays no pop cash here, so its value
+                    // carries the whole RBE x rbeCashMultiplier; the game pops the bloons (their pop
+                    // cash) and pays (multiplier - 1) x the eaten layers.)
+                    pr.spec.cash = Some(eat.full_cash.clone().map(|c| crate::data::Cash { min: 0.0, max: 0.0, ..c }).unwrap_or(crate::data::Cash { min: 0.0, max: 0.0, bonus: 0.0, pickup: Some(60.0), bonus_shared: false }));
                     pr.spec.no_hit = true;
                     // (EmitCash makes the Full trap in its place, gone after its AgeModel
                     // lifespan: recording map_geared_engineer_204_r40, full at rt 2169, gone at 2470.)
@@ -15300,6 +15299,21 @@ impl Game {
             let (o1, o2) = self.tier(t).map_or(([0.0; 3], [0.0; 3]), |tr| (tr.preempt_offset, tr.preempt_offset2));
             let n = self.towers[t].preempt_n;
             self.towers[t].preempt_n += 1;
+            // Launch (VERIFIED-DECOMP @0x180d5e190): with animationState > 0, SetAnimation(the second
+            // state on odd launches when it is set, else the first) on the Sub: its launch animation
+            // (display only).
+            let [a1, a2] = self.tier(t).map_or([0, 0], |tr| tr.preempt_anim);
+            if a1 > 0 {
+                let st = if a2 >= 1 && n % 2 == 1 { a2 } else { a1 };
+                let now = self.sim_elapsed;
+                let tw = &mut self.towers[t];
+                if tw.anim_frame != now || tw.anim_state < 1 || tw.anim_state <= st {
+                    tw.anim_state = st;
+                    tw.anim_frame = now;
+                }
+                tw.attack_t = 0.0;
+                tw.idle_t = 0.0;
+            }
             let [ex, ey, ez] = if n % 2 == 0 && o2 != [0.0; 3] { o2 } else { o1 };
             // (Turned by minus the tower's rotation: recording sub_paragon_r40 rt 633, the second
             // offset (-8.5, 12) at a rotation of -19.59 lands where +19.59 would.)

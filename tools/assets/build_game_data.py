@@ -1190,6 +1190,10 @@ def main():
         if eat and deref(eat["f"].get("projectile")):
             fp = projectile(deref(eat["f"]["projectile"]), depth + 1)
             out["eat"]["full_lifespan"] = fp.get("age_lifespan") or fp.get("lifespan")
+            # Its CashModel / PickupModel; EmitCash sets min = max = (rbeCashMultiplier - 1) x
+            # cashCollected (the eaten bloons' layers x the round's income multiplier).
+            out["eat"]["full_cash"] = fp.get("cash")
+            out["eat"]["full_behaviors"] = sorted({b["type"] for b in items(deref(eat["f"]["projectile"])["f"]["behaviors"]) if b})
         # CollideExtraPierceReductionModel: each hit uses this much more pierce.
         # (By tag when one is given: each hit on a bloon with that tag uses extraAmount more.)
         tagged = [c["f"] for c in pb.get("CollideExtraPierceReductionModel", []) if c["f"].get("bloonTag")]
@@ -2733,6 +2737,10 @@ def main():
                 # when it isn't zero (the Sub Paragon's).
                 "preempt_offset2": next(([b["f"].get("throwOffsetSecondX", 0.0), b["f"].get("throwOffsetSecondY", 0.0), b["f"].get("throwOffsetSecondZ", 0.0)]
                                         for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "PreEmptiveStrikeLauncherModel"), [0.0, 0.0, 0.0]),
+                # animationState / animationStateSecond: Launch's SetAnimation on the Sub's weapon
+                # (second on odd launches when it is set; none when the first is 0). Display only.
+                "preempt_anim": next(([b["f"].get("animationState", 0), b["f"].get("animationStateSecond", 0)]
+                                      for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "PreEmptiveStrikeLauncherModel"), [0, 0]),
                 # RotateToDefaultPositionTowerModel (Buccaneer 4xx / 5xx): on reaching that tier the
                 # tower turns to `rotation` (OnUpgraded @0x180d86c70).
                 "default_rot": [[b["f"].get("rotation", 0.0), float(b["f"].get("onlyOnReachingTier", 0))]

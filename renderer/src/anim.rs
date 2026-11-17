@@ -812,6 +812,12 @@ impl AnimModel {
     /// cycles the animator's attack states). STAND-IN: the animator's state-to-clip order isn't
     /// exported; the clips are taken in name order.
     /// The clip of animation state `n` (Weapon.SetAnimation), when the model's states name one it has.
+    /// MonkeyAnimationController.SetState (VERIFIED-DECOMP @0x1815264c0) plays state `n` only when
+    /// it is within animationStatesByIndex: false when the model's list is known and `n` is past it.
+    pub fn state_in_range(&self, n: i32) -> bool {
+        self.states.is_empty() || (n as usize) < self.states.len()
+    }
+
     pub fn state_clip(&self, n: i32) -> Option<usize> {
         let name = self.states.get(usize::try_from(n).ok()?)?.as_deref()?;
         self.clips.iter().position(|c| c.name == name)

@@ -43,11 +43,14 @@ effect names, model behaviours the data builder never reads).
   "state"; the Animator's clip list can lack them: Tack 204's OverDriveAttack, Druid's DruidSpearIdle /
   DruidSpearAttack, Silas, Desperado, Skywarden; those 72 tier models were re-exported locally; an existing
   install keeps its old folders, since export_tower_tiers skips exported ones). 2755 of 2778 weapon states
-  resolve. LEFT: 23 past the end of their model's list (Village 5-x-x, some Buccaneer and Dartling crosspaths;
-  SetState then plays nothing, the clone still plays a clip by name). Not ported: Weapon.GetAnimationOverride
-  (animationStateOverrides) and the other SetAnimation
-  callers (ChangeProjectilePerEmit, DuplicateProjectilePerEmit, EmissionClosestOffset, SwapProjectile,
-  PreEmptiveStrikeLauncher, AttackBloonOnEntrance).
+  resolve; the other 23 are past the end of their model's list (Village 5-x-x, some Buccaneer and Dartling
+  crosspaths) and, as SetState, play nothing. STAND-IN: SetAnimation sets the state on the weapon's attack's
+  display (mainAttack's with animateOnMainAttack); the clone gives the one state to the body and its attack
+  displays alike. Pre-emptive Strike's launch sets its animationState
+  (state 2, MonkeySub050MissileAttack; `preempt_anim`). Weapon.GetAnimationOverride changes nothing: the game
+  data has no AnimationStateOverrideModel. LEFT (heroes only, not in the shop): EmissionClosestOffset
+  (Admiral Brickell), SwapProjectile, ChangeProjectilePerEmit, DuplicateProjectilePerEmit; AttackBloonOnEntrance
+  has no model in the data.
 
 - **Paragon degree swaps** (`ParagonAssetSwapModel`, `ParagonAssetSwapPerDegreeModel`; paragon `swaps`,
   `per_degree`, `Game::paragon_display`): at its display level a Paragon's extras and shots use the
