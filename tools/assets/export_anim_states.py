@@ -1,5 +1,5 @@
 """Writes states.json next to each exported tower model: the clip names of its
-MonkeyAnimationController.animationStates, in order. Weapon.SetAnimation(n) (VERIFIED-DECOMP
+MonkeyAnimationController.animationStatesByIndex, in order. Weapon.SetAnimation(n) (VERIFIED-DECOMP
 @0x180c51220) picks state n; AlternateAnimation.ProjectilesCreated (@0x180c68ff0) sets
 emissionCount % states + originState + 1, Weapon.Process (@0x180c50670) weaponModel.animation.
 
@@ -86,8 +86,11 @@ def states_of(root):
                 continue
             t = o.read_typetree()
             if "animationStates" in t and "placementConfigs" in t:
+                # MonkeyAnimationController.WriteHighQualityAnimationIndices (VERIFIED-DECOMP
+                # @0x1815272b0): animationStatesByIndex is animationStates, then placementConfigs,
+                # attackIdleConfigs and IdleVariants; SetState(n) plays entry n (@0x1815264c0).
                 out = []
-                for s in t["animationStates"]:
+                for s in [x for k in ("animationStates", "placementConfigs", "attackIdleConfigs", "IdleVariants") for x in t.get(k, [])]:
                     co = resolve(af, s.get("animationClip"))
                     if co is not None:
                         co = over.get(co.path_id, co)

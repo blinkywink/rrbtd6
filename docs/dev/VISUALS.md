@@ -32,16 +32,20 @@ effect names, model behaviours the data builder never reads).
   Buccaneer (AttackL / R / Both), Druid's lightning, Beast Handler, Sauda, Pat Fusty, Admiral Brickell,
   Psi, D&D Monke, the Nautic Siege Core...
 - **Attack clip by animation state** (2026-11-17): a throw plays the model's
-  `MonkeyAnimationController.animationStates[n]` (states.json, `export_anim_states.py`), n from
-  Weapon.SetAnimation: `weaponModel.animation` (`anim_state`) or AlternateAnimation's
-  `emissionCount % states + originState + 1` (`alt_anim`), the higher pending one kept
-  (Tower.anim_state). Artillery Battery: Attack3, Attack1, Attack2 (not name order). export_animated.py
-  now also exports every state's clip (role "state"; the Animator's clip list can lack them: Tack 204's
-  OverDriveAttack, Druid's DruidSpearIdle / DruidSpearAttack, Silas, Desperado, Skywarden; those 72 tier
-  models were re-exported locally; an existing install keeps its old folders, since export_tower_tiers
-  skips exported ones). 2521 of 2574 weapon states resolve. LEFT: 53 whose state index is past the body's
-  list (Dartling's and Buccaneer's attacks are on their attack displays; Village 5-x-x has one state): name
-  order still. Not ported: Weapon.GetAnimationOverride (animationStateOverrides) and the other SetAnimation
+  `MonkeyAnimationController.animationStatesByIndex[n]` (WriteHighQualityAnimationIndices @0x1815272b0:
+  animationStates, then placementConfigs, attackIdleConfigs, IdleVariants; states.json,
+  `export_anim_states.py`; Scene.PresentModels passes the pending state to UnityDisplayNode.set_AnimationState
+  and clears it). n from Weapon.SetAnimation: `weaponModel.animation` (`anim_state`), CycleAnimation's current
+  state at the throw's start (`cycle_anim`: + 1 per throw, Loop / Clamp past max, or the synced
+  Next(min, max + 1) the clone already drew), or AlternateAnimation's `emissionCount % states + originState + 1`
+  (`alt_anim`), a pending state replaced only by one at least as high (Tower.anim_state). Artillery Battery
+  cycles 1-3: Attack3, Attack1, Attack2. export_animated.py now also exports every state's clip (role
+  "state"; the Animator's clip list can lack them: Tack 204's OverDriveAttack, Druid's DruidSpearIdle /
+  DruidSpearAttack, Silas, Desperado, Skywarden; those 72 tier models were re-exported locally; an existing
+  install keeps its old folders, since export_tower_tiers skips exported ones). 2755 of 2778 weapon states
+  resolve. LEFT: 23 past the end of their model's list (Village 5-x-x, some Buccaneer and Dartling crosspaths;
+  SetState then plays nothing, the clone still plays a clip by name). Not ported: Weapon.GetAnimationOverride
+  (animationStateOverrides) and the other SetAnimation
   callers (ChangeProjectilePerEmit, DuplicateProjectilePerEmit, EmissionClosestOffset, SwapProjectile,
   PreEmptiveStrikeLauncher, AttackBloonOnEntrance).
 

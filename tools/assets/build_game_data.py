@@ -1570,6 +1570,11 @@ def main():
                                 # TheBlazingSunModel: [maxStacks, stacksToBurn, attackSpeedPerStack, debuffExpiresAfterFrames].
                                 "blazing_sun": next(([x["f"].get("maxStacks", 0), x["f"].get("stacksToBurn", 0), x["f"].get("attackSpeedPerStack", 0.0), x["f"].get("debuffExpiresAfterFrames", 0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "TheBlazingSunModel"), None),
                                 "cycle_random": any(x and x["type"] == "CycleAnimationModel" and x["f"].get("randomize") for x in items(w["f"].get("behaviors"))),
+                                # CycleAnimationModel (minAnimationState, maxAnimationState, loopMode,
+                                # randomize): the state each throw starts (GetAnimation @0x180c72140).
+                                "cycle_anim": next(({"min": x["f"].get("minAnimationState", 0), "max": x["f"].get("maxAnimationState", 0),
+                                                     "mode": x["f"].get("loopMode") or "", "random": bool(x["f"].get("randomize"))}
+                                                    for x in items(w["f"].get("behaviors")) if x and x["type"] == "CycleAnimationModel"), None),
                                 # LeakDangerAttackSpeedModel: up to maxRateIncreasePercent faster as bloons near the exit.
                                 "leak_danger": next((x["f"].get("maxRateIncreasePercent", 0.0) for x in items(w["f"].get("behaviors"))
                                                      if x and x["type"] == "LeakDangerAttackSpeedModel"), 0.0), "animation_offset": w["f"].get("animationOffset", 0.0),

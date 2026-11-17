@@ -674,12 +674,13 @@ STEP_VERSIONS["extended_towers"] = 4  # 4: the Genie Bottle's genie (models/air)
 STEP_VERSIONS["ingame_ui"] = 6  # 3: the boss HUD; 4: the Powers menu; 5: its Animators; 6: GameMessageManager.
 # misc_art 3, game_data 3: bloon sprites at their true size (Simple draw mode) with trim, per axis.
 STEP_VERSIONS["misc_art"] = 3
-STEP_VERSIONS["game_data"] = 9  # 9: weapons' anim_state / alt_anim; 8: abilities' between_rounds, tap_banned, overclock displays; 4: power_projectiles and power_towers; 5: Desperado's panel toggles, portraits;
+STEP_VERSIONS["game_data"] = 10  # 9: weapons' anim_state / alt_anim; 10: cycle_anim; 8: abilities' between_rounds, tap_banned, overclock displays; 4: power_projectiles and power_towers; 5: Desperado's panel toggles, portraits;
 # 6: the lightning flag; 7: bloon overlay classes and effect overlay types.
 # audio 3: the game's own Vorbis as .ogg (fsb_vorbis.py) instead of FLAC decoded by FMOD.
 # audio 4: also the asset library's clips.
 STEP_VERSIONS["audio"] = 4
 STEP_VERSIONS["dedupe"] = 1
+STEP_VERSIONS["anim_states"] = 2  # 2: the whole animationStatesByIndex list
 # bloon_models 2: boss models and data.
 STEP_VERSIONS["bloon_models"] = 8  # 3: also game/powers.json; 4: keyed by the Powers' ids; 5-6: Power projectile displays; 7: Power towers' models;
 # 8: bloon overlays (glue, ice...).

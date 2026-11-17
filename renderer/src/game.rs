@@ -1393,6 +1393,8 @@ pub struct WeaponState {
     pub anim: i64,
     /// AlternateAnimation.emissionCount (display only).
     pub alt_count: i32,
+    /// CycleAnimation.current (Initialise: minAnimationState; display only).
+    pub cycle_cur: i32,
     /// Where that throw was aimed, and at which bloon (0: a point): the throw stays on the
     /// target it started with (recorded: the tower keeps turning to it as it leaves range).
     pub aim_at: [f32; 2],
@@ -1487,6 +1489,7 @@ impl WeaponState {
             last: NEVER,
             anim: -1,
             alt_count: 0,
+            cycle_cur: w.cycle_anim.as_ref().map_or(0, |c| c.min),
             aim_at: [0.0; 2],
             aim_z0: 0.0,
             aim_id: 0,
@@ -17522,11 +17525,38 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     // CycleAnimation.GetAnimation (@0xc72140, the weapon's behaviours as the throw starts):
                     // randomize takes a synced Next(min, max + 1), a draw whatever it's used for
                     // (recording beast_052: Next(2, 5) at each of the pet's throws).
+                    // GetAnimation returns `current` (the throw's state, in place of weaponModel.animation:
+                    // Weapon.Process @0x180c50670 -> SetAnimation) and moves it on: randomize, Next(min,
+                    // max + 1); else + 1, past max back to min ("Loop") or held at max ("Clamp").
+                    let mut cycled: Option<i32> = None;
                     if started.is_some() && weapon.cycle_random {
                         let seed = self.freeplay_seed;
                         let d = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
                         if std::env::var_os("RRBTD6_RNG_LOG").is_some() {
                             eprintln!("RNG {} {d:?} @{}", self.round_clock, std::panic::Location::caller().line());
+                        }
+                        if let Some(c) = &weapon.cycle_anim {
+                            cycled = Some(st.cycle_cur);
+                            st.cycle_cur = (d * ((c.max + 1) as f64 - c.min as f64)) as i32 + c.min;
+                        }
+                    } else if started.is_some() {
+                        if let Some(c) = &weapon.cycle_anim {
+                            cycled = Some(st.cycle_cur);
+                            st.cycle_cur += 1;
+                            if st.cycle_cur > c.max {
+                                match c.mode.as_str() {
+                                    "Loop" => st.cycle_cur = c.min,
+                                    "Clamp" => st.cycle_cur = c.max,
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    if let Some(n) = cycled {
+                        let now = self.sim_elapsed;
+                        if n >= 1 && (tw.anim_frame != now || tw.anim_state < 1 || tw.anim_state <= n) {
+                            tw.anim_state = n;
+                            tw.anim_frame = now;
                         }
                     }
                     // The Target's factory object, while its bloon lives. (Its cached spot is where
@@ -17637,7 +17667,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 set(tw, n);
                             }
                         }
-                        set(tw, weapon.anim_state);
+                        // (A CycleAnimation weapon's throw state replaced weaponModel.animation at its start.)
+                        if weapon.cycle_anim.is_none() {
+                            set(tw, weapon.anim_state);
+                        }
                     }
                     fired_ids.extend(weapon.alt_id);
                     if let Some(a) = weapon.alt_id {

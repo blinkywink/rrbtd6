@@ -1237,6 +1237,10 @@ pub struct Weapon {
     /// emissionCount % states + originState + 1 (display only).
     #[serde(default)]
     pub alt_anim: Option<[i32; 2]>,
+    /// CycleAnimationModel: the animation state each throw starts (display only; the random
+    /// draw is made either way: `cycle_random`).
+    #[serde(default)]
+    pub cycle_anim: Option<CycleAnim>,
     /// RateBasedAnimationOffsetModel: (baseRate, offset).
     #[serde(default)]
     pub rate_anim_offset: Option<[f32; 2]>,
@@ -3486,4 +3490,15 @@ pub struct TierExtra {
     pub name: String,
     #[serde(default = "one_f32")]
     pub scale: f32,
+}
+
+/// CycleAnimationModel (minAnimationState, maxAnimationState, loopMode "Loop" / "Clamp", randomize).
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct CycleAnim {
+    pub min: i32,
+    pub max: i32,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub random: bool,
 }
