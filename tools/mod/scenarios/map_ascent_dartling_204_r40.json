@@ -1,0 +1,1 @@
+{"name": "map_ascent_dartling_204_r40", "map": "Ascent", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "DartlingGunner-204", "x": 70.0, "y": -72.0, "point": [51.95, -71.24], "target": "Locked"}], "quit": true, "cash": 10000000}

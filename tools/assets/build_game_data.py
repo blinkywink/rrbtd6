@@ -1988,6 +1988,13 @@ def main():
                     out["overclock"]["permanent"] = {"rate": xf.get("rateModifier", 1.0),
                                                      "village_range": xf.get("villageRangeModifier", 1.0),
                                                      "max_stacks": xf.get("maxStacks", 1)}
+                    # OverclockPermanentMutator.ctor (@0x18128f440): BehaviorMutator with the model's
+                    # child BuffIndicatorModel (GetBuffIndicatorModel @0x18128e560); its query's
+                    # availableBuffCount is StackCount (@0x180a4a1c0: stacks).
+                    bi = next((c["f"] for c in items(xf.get("childDependants")) if c and c["type"] == "BuffIndicatorModel"), None)
+                    if bi:
+                        out["overclock"]["permanent"].update({"buff_icon": bi.get("iconName") or None, "buff_name": bi.get("buffName") or "",
+                                                              "buff_max": bi.get("maxStackSize", 0) if bi.get("stackable") else 0})
                 # DroneSwarmModel (Etienne): `count` more drones for `duration`; UCAVModel: the
                 # UCAV for `duration`. Temporary sub-towers like Summon Phoenix.
                 if x["type"] == "DroneSwarmModel":

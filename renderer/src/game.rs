@@ -1876,6 +1876,8 @@ pub struct Tower {
     pub overclock_fx: Option<String>,
     /// The boost mutator's buff icon (iconName, buffName) while `overclock` lasts.
     pub overclock_icon: Option<(String, String)>,
+    /// Ultraboost's OverclockPermanentMutator indicator: (iconName, buffName, maxStackSize).
+    pub ultra_icon: Option<(String, String, i32)>,
     /// Monkeyopolis.activated, and its EmissionMutator's cash per crate (totalCashPerCrate).
     pub mopolis_done: bool,
     pub mopolis_cash: Option<f32>,
@@ -8471,6 +8473,7 @@ impl Game {
             overclock: None,
             overclock_fx: None,
             overclock_icon: None,
+            ultra_icon: None,
             mopolis_done: false,
             mopolis_cash: None,
             range_up: None,
@@ -10909,6 +10912,7 @@ impl Game {
             overclock: None,
             overclock_fx: None,
             overclock_icon: None,
+            ultra_icon: None,
             mopolis_done: false,
             mopolis_cash: None,
             range_up: None,
@@ -11716,6 +11720,7 @@ impl Game {
             tw.overclock_icon = oc.buff_icon.clone().map(|i| (i, oc.buff_name.clone()));
             if let Some(st) = &oc.permanent {
                 tw.ultra = ((tw.ultra.0 + 1).min(st.max_stacks), st.rate, st.village_range);
+                tw.ultra_icon = st.buff_icon.clone().map(|i| (i, st.buff_name.clone(), st.buff_max));
             }
             // Tower.AddMutatorIncludeSubTowers (VERIFIED-DECOMP @0x180c0a1c0): every child tower
             // (TowerManager.GetChildTowers) without dontAddMutatorsFromParent gets it too
@@ -13413,6 +13418,10 @@ impl Game {
         }
         if let (Some(_), Some((icon, name))) = (self.towers[t].overclock, &self.towers[t].overclock_icon) {
             queries.push((icon.clone(), name.clone(), 0, 1, 0, true));
+        }
+        // Ultraboost's permanent mutator: availableBuffCount = its stacks (StackCount), shown "x" + n.
+        if let (n @ 1.., Some((icon, name, max))) = (self.towers[t].ultra.0, &self.towers[t].ultra_icon) {
+            queries.push((icon.clone(), name.clone(), *max, 1, n, true));
         }
         // Discount zones: Tower.AddDiscountZoneBuffs (MoveNext @0x180c2f200): for each path, if
         // the owner is -1 (single player: recordings' IN lines), the model isn't a paragon,
@@ -20301,9 +20310,17 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // there (HasRetreated); the minis are made 50 past the edge and stay put, so they go
             // at once (recording map_rake_heli_204_r40: all three gone at rt 2308, 900 frames
             // after the round's 75% activation).
-            if self.towers[t].comanche.1 != 0 && self.towers[t].comanche.0 + cm.duration as f32 <= self.sim_elapsed as f32 {
+            // (Whatever the activated flags: recording map_skulltweak_heli_204_r40, the heli made
+            // at rt 726 goes at 1625 though round 41's start at 946 cleared them.)
+            if self.towers[t].comanche.0 + cm.duration as f32 <= self.sim_elapsed as f32 {
                 let id = self.towers[t].id;
                 retreat.extend(self.towers.iter().filter(|o| o.sub.as_ref().is_some_and(|s| s.parent == id && s.spec.name == cm.tower.name)).map(|o| o.id));
+            }
+            // Then, in sandbox only (Simulation.sandbox, +0x2d0), activationTime + cooldownFrames <=
+            // time re-arms all three (recording map_rake_heli_204_r40: no re-arm in a game, no
+            // helis at 2909).
+            if self.sandbox && self.towers[t].comanche.0 + cm.cooldown as f32 <= self.sim_elapsed as f32 {
+                self.towers[t].comanche.1 = 0;
             }
         }
         for g in retreat {
@@ -25382,6 +25399,9 @@ mod beast_tests {
         g.buffs = g.compute_buffs();
         assert!(g.buffs[d].rate_mult < before * 0.7);
         assert_eq!(g.towers[d].ultra.0, 1, "Ultraboost stack");
+        // OverclockPermanentMutator's indicator, "x" + its stacks, after the Overclock icon.
+        let icons = g.buff_icons(d);
+        assert!(icons.iter().any(|(i, n)| i == "BuffIconEngineerx5x" && *n == 1), "{icons:?}");
     }
 
     /// BuffIndicatorUi.GroupStackableBuffs: a 3-0-0 Village's three Primary Training supports share

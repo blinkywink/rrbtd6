@@ -2858,6 +2858,13 @@ pub struct OverclockStack {
     pub rate: f32,
     pub village_range: f32,
     pub max_stacks: u32,
+    /// Its mutator's BuffIndicatorModel: iconName, buffName, maxStackSize (0 unless stackable).
+    #[serde(default)]
+    pub buff_icon: Option<String>,
+    #[serde(default)]
+    pub buff_name: String,
+    #[serde(default)]
+    pub buff_max: i32,
 }
 
 #[derive(Deserialize, Clone)]
