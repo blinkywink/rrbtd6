@@ -3466,7 +3466,13 @@ fn blocker_grid(areas: &[Area]) -> Vec<(i32, Vec<[f32; 4]>)> {
     for a in areas.iter().filter(|a| !a.is_disabled) {
         for c in &a.blockers {
             let (x, y) = grid_cell([c[0], c[1]]);
-            let cell = &mut g[(y.clamp(0, 32) * 40 + x.clamp(0, 39)) as usize];
+            // (A blocker circle outside the 40 x 33 grid is in no bucket: recording
+            // map_darkpath_super_302_r40 rt 956, a shot past the bottom edge flies on through
+            // CliffNonPlace2's r 31.95 circle at row 34 until its age ends it at rt 972.)
+            if x < 0 || y < 0 || x >= 40 || y >= 33 {
+                continue;
+            }
+            let cell = &mut g[(y * 40 + x) as usize];
             cell.1.push([c[0], -c[1], c[2], a.height]);
             // Bucket.Add: largestCellSpan = (int)(largestRadius / 10 + 0.5) (VERIFIED by dump).
             let largest = cell.1.iter().map(|b| b[2]).fold(0.0f32, f32::max);
