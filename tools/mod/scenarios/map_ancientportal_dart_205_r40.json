@@ -1,1 +1,1 @@
-{"name": "map_ancientportal_dart_205_r40", "map": "AncientPortal", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "DartMonkey-205", "x": -110.0, "y": 108.0}], "quit": true, "cash": 10000000}
+{"name": "map_ancientportal_dart_205_r40", "map": "AncientPortal", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "DartMonkey-205", "x": 114.0, "y": 88.0}], "quit": true, "cash": 10000000}

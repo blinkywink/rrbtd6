@@ -585,6 +585,11 @@ def pending_models(c):
     c.py("tools/assets/export_pending_models.py", c.game)
 
 
+def anim_states(c):
+    """Each tower model's animationStates order (states.json): which clip a throw's state plays."""
+    c.py("tools/assets/export_anim_states.py", c.game)
+
+
 def finish(c):
     c.py("tools/assets/canonical_anims.py", c.root, c.out / "models")
     # Home/startup models are exported after bloon_models' earlier compaction pass.
@@ -611,7 +616,7 @@ def prune_achievements(c):
 
 
 STEPS = [prune_achievements, metadata, sim_model, cab_index, catalogs, container_index, rounds_maps, sprites, mapset, tower_models, misc_art, upgrade_art,
-         ingame_ui, core_menus, game_data, extended_towers, tower_indices, particles, audio, bloon_models, frontend, startup, home, social, menu_additions, profile_menu, builtin_ui_sprites, map_mechanics, pending_models, finish, dedupe]
+         ingame_ui, core_menus, game_data, extended_towers, tower_indices, particles, audio, bloon_models, frontend, startup, home, social, menu_additions, profile_menu, builtin_ui_sprites, map_mechanics, pending_models, anim_states, finish, dedupe]
 
 
 def install_hook(root):
@@ -669,7 +674,7 @@ STEP_VERSIONS["extended_towers"] = 4  # 4: the Genie Bottle's genie (models/air)
 STEP_VERSIONS["ingame_ui"] = 6  # 3: the boss HUD; 4: the Powers menu; 5: its Animators; 6: GameMessageManager.
 # misc_art 3, game_data 3: bloon sprites at their true size (Simple draw mode) with trim, per axis.
 STEP_VERSIONS["misc_art"] = 3
-STEP_VERSIONS["game_data"] = 8  # 8: abilities' between_rounds, tap_banned, overclock displays; 4: power_projectiles and power_towers; 5: Desperado's panel toggles, portraits;
+STEP_VERSIONS["game_data"] = 9  # 9: weapons' anim_state / alt_anim; 8: abilities' between_rounds, tap_banned, overclock displays; 4: power_projectiles and power_towers; 5: Desperado's panel toggles, portraits;
 # 6: the lightning flag; 7: bloon overlay classes and effect overlay types.
 # audio 3: the game's own Vorbis as .ogg (fsb_vorbis.py) instead of FLAC decoded by FMOD.
 # audio 4: also the asset library's clips.

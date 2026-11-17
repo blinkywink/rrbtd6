@@ -220,6 +220,9 @@ pub struct AnimModel {
     nverts: usize,
     frames: std::sync::Arc<Frames>,
     attach: Option<std::sync::Arc<Attach>>,
+    /// MonkeyAnimationController.animationStates' clip names in order (states.json,
+    /// export_anim_states.py): Weapon.SetAnimation's state n plays states[n].
+    states: Vec<Option<String>>,
     legacy_scratch:Option<(Vec<Vertex>,Vec<Vertex>)>,
     /// Set before a draw: (pitch, roll, scale) applied in the model's own space before its yaw
     /// (nose up about x, roll about its forward z, left wing down for positive roll).
@@ -353,6 +356,7 @@ pub struct Staged {
     nverts: usize,
     frames: std::sync::Arc<Frames>,
     attach: Option<std::sync::Arc<Attach>>,
+    states: Vec<Option<String>>,
 }
 
 /// export_animated.py attach.bin: the transforms carrying particle systems (paths from the prefab
@@ -538,7 +542,7 @@ impl AnimModel {
             .collect::<Vec<_>>();
         let fx = parts.iter().map(|p| p.fx_spec.as_ref().and_then(|s| make_fx(s))).collect();
         let shadow = st.shadow.map(|s| Shadow { tex: upload_shadow(&s.tex), size: s.size, pos: s.pos });
-        Self { shadow, parts, fx, clips: st.clips, nverts: st.nverts, frames: st.frames, attach: st.attach, legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt: None }
+        Self { shadow, parts, fx, clips: st.clips, nverts: st.nverts, frames: st.frames, attach: st.attach, states: st.states, legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt: None }
     }
 
     async fn from_staged_cooperative(st:Staged)->Self{
@@ -558,7 +562,7 @@ impl AnimModel {
         }
         let fx=parts.iter().map(|p|p.fx_spec.as_ref().and_then(|s|make_fx(s))).collect();
         let shadow=if let Some(s)=st.shadow{let tex=upload_shadow_cooperative(&s.tex).await;Some(Shadow{tex,size:s.size,pos:s.pos})}else{None};
-        Self{shadow,parts,fx,clips:st.clips,nverts:st.nverts,frames:st.frames,attach:st.attach,legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt:None}
+        Self{shadow,parts,fx,clips:st.clips,nverts:st.nverts,frames:st.frames,attach:st.attach,states:st.states,legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt:None}
     }
 
     /// Reads and decodes a model directory without touching the GPU (safe off the main thread).
@@ -690,7 +694,8 @@ impl AnimModel {
                 std::sync::Arc::new(Attach { paths, mats })
             })
         });
-        Some(Staged { shadow, parts, clips, nverts, frames, attach })
+        let states: Vec<Option<String>> = std::fs::read_to_string(dir.join("states.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        Some(Staged { shadow, parts, clips, nverts, frames, attach, states })
     }
 
     pub fn vertex_count(&self) -> usize {
@@ -806,6 +811,12 @@ impl AnimModel {
     /// The attack clip for the tower's `n`th throw: several alternate in turn (AlternateAnimationModel
     /// cycles the animator's attack states). STAND-IN: the animator's state-to-clip order isn't
     /// exported; the clips are taken in name order.
+    /// The clip of animation state `n` (Weapon.SetAnimation), when the model's states name one it has.
+    pub fn state_clip(&self, n: i32) -> Option<usize> {
+        let name = self.states.get(usize::try_from(n).ok()?)?.as_deref()?;
+        self.clips.iter().position(|c| c.name == name)
+    }
+
     pub fn attack_clip_n(&self, n: u32) -> Option<usize> {
         let v = self.attack_clips();
         (!v.is_empty()).then(|| v[n as usize % v.len()])

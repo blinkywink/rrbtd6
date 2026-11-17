@@ -1573,6 +1573,12 @@ def main():
                                 # LeakDangerAttackSpeedModel: up to maxRateIncreasePercent faster as bloons near the exit.
                                 "leak_danger": next((x["f"].get("maxRateIncreasePercent", 0.0) for x in items(w["f"].get("behaviors"))
                                                      if x and x["type"] == "LeakDangerAttackSpeedModel"), 0.0), "animation_offset": w["f"].get("animationOffset", 0.0),
+                                # WeaponModel.animation: the display state a throw sets (Weapon.Process
+                                # @0x180c50670 -> SetAnimation); AlternateAnimationModel (states,
+                                # originState): emissionCount % states + originState + 1 per emission.
+                                "anim_state": w["f"].get("animation", 0),
+                                "alt_anim": next(([x["f"].get("states", 0), x["f"].get("originState", 0)] for x in items(w["f"].get("behaviors"))
+                                                  if x and x["type"] == "AlternateAnimationModel"), None),
                                          # RateBasedAnimationOffsetModel (Dartling 0-0-4 guns): (baseRate, offset).
                                          "rate_anim_offset": next(([x["f"].get("baseRate", 1.0), x["f"].get("offset", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "RateBasedAnimationOffsetModel"), None),
                                 # fireBetweenRounds (weapon clock is Simulation.time, not roundTime),

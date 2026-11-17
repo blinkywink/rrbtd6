@@ -1230,6 +1230,13 @@ pub struct Weapon {
     /// WeaponModel.animationOffset: the attack animation starts this many seconds before the shot.
     #[serde(default)]
     pub animation_offset: f32,
+    /// WeaponModel.animation: the animationStates index a throw plays (display only).
+    #[serde(default)]
+    pub anim_state: i32,
+    /// AlternateAnimationModel (states, originState): each emission sets state
+    /// emissionCount % states + originState + 1 (display only).
+    #[serde(default)]
+    pub alt_anim: Option<[i32; 2]>,
     /// RateBasedAnimationOffsetModel: (baseRate, offset).
     #[serde(default)]
     pub rate_anim_offset: Option<[f32; 2]>,

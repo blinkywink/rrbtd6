@@ -239,7 +239,11 @@ def main():
                     continue
                 lists = [("place", t_mb.get("placementConfigs", [])), ("attack_idle", t_mb.get("attackIdleConfigs", [])),
                          ("idle_variant", t_mb.get("IdleVariants", [])),
-                         ("upgrade", [x for x in t_mb.get("animationStates", []) if x.get("isUpgradeAnimation")])]
+                         ("upgrade", [x for x in t_mb.get("animationStates", []) if x.get("isUpgradeAnimation")]),
+                         # Every animation state's clip: Weapon.SetAnimation's state n plays
+                         # animationStates[n] (export_anim_states.py), which the Animator's own clip
+                         # list can lack (Tack 204's OverDriveAttack, Druid's DruidSpearAttack).
+                         ("state", [x for x in t_mb.get("animationStates", []) if not x.get("isUpgradeAnimation")])]
                 for role, states in lists:
                     for st in states:
                         o = em.resolve(af, st["animationClip"])

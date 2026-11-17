@@ -1391,6 +1391,8 @@ pub struct WeaponState {
     pub last: i64,
     /// animationStartedAt (Simulation.time) of a throw whose projectile hasn't left yet; -1.
     pub anim: i64,
+    /// AlternateAnimation.emissionCount (display only).
+    pub alt_count: i32,
     /// Where that throw was aimed, and at which bloon (0: a point): the throw stays on the
     /// target it started with (recorded: the tower keeps turning to it as it leaves range).
     pub aim_at: [f32; 2],
@@ -1484,6 +1486,7 @@ impl WeaponState {
             key,
             last: NEVER,
             anim: -1,
+            alt_count: 0,
             aim_at: [0.0; 2],
             aim_z0: 0.0,
             aim_id: 0,
@@ -1798,6 +1801,10 @@ pub struct Tower {
     /// Its rotation in the game's frame (degrees) as of its last aimed shot: what emissions it
     /// owns start from (ArcEmission.GetDirection reads the tower's rotation).
     pub game_rot: Option<f32>,
+    /// The display's animation state the last throw set (Weapon.SetAnimation: an index into the
+    /// model's animationStates; 0 none) and the Simulation.time it was set (display only).
+    pub anim_state: i32,
+    pub anim_frame: u64,
     /// ChurchillBaseRotation (Apex Plasma Master): Tower.Rotation, the turret's angle on it (set
     /// by RotateToTarget.ApplyRotation: aim - Tower.Rotation; the turret turns with the base), and
     /// (pausedRotation, elapsedPaused, rotateToTarget, rotationTargetAngle).
@@ -8415,6 +8422,8 @@ impl Game {
             angle: -std::f32::consts::FRAC_PI_2,
             aim: -std::f32::consts::FRAC_PI_2,
             game_rot: None,
+            anim_state: 0,
+            anim_frame: 0,
             spin: Vec::new(),
             randpos: Vec::new(),
             base_rot: 0.0,
@@ -10851,6 +10860,8 @@ impl Game {
             angle: -std::f32::consts::FRAC_PI_2,
             aim: -std::f32::consts::FRAC_PI_2,
             game_rot: None,
+            anim_state: 0,
+            anim_frame: 0,
             spin: Vec::new(),
             randpos: Vec::new(),
             base_rot: 0.0,
@@ -17603,6 +17614,30 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     let st = &mut tw.weapons[w];
                     if spawns == 0 {
                         continue;
+                    }
+                    // The display state this frame's throws set (display only). Each SpawnDart's
+                    // ProjectilesCreated: AlternateAnimation (@0x180c68ff0) SetAnimation(emissionCount %
+                    // states + originState + 1), emissionCount + 1; then Weapon.Process (@0x180c50670)
+                    // SetAnimation(weaponModel.animation). SetAnimation (@0x180c51220) ignores n < 1 and
+                    // replaces a pending state only with one at least as high.
+                    {
+                        let now = self.sim_elapsed;
+                        let tw = &mut self.towers[t];
+                        let mut set = |tw: &mut Tower, n: i32| {
+                            if n >= 1 && (tw.anim_frame != now || tw.anim_state < 1 || tw.anim_state <= n) {
+                                tw.anim_state = n;
+                                tw.anim_frame = now;
+                            }
+                        };
+                        for _ in 0..spawns {
+                            if let Some([k, origin]) = weapon.alt_anim.filter(|a| a[0] > 0) {
+                                let st = &mut tw.weapons[w];
+                                let n = st.alt_count % k + origin + 1;
+                                st.alt_count += 1;
+                                set(tw, n);
+                            }
+                        }
+                        set(tw, weapon.anim_state);
                     }
                     fired_ids.extend(weapon.alt_id);
                     if let Some(a) = weapon.alt_id {

@@ -30,8 +30,20 @@ effect names, model behaviours the data builder never reads).
   attacks. Now any non-idle "Attack" clip counts, and several of one family alternate per throw:
   Mortar's Artillery Battery (Attack1-3), Dartling's Hydra / MAD / Rocket Storm, Engineer's traps,
   Buccaneer (AttackL / R / Both), Druid's lightning, Beast Handler, Sauda, Pat Fusty, Admiral Brickell,
-  Psi, D&D Monke, the Nautic Siege Core... STAND-IN: the animator's state-to-clip order (AlternateAnimationModel states,
-  originState) isn't exported, so clips go in name order.
+  Psi, D&D Monke, the Nautic Siege Core...
+- **Attack clip by animation state** (2026-11-17): a throw plays the model's
+  `MonkeyAnimationController.animationStates[n]` (states.json, `export_anim_states.py`), n from
+  Weapon.SetAnimation: `weaponModel.animation` (`anim_state`) or AlternateAnimation's
+  `emissionCount % states + originState + 1` (`alt_anim`), the higher pending one kept
+  (Tower.anim_state). Artillery Battery: Attack3, Attack1, Attack2 (not name order). export_animated.py
+  now also exports every state's clip (role "state"; the Animator's clip list can lack them: Tack 204's
+  OverDriveAttack, Druid's DruidSpearIdle / DruidSpearAttack, Silas, Desperado, Skywarden; those 72 tier
+  models were re-exported locally; an existing install keeps its old folders, since export_tower_tiers
+  skips exported ones). 2521 of 2574 weapon states resolve. LEFT: 53 whose state index is past the body's
+  list (Dartling's and Buccaneer's attacks are on their attack displays; Village 5-x-x has one state): name
+  order still. Not ported: Weapon.GetAnimationOverride (animationStateOverrides) and the other SetAnimation
+  callers (ChangeProjectilePerEmit, DuplicateProjectilePerEmit, EmissionClosestOffset, SwapProjectile,
+  PreEmptiveStrikeLauncher, AttackBloonOnEntrance).
 
 - **Paragon degree swaps** (`ParagonAssetSwapModel`, `ParagonAssetSwapPerDegreeModel`; paragon `swaps`,
   `per_degree`, `Game::paragon_display`): at its display level a Paragon's extras and shots use the
@@ -63,8 +75,9 @@ effect names, model behaviours the data builder never reads).
 
 - `MalevolenceFx` / `MalevolenceSpellCast` (Corvus) exported to effects/, not drawn: the clone doesn't
   simulate the Malevolence spell (its display shows while that attack isn't paused).
-- Model transforms (scale, offset) aren't compared with the game automatically: the FX capture covers
-  particle systems only. Report anything that looks wrong in docs/dev/ISSUES.txt.
+- Model transforms: every TowerModel's body DisplayModel has scale 1, no positionOffset and displayScale 1
+  (checked 2026-11-17 over all 2508), so a body's size and offset are its prefab's transforms, which the
+  export bakes in. Extras use their DisplayModel scale. The FX capture covers particle systems only.
 
 ## Done (2026-11-16)
 
