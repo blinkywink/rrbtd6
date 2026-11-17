@@ -1364,6 +1364,31 @@ fn aim_origin_y(clone_y: f32, z: f32, lift: f32) -> f32 {
 /// lastEmission of a weapon that never fired (int.MinValue: ready at once).
 const NEVER: i64 = i32::MIN as i64;
 
+/// GreatWhiteEffect (Simulation.Behaviors; Process @0x18102c8a0): a grabbed bloon dragged to the pet.
+#[derive(Clone)]
+pub struct GwEffect {
+    /// parentTower (the pet) and its limiter weapon slot.
+    pub tower: u64,
+    /// The id its pops go to (the projectile's owner: a pet's handler).
+    pub credit: u64,
+    pub weapon: usize,
+    pub spec: std::sync::Arc<crate::data::GreatWhite>,
+    /// createdAt (roundTime), totalFramesToPopBloon.
+    pub created: i64,
+    pub total: i64,
+    pub from: [f32; 2],
+    pub to: [f32; 2],
+    pub pos: [f32; 2],
+    pub exited: bool,
+    /// timeOfLastThrashProjectileEmit (roundTime), thrashingProjectileRateFrames.
+    pub last_thrash: i64,
+    pub thrash_rate: i64,
+    /// Spawner.BlockRoundEnding until the bloon is popped (createdAt + total).
+    pub blocking: bool,
+    /// The grabbed bloon's kind (display only).
+    pub kind: usize,
+}
+
 /// Simulation.Towers.Weapons.Weapon state.
 #[derive(Clone, Debug)]
 pub struct WeaponState {
@@ -1396,6 +1421,12 @@ pub struct WeaponState {
     pub alt_count: i32,
     /// CycleAnimation.current (Initialise: minAnimationState; display only).
     pub cycle_cur: i32,
+    /// GreatWhiteLimitProjectile: travelingProjectile (the bite in flight, by uid),
+    /// attachedProjectile, limitUntil (Simulation.time) and whether a GreatWhiteEffect is current.
+    pub gw_travel: Option<u64>,
+    pub gw_attached: Option<u64>,
+    pub gw_until: i64,
+    pub gw_effect: bool,
     /// Where that throw was aimed, and at which bloon (0: a point): the throw stays on the
     /// target it started with (recorded: the tower keeps turning to it as it leaves range).
     pub aim_at: [f32; 2],
@@ -1491,6 +1522,10 @@ impl WeaponState {
             anim: -1,
             alt_count: 0,
             cycle_cur: w.cycle_anim.as_ref().map_or(0, |c| c.min),
+            gw_travel: None,
+            gw_attached: None,
+            gw_until: 0,
+            gw_effect: false,
             aim_at: [0.0; 2],
             aim_z0: 0.0,
             aim_id: 0,
@@ -3865,6 +3900,8 @@ pub struct Game {
     /// height).
     pop_emits: Vec<([f32; 2], Box<Proj>, Box<Emission>, u64, f32, u64, f32)>,
     pub hooks: Vec<Hook>,
+    /// Live GreatWhiteEffects (Beast Handler grabs), in creation order.
+    pub gw_effects: Vec<GwEffect>,
     pub paragon_degree: Option<crate::data::ParagonDegree>,
     /// GameModel.buffIndicatorModels' FullNames in order (data::GameData::buff_order).
     pub buff_order: std::sync::Arc<[String]>,
@@ -5217,6 +5254,13 @@ macro_rules! collide_pass {
                 // Dark Champion dart popping a knocked MOAB leaves its Ceramics unknocked, the
                 // first moving on at full speed that frame. INFERRED: Knockback.Collide's
                 // IsMutatedBy / offTrackCount checks on the degrading object.)
+                // CreateGreatWhiteEffect.Collide (VERIFIED-DECOMP @0x180ca0a30; Game::great_white_hit),
+                // on the bloon where it is before the Explosion's knockback turns it (recording
+                // map_haunted_beast_402_r40 rt 623: the grabbed Black's createdAtPosition is its
+                // spot after this frame's move, 17.08, not pushed back).
+                if let Some(gw) = $s.projectiles[$p].spec.great_white.clone() {
+                    $s.great_white_hit($p, id, gw);
+                }
                 if let Some(kb) = $s.projectiles[$p].spec.knockback.clone().filter(|_| !(hit_moab && n > 0)) {
                     let mut valid = None;
                     for kid in std::iter::once(id).chain($kids.iter().copied()) {
@@ -6147,6 +6191,7 @@ impl Game {
             free_tower_round: None,
             pop_emits: Vec::new(),
             hooks: Vec::new(),
+            gw_effects: Vec::new(),
             prof: [0.0; 3],
             syphon: 0.0,
             paragon_degree: d.paragon_degree.clone(),
@@ -9561,15 +9606,19 @@ impl Game {
                     };
                 }
             }
-            // Process: with nothing to do it plans an idle move.
+            // Process: with nothing to do it plans an idle move. timeOfNextIdleMove is on
+            // Simulation.time (VERIFIED-DECOMP Process @0x180dc69a0: Simulation +0x30), not roundTime
+            // (recordings map_haunted_beast_402_r40 / map_spillway_beast_302_r40: set at time 299
+            // to 488, the move at rt 471, a round boundary later).
             let mut idle_started = false;
+            let now_t = self.sim_elapsed as i64;
             if !self.gyr_valid(&st) {
                 if st.next_idle < 0 {
                     let d = self.synced_double();
-                    st.next_idle = g.idle_min as i64 + (d * (g.idle_max - g.idle_min) as f64) as i64 + rt;
+                    st.next_idle = g.idle_min as i64 + (d * (g.idle_max - g.idle_min) as f64) as i64 + now_t;
                 }
                 // The idle move: a random spot within the hovered tower's range, on the map.
-                if st.next_idle <= rt && st.hover {
+                if st.next_idle <= now_t && st.hover {
                     let (d1, d2) = (self.synced_double() as f32, self.synced_double() as f32);
                     let (sa, ca) = crt_sin_cos(DEG2RAD * -(d1 * 360.0));
                     let r = d2 * range;
@@ -15549,6 +15598,157 @@ impl Game {
     /// (@0xcccc50) destroys it (x mult cash). Then TravelTowardsEmitTower: 150 / 60 a frame, flat,
     /// back to where it was made; DestroyIfReachedTarget once within 6 (recording bucc_040: out at
     /// 33.3 a frame from rt 121, snap and kill at 126, back 2.5 a frame, last seen at 182).
+    /// CreateGreatWhiteEffect.UpdateParent (@0x180ca18c0): the emitting tower and its first
+    /// GreatWhiteLimitProjectile. A pet's shots carry their handler's id (pop credit), so the
+    /// tower is `owner` itself or its pet with the limiter.
+    fn gw_limiter(&self, owner: u64) -> Option<(usize, usize)> {
+        let slot = |t: usize| self.tier(t).and_then(|tr| tr.attacks.iter().flat_map(|a| a.weapons.iter()).position(|w| w.gw_limit));
+        let t = self.towers.iter().position(|o| o.id == owner)?;
+        if let Some(wi) = slot(t) {
+            return Some((t, wi));
+        }
+        (0..self.towers.len()).filter(|&o| self.towers[o].sub.as_ref().is_some_and(|s| s.parent == owner)).find_map(|o| slot(o).map(|wi| (o, wi)))
+    }
+
+    /// BloonDegradeStepper.GetTotalBloonHealth: its health and every layer below it.
+    fn total_bloon_health(&self, i: usize) -> i32 {
+        fn below(g: &Game, k: usize) -> i64 {
+            g.child_kinds[k].iter().map(|&c| g.defs[c].max_health as i64 + below(g, c)).sum()
+        }
+        let b = &self.bloons[i];
+        (b.hp as i64 + below(self, b.kind)).min(i32::MAX as i64) as i32
+    }
+
+    /// CreateGreatWhiteEffect.Collide (VERIFIED-DECOMP @0x180ca0a30) for projectile `p` meeting
+    /// bloon `id`: (no DamageModel on the Explosion, so no WillDamage / WillDestroy test)
+    /// UpdateParent: the emitting tower and its first GreatWhiteLimitProjectile; nothing while
+    /// that has a current effect or an attached projectile. CanPullBloon (@0x180ca0890): not a
+    /// boss, a Tombstone, a Rock below tier 5, nor with GetTotalBloonHealth >= maxPullRbe; its
+    /// layerNumber <= maxGrabBloonName's. Pulled: a GreatWhiteEffect (SetGrabbedBloon
+    /// @0x18102cbd0), then Bloon.Damage(GetTotalBloonHealth, the Explosion, distributed with the
+    /// blocker overridden, no effect, the tower). STAND-IN: not pulled, the game attaches
+    /// bloonFollowProjectileModel (latching, thrashing); the clone does nothing.
+    fn great_white_hit(&mut self, p: usize, id: u64, gw: Box<crate::data::GreatWhite>) {
+        let Some(i) = self.bloons.iter().position(|b| b.id == id) else { return };
+        let owner = self.projectiles[p].owner;
+        let Some((t, wi)) = self.gw_limiter(owner) else { return };
+        let busy = match self.towers[t].weapons.get(wi) {
+            Some(st) => st.gw_effect || st.gw_attached.is_some_and(|u| self.projectiles.iter().any(|q| q.uid == u)),
+            None => true,
+        };
+        if busy {
+            return;
+        }
+        let d = &self.defs[self.bloons[i].kind];
+        let tags = &d.tags;
+        let tier5 = self.towers[t].tiers.iter().any(|&x| x >= 5);
+        let total = self.total_bloon_health(i);
+        let pull = !tags.iter().any(|x| x == "Boss" || x == "Tombstone")
+            && !(!tier5 && tags.iter().any(|x| x == "Rock"))
+            && (total as f32) < gw.max_pull_rbe
+            && gw.max_layer.is_none_or(|m| d.layer_number <= m);
+        if !pull {
+            return;
+        }
+        // SetGrabbedBloon: f = non-MOAB (sqrt(GetTotalLeakDamage) + 1, + 2 with Lead) x 0.25 x
+        // bloonPopTimeScale; MOAB min(health / moabDamagePerSecond, maxMoabGrabTime) (the percent
+        // branch when maxMoabDamagePercentPerSecond > 0); clamped to [1, 30];
+        // totalFramesToPopBloon = (int)(f x 60) - 4.
+        let b = &self.bloons[i];
+        let is_moab = tags.iter().any(|x| x == "Moabs");
+        let mut f = if !is_moab {
+            let mut v = self.total_leak(b.kind).max(0.0).sqrt() + 1.0;
+            if tags.iter().any(|x| x == "Lead") {
+                v += 2.0;
+            }
+            v * 0.25 * gw.pop_scale
+        } else if gw.moab_pct > 0.0 {
+            let a = (d.max_health as f32 * gw.moab_pct).min(b.hp as f32 / gw.moab_dps as f32);
+            if tags.iter().any(|x| x == "Bad") { a } else { a.min(gw.max_moab_time) }
+        } else {
+            (b.hp as f32 / gw.moab_dps as f32).min(gw.max_moab_time)
+        };
+        f = f.clamp(1.0, 30.0);
+        let total_frames = (f * 60.0) as i64 - 4;
+        // createdAtPosition: the bloon's Position (a MOAB's centre, not the bite's spot above it:
+        // recording map_haunted_beast_402_r40 rt 375, the first thrash 36 / 96 of the way from
+        // MOAB 348's (-27.04, 47.70) to the pet).
+        let from = b.pos;
+        let kind = b.kind;
+        let to = self.towers[t].pos;
+        // SetCooldown(postDragTimeFrames x (1/60) + f): limitUntil = (int)(s / (1/60)) + time.
+        let secs = gw.post_drag_frames as f32 * (1.0 / 60.0f32) + f;
+        let until = (secs / (1.0 / 60.0f32)) as i64 + self.sim_elapsed as i64;
+        // thrashingProjectileRateFrames = (int)(Tower.GetTotalRateModifier x the model's).
+        let rate_mod = self.buffs.get(t).map_or(1.0, |bf| bf.rate_mult);
+        let thrash_rate = (rate_mod * gw.thrash_frames as f32) as i64;
+        if let Some(st) = self.towers[t].weapons.get_mut(wi) {
+            st.gw_effect = true;
+            st.gw_until = until;
+        }
+        let now = self.round_clock;
+        let pet = self.towers[t].id;
+        self.gw_effects.push(GwEffect { tower: pet, credit: owner, weapon: wi, spec: std::sync::Arc::new(*gw), created: now, total: total_frames, from, to, pos: from, exited: false, last_thrash: now, thrash_rate, blocking: true, kind });
+        let (tally0, saved) = (self.damage_tally, self.distribute);
+        self.distribute = (true, true);
+        let n = self.damage(i, total, &mut Vec::new());
+        self.distribute = saved;
+        let dealt = self.damage_tally - tally0;
+        if let Some(tw) = self.towers.iter_mut().find(|x| x.id == owner) {
+            tw.pops += n;
+            tw.sun_destroyed(self.last_destroyed);
+            tw.damage += dealt;
+        }
+        self.stats.pops += n;
+        self.stats.damage += dealt;
+    }
+
+    /// GreatWhiteEffect.Process (VERIFIED-DECOMP @0x18102c8a0), each effect: its tower gone or no
+    /// round on, Destroy; at createdAt + total + postDragTimeFrames - 4, Destroy (the limiter's
+    /// currentEffect cleared); from createdAt + total the bloon is gone and round ending
+    /// unblocked; UpdatePosition (@0x18102d1c0): created + (dragTo - created) x min(1, (roundTime -
+    /// createdAt) / max(postDragTimeFrames - exitAnimationTimeFrames, total)), and at 1 the exit
+    /// plays (hasExitAnimationPlayed); UpdateThrashingProjectile (@0x18102d5f0): until then, every
+    /// thrashingProjectileRateFrames (roundTime) the thrashing projectile by its emission at the
+    /// effect's position, owner the tower.
+    fn gw_step(&mut self) {
+        let now = self.round_clock;
+        let mut k = 0;
+        while k < self.gw_effects.len() {
+            let e = self.gw_effects[k].clone();
+            let t = self.towers.iter().position(|o| o.id == e.tower);
+            let end = e.created + e.total + e.spec.post_drag_frames as i64 - 4;
+            if t.is_none() || !self.round_active || end <= now {
+                if let Some(t) = t {
+                    if let Some(st) = self.towers[t].weapons.get_mut(e.weapon) {
+                        st.gw_effect = false;
+                    }
+                }
+                self.gw_effects.remove(k);
+                continue;
+            }
+            let t = t.unwrap();
+            if e.created + e.total <= now {
+                self.gw_effects[k].blocking = false;
+            }
+            let span = ((e.spec.post_drag_frames - e.spec.exit_frames) as i64).max(e.total) as f32;
+            let frac = ((now - e.created) as f32 / span).min(1.0);
+            let pos = [e.from[0] + (e.to[0] - e.from[0]) * frac, e.from[1] + (e.to[1] - e.from[1]) * frac];
+            self.gw_effects[k].pos = pos;
+            if frac >= 1.0 && !e.exited {
+                self.gw_effects[k].exited = true;
+            }
+            if !self.gw_effects[k].exited && now - e.last_thrash >= e.thrash_rate {
+                if let Some(proj) = e.spec.thrash.clone() {
+                    let tiers = self.towers[t].tiers;
+                    self.emit(pos, 0.0, &e.spec.emission, &proj, None, tiers, e.credit);
+                }
+                self.gw_effects[k].last_thrash = now;
+            }
+            k += 1;
+        }
+    }
+
     fn hooks_step(&mut self) {
         let mut k = 0;
         while k < self.hooks.len() {
@@ -17658,7 +17858,17 @@ impl Game {
                     let at_limit = at_limit || subs_full || off_track
                         // JungleVineLimitProjectile.FilterEmission (VERIFIED-DECOMP @0x180c7b880): a shot
                         // needs a limiter slot whose until-time is at or before roundTime.
-                        || (weapon.vine_limit.is_some() && self.towers[t].weapons.get(wi).is_some_and(|st| !st.vine_until.is_empty() && !st.vine_until.iter().any(|&u| u <= self.round_clock)));
+                        || (weapon.vine_limit.is_some() && self.towers[t].weapons.get(wi).is_some_and(|st| !st.vine_until.is_empty() && !st.vine_until.iter().any(|&u| u <= self.round_clock)))
+                        // GreatWhiteLimitProjectile.FilterEmission (VERIFIED-DECOMP @0x180c796a0): no
+                        // currentEffect, Simulation.time >= limitUntil, and no live travelingProjectile
+                        // (the bite: the tower's live shot that becomes the grabbing Explosion) or
+                        // attachedProjectile.
+                        || (weapon.gw_limit && {
+                            let owner = match &self.towers[t].sub { Some(s) if s.spec.credit_parent => s.parent, _ => self.towers[t].id };
+                            let travel = self.projectiles.iter().any(|q| q.owner == owner && q.spec.on_exhaust.iter().any(|e| e.projectile.great_white.is_some()));
+                            self.towers[t].weapons.get(wi).is_some_and(|st| st.gw_effect || (self.sim_elapsed as i64) < st.gw_until
+                                || st.gw_attached.is_some_and(|u| self.projectiles.iter().any(|q| q.uid == u))) || travel
+                        });
                     let w = wi;
                     wi += 1;
                     // LineProjectileEmission.Process (VERIFIED-DISASM @0xc45bb0): once a target length
@@ -20078,7 +20288,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             b.path = next as u8;
         }
         let tr = &self.tracks[b.path as usize];
-        b.pos = tr.bloon_pos(b.dist);
+        // (A bloon in a Gyrfalcon's claws (offTrackCount) is where the bird put it, MoveWithAirUnit
+        // in the bird's Process; Bloon.Move doesn't put it back on the track: recording
+        // map_spillway_beast_302_r40 rt 1919, a bite following carried Pink 1066 heads for the
+        // bird, not the Pink's track spot.)
+        if !b.held {
+            b.pos = tr.bloon_pos(b.dist);
+        }
         // (Bloon.Move sets the whole Position, z from the new distance, as track_height:
         // recording map_threeminesaround_alch_204_r40 rt 449, a MOAB at 217.7077 is at z
         // 121.842, the height there, not the 121.897 of the distance it moved from.)
@@ -22369,6 +22585,14 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // collideOnSubProjectile: while the shot's Target is valid (its bloon alive), each new
             // projectile Projectile.CollideBloon's it at once (recording map_haunted_beast_240_r40
             // rt 1413: a Piranha's Explosion depletes Black 674 the frame the bite expires).
+            // CreateGreatWhiteEffect.Process (VERIFIED-DECOMP @0x180ca1880): the projectile's first
+            // Process ends it (vfunc 0x808), so the Explosion lives only the frame it is made
+            // (recording map_haunted_beast_402_r40: P 365 made at rt 339, x365 at 340).
+            for pr in &mut self.projectiles[start..] {
+                if pr.spec.great_white.is_some() {
+                    pr.frames_left = pr.frames_left.min(1.0);
+                }
+            }
             if ex.collide_sub && self.in_step {
                 if let Some(id) = target.filter(|id| self.bloons.iter().any(|b| b.id == *id)) {
                     let uids: Vec<u64> = self.projectiles[start..].iter().map(|pr| pr.uid).collect();
@@ -23633,6 +23857,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // The hooks follow their bloons where they are after this frame's move (recording bucc_040
         // rt 121: the step toward the MOAB's 121 spot).
         self.hooks_step();
+        self.gw_step();
         // Instant (its Process in the process list after the bloons it follows): an instant shot
         // takes its target's position from after this frame's move; not one made this frame
         // (recording sub_050: Pre-emptive Strike's missile sits at its launch point, then on
@@ -23643,6 +23868,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // Missile's blast on the MOAB; Pre-emptive Strike's, without it, where the missile was).
         // ArriveAtTarget shots following a target made before them (Game::arrive_follow), then the
         // ones that arrived this frame expire from there.
+        // (The bird's process is after the bloons': recording beast_001; and, a tower's, before the
+        // projectiles': a bite at a bloon it carries follows and expires where the bird has it this
+        // frame (recording map_spillway_beast_302_r40 rt 1919 / 1942).)
+        self.fly_birds();
+        self.hold_bird_bloons();
         self.arrive_follow();
         let mut p = 0;
         while p < self.projectiles.len() {
@@ -23995,9 +24225,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             self.emit_frame_spawn(k, path);
         }
         self.spawn_exhausted(stale_blasts);
-        // (The bird's process is after the bloons': recording beast_001.)
-        self.fly_birds();
-        self.hold_bird_bloons();
+
         // ChurchillBaseRotation.Process (VERIFIED-DISASM @0xd26830), at the frame's end (what the turret's aim and the exhausts read is the
         // base as the frame began: recording dart_paragon_r40, rings at rt 216 / 217):
         // unless paused, the base takes the turret's angle as its target and turns
@@ -24040,7 +24268,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let emitted = self.apopalypse && !last;
         // (MoabTakedown.Collide: Spawner.BlockRoundEnding until its hook is back; recording bucc_040,
         // round 41 starts at 184, the frame after the hook goes.)
-        if self.round_active && self.pending.is_empty() && (self.bloons.is_empty() || emitted) && self.hooks.iter().all(|h| !h.back) {
+        // (GreatWhiteEffect.SetGrabbedBloon: Spawner.BlockRoundEnding until the grabbed bloon pops.)
+        if self.round_active && self.pending.is_empty() && (self.bloons.is_empty() || emitted) && self.hooks.iter().all(|h| !h.back) && self.gw_effects.iter().all(|e| !e.blocking) {
             self.round_active = false;
             // CreateProjectilesOnTrackOnExhaustFraction.GeneratePoints (VERIFIED-DECOMP
             // @0x180ca9c40) for every live pile as the round ends, in list order: the path segments
@@ -24089,6 +24318,15 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         self.sandbox || self.round_active || !self.bloons.is_empty()
     }
     fn finish_round(&mut self){
+        // GreatWhiteLimitProjectile.OnRoundEnd (@0x180c79630): limitUntil = Simulation.time.
+        let now = self.sim_elapsed as i64;
+        for tw in &mut self.towers {
+            for st in &mut tw.weapons {
+                if st.gw_until > now {
+                    st.gw_until = now;
+                }
+            }
+        }
         self.logic_round_end();
         // CreateEffectOnRoundEndModel: its effect on each such tower (the Rare Quincy Action Figure),
         // display only.
@@ -25290,6 +25528,7 @@ mod tests {
                     eprintln!("  rt {rt} clone bloons {:?}", g.bloons.iter().map(|b| (b.id, g.names[b.kind].as_str(), b.dist, b.hp)).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone effects {:?}", g.bloons.iter().map(|b| (b.id, b.effects.iter().map(|e| (e.id.clone(), e.frames_left, if let EffectKind::Dot { tick, .. } = e.kind { tick } else if let EffectKind::Slow { mult, .. } = e.kind { mult * 1000.0 + e.layers as f32 } else { e.layers as f32 })).collect::<Vec<_>>())).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone darts {:?}", g.projectiles.iter().map(|p| (p.pos, p.vel, p.pierce, p.frames_left, p.grot, p.z, g.blocker_hit(p.prev, p.spec.vs_blocker_radius, p.z), p.target.is_some(), p.aim, p.seek, p.seek_t)).collect::<Vec<_>>());
+                    eprintln!("  rt {rt} clone arrive {:?}", g.projectiles.iter().map(|p| (p.uid, p.arrive_at, p.target, p.spec.arrive.as_ref().map(|a| a.time))).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone towerpos {:?}", g.towers.iter().map(|t| (t.pos[0], -t.pos[1])).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone towers {:?}", g.towers.iter().enumerate().map(|(i, t)| (t.game_rot, t.base_rot, g.range(i), t.weapons.iter().map(|w| (w.last, w.anim, w.rate_frames)).collect::<Vec<_>>(), t.orbit.as_ref().map(|o| (o.speed, o.angle, o.seen)))).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone hits {:?} layers {:?}", g.projectiles.iter().map(|p| (p.hit.small.clone(), p.clear_t, p.clear_hits_next)).collect::<Vec<_>>(), g.bloons.iter().map(|b| (b.id, b.layer, b.lineage.clone())).collect::<Vec<_>>());

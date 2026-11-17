@@ -1036,6 +1036,26 @@ def main():
         if pb.get("JungleVineEffectModel"):
             ad = deref(pb["JungleVineEffectModel"][0]["f"].get("ageingDestroyModel"))
             out["vine_frames"] = int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", (ad or {}).get("f", {}).get("time", 0.0)))[0] * 60.0))[0])
+        # CreateGreatWhiteEffectModel (Beast Handler 3xx+ water pet's Explosion; CreateGreatWhiteEffect
+        # .Collide @0x180ca0a30, GreatWhiteEffect @0x18102c8a0..): grab and pull a bloon. Frame counts
+        # as GreatWhiteEffectModel.ctor (@0x1811903c0): (int)(seconds x 60) in f32.
+        if pb.get("CreateGreatWhiteEffectModel"):
+            gf = pb["CreateGreatWhiteEffectModel"][0]["f"]
+            f32 = lambda v: struct.unpack("<f", struct.pack("<f", v))[0]
+            frames = lambda v: int(f32(f32(v) * 60.0))
+            grab_name = gf.get("maxGrabBloonName") or ""
+            layer = next((r["f"].get("layerNumber") for r in objs.values()
+                          if r["type"] == "BloonModel" and r["f"].get("_name") == grab_name), None) if grab_name else None
+            out["great_white"] = {
+                "max_layer": layer, "max_pull_rbe": gf.get("maxPullRbe", 0),
+                "pop_scale": gf.get("bloonPopTimeScale", 1.0), "post_drag_frames": frames(gf.get("postDragTime", 0.0)),
+                "max_moab_time": gf.get("maxMoabGrabTime", 0.0), "moab_dps": gf.get("moabDamagePerSecond", 1),
+                "moab_pct": gf.get("maxMoabDamagePercentPerSecond", 0.0),
+                "exit_frames": frames(gf.get("exitAnimationTime", 0.0)), "retreat_frames": frames(gf.get("playRetreatAnimationAt", 0.0)),
+                "thrash_frames": frames(gf.get("thrashingProjectileRate", 0.0)),
+                "thrash": projectile(deref(gf.get("thrashingProjectileModel")), depth + 1) if deref(gf.get("thrashingProjectileModel")) else None,
+                "emission": emission(deref(gf.get("emissionModel"))),
+            }
         if pb.get("RefreshPierceModel"):
             out["refresh_pierce"] = pb["RefreshPierceModel"][0]["f"]["interval"]
             # RefreshPierceModel ctor (VERIFIED-DECOMP @0x1811f93d0): isBuffedByRate (+0x38);
@@ -1524,6 +1544,8 @@ def main():
                 # JungleVineLimitProjectile (VERIFIED-DECOMP FilterEmission @0x180c7b880, AddLimiter
                 # @0x180c7b790): `limit` slots of until-times; a shot needs one at or before roundTime.
                 vl = next((x["f"] for x in items(w["f"].get("behaviors")) if x and x["type"] == "JungleVineLimitProjectileModel"), None)
+                # GreatWhiteLimitProjectileModel (FilterEmission @0x180c796a0): one bite / grab at a time.
+                gw_limit = any(x and x["type"] == "GreatWhiteLimitProjectileModel" for x in items(w["f"].get("behaviors")))
                 vine_limit = [vl.get("limit", 0), vl.get("delayInFrames", 0)] if vl else None
                 # CheckAirUnitOverTrackModel: fires only with the plane over the track.
                 over_track = any(x and x["type"] == "CheckAirUnitOverTrackModel" for x in items(w["f"].get("behaviors")))
@@ -1639,7 +1661,7 @@ def main():
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "LineEffectModel"), None),
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
-                                "alternate": alternate, "spread": spread, "per_round": per_round, "mana": next((int(x["f"].get("graveyardManaChange", 0)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "MagusPerfectusGraveyardModel"), 0), "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
+                                "alternate": alternate, "spread": spread, "per_round": per_round, "mana": next((int(x["f"].get("graveyardManaChange", 0)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "MagusPerfectusGraveyardModel"), 0), "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "gw_limit": gw_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
                                 # the emission is laid out on the tower's rotation, each shot then sent at

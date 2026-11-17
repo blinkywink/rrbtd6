@@ -1303,6 +1303,9 @@ pub struct Weapon {
     /// JungleVineLimitProjectileModel: [limit, delayInFrames].
     #[serde(default)]
     pub vine_limit: Option<[i64; 2]>,
+    /// GreatWhiteLimitProjectileModel: one bite / grab at a time (FilterEmission @0x180c796a0).
+    #[serde(default)]
+    pub gw_limit: bool,
     /// CheckAirUnitOverTrackModel: only while the plane is over the track.
     #[serde(default)]
     pub over_track: bool,
@@ -2219,6 +2222,9 @@ pub struct Proj {
     /// JungleVineEffectModel.ageingDestroyModel.timeFrames: added to the grab's limiter frames.
     #[serde(default)]
     pub vine_frames: Option<i64>,
+    /// CreateGreatWhiteEffectModel: its hit grabs and pulls the bloon (Beast Handler 3xx+).
+    #[serde(default)]
+    pub great_white: Option<Box<GreatWhite>>,
     /// RefreshPierceModel.interval: pierce is restored every this many seconds (Druid vines).
     #[serde(default)]
     pub refresh_pierce: Option<f32>,
@@ -3535,4 +3541,24 @@ pub struct CycleAnim {
     pub mode: String,
     #[serde(default)]
     pub random: bool,
+}
+
+/// CreateGreatWhiteEffectModel (frames as GreatWhiteEffectModel.ctor: (int)(seconds x 60)).
+#[derive(Deserialize, Clone)]
+pub struct GreatWhite {
+    /// layerNumber of maxGrabBloonName's model (None: any).
+    #[serde(default)]
+    pub max_layer: Option<u32>,
+    pub max_pull_rbe: f32,
+    pub pop_scale: f32,
+    pub post_drag_frames: i32,
+    pub max_moab_time: f32,
+    pub moab_dps: i32,
+    pub moab_pct: f32,
+    pub exit_frames: i32,
+    pub retreat_frames: i32,
+    pub thrash_frames: i32,
+    #[serde(default)]
+    pub thrash: Option<Proj>,
+    pub emission: Emission,
 }
