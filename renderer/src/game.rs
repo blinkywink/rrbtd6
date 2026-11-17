@@ -63,7 +63,8 @@
 //! - HYPOTHESIS P-SUPPORT: support buffs reach towers whose footprint touches the radius;
 //!   one instance per mutator id unless it stacks; range x(1 + m) + a, rate x m, pierce + a.
 //! - Discounts: DiscountZone selection is TowerManager.GetZoneDiscount (VERIFIED-DECOMP, see
-//!   Game::zone_discount); HYPOTHESIS P-DISCOUNT left: discounted prices round to the nearest 5.
+//!   Game::zone_discount; free upgrades GetFreeUpgrade, Game::free_upgrade); prices round
+//!   half-to-even to a multiple of 5 (@0x180521800, game_cost).
 //! - Druid: P-EMIT-RANDOM (thorn spread), P-LIGHTNING (chain without branching), P-INTERVAL
 //!   (Ball Lightning sub-shots at a random bloon in range), P-REMOVEMUT (tornado strips effects
 //!   by mutator id), P-ATTARGET (Jungle Vines land on their target).
@@ -7055,7 +7056,11 @@ impl Game {
 
     /// `p` lies in a water area (areaType 1) and on the map.
     fn water_at(&self, p: [f32; 2]) -> bool {
-        on_map(p, 0.0) && self.areas.iter().any(|a| a.kind == 1 && Self::in_area(p, a))
+        // (Map.GetAreaAtPoint: the first scene area holding it, else the BaseArea, which is water on
+        // Peninsula: recording map_peninsula_mermonkey_204_r40, a Mermonkey on land has no water
+        // range bonus.)
+        on_map(p, 0.0)
+            && self.areas.iter().skip(1).find(|a| a.kind != AREA_SKIPPED && Self::in_area(p, a)).or_else(|| self.areas.first().filter(|a| Self::in_area(p, a))).is_some_and(|a| a.kind == 1)
     }
 
     /// Map.IsTargetLineClear (VERIFIED-DISASM @0xf7aec0, Area.Intersects @0xf67e40,
@@ -8209,8 +8214,8 @@ impl Game {
         false
     }
 
-    /// Price of tower `def` placed at `p`, after discounts. HYPOTHESIS P-DISCOUNT: discounted
-    /// prices round to the nearest 5 like the game's other price scaling.
+    /// Price of tower `def` placed at `p`, after discounts (TowerManager.GetTowerCost
+    /// @0x180c2a420: rounded half-to-even to a multiple of 5).
     pub fn place_cost(&self, def: usize, p: [f32; 2]) -> f64 {
         let cost = game_cost(self.tower_defs[def].1.cost, self.cost_mult, self.discount(def, p, None, None, 0, ""));
         match self.free_tower(def) {
@@ -11207,6 +11212,15 @@ impl Game {
             }
         }
         for pet in fresh {
+            // (TranceTotemSpawner.Process makes it (shouldSpawnTotem), from the next frame, on the
+            // Mermonkey's spot with no placement test (CreateSubtower): recording mermonkey_004,
+            // its weapon's start cooldown from rt 1; map_peninsula_mermonkey_204_r40, a spot in a
+            // NonPlace area over Peninsula's water base.)
+            if pet.name == "TranceTotem" {
+                let h = self.towers[t].pos;
+                self.pending_pets.push((id, pet, h));
+                continue;
+            }
             // BeastHandlerLeash.ProcessLeashedTower (VERIFIED-DISASM @0xcffd80): the pet is made at
             // its spawner attack's Target, a RandomPosition (recording beast_010: at (-61.9, -54.22)).
             let spawner = self.tier(t).and_then(|x| x.attacks.iter().find(|a| a.model_name.contains("PetSpawnerAttack") && a.model_name.contains(pet.name.as_str())).and_then(|a| a.random_pos.map(|m| (a.model_name.clone(), m))));
@@ -11215,14 +11229,6 @@ impl Game {
                 None => self.pet_spot(t, &pet),
             };
             if let Some(q) = spot {
-                // (TranceTotemSpawner.Process makes it (shouldSpawnTotem), from the next frame:
-                // recording mermonkey_004, its weapon's start cooldown from rt 1.)
-                if pet.name == "TranceTotem" {
-                    // (On the Mermonkey's spot, selectTargetModeActive off: CreateSubtower.)
-                    let h = self.towers[t].pos;
-                    self.pending_pets.push((id, pet, h));
-                    continue;
-                }
                 let circling = pet.circle.is_some();
                 self.spawn_sub(pet, q, id, true);
                 if circling {
@@ -13433,6 +13439,27 @@ impl Game {
         if let (n @ 1.., Some((icon, name, max))) = (self.towers[t].ultra.0, &self.towers[t].ultra_icon) {
             queries.push((icon.clone(), name.clone(), *max, 1, n, true));
         }
+        // (2) Every Support whose CanShowInactiveBuffIcon holds: an inactive query (canEventuallyBuff,
+        // not canCurrentlyBuff). Only MonkeySubParagonSupport overrides it (VERIFIED-DECOMP
+        // @0x180d3ddc0): false while its tower's TargetType id (+0xc8, Tower.SetTargetType) is
+        // "Submerged", which no TargetType in the game data is (Submerge sets "Submerge"); else for a
+        // tower model whose baseId is
+        // MonkeySub or IsHero (@0x1811b40c0), DistanceSquared(its tower, the tower) <= its
+        // TowerModel.range^2. (Behind the active query of the same FullName when it buffs.)
+        {
+            let base_ok = self.tower_defs[self.towers[t].def].0 == "MonkeySub" || self.hero_def(self.towers[t].def).is_some();
+            if base_ok {
+                let p = self.towers[t].pos;
+                for tw in &self.towers {
+                    let Some(tr) = self.tier_of(tw) else { continue };
+                    let Some(sp) = tr.supports.iter().find(|sp| sp.kind == "subparagon" && sp.icon.is_some()) else { continue };
+                    let r = tr.range;
+                    if (tw.pos[0] - p[0]).powi(2) + (tw.pos[1] - p[1]).powi(2) <= r * r {
+                        queries.push((sp.icon.clone().unwrap(), sp.buff_name.clone(), sp.buff_max, 1, 0, false));
+                    }
+                }
+            }
+        }
         // Discount zones: Tower.AddDiscountZoneBuffs (MoveNext @0x180c2f200): for each path, if
         // the owner is -1 (single player: recordings' IN lines), the model isn't a paragon,
         // TowerManager.IsTowerPathTierLocked (@0x180c2c9f0: true unless the model has a next
@@ -13790,20 +13817,54 @@ impl Game {
     /// discountMultiplier summed in f32, group by group. STAND-IN: FreeUpgradeSupport (Primary
     /// Mentoring / Expertise) still a whole discount up to its tier through `supports_at`
     /// (GetFreeUpgrade not ported).
+    /// TowerManager.GetTowerUpgradeCost (VERIFIED-DECOMP @0x180c2acc0) / GetTowerCost (@0x180c2a420):
+    /// an upgrade that GetFreeUpgrade grants costs nothing (1.0 here); otherwise the zone discount
+    /// (GetZoneDiscount -> GetDiscountMultiplier) + GetAreaDiscount (no map area model has a
+    /// discount) + Simulation.GetSimulationBehaviorDiscount (ComeOnEverybody: none in the game
+    /// data). Placing a tower (no path) has no GetFreeUpgrade.
     pub fn discount(&self, def: usize, p: [f32; 2], skip: Option<usize>, path: Option<usize>, tier: u32, upgrade: &str) -> f64 {
-        let free: f32 = self
-            .supports_at(def, p, skip)
-            .iter()
-            .filter(|(sp, _)| sp.kind == "discount" && tier <= sp.tier_cap)
-            .map(|(sp, n)| sp.mult * *n as f32)
-            .sum();
+        if path.is_some() && self.free_upgrade(def, p, skip, tier) {
+            return 1.0;
+        }
         let mut d = 0.0f32;
         for (_, zones) in self.zone_discount(def, p, path, tier, upgrade) {
             for (_, z) in zones {
                 d += z.mult;
             }
         }
-        (free + d).min(1.0) as f64
+        d.min(1.0) as f64
+    }
+
+    /// TowerManager.GetFreeUpgrade (VERIFIED-DECOMP @0x180c294e0): some FreeUpgradeSupport (Primary
+    /// Mentoring / Expertise) whose tower is within its TowerModel.range of `p`
+    /// (DistanceSquared <= range^2; the mutated model's range), whose upgradeTierLimit is at least
+    /// `tier`, and whose Support.CheckBehavior accepts the tower (the support's own filters).
+    fn free_upgrade(&self, def: usize, p: [f32; 2], skip: Option<usize>, tier: u32) -> bool {
+        let name = &self.tower_defs[def].0;
+        let set = self.tower_tiers[def].as_ref().and_then(|tt| tt.tiers.get("000")).map_or(0, |t| t.set);
+        (0..self.towers.len()).any(|s| {
+            let Some(tr) = self.tier(s) else { return false };
+            let src = &self.towers[s];
+            tr.supports.iter().any(|sp| {
+                if sp.kind != "discount" || tier > sp.tier_cap {
+                    return false;
+                }
+                if Some(s) == skip && !sp.on_self {
+                    return false;
+                }
+                if !sp.sets.is_empty() && !sp.sets.iter().any(|&m| m & set != 0) {
+                    return false;
+                }
+                if !sp.bases.is_empty() && !sp.bases.iter().any(|b| b == name) {
+                    return false;
+                }
+                if sp.heroes && !self.tower_tiers[def].as_ref().is_some_and(|tt| tt.hero.is_some()) {
+                    return false;
+                }
+                let r = self.range(s);
+                (src.pos[0] - p[0]).powi(2) + (src.pos[1] - p[1]).powi(2) <= r * r
+            })
+        })
     }
 
     /// TowerManager.GetZoneDiscount (VERIFIED-DECOMP @0x180c2bd90): every DiscountZone in the
@@ -14191,8 +14252,10 @@ impl Game {
         let inherited: Vec<Effect> = b
             .effects
             .iter()
-            .filter(|e| e.layers > 1 && (!moab_pop || e.keep || KEPT_ON_MOAB_POP.contains(&e.id.as_str())))
-            .map(|e| Effect { layers: e.layers - 1, ..e.clone() })
+            // (A Trance outlasts its layer count: recording map_peninsula_mermonkey_204_r40 rt
+            // 1584, a tranced Green's two Yellows both orbit on, the copy a frame behind.)
+            .filter(|e| (e.layers > 1 || matches!(e.kind, EffectKind::Trance(_))) && (!moab_pop || e.keep || KEPT_ON_MOAB_POP.contains(&e.id.as_str())))
+            .map(|e| Effect { layers: e.layers.saturating_sub(1).max(1), ..e.clone() })
             .collect();
         // (A MOAB-class pop drops its other mutators at once, CarryProjectile.OnDestroy taking
         // their projectiles: recording ice_paragon_r40 rt 189, the Icicles X destroy at age 0.)
@@ -14510,6 +14573,22 @@ impl Game {
             }
             let child = self.bloons.last_mut().unwrap();
             child.effects = keep;
+            // (A tranced parent's children keep its Trance and are made at its Position on the
+            // orbit, z too; a copy made in the collision pass first Processes next frame, so it
+            // stays there this frame: recording map_peninsula_mermonkey_204_r40 rt 1585, a Black's
+            // copied Yellow where the Black was, its first child a step on.)
+            if child.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq)) && parent_wind.is_none() {
+                child.pos = pp0;
+                child.prev = pp0;
+                child.height = parent_z;
+                if n > 0 && !(self.pop_after_move || self.pop_in_process) {
+                    for e in child.effects.iter_mut() {
+                        if let EffectKind::Trance(t) = &mut e.kind {
+                            t.new = true;
+                        }
+                    }
+                }
+            }
             child.decamo = decamo;
             child.base = base;
             // (Every child keeps the parent's colours: recordings, Pinks born of a WhiteRegrow
@@ -14602,7 +14681,9 @@ impl Game {
                 let b = &mut self.bloons[j];
                 // (A bloon MoveWithWind carries keeps its place and distance; it walks to its
                 // track spot.)
-                if b.wind.is_none() && !(k == 0 && parent_at) {
+                // (A tranced one keeps its orbit spot too, as a carried one: see damage.)
+                let tranced = b.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq));
+                if b.wind.is_none() && !(k == 0 && parent_at) && !tranced {
                     b.dist = dist;
                     b.pos = pos;
                     b.prev = prev;
@@ -20522,6 +20603,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             }
             return off;
         }
+        // (Its Process: in the grid from the next fill, as a carried one; recording
+        // map_peninsula_mermonkey_204_r40 rt 1623, a tranced copy taken by a trident.)
+        b.unplaced = false;
+        b.fresh = false;
         t.elapsed += 1;
         let dead = centre.is_none();
         // Vector2.Rotate((0, r), deg), game frame, + the tower (the clone's y flipped).
@@ -26300,6 +26385,81 @@ mod beast_tests {
             // (SubCommanderSupport: +4 on every ProjectileModel of the tower, `pierce_all`.)
             assert_eq!(g.buffs[t].pierce_all, 4.0);
         }
+    }
+
+    /// TowerManager.GetTowerCost (@0x180c2a420) has no GetFreeUpgrade: Primary Mentoring's free
+    /// upgrades don't make placing a tower free.
+    #[test]
+    fn free_upgrades_not_free_placement() {
+        let mut g = game();
+        g.cash = 1e9;
+        let v = g.tower_defs.iter().position(|(n, _)| n == "MonkeyVillage").unwrap();
+        let dart = g.tower_defs.iter().position(|(n, _)| n == "DartMonkey").unwrap();
+        let vt = place_near(&mut g, v, 300.0);
+        for _ in 0..4 {
+            assert!(g.upgrade(vt, 0));
+        }
+        g.step();
+        g.step();
+        let p = g.towers[vt].pos;
+        let near = [p[0] + 15.0, p[1]];
+        assert!(g.place_cost(dart, near) > 0.0, "placing is paid");
+        // ... but its first upgrades are free (GetFreeUpgrade, upgradeTierLimit 1).
+        let spot = (0..400).map(|k| {
+            let a = k as f32 * 0.37;
+            let r = 12.0 + (k / 20) as f32 * 1.5;
+            [p[0] + r * a.cos(), p[1] + r * a.sin()]
+        }).find(|&q| g.can_place(dart, q)).expect("spot");
+        assert!(g.place(dart, spot));
+        let d = g.towers.len() - 1;
+        assert_eq!(g.next_upgrade(d, 0).map(|u| u.1), Some(0.0));
+    }
+
+    /// MonkeySubParagonSupport.CanShowInactiveBuffIcon: a Sub in the Navarch's range shows its
+    /// icon inactive until the support buffs it.
+    #[test]
+    fn sub_paragon_inactive_icon() {
+        let (mut g, _) = logs_game();
+        let sub = g.tower_defs.iter().position(|(x, _)| x == "MonkeySub").unwrap();
+        g.cash = 1e12;
+        let mut placed = Vec::new();
+        'outer: for y in (-200..200).step_by(4) {
+            for x in (-300..300).step_by(4) {
+                if g.place(sub, [x as f32, y as f32]) {
+                    placed.push(g.towers[g.towers.len() - 1].id);
+                    if placed.len() == 3 {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        assert_eq!(placed.len(), 3);
+        let at = |g: &Game, id: u64| g.towers.iter().position(|t| t.id == id).unwrap();
+        for (k, path) in [(0usize, 0usize), (1, 1), (2, 2)] {
+            for _ in 0..5 {
+                let t = at(&g, placed[k]);
+                assert!(g.upgrade(t, path));
+            }
+        }
+        let t0 = at(&g, placed[0]);
+        assert!(g.buy_paragon(t0, 0.0), "paragon");
+        g.remove_sacrificed();
+        // Another Sub in the Navarch's range.
+        let pp = g.towers[at(&g, placed[0])].pos;
+        let spot = (0..400).map(|k| {
+            let a = k as f32 * 0.37;
+            let r = 15.0 + (k / 20) as f32 * 2.0;
+            [pp[0] + r * a.cos(), pp[1] + r * a.sin()]
+        }).find(|&q| g.can_place(sub, q)).expect("spot");
+        assert!(g.place(sub, spot));
+        placed.push(g.towers[g.towers.len() - 1].id);
+        let other = at(&g, placed[3]);
+        let shown = g.buff_icons_shown(other);
+        let icon = shown.iter().find(|x| x.0 == "BuffIconMonkeySubParagon").cloned();
+        assert!(icon.as_ref().is_some_and(|x| !x.2), "{shown:?}");
+        // (Submerged or not: no TargetType id is "Submerged".)
+        let p = at(&g, placed[0]);
+        assert!(g.towers[p].submerged);
     }
 
     /// Every ability of every tower tier activates mid-round and the sim keeps running (a
