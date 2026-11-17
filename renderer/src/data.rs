@@ -214,6 +214,9 @@ pub struct BloonDef {
     /// BloonModel.isMoab.
     #[serde(default)]
     pub is_moab: bool,
+    /// BloonModel.isBoss.
+    #[serde(default)]
+    pub is_boss: bool,
     /// BadImmunityModel (BAD).
     #[serde(default)]
     pub bad_immunity: bool,
@@ -1797,6 +1800,10 @@ pub struct OnDestroy {
 
 #[derive(Deserialize, Clone)]
 pub struct Exhaust {
+    /// CreateProjectileOnExhaustFractionModel.collideOnSubProjectile: each new projectile hits the
+    /// shot's still-valid Target at once (Projectile.CollideBloon).
+    #[serde(default)]
+    pub collide_sub: bool,
     /// (Runtime: the uid of the projectile it came from, for the process-list order.)
     #[serde(skip)]
     pub src: u64,
@@ -2990,6 +2997,17 @@ pub struct Arrive {
     /// ArriveAtTargetModel.curveSamples (Curve.Evaluate).
     #[serde(default)]
     pub samples: Vec<f32>,
+    /// keepUpdatingTargetPos: targetPos = Target.Position each Process while the Target is valid.
+    #[serde(default)]
+    pub keep_update: bool,
+    /// rotateToTarget, maxTurnAngle: the direction turns to the Target when within the angle.
+    #[serde(default)]
+    pub rotate: bool,
+    #[serde(default)]
+    pub max_turn: f32,
+    /// positionAboveMoabTypes: z 181 at a boss, 121 at a MOAB, while its Target is valid.
+    #[serde(default)]
+    pub above_moab: bool,
 }
 
 /// CashModel (+ PickupModel.collectRadius when it has to be collected by hand).

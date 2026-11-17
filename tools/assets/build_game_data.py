@@ -183,7 +183,7 @@ def main():
             "speed": f["speed"], "maxHealth": f["maxHealth"], "radius": f["radius"],
             # BloonModel.danger: what Strong targeting ranks by (Path.FindBestBloon).
             "danger": f.get("danger", 0.0),
-            "isMoab": f["isMoab"], "isCamo": f["isCamo"], "leakDamage": f["leakDamage"], "baseId": f.get("baseId") or "",
+            "isMoab": f["isMoab"], "isBoss": bool(f.get("isBoss", False)), "isCamo": f["isCamo"], "leakDamage": f["leakDamage"], "baseId": f.get("baseId") or "",
             "bloonProperties": f.get("bloonProperties", 0), "tags": items(f.get("tags")),
             "layerNumber": f["layerNumber"], "children": children,
             "index": model_index.get(f["id"], len(model_index)),
@@ -654,7 +654,14 @@ def main():
             arrive = {"time": af["timeToTake"], "expire": af.get("expireOnArrival", True),
                       "filter_moving": af.get("filterCollisionWhileMoving", False), "alt_speed": af.get("altSpeed", 0.0),
                       # ArriveAtTargetModel.curveSamples: Curve.Evaluate's samples (the share of the way).
-                      "samples": [float(x) for x in (deref(af.get("curveSamples")) or [])]}
+                      "samples": [float(x) for x in (deref(af.get("curveSamples")) or [])],
+                      # ArriveAtTarget.Process (VERIFIED-DECOMP @0x180c870f0): keepUpdatingTargetPos,
+                      # rotateToTarget (RotateToTarget @0x180c87720, within maxTurnAngle) and
+                      # positionAboveMoabTypes (z 181 boss / 121 MOAB while its Target is valid).
+                      "keep_update": bool(af.get("keepUpdatingTargetPos", False)),
+                      "rotate": bool(af.get("rotateToTarget", False)),
+                      "max_turn": float(af.get("maxTurnAngle", 0.0) or 0.0),
+                      "above_moab": bool(af.get("positionAboveMoabTypes", False))}
         cash = None
         if pb.get("CashModel"):
             cf = pb["CashModel"][0]["f"]
@@ -1080,8 +1087,11 @@ def main():
         if depth < 3:
             # Every CreateProjectileOnExhaustFractionModel (a Mortar shell has its explosion, burn
             # and camo / fortified strip as separate ones).
+            # (collideOnSubProjectile: CheckFraction (VERIFIED-DECOMP @0x180ca3500) has each new
+            # projectile Projectile.CollideBloon the shot's Target at once while it is valid.)
             out["on_exhaust"] = [{"fraction": ce["f"]["fraction"], "duration_fraction": ce["f"]["durationfraction"],
                                   "between_rounds": bool(ce["f"].get("canCreateInBetweenRounds")),
+                                  "collide_sub": bool(ce["f"].get("collideOnSubProjectile")),
                                   "projectile": projectile(deref(ce["f"]["projectile"]), depth + 1),
                                   "emission": emission(deref(ce["f"]["emission"]))}
                                  for ce in pb.get("CreateProjectileOnExhaustFractionModel", [])]

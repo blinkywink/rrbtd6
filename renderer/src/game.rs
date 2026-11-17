@@ -2736,6 +2736,8 @@ pub struct Projectile {
     pub clear_hits_next: bool,
     /// RefreshPierce came due this frame: applied after the collision pass.
     pub refresh_due: bool,
+    /// Arrives (expires) after the bloons move: Game::arrive_follow.
+    pub follow_expire: bool,
     /// A carried projectile's bloon (CarryProjectile), which it never hits; 0: none.
     pub carrier: u64,
     /// Tiers of the tower that fired it (display only).
@@ -3551,6 +3553,8 @@ pub struct Game {
     emit_z: f32,
     /// The Target an emission is given, when it is a bloon (see `emit_height`).
     emit_target: Option<u64>,
+    /// The emitting weapon's Target offset from its bloon (a MOAB's collision circle: `aim_off`).
+    emit_target_off: [f32; 2],
     /// The throw's Target.Position (clone frame): where a target that died in the throw was.
     emit_aim: Option<[f32; 2]>,
     /// In InstantDamageEmission.Process's collision pass (after the towers act).
@@ -4115,7 +4119,41 @@ macro_rules! collide_pass {
                 // the lifespan, else it expires where it is (recording dart_500: a Juggernaut's
                 // burst comes from its last position).
                 let last_frame = pr.spec.speed > 0.0 && pr.spec.seek.is_none() && pr.frames_left <= 1.0;
-                if let (Some((t0, o, tg)), Some(ar)) = (pr.arrive_at, pr.spec.arrive.as_ref()) {
+                if let (Some((t0, o, mut tg)), Some(ar)) = (pr.arrive_at, pr.spec.arrive.as_ref()) {
+                    // ArriveAtTarget.Process (VERIFIED-DECOMP @0x180c870f0): with keepUpdatingTargetPos,
+                    // targetPos = Target.Position (its bloon's Position + the Target's offset) while
+                    // the Target is valid (recording map_haunted_beast_240_r40 rt 347-369: a Piranha's
+                    // bite curves after MOAB 359's front circle); then RotateToTarget (@0x180c87720):
+                    // the direction turned by Vector2.AngleBetween(direction, targetPos - position)
+                    // when that is within maxTurnAngle, the rotation read back from it.
+                    let live = pr.aim.and_then(|id| $s.bloons.iter().find(|b| b.id == id));
+                    // (A target bloon made before the shot moves before its Process, after this
+                    // pass: Game::arrive_follow places the shot again from its new spot.)
+                    let older = live.is_some_and(|b| b.born < pr.born) && (ar.keep_update || ar.rotate);
+                    let live = if older { None } else { live };
+                    if let (true, Some(b)) = (ar.keep_update, live) {
+                        tg = [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]];
+                        if let Some(a) = pr.arrive_at.as_mut() {
+                            a.2 = tg;
+                        }
+                    }
+                    if let (true, Some(b), Some(d)) = (ar.rotate, live, pr.dir) {
+                        let q = [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]];
+                        let t = [q[0] - pr.pos[0], -(q[1] - pr.pos[1])];
+                        let ang = angle_between(d, t);
+                        if ang.abs() <= ar.max_turn {
+                            let r = DEG2RAD * -ang;
+                            let (sn, cs) = crt_sin_cos(r);
+                            pr.dir = Some([cs * d[0] - sn * d[1], cs * d[1] + sn * d[0]]);
+                            pr.grot = Some(pr.dir_rot());
+                        }
+                    }
+                    let live = if older { pr.aim.and_then(|id| $s.bloons.iter().find(|b| b.id == id)) } else { live };
+                    let above = match (ar.above_moab, live) {
+                        (true, Some(b)) if $s.defs[b.kind].is_boss => Some(181.0f32),
+                        (true, Some(b)) if $s.defs[b.kind].is_moab => Some(121.0f32),
+                        _ => None,
+                    };
                     let perc = ((($sim_now - t0) as f32) * (1.0f32 / 60.0) / pr.arrive_time).min(1.0);
                     let e = curve_eval(&ar.samples, perc);
                     let np = [o[0] + (tg[0] - o[0]) * e, o[1] + (tg[1] - o[1]) * e];
@@ -4127,6 +4165,9 @@ macro_rules! collide_pass {
                         pr.arrive_tz = h;
                     }
                     pr.z = pr.arrive_z0 + (pr.arrive_tz - pr.arrive_z0) * e;
+                    if let Some(z) = above {
+                        pr.z = z;
+                    }
                 } else if let (Some([_, _, max]), Some(d)) = (pr.spec.slowdown, pr.dir) {
                     // TravelStraitSlowdown.Process (VERIFIED-DISASM @0xcf65c0): speedFrames less
                     // slowdownSpeedFrames, at least minimumSpeedFrames, then position + direction x
@@ -5706,6 +5747,12 @@ macro_rules! collide_pass {
         // An instant shot whose expire projectile goes where its living target is expires
         // after the bloons have moved (below).
         let later = pr.spec.instant && pr.pierce > 0.0 && pr.spec.on_exhaust.iter().any(|e| e.use_target) && pr.target.is_some_and(|id| $s.bloons.iter().any(|b| b.id == id));
+        // (An ArriveAtTarget shot following an older bloon arrives after the bloons move.)
+        let follow = pr.pierce > 0.0 && pr.arrive_at.is_some() && pr.spec.arrive.as_ref().is_some_and(|a| a.keep_update)
+            && pr.aim.and_then(|id| $s.bloons.iter().find(|b| b.id == id)).is_some_and(|b| b.born < pr.born);
+        let later = later || follow;
+        $s.projectiles[$p].follow_expire = follow;
+        let pr = &$s.projectiles[$p];
         // (ignorePierceExhaustion: spent, it stays; recording wizard_040, a Wall of Fire at 0
         // from rt 231 refreshes at 234.)
         if (pr.pierce <= 0.0 && !pr.spec.keep_spent) || (pr.frames_left <= 0.0 && !later) {
@@ -5914,6 +5961,7 @@ impl Game {
             emit_dir_rot: None,
             emit_z: 0.0,
             emit_target: None,
+            emit_target_off: [0.0; 2],
             emit_aim: None,
             in_instant: false,
             path_lists: Vec::new(),
@@ -7487,6 +7535,53 @@ impl Game {
     /// it has none (or always, with constantlyAquireNewTarget); with a target it turns towards
     /// it (CalculateDirection). Between looks a gone target means flying straight (recording
     /// tack_500: a meteor whose MOAB popped).
+    /// ArriveAtTarget.Process for a keepUpdatingTargetPos / rotateToTarget shot whose target bloon
+    /// was made before it: the process list moves that bloon first, so the shot follows its new
+    /// Position (recording map_haunted_beast_240_r40 rt 347: a Piranha's bite at MOAB 359's front
+    /// circle where the MOAB stands after its move). The collision pass left these for now.
+    fn arrive_follow(&mut self) {
+        let now = self.sim_elapsed;
+        let now4 = now * 4;
+        for p in 0..self.projectiles.len() {
+            let pr = &self.projectiles[p];
+            let (Some((t0, o, _)), Some(ar)) = (pr.arrive_at, pr.spec.arrive.as_ref()) else { continue };
+            if !(ar.keep_update || ar.rotate) || pr.born >= now4 {
+                continue;
+            }
+            let Some(b) = pr.aim.and_then(|id| self.bloons.iter().find(|b| b.id == id)) else { continue };
+            if b.born >= pr.born {
+                continue;
+            }
+            let q = [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]];
+            let ar = ar.clone();
+            let pr = &mut self.projectiles[p];
+            let mut tg = pr.arrive_at.unwrap().2;
+            if ar.keep_update {
+                tg = q;
+                if let Some(a) = pr.arrive_at.as_mut() {
+                    a.2 = tg;
+                }
+            }
+            if let (true, Some(d)) = (ar.rotate, pr.dir) {
+                let t = [q[0] - pr.prev[0], -(q[1] - pr.prev[1])];
+                let ang = angle_between(d, t);
+                if ang.abs() <= ar.max_turn {
+                    let r = DEG2RAD * -ang;
+                    let (sn, cs) = crt_sin_cos(r);
+                    pr.dir = Some([cs * d[0] - sn * d[1], cs * d[1] + sn * d[0]]);
+                    pr.grot = Some(pr.dir_rot());
+                }
+            }
+            if ar.keep_update {
+                let perc = (((now - t0) as f32) * (1.0f32 / 60.0) / pr.arrive_time).min(1.0);
+                let e = curve_eval(&ar.samples, perc);
+                let np = [o[0] + (tg[0] - o[0]) * e, o[1] + (tg[1] - o[1]) * e];
+                pr.vel = [np[0] - pr.prev[0], np[1] - pr.prev[1]];
+                pr.pos = np;
+            }
+        }
+    }
+
     fn track_targets(&mut self, only: Option<u64>) {
         let now = self.sim_elapsed * 4;
         for p in 0..self.projectiles.len() {
@@ -8159,7 +8254,7 @@ impl Game {
                 }
                 let near = m.ideal <= 0.0
                     || self.track_segs.iter().enumerate().any(|(pi, sg)| sg.iter().enumerate().any(|(k, q)| self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false) && (q[0] - pc[0]).powi(2) + (q[1] - pc[1]).powi(2) < m.ideal * m.ideal));
-                let placeable = if m.water { on_map(pc, -m.radius) && self.areas.iter().any(|a| a.kind == 1 && Self::in_area(pc, a)) } else { self.land_clear(pc, m.radius) };
+                let placeable = self.area_clear(pc, m.radius, if m.water { 1 } else { AREA_LAND });
                 if !placeable {
                     continue;
                 }
@@ -8187,6 +8282,13 @@ impl Game {
 
     /// The map part of `can_place`: placeable land for a circle of radius `r` at `p`.
     fn land_clear(&self, p: [f32; 2], r: f32) -> bool {
+        self.area_clear(p, r, AREA_LAND)
+    }
+
+    /// Map.CanPlace's area part for a tower placeable on area type `kind` (Map.IsPlaceableInAreaType:
+    /// land 2, water 1): the same rules for either (recording map_haunted_beast_240_r40: the
+    /// Piranha's RandomPosition refuses a water spot the land rules would).
+    fn area_clear(&self, p: [f32; 2], r: f32, kind: i32) -> bool {
         if !on_map(p, -r) {
             return false;
         }
@@ -8196,7 +8298,7 @@ impl Game {
         let Some(area) = self.areas.iter().skip(1).find(|a| a.kind != AREA_SKIPPED && Self::in_area(p, a)).or_else(|| self.areas.first().filter(|a| Self::in_area(p, a))) else {
             return true;
         };
-        if area.kind != AREA_LAND {
+        if area.kind != kind {
             return false;
         }
         // Other unplaceable areas within 0..=5 above it must not cross the 0.75 * radius circle
@@ -8204,7 +8306,7 @@ impl Game {
         // area holding the whole circle doesn't count; recording map_geared_engineer_204_r40,
         // Geared's unplaceable BaseArea under every spot).
         for o in &self.areas {
-            if std::ptr::eq(o, area) || o.kind == AREA_SKIPPED || o.kind == AREA_LAND {
+            if std::ptr::eq(o, area) || o.kind == AREA_SKIPPED || o.kind == kind {
                 continue;
             }
             let dh = o.height - area.height;
@@ -8224,7 +8326,7 @@ impl Game {
             if Self::circle_crosses_area(p, r75, own) {
                 let ok = self.areas.iter().any(|o| {
                     let dh = o.height - own.height;
-                    !std::ptr::eq(o, own) && o.kind == AREA_LAND && (-5.0..=5.0).contains(&dh) && Self::in_area(p, o) && !Self::circle_crosses_area(p, r75, o)
+                    !std::ptr::eq(o, own) && o.kind == kind && (-5.0..=5.0).contains(&dh) && Self::in_area(p, o) && !Self::circle_crosses_area(p, r75, o)
                 });
                 if !ok {
                     return false;
@@ -10695,6 +10797,7 @@ impl Game {
         self.emit_rot = Some(r);
         self.emit_z = 250.0;
         self.emit_target = None;
+        self.emit_target_off = [0.0; 2];
         self.emit_aim = None;
         self.emit(from, (r - 90.0) * DEG2RAD, &emission, &proj, crit, tiers, owner);
         self.emit_rot = None;
@@ -18566,6 +18669,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 // ejectZ / tan 60 below the tower.)
                                 self.emit_z = ez + self.shot_base_z(t, weapon.from_air);
                                 self.emit_target = (target_id != 0).then_some(target_id);
+                                self.emit_target_off = self.towers[t].weapons[w].aim_off;
                                 self.emit_aim = Some(target);
                                 self.emit(from, dir, emission, &spec, crit, tiers, owner);
                                 // EjectEffectModel: the muzzle effect at the eject point (visual).
@@ -18585,6 +18689,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 }
                                 self.emit_z = 0.0;
                                 self.emit_target = None;
+                                self.emit_target_off = [0.0; 2];
                                 self.emit_aim = None;
                             } else {
                                 let bursts = self.bursts.len();
@@ -18634,6 +18739,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 self.emit_rot = if disp { Some(self.towers[t].game_rot.unwrap_or(0.0)) } else { grot };
                                 self.emit_z = if self.towers[t].weapons[w].empty_throw { 20.0 } else { ez + self.shot_base_z(t, weapon.from_air) };
                                 self.emit_target = (target_id != 0).then_some(target_id);
+                                self.emit_target_off = self.towers[t].weapons[w].aim_off;
                                 self.emit_aim = Some(target);
                                 let mut s0 = self.projectiles.len();
                                 if let Some(bf) = weapon.burst.as_ref().filter(|b| b.over_time && (b.air || !b.supply.is_empty())) {
@@ -18771,6 +18877,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 self.emit_rot = None;
                                 self.emit_z = 0.0;
                                 self.emit_target = None;
+                                self.emit_target_off = [0.0; 2];
                                 self.emit_aim = None;
                                 // MultiEmissionModel: its secondary projectile from the tower too.
                                 if let Some(sec) = &emission.secondary {
@@ -18975,6 +19082,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                     self.emit_rot = grot;
                                     self.emit_z = ez + self.shot_base_z(t, weapon.from_air);
                                 self.emit_target = (target_id != 0).then_some(target_id);
+                                self.emit_target_off = self.towers[t].weapons[w].aim_off;
                                 self.emit_aim = Some(target);
                                     self.emit(from, dir, emission, proj, crit, tiers, owner);
                                     self.emit_rot = None;
@@ -22257,6 +22365,25 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     pr.target = target;
                 }
             }
+            // CreateProjectileOnExhaustFraction.CheckFraction (VERIFIED-DECOMP @0x180ca3500) with
+            // collideOnSubProjectile: while the shot's Target is valid (its bloon alive), each new
+            // projectile Projectile.CollideBloon's it at once (recording map_haunted_beast_240_r40
+            // rt 1413: a Piranha's Explosion depletes Black 674 the frame the bite expires).
+            if ex.collide_sub && self.in_step {
+                if let Some(id) = target.filter(|id| self.bloons.iter().any(|b| b.id == *id)) {
+                    let uids: Vec<u64> = self.projectiles[start..].iter().map(|pr| pr.uid).collect();
+                    for pr in &mut self.projectiles[start..] {
+                        pr.line_hits = Some(vec![id]);
+                    }
+                    self.instant_hits.extend(uids);
+                    // (In the expiring shot's Process, after the bloons have moved: the pop's
+                    // children are made from where the bloon is now, as exhaust_line's.)
+                    let was = self.pop_after_move;
+                    self.pop_after_move = self.phase >= 2 || was;
+                    self.instant_pass();
+                    self.pop_after_move = was;
+                }
+            }
         }
     }
 
@@ -22723,7 +22850,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             if em.towards {
                 // (A target that died in the throw: Target.Position, the spot cached as it started;
                 // recording super_400 rt 273, a Sun Temple glaive along -67.23.)
-                if let Some(bp) = self.emit_target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.pos).or(self.emit_aim) {
+                // (Target.Position of a MOAB seen by a collision circle is that circle's spot: its
+                // Position + the circle's offset; recording map_haunted_beast_240_r40 rt 346, a
+                // Piranha's bite at MOAB 359's front circle, -36.48 where the centre gives -33.13.)
+                let off = self.emit_target_off;
+                if let Some(bp) = self.emit_target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]).or(self.emit_aim) {
                     let mut v = [bp[0] - pos[0], -(bp[1] - pos[1])];
                     if em.offset != 0.0 {
                         let a = DEG2RAD * -em.offset;
@@ -22917,6 +23048,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 hit: HitSet::default(),
                 clear_hits_next: false,
                 refresh_due: false,
+                follow_expire: false,
                 carrier: 0,
                 tiers,
                 owner,
@@ -23509,10 +23641,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // CreateProjectileOnExpire with useTargetPosition: the expiring shot's projectile goes
         // where its target is now that the bloons have moved (recording sub_040: a Ballistic
         // Missile's blast on the MOAB; Pre-emptive Strike's, without it, where the missile was).
+        // ArriveAtTarget shots following a target made before them (Game::arrive_follow), then the
+        // ones that arrived this frame expire from there.
+        self.arrive_follow();
         let mut p = 0;
         while p < self.projectiles.len() {
             let pr = &self.projectiles[p];
-            if pr.spec.instant && pr.born < now && pr.frames_left <= 0.0 && pr.pierce > 0.0 && pr.spec.on_exhaust.iter().any(|e| e.use_target) {
+            if (pr.spec.instant && pr.born < now && pr.frames_left <= 0.0 && pr.pierce > 0.0 && pr.spec.on_exhaust.iter().any(|e| e.use_target)) || (pr.follow_expire && pr.frames_left <= 0.0) {
                 let pr = self.projectiles.remove(p);
                 let (ex, sub) = self.retire_projectile(&pr);
                 exhausted.extend(ex.into_iter().map(|(a, b, c, d, e, f, g, _)| (a, b, c, d, e, f, g)));
