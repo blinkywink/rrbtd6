@@ -440,7 +440,9 @@ struct AnimJson {
     speed_range: Option<[f32; 2]>,
 }
 
-/// An Animator's default state (animator_clip): its clip sampled every 1/60 s per node.
+/// An Animator's entry state (animator_clip): its clip sampled every 1/60 s per node; with
+/// `states`, its whole state machine: each state's clip and exit transition, the Entry state, and
+/// the states the int parameter jumps to (AnyState Equals: UnityDisplayNode.set_AnimationState).
 #[derive(Deserialize, Clone)]
 struct ClipJson {
     len: f32,
@@ -449,14 +451,44 @@ struct ClipJson {
     #[serde(default = "one")]
     speed: f32,
     tracks: Vec<TrackJson>,
+    #[serde(default)]
+    states: Vec<StateJson>,
+    #[serde(default)]
+    entry: usize,
+    #[serde(default)]
+    param: HashMap<String, usize>,
 }
 
-/// attr 1 localPosition, 2 localRotation (x y z w), 3 localScale, 4 localEulerAngles.
+#[derive(Deserialize, Clone)]
+struct StateJson {
+    len: f32,
+    #[serde(default, rename = "loop")]
+    looping: bool,
+    #[serde(default = "one")]
+    speed: f32,
+    tracks: Vec<TrackJson>,
+    /// Its exit-time transition: (normalized exit time, next state).
+    #[serde(default)]
+    exit: Option<(f32, usize)>,
+}
+
+/// attr 1 localPosition, 2 localRotation (x y z w), 3 localScale, 4 localEulerAngles,
+/// 5 GameObject active ([0 / 1]), 6 SpriteRenderer sprite ([index into `frames`]).
 #[derive(Deserialize, Clone)]
 struct TrackJson {
     node: usize,
     attr: u8,
     samples: Vec<Vec<f32>>,
+    #[serde(default)]
+    frames: Vec<Option<FrameJson>>,
+}
+
+/// One sprite a sprite track swaps in.
+#[derive(Deserialize, Clone)]
+struct FrameJson {
+    texture: String,
+    size: [f32; 2],
+    pivot: [f32; 2],
 }
 
 fn two() -> f32 {
@@ -571,6 +603,9 @@ pub struct EffectDef {
     /// The node each animator component is on.
     anim_owner: Vec<usize>,
     clips: Vec<(usize, ClipJson)>,
+    /// Per clip, per state (the entry clip alone when it has no `states`), per track: its sprite
+    /// frames (texture, size, pivot; None: no sprite).
+    clip_frames: Vec<Vec<Vec<Vec<Option<(Texture2D, Vec2, Vec2)>>>>>,
     /// Each node's exported world (prefab-root) matrix, and per system whether an animator moves
     /// it or an ancestor (its particles then follow the node's transform as it is each frame).
     baked: Vec<Mat4>,
@@ -830,7 +865,23 @@ impl EffectDef {
                 is_sub[k] = true;
             }
         }
-        Some(EffectDef { systems, nodes, sprites, meshes, anims, anim_owner, clips, baked, sys_animated, subs, is_sub, texts, sprite_display: j.sprite_display })
+        let clip_frames = clips
+            .iter()
+            .map(|(_, c)| {
+                let mut one = |tracks: &[TrackJson], textures: &mut HashMap<String, Texture2D>| -> Vec<Vec<Option<(Texture2D, Vec2, Vec2)>>> {
+                    tracks
+                        .iter()
+                        .map(|t| t.frames.iter().map(|f| f.as_ref().and_then(|f| load_tex(&f.texture, textures).map(|tx| (tx, Vec2::from_array(f.size), Vec2::from_array(f.pivot))))).collect())
+                        .collect()
+                };
+                if c.states.is_empty() {
+                    vec![one(&c.tracks, &mut textures)]
+                } else {
+                    c.states.iter().map(|st| one(&st.tracks, &mut textures)).collect()
+                }
+            })
+            .collect();
+        Some(EffectDef { systems, nodes, sprites, meshes, anims, anim_owner, clips, clip_frames, baked, sys_animated, subs, is_sub, texts, sprite_display: j.sprite_display })
     }
 }
 
@@ -940,6 +991,8 @@ struct Instance {
     disabled: Vec<usize>,
     /// Per Animator: its state's time (seconds).
     clip_t: Vec<f32>,
+    /// Per Animator: its current state (`ClipJson::states`; 0 without).
+    clip_state: Vec<usize>,
     /// Replaces the text nodes' placeholder (Simulation.CreateTextEffect's text).
     text: Option<String>,
     /// The display's own rotation (Unity space) over the whole prefab: identity, or a sprite
@@ -1054,7 +1107,8 @@ impl Instance {
             })
             .collect();
         let clip_t = vec![0.0; def.clips.len()];
-        Self { def, at, scale, states, age: 0.0, ambient: false, tag: None, stopped: false, anim_state, disabled: Vec::new(), clip_t, text: None, rot: Quat::IDENTITY, overrides: Vec::new() }
+        let clip_state = def.clips.iter().map(|(_, c)| if c.states.is_empty() { 0 } else { c.entry }).collect();
+        Self { def, at, scale, states, age: 0.0, ambient: false, tag: None, stopped: false, anim_state, disabled: Vec::new(), clip_t, clip_state, text: None, rot: Quat::IDENTITY, overrides: Vec::new() }
     }
 
     /// The nodes' local transforms and sprite colours now (prefab space): the export's, with the
@@ -1102,10 +1156,11 @@ impl Instance {
                 _ => {}
             }
         }
-        for ((node, c), &t) in def.clips.iter().zip(&self.clip_t) {
+        for (((node, c), &t), &si) in def.clips.iter().zip(&self.clip_t).zip(&self.clip_state) {
             let _ = node;
             let f = t * 60.0;
-            for tr in &c.tracks {
+            let tracks = c.states.get(si).map_or(&c.tracks, |st| &st.tracks);
+            for tr in tracks {
                 let n = tr.samples.len();
                 if n == 0 || tr.node >= local.len() {
                     continue;
@@ -1125,6 +1180,8 @@ impl Instance {
                         let (x, y, z) = (lerp(0).to_radians(), lerp(1).to_radians(), lerp(2).to_radians());
                         local[tr.node].1 = Quat::from_rotation_y(y) * Quat::from_rotation_x(x) * Quat::from_rotation_z(z);
                     }
+                    // GameObject.SetActive (stepped).
+                    5 => local[tr.node].3 = a.first().copied().unwrap_or(1.0) > 0.5 && !self.disabled.contains(&tr.node),
                     _ => {}
                 }
             }
@@ -1170,6 +1227,26 @@ impl Instance {
             .collect()
     }
 
+    /// The sprite an Animator sprite track shows on `node` now: None without a track, Some(None)
+    /// for an empty frame.
+    fn sprite_frame(&self, node: usize) -> Option<Option<(Texture2D, Vec2, Vec2)>> {
+        let def = &self.def;
+        for (ci, ((_, c), &t)) in def.clips.iter().zip(&self.clip_t).enumerate() {
+            let si = self.clip_state.get(ci).copied().unwrap_or(0);
+            let tracks = c.states.get(si).map_or(&c.tracks, |st| &st.tracks);
+            for (ti, tr) in tracks.iter().enumerate() {
+                if tr.attr != 6 || tr.node != node || tr.samples.is_empty() {
+                    continue;
+                }
+                let i = ((t * 60.0).floor() as usize).min(tr.samples.len() - 1);
+                let fi = tr.samples[i].first().copied().unwrap_or(0.0).max(0.0) as usize;
+                let frames = def.clip_frames.get(ci).and_then(|s| s.get(if c.states.is_empty() { 0 } else { si })).and_then(|s| s.get(ti));
+                return Some(frames.and_then(|f| f.get(fi).cloned().flatten()));
+            }
+        }
+        None
+    }
+
     fn world_rot(&self, local: &[(Vec3, Quat, Vec3, bool)], i: usize) -> Quat {
         let mut q = local[i].1;
         let mut p = self.def.nodes[i].parent;
@@ -1199,12 +1276,32 @@ impl Instance {
                 }
             }
         }
-        for ((_, c), t) in def.clips.iter().zip(self.clip_t.iter_mut()) {
-            *t += dt * c.speed;
-            if c.looping && c.len > 0.0 {
-                *t %= c.len;
+        for (((_, c), t), si) in def.clips.iter().zip(self.clip_t.iter_mut()).zip(self.clip_state.iter_mut()) {
+            let Some(st) = c.states.get(*si) else {
+                *t += dt * c.speed;
+                if c.looping && c.len > 0.0 {
+                    *t %= c.len;
+                } else {
+                    *t = t.min(c.len);
+                }
+                continue;
+            };
+            let prev = *t;
+            *t += dt * st.speed;
+            // An exit-time transition fires as the state's normalized time passes its exit time
+            // (0: the clip's end); to Exit, the Entry state (from its start).
+            if let Some((e, next)) = st.exit {
+                let at = if e > 0.0 { e } else { 1.0 } * st.len;
+                if st.len > 0.0 && prev < at && *t >= at {
+                    *si = next.min(c.states.len().saturating_sub(1));
+                    *t = 0.0;
+                    continue;
+                }
+            }
+            if st.looping && st.len > 0.0 {
+                *t %= st.len;
             } else {
-                *t = t.min(c.len);
+                *t = t.min(st.len);
             }
         }
     }
@@ -1598,6 +1695,20 @@ impl Particles {
         }
     }
 
+    /// UnityDisplayNode.set_AnimationState on the effect tagged `tag`: each Animator whose
+    /// AnyState transitions take `value` jumps to that state, from its start.
+    pub fn set_anim_state(&mut self, tag: u64, value: i32) {
+        for i in self.live.iter_mut().filter(|i| i.tag == Some(tag)) {
+            let key = value.to_string();
+            for (ci, (_, c)) in i.def.clips.iter().enumerate() {
+                if let Some(&st) = c.param.get(&key).filter(|&&st| st < c.states.len()) {
+                    i.clip_state[ci] = st;
+                    i.clip_t[ci] = 0.0;
+                }
+            }
+        }
+    }
+
     /// Rescales the effect tagged `tag` (a Paragon's investment orb shrinking into it).
     pub fn set_scale(&mut self, tag: u64, scale: f32) {
         for i in self.live.iter_mut().filter(|i| i.tag == Some(tag)) {
@@ -1733,13 +1844,22 @@ impl Particles {
                         if !world[sp.node].3 {
                             continue;
                         }
+                        // An Animator's sprite track: its frame now (none: nothing drawn).
+                        let frame = inst.sprite_frame(sp.node);
+                        if matches!(frame, Some(None)) {
+                            continue;
+                        }
+                        let (tex, size, pivot) = match frame.flatten() {
+                            Some((t, s, p)) => (t, s, p),
+                            None => (sp.tex.clone(), sp.size, sp.pivot),
+                        };
                         let c = colors.get(&sp.node).copied().unwrap_or(sp.color);
                         if c[3] <= 0.0 {
                             continue;
                         }
                         let col = c.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
-                        let (x0, y0) = (-sp.pivot.x * sp.size.x, -sp.pivot.y * sp.size.y);
-                        let (x1, y1) = (x0 + sp.size.x, y0 + sp.size.y);
+                        let (x0, y0) = (-pivot.x * size.x, -pivot.y * size.y);
+                        let (x1, y1) = (x0 + size.x, y0 + size.y);
                         let (u0, u1) = if sp.flip[0] { (1.0, 0.0) } else { (0.0, 1.0) };
                         let (vb, vt) = if sp.flip[1] { (0.0, 1.0) } else { (1.0, 0.0) };
                         let v = |q: Vec3, a: f32, b: f32| Vertex { position: q, uv: vec2(a, b), color: col, normal: Vec4::ZERO };
@@ -1754,7 +1874,7 @@ impl Particles {
                         self.idx.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
                         let m = self.mats.entry((Blend::Alpha, false)).or_insert_with(|| material(Blend::Alpha, false));
                         gl_use_material(m);
-                        let mesh = Mesh { vertices: std::mem::take(&mut self.verts), indices: std::mem::take(&mut self.idx), texture: Some(sp.tex.clone()) };
+                        let mesh = Mesh { vertices: std::mem::take(&mut self.verts), indices: std::mem::take(&mut self.idx), texture: Some(tex) };
                         draw_mesh(&mesh);
                         gl_use_default_material();
                         self.verts = mesh.vertices;

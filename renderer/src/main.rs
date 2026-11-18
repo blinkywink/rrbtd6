@@ -802,6 +802,11 @@ async fn game_main() {
     // CreateEffectProjectileAfterTime: per (projectile uid, effect index) the age its effect is next due (-1 done).
     // Each tower's hand last frame (FlipFollowPath): a switch plays its effectOnFlip.
     let mut flip_seen: HashMap<u64, bool> = HashMap::new();
+    // Live Jungle Vines (JungleVineEffect): (effect tag, where, stand-in list index, camo,
+    // regrow, effectFrames left, degradeStep, stepCount, End frames left once released).
+    let mut vines: Vec<(u64, [f32; 2], usize, bool, bool, i32, i32, i32, Option<i32>)> = Vec::new();
+    let mut vine_tag: u64 = 0;
+    let mut vine_clock: u64 = 0;
     // Towers whose ammo crate had arrived last frame (SniperAmmoSwap).
     let mut ammo_seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut after_fx_seen: HashMap<(u64, usize), f32> = HashMap::new();
@@ -1005,6 +1010,11 @@ async fn game_main() {
     const ORBIT_FX_TAG: u64 = 1 << 61;
     /// With PROJ_FX_TAG: a projectile's ScaleProjectileOverTime effect (projectile uid).
     const SCALE_FX_TAG: u64 = 1 << 59;
+/// Jungle Vines' displays (main.rs `vines`).
+const VINE_FX_TAG: u64 = 1 << 58;
+/// The vines' End clips (JungleVineWrapEnd 0.25 s, JungleVineGrowEnd 0.367 s): frames they
+/// stay after the grab ends.
+const VINE_END_FRAMES: i32 = 23;
     // NecromancerTargetTrackWithinRange.StartDraw: its display (TargetGreen) on the chosen spawn
     // segment while the tower is selected.
     const NECRO_FX_TAG: u64 = (1 << 62) - 1;
@@ -2880,6 +2890,23 @@ async fn game_main() {
                     None => draw_sphere(render3d::gl(p[0], d.radius, p[1]), d.radius, None, RED),
                 }
             }
+            // The Jungle Vines' stand-in bloons (bloonEffectDisplay: GameModel.GetBloon(
+            // BloonType.Construct(list entry, camo, regrow))'s display), drawn as a bloon is until
+            // the grab ends. STAND-IN: between the bloons and the effects, not between the vines'
+            // back and front displays.
+            for v in vines.iter().filter(|v| v.8.is_none()) {
+                const LIST: [&str; 9] = ["Red", "Blue", "Green", "Yellow", "Pink", "Black", "Zebra", "Rainbow", "Ceramic"];
+                let name = format!("{}{}{}", LIST[v.2], if v.4 { "Regrow" } else { "" }, if v.3 { "Camo" } else { "" });
+                let Some(k) = game.bloon_kind(&name).or_else(|| game.bloon_kind(LIST[v.2])) else { continue };
+                let (Some(t), Some(l)) = (&bloon_tex[k], game.defs[k].display.first()) else { continue };
+                let p = v.1;
+                let y = p[1] - 20.0 / 60f32.to_radians().tan();
+                sprite_batch.shift_next(l.trim);
+                match (&atlas, bloon_uv[k]) {
+                    (Some(a), Some(uv)) => sprite_batch.billboard_uv(&a.tex, uv, p[0], y, 20.0, l.w, l.h, [255; 4]),
+                    _ => sprite_batch.billboard(t, p[0], y, 20.0, l.w, l.h, [255; 4]),
+                }
+            }
             sprite_batch.flush();
             if let Some(inst) = instancer.as_mut() {
                 inst.flush(&mut bloon_models, &shaders, get_time() as f32, outline_scale, bloon_viewport);
@@ -3221,6 +3248,67 @@ async fn game_main() {
             for (p, fx, k) in game.place_fx.drain(..) {
                 particles.spawn(&fx, [p[0], 0.0, p[1]], k);
             }
+            // JungleVineEffect.Collide (VERIFIED-DECOMP @0x180cc23b0): the back display, a stand-in
+            // bloon (bloonEffectDisplay) and the front display at the grabbed bloon. The stand-in
+            // is the static list's entry for its baseId (White / Purple as Black, Lead as Zebra),
+            // made with its camo / regrow (BloonType.Construct); effectFrames = duration x 60,
+            // degradeStep = effectFrames / (index + 1).
+            for (p, kind, frames, front, back) in std::mem::take(&mut game.vine_fx) {
+                const LIST: [&str; 9] = ["Red", "Blue", "Green", "Yellow", "Pink", "Black", "Zebra", "Rainbow", "Ceramic"];
+                let d = &game.defs[kind];
+                let base = match d.base_id.as_str() {
+                    "White" | "Purple" => "Black",
+                    "Lead" => "Zebra",
+                    b => b,
+                };
+                let Some(idx) = LIST.iter().position(|n| *n == base) else { continue };
+                let name = game.bloon_name(kind).unwrap_or("");
+                let (camo, regrow) = (d.is_camo || name.contains("Camo"), name.contains("Regrow"));
+                let step = frames / (idx as i32 + 1);
+                vine_tag += 1;
+                let tag = VINE_FX_TAG | vine_tag;
+                // (At the bloon's display height, 20, moved back along the camera tilt as the
+                // bloons are drawn.)
+                let at = [p[0], 20.0, p[1] - 20.0 / 60f32.to_radians().tan()];
+                particles.spawn_display(&back, at, 1.0, 0.0, false, Some(tag));
+                particles.spawn_display(&front, at, 1.0, 0.0, false, Some(tag));
+                vines.push((tag, p, idx, camo, regrow, frames, step, step, None));
+            }
+            // JungleVineEffect.Process (VERIFIED-DECOMP @0x180cc3140), each sim frame: stepCount - 1;
+            // below 0 it restarts at degradeStep and the stand-in steps one entry down the list;
+            // when effectFrames runs out the stand-in hides and both displays take animation state
+            // 2 (their End clips; gone after them).
+            let vnow = game.sim_elapsed;
+            let steps = vnow.saturating_sub(vine_clock).min(600) as i32;
+            vine_clock = vnow;
+            for _ in 0..steps {
+                for v in vines.iter_mut() {
+                    if let Some(e) = &mut v.8 {
+                        *e -= 1;
+                        continue;
+                    }
+                    if v.5 < 1 {
+                        continue;
+                    }
+                    v.5 -= 1;
+                    v.7 -= 1;
+                    if v.7 < 0 {
+                        v.7 = v.6;
+                        v.2 = v.2.saturating_sub(1);
+                    }
+                    if v.5 <= 0 {
+                        particles.set_anim_state(v.0, 2);
+                        v.8 = Some(VINE_END_FRAMES);
+                    }
+                }
+            }
+            vines.retain(|v| {
+                let done = v.8.is_some_and(|e| e <= 0);
+                if done {
+                    particles.kill(v.0);
+                }
+                !done
+            });
             // CreateEffectProjectileAfterTime (Process @0x180ca04c0): its effect once timeFrames
             // have passed since it was made (again every timeFrames with repeat), at the projectile
             // or, useTargetPosition, its target (the Sub's missile-pod FXDown, Tack Paragon meteors).
@@ -4310,6 +4398,23 @@ async fn game_main() {
             if frames < last && frames + burst >= last {
                 get_screen_data().export_png(&format!("{path}.{frames}.png"));
                 eprintln!("burst {frames}: projectiles {:?}", game.projectiles.iter().map(|p| (p.owner, p.pos.map(|v| v.round()))).collect::<Vec<_>>());
+            }
+            // RRBTD6_SPAWNFX=a,b,...: those effects as displays at the map's middle at frame 10,
+            // kept (tagged); RRBTD6_FXSTATE=f:v sets their animation state v at frame f.
+            if frames == 10 {
+                if let Ok(list) = std::env::var("RRBTD6_SPAWNFX") {
+                    let (lo, hi) = game.bounds;
+                    let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+                    for (i, n) in list.split(',').enumerate() {
+                        let ok = particles.spawn_display(n.trim(), [c[0] + i as f32 * 40.0, 20.0, c[1] - 20.0 / 60f32.to_radians().tan()], 1.0, 0.0, false, Some((1 << 57) | 1));
+                        eprintln!("autotest: spawnfx {n} {ok}");
+                    }
+                }
+            }
+            if let Some((f, v)) = std::env::var("RRBTD6_FXSTATE").ok().and_then(|s| s.split_once(':').and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<i32>().ok()?)))) {
+                if frames == f {
+                    particles.set_anim_state((1 << 57) | 1, v);
+                }
             }
             // RRBTD6_FLIP=n: every tower switches hands at frame n (the hand button).
             if std::env::var("RRBTD6_FLIP").ok().and_then(|v| v.parse::<u32>().ok()) == Some(frames) {

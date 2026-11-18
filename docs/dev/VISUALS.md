@@ -121,9 +121,22 @@ effect names, model behaviours the data builder never reads).
   end, the Sniper Paragon's muzzle flash, beam hits up to maxCollisionEffects). STAND-IN: a new effect each
   Emit, not the one kept and moved. Bloon Trap's BloonTrapBloonCollect on each eat that doesn't fill it
   (eat `fx`; EatBloon.PlayEffect @0x180cba040 at the trap). STAND-IN: the game skips it while the last plays.
-- LEFT: Druid 030+'s jungle vines (JungleVineEffect.Collide / Process @0x180cc23b0 / @0x180cc3140): the
-  JungleVineWrap / Grow models exported with no mesh (vertex_count 0), so the exporter needs work first.
-  Sniper 030+'s BouncingBulletTracer (CreateEffectFromCollisionToCollision @0x180c9ea30: spawned along the
+- DONE (2026-11-18): Druid 030+'s Jungle Vines (JungleVineEffect.Collide / Process @0x180cc23b0 /
+  @0x180cc3140): game.rs `vine_fx` (display only) at each grab; main.rs plays the back (JungleVineGrow*) and
+  front (JungleVineWrap*) displays at the bloon's display height, a stand-in bloon stepping down the game's
+  static list (Red, Blue, Green, Yellow, Pink, Black, Zebra, Rainbow, Ceramic; White / Purple as Black, Lead
+  as Zebra; INFERRED order: the .cctor decompile shows only Red at 0) every degradeStep frames, then
+  animation state 2 (End) on both. STAND-IN: the stand-in draws between the bloons and the effects, not
+  between the back and front displays; the clip-toggled particle systems (SqueezeEffect, PopEffect) don't
+  emit (inactive at load).
+- Animator states in effects (export_particles `animator_clip`, particles.rs): every state's clip with
+  GameObject active (attr 5) and SpriteRenderer sprite-swap (attr 6) tracks, exit-time transitions (to Exit:
+  the Entry state), AnyState jumps on the int parameter (`Particles::set_anim_state`, as
+  UnityDisplayNode.set_AnimationState). mecanim_clip: PPtr curves sit after curveCount in the streamed data
+  and take no float slot (the old layout shifted every later transform track in clips with sprite swaps).
+  Only the vines are re-exported so far. Autotest: `RRBTD6_SPAWNFX=a,b` shows effects mid-map,
+  `RRBTD6_FXSTATE=frame:value` sets their state.
+- LEFT: Sniper 030+'s BouncingBulletTracer (CreateEffectFromCollisionToCollision @0x180c9ea30: spawned along the
   segment, stretched by length / effectLength): its prefab has no particles, so the streak stand-in stays.
 - DONE (2026-11-18): Boomerang hand switch (FlipFollowPath.Flip @0x180c81de0): flipTowerDisplayX mirrors
   the tower's model (`AnimModel::mirror_x`, culled parts swap sides) and effectOnFlip

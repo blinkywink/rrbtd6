@@ -2273,6 +2273,9 @@ pub struct Proj {
     /// JungleVineEffectModel.ageingDestroyModel.timeFrames: added to the grab's limiter frames.
     #[serde(default)]
     pub vine_frames: Option<i64>,
+    /// JungleVineEffectModel's displays (front, back effect prefabs), display only.
+    #[serde(default)]
+    pub vine_display: Option<(String, String)>,
     /// CreateGreatWhiteEffectModel: its hit grabs and pulls the bloon (Beast Handler 3xx+).
     #[serde(default)]
     pub great_white: Option<Box<GreatWhite>>,

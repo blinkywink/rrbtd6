@@ -3970,6 +3970,9 @@ pub struct Game {
     pub sacrifices: Vec<Sacrifice>,
     /// Towers placed this frame: (position, placement effect prefab, scale).
     pub place_fx: Vec<([f32; 2], String, f32)>,
+    /// Jungle Vines grabbing a bloon this step (display only): where, the bloon's kind, the
+    /// grab's frames (JungleVineEffect.effectFrames) and the front / back displays.
+    pub vine_fx: Vec<([f32; 2], usize, i32, String, String)>,
     /// Simulation.CreateTextEffect this frame (display only): position, effect prefab, its text,
     /// lifespan in seconds (Lead to Gold's "$50"), height (an air unit's).
     pub text_fx: Vec<([f32; 2], String, String, f32, f32)>,
@@ -4850,6 +4853,7 @@ macro_rules! collide_pass {
             let id = b.id;
             let layer = b.layer;
             let hit_kind = b.kind;
+            let hit_pos = b.pos;
             let tag_extra: f32 = pr.spec.pierce_tags.iter().filter(|(t, _)| d.tags.iter().any(|g| g == t)).map(|x| x.1).sum();
             // DamageInRingRadius.Collide (VERIFIED-DISASM @0xcb1950): Damage.Collide only when
             // the bloon is at least Projectile+0x150 x innerRingRadius from the projectile (Shockwave).
@@ -5621,6 +5625,10 @@ macro_rules! collide_pass {
                     }
                     dur *= 0.125;
                     let add = vf + (dur * 60.0) as i64;
+                    // (Display only: the vines' displays at the bloon, effectFrames = duration x 60.)
+                    if let Some((front, back)) = $s.projectiles[$p].spec.vine_display.clone() {
+                        $s.vine_fx.push((hit_pos, hit_kind, (dur * 60.0) as i32, front, back));
+                    }
                     let now = $s.round_clock;
                     let owner = $s.projectiles[$p].owner;
                     if let Some(t) = $s.towers.iter().position(|t| t.id == owner) {
@@ -6321,6 +6329,7 @@ impl Game {
             pet_moves: HashMap::new(),
             sacrifices: Vec::new(),
             place_fx: Vec::new(),
+            vine_fx: Vec::new(),
             effect_seq: 0,
             voice_warned: Vec::new(),
             free_tower_round: None,
@@ -13353,6 +13362,14 @@ impl Game {
     /// Current tier stats for tower `t`.
     pub fn tier(&self, t: usize) -> Option<&Tier> {
         self.tier_of(&self.towers[t])
+    }
+
+    /// A bloon kind by its id ("RedRegrowCamo"), and a kind's id (display helpers).
+    pub fn bloon_kind(&self, name: &str) -> Option<usize> {
+        self.by_name.get(name).copied()
+    }
+    pub fn bloon_name(&self, kind: usize) -> Option<&str> {
+        self.names.get(kind).map(String::as_str)
     }
 
     pub fn tier_of<'a>(&'a self, tw: &'a Tower) -> Option<&'a Tier> {

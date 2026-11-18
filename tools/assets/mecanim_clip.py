@@ -18,8 +18,13 @@ class Clip:
         self.events = [(e["time"], e["functionName"]) for e in t.get("m_Events", [])]
         sc = c["m_StreamedClip"]
         self.n_streamed = sc["curveCount"]
+        # PPtr curves (sprite swaps): stepped keys in the streamed data after its curveCount float
+        # curves, one per PPtr binding in binding order, their values indexes into
+        # pptrCurveMapping; they take no slot in the float layout (JungleVineWrap: curveCount 5,
+        # its two sprite curves at 5 and 6).
+        self.n_pptr = sum(1 for b in t["m_ClipBindingConstant"]["genericBindings"] if b.get("isPPtrCurve"))
         raw = struct.pack(f"<{len(sc['data'])}I", *sc["data"])
-        self.keys = [[] for _ in range(self.n_streamed)]
+        self.keys = [[] for _ in range(self.n_streamed + self.n_pptr)]
         p = 0
         while p < len(raw):
             time, n = struct.unpack_from("<fI", raw, p)
@@ -27,7 +32,7 @@ class Clip:
             for _ in range(n):
                 idx, a, b, cc, d = struct.unpack_from("<I4f", raw, p)
                 p += 20
-                if idx < self.n_streamed:
+                if idx < len(self.keys):
                     self.keys[idx].append((time, a, b, cc, d))
         dc = c["m_DenseClip"]
         self.n_dense = dc["m_CurveCount"]
@@ -38,16 +43,45 @@ class Clip:
         self.key_times = [tuple(k[0] for k in keys) if all(k[0] == k[0] for k in keys) and all(a[0] <= b[0] for a, b in zip(keys, keys[1:])) else None
                           for keys in self.keys]
         self.pose_layout = []
+        # Every binding's (path, attribute, typeID, isPPtrCurve, curve index, width): GameObject
+        # m_IsActive (typeID 1) and SpriteRenderer m_Sprite (typeID 212, a PPtr curve whose value
+        # indexes m_ClipBindingConstant.pptrCurveMapping) besides the transforms.
+        self.generic_layout = []
+        self.pptr_mapping = t["m_ClipBindingConstant"].get("pptrCurveMapping", [])
         ci = 0
+        # values(): the float curves (streamed, dense, constant), then the PPtr curves.
+        pi = self.n_streamed + self.n_dense + len(self.const)
         for b in self.bindings:
+            if b.get("isPPtrCurve"):
+                self.generic_layout.append((b["path"], b["attribute"], b["typeID"], True, pi, 1))
+                pi += 1
+                continue
             n = {1: 3, 2: 4, 3: 3, 4: 3}.get(b["attribute"], 1) if b["typeID"] == 4 else 1
             if b["typeID"] == 4:
                 self.pose_layout.append((b["path"], b["attribute"], ci, n))
+            self.generic_layout.append((b["path"], b["attribute"], b["typeID"], False, ci, n))
             ci += n
+
+    def _curve(self, keys, times, t):
+        v = 0.0
+        if times is not None and t == t:
+            index = bisect_right(times, t) - 1
+            if index >= 0:
+                k = keys[index]
+                dt = t - k[0]
+                v = ((k[1] * dt + k[2]) * dt + k[3]) * dt + k[4]
+        else:
+            for k in keys:
+                if k[0] <= t:
+                    dt = t - k[0]
+                    v = ((k[1] * dt + k[2]) * dt + k[3]) * dt + k[4]
+                else:
+                    break
+        return v
 
     def values(self, t):
         out = []
-        for keys, times in zip(self.keys, self.key_times):
+        for keys, times in zip(self.keys[:self.n_streamed], self.key_times[:self.n_streamed]):
             v = 0.0
             if times is not None and t == t:
                 index = bisect_right(times, t) - 1
@@ -72,6 +106,7 @@ class Clip:
             u = float(min(1, max(0, f - i0)))
             out.extend((self.dense[i0] * (1 - u) + self.dense[i1] * u).tolist())
         out.extend(self.const)
+        out.extend(self._curve(k, tm, t) for k, tm in zip(self.keys[self.n_streamed:], self.key_times[self.n_streamed:]))
         return out
 
     def pose(self, t):

@@ -1083,6 +1083,11 @@ def main():
         # JungleVineLimitProjectile.AddLimiter(ageingDestroyModel.timeFrames + grab frames);
         # AgeingDestroyModel.set_Time: timeFrames = (int)(time * 60).
         if pb.get("JungleVineEffectModel"):
+            jf = pb["JungleVineEffectModel"][0]["f"]
+            # Its displays (visual): displayFrontAssetId (the wrap) and displayBackAssetId (the
+            # growth behind the bloon), exported as effects.
+            out["vine_display"] = [prefab_name(jf.get("displayFrontAssetId")), prefab_name(jf.get("displayBackAssetId"))] \
+                if prefab_name(jf.get("displayFrontAssetId")) and prefab_name(jf.get("displayBackAssetId")) else None
             ad = deref(pb["JungleVineEffectModel"][0]["f"].get("ageingDestroyModel"))
             out["vine_frames"] = int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", (ad or {}).get("f", {}).get("time", 0.0)))[0] * 60.0))[0])
         # CreateGreatWhiteEffectModel (Beast Handler 3xx+ water pet's Explosion; CreateGreatWhiteEffect

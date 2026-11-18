@@ -840,10 +840,78 @@ def anim_node(t):
     return out
 
 
-def animator_clip(an):
-    """The Animator's default state's clip sampled every 1/60 s: {len, loop, speed, tracks [{path
-    hash, attr (1 position, 2 rotation, 3 scale, 4 euler), samples}]}; export_root resolves the
-    paths to nodes."""
+M_ISACTIVE = 2086281974  # crc32("m_IsActive"): a GameObject binding's attribute
+
+
+def _sprite_frame(sp_obj, out_tex):
+    """A Sprite object as an image under out_tex: {texture, size, pivot} (as sprite_node)."""
+    sp = sp_obj.read()
+    st = sp.object_reader.read_typetree()
+    fn = f"sprite_{sp.m_Name}.png"
+    fp = os.path.join(out_tex, fn)
+    if not os.path.exists(fp):
+        os.makedirs(out_tex, exist_ok=True)
+        try:
+            img = sp.image
+        except ValueError:
+            img = atlas_sprite_image(sp, st)
+        img.save(fp)
+    r, ppu = st["m_Rect"], st["m_PixelsToUnits"] or 100.0
+    return {"texture": "tex/" + fn, "size": [r["width"] / ppu, r["height"] / ppu], "pivot": [st["m_Pivot"]["x"], st["m_Pivot"]["y"]]}
+
+
+def _sample_clip(clip, clip_obj, out_tex):
+    """`clip` (mecanim_clip.Clip) sampled every 1/60 s: {len, loop, tracks [{path hash, attr, samples}]}.
+    attr 1 position, 2 rotation, 3 scale, 4 euler (transforms), 5 GameObject m_IsActive ([0 / 1]),
+    6 SpriteRenderer m_Sprite ([frame index], `frames` the track's sprites, null for none)."""
+    n = max(1, int(round((clip.stop - clip.start) * 60)))
+    tracks = {}
+    frames = {}
+    for path, attr, tid, pptr, ci, w in clip.generic_layout:
+        if tid == 1 and attr == M_ISACTIVE:
+            tracks[(path, 5)] = []
+        elif tid == 212 and pptr and attr == 0:
+            tracks[(path, 6)] = []
+            if path not in frames:
+                fl = []
+                for pp in clip.pptr_mapping:
+                    pid = pp.get("m_PathID", 0)
+                    try:
+                        objs = clip_obj.assets_file.objects
+                        fl.append(_sprite_frame(objs[pid], out_tex) if pid and pid in objs else None)
+                    except Exception:
+                        fl.append(None)
+                frames[path] = fl
+    generic = any(k[1] in (5, 6) for k in tracks)
+    for f in range(n + 1):
+        t = clip.start + f / 60
+        for ph, attrs in clip.pose(t).items():
+            for a, val in attrs.items():
+                tracks.setdefault((ph, a), []).append([float(x) for x in val])
+        if generic:
+            vals = clip.values(t)
+            for path, attr, tid, pptr, ci, w in clip.generic_layout:
+                if tid == 1 and attr == M_ISACTIVE:
+                    tracks[(path, 5)].append([1.0 if vals[ci] > 0.5 else 0.0])
+                elif tid == 212 and pptr and attr == 0:
+                    tracks[(path, 6)].append([float(int(round(vals[ci])))])
+    out = []
+    for (ph, a), smp in tracks.items():
+        tr = {"path": ph, "attr": a, "samples": smp}
+        if a == 6:
+            tr["frames"] = frames.get(ph, [])
+        out.append(tr)
+    return {"len": clip.stop - clip.start, "loop": clip.loop, "tracks": out}
+
+
+def animator_clip(an, out_tex=None):
+    """The Animator's entry state's clip sampled every 1/60 s: {len, loop, speed, tracks [{path
+    hash, attr (1 position, 2 rotation, 3 scale, 4 euler, 5 active, 6 sprite), samples}]}, and,
+    with more than one state or an exit, its state machine: `states` [{len, loop, speed, tracks,
+    exit [normalized exit time, next state]}], `entry` (the Entry transition's state) and `param`
+    {value: state} (AnyState transitions on the int parameter Equals value: what
+    UnityDisplayNode.set_AnimationState drives). An exit transition to Exit (30000 / 30001)
+    returns to `entry`. export_root resolves the paths to nodes."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from mecanim_clip import Clip
     if not an.m_Controller or not an.m_Controller.path_id:
@@ -861,22 +929,48 @@ def animator_clip(an):
     if not machines or not machines[0]["data"]["m_StateConstantArray"]:
         return None
     sm = machines[0]["data"]
-    st = sm["m_StateConstantArray"][sm.get("m_DefaultState", 0)]["data"]
     clips = ctl.m_AnimationClips
-    ci = 0
-    if st.get("m_BlendTreeConstantArray"):
-        ci = st["m_BlendTreeConstantArray"][0]["data"]["m_NodeArray"][0]["data"]["m_ClipID"]
-    if ci >= len(clips):
+    entry = sm.get("m_DefaultState", 0)
+    for sel in sm.get("m_SelectorStateConstantArray", []):
+        sd = sel["data"]
+        if sd.get("m_IsEntry") and sd["m_TransitionConstantArray"]:
+            d = sd["m_TransitionConstantArray"][0]["data"]["m_Destination"]
+            if d < len(sm["m_StateConstantArray"]):
+                entry = d
+    states = []
+    for sc in sm["m_StateConstantArray"]:
+        st = sc["data"]
+        ci = 0
+        if st.get("m_BlendTreeConstantArray"):
+            ci = st["m_BlendTreeConstantArray"][0]["data"]["m_NodeArray"][0]["data"]["m_ClipID"]
+        if ci >= len(clips):
+            states.append(None)
+            continue
+        cobj = overrides.get(clips[ci].path_id, clips[ci]).read()
+        smp = _sample_clip(Clip(cobj.object_reader.read_typetree()), cobj, out_tex or os.path.join(OUT, "_tex"))
+        smp["speed"] = st.get("m_Speed", 1.0)
+        ex = next((t["data"] for t in st["m_TransitionConstantArray"]
+                   if t["data"].get("m_HasExitTime") and not t["data"]["m_ConditionConstantArray"]), None)
+        if ex is not None:
+            d = ex["m_DestinationState"]
+            smp["exit"] = [ex.get("m_ExitTime", 1.0), entry if d >= 30000 else d]
+        states.append(smp)
+    if entry >= len(states) or states[entry] is None:
         return None
-    clip = Clip(overrides.get(clips[ci].path_id, clips[ci]).read().object_reader.read_typetree())
-    n = max(1, int(round((clip.stop - clip.start) * 60)))
-    tracks = {}
-    for f in range(n + 1):
-        for ph, attrs in clip.pose(clip.start + f / 60).items():
-            for a, val in attrs.items():
-                tracks.setdefault((ph, a), []).append([float(x) for x in val])
-    return {"len": clip.stop - clip.start, "loop": clip.loop, "speed": st.get("m_Speed", 1.0),
-            "tracks": [{"path": ph, "attr": a, "samples": smp} for (ph, a), smp in tracks.items()]}
+    param = {}
+    for t in sm.get("m_AnyStateTransitionConstantArray", []):
+        td = t["data"]
+        conds = td["m_ConditionConstantArray"]
+        # ConditionMode 6: Equals.
+        if len(conds) == 1 and conds[0]["data"]["m_ConditionMode"] == 6 and td["m_DestinationState"] < len(states):
+            param[str(int(conds[0]["data"]["m_EventThreshold"]))] = td["m_DestinationState"]
+    first = states[entry]
+    out = {"len": first["len"], "loop": first["loop"], "speed": first["speed"], "tracks": first["tracks"]}
+    if len(states) > 1 or "exit" in first:
+        out["states"] = [x or {"len": 0.0, "loop": False, "speed": 1.0, "tracks": []} for x in states]
+        out["entry"] = entry
+        out["param"] = param
+    return out
 
 
 def export_root(env, root, name, root_tr=None, prefab=None, parts=True):
@@ -943,7 +1037,7 @@ def export_root(env, root, name, root_tr=None, prefab=None, parts=True):
                 elif tn == "Animator":
                     # A clip that can't be read mustn't lose the node's meshes and sprites.
                     try:
-                        cl = animator_clip(c)
+                        cl = animator_clip(c, os.path.join(out_dir, "tex"))
                     except Exception as e:
                         print("  node", go.m_Name, "clip not exported:", type(e).__name__, e, flush=True)
                         cl = None
@@ -985,6 +1079,8 @@ def export_root(env, root, name, root_tr=None, prefab=None, parts=True):
 
         below(i, "")
         n["clip"]["tracks"] = [dict(t, node=paths[t["path"]]) for t in n["clip"]["tracks"] if t["path"] in paths]
+        for st in n["clip"].get("states", []):
+            st["tracks"] = [dict(t, node=paths[t["path"]]) for t in st["tracks"] if t["path"] in paths]
     os.makedirs(out_dir, exist_ok=True)
     # UnityDisplayNode.Initialize (Steam build @0x181514830): a display is a sprite (faces the
     # camera: RotationCache's Euler(60, 0, -angle) for its rotation) when its root has an enabled
