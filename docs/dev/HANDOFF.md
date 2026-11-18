@@ -172,6 +172,37 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### DONE: map_haunted_beast_402_r60 MATCH (2026-11-17; moved to pending/maptowers, maptowers 91/91)
+Fixed, each from the recording (SimRecorder's new read-only "AA projectile targetPos.x targetPos.y arrived"
+line for ArriveAtTarget showed targetPos lags one frame while 498 is carried, but not on the snatch frame):
+(1) the carrying runs after projectiles made before the snatch: Bloon.held_at (set at the first snatch or
+carry, kept through a degrade's first child, cleared on release) and held_prev (its spot as the frame
+began); ArriveAtTarget's follow (pr.born < held_at) and the Great White grab's createdAtPosition (its
+Explosion's source bite, Projectile.src_born) take held_prev; (2) Knockback.Collide (VERIFIED-DECOMP
+@0x180cc6bd0) returns for offTrackCount > 0 (a carried bloon, wind, a trance): rt 2506, the dropped
+PinkRegrows move on at full speed; (3) instant_pass keeps the collision grid on only while it still
+matches the bloon list (it is the last collision pass's; a grab's chained pops in a bite's
+collideOnSubProjectile hit at rt 3135 corrupted it). The no-pull branch still never happens here.
+(Earlier notes, kept:)
+Scenario tools/mod/scenarios/map_haunted_beast_402_r60.json (round 60, same spot). The no-pull branch
+never happens in it (no BloonFollowProjectile). First difference rt 1894: Piranha bite 848 (made ~1874,
+keepUpdatingTargetPos) follows ZebraRegrow 498, which the Gyrfalcon snatches at 1893 (degraded to PinkRegrow,
+distanceTraveled 487.5 -> 389.5, offTrackCount 1). The game's bite at 1894 still heads for 498's 1893 spot
+(-4.46, 45.02) (solved from its position: e 0.6597 on both axes), while the clone, whose birds now run before
+the follow (needed by map_spillway_beast_302_r40 rt 1919, where a bite at a bloon carried since before it was
+made uses the bloon's current-frame spot), uses 498's 1894 spot. Find what differs: the Target's validity
+for a just-snatched bloon (TrackTarget / ArriveAtTarget Target.IsValid, its cached position) or the air unit's
+place in the process list relative to the projectile. READ (2026-11-17): ArriveAtTarget.Process
+(@0x180c870f0) with keepUpdatingTargetPosition sets targetPos = Target.Position whenever Target.IsValid
+(@0x180c09350: the bloon not destroyed, its Id == setBloonId, not IsInvulnerable (Bloon vtable slot 100));
+Target.GetPosition reads the bloon's Position (lastBloonPosition only once it is destroyed). So neither
+explains a frame-old spot: next, add a SimRecorder probe line for ArriveAtTarget.targetPos (+0x7c) per
+frame and re-record, to see whether targetPos itself lags or the curve differs. First bloon difference rt 2506 (PinkRegrows), likely
+downstream. LatchToBloon (the no-pull branch) read: Process @0x180cc7200 (position = bloon + offset rotated
+by the bloon's rotation change, z + the MOAB height offset), SetTarget @0x180cc7670, OnDestroy @0x180cc7110
+(SetBeastHandlerIntoCooldown: limitUntil = (int)(postBloonDestroyTime / (1/60)) + time, the slow mutator
+removed); needs a recording where a ZOMG+ reaches the pet.
+
 ### DONE: Beast Handler Great White grab (2026-11-17; no-pull branch a STAND-IN)
 PORTED (game.json projectile `great_white`, weapon `gw_limit`; Game::great_white_hit / gw_step / gw_limiter,
 GwEffect, WeaponState gw_*): GreatWhiteLimitProjectile.FilterEmission (no current effect, Simulation.time >=

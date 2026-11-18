@@ -363,6 +363,13 @@ pub struct Bloon {
     pub cseq: u64,
     /// In a Gyrfalcon's claws (MoveWithAirUnit, offTrackCount): not filed on the path's segments.
     pub held: bool,
+    /// When a Gyrfalcon snatched it (sim_elapsed x 4 + 3) and where it was carried to as this frame
+    /// began: the carrying is processed after projectiles made before the snatch (recording
+    /// map_haunted_beast_402_r60 AA lines: bite 848, made before ZebraRegrow 498 was snatched at
+    /// 1893, follows its spot of the frame before from 1894; map_spillway_beast_302_r40: a bite
+    /// made after the snatch follows the current spot).
+    pub held_at: u64,
+    pub held_prev: [f32; 2],
     /// Galvanized's stage mutator (AddBehaviorToBloonMutator "Galvanised", stage 1 / 2 / 3) and
     /// the frame (sim_elapsed) it runs out.
     pub galv: (u8, u64),
@@ -2794,6 +2801,8 @@ pub struct Projectile {
     retarget_at: Option<u64>,
     /// As Bloon.born.
     born: u64,
+    /// For one made by another's exhaust, that one's `born` (its Process made it; 0 otherwise).
+    src_born: u64,
     camo: bool,
     /// Its tower sees camo by a support buff (which turns the FilterInvisibles off).
     buff_camo: bool,
@@ -5284,7 +5293,11 @@ macro_rules! collide_pass {
                         // IsMutatedBy check isn't for its own mutator; another Knockback mutator goes on
                         // with a full lifespan. INFERRED from recording desperado_004 rt 261: a third
                         // pellet a frame after the first two keeps the MOAB going back 12 frames, not 11.)
-                        let ok = *valid.get_or_insert(on_map(b.pos, 0.0) && spawn_ok && past_entry);
+                        // (Knockback.Collide (VERIFIED-DECOMP @0x180cc6bd0) returns for a bloon with
+                        // offTrackCount > 0: carried by a Gyrfalcon, wind or a trance; recording
+                        // map_haunted_beast_402_r60 rt 2506, the bird's PinkRegrows dropped after
+                        // thrashes hit them move on at full speed.)
+                        let ok = *valid.get_or_insert(on_map(b.pos, 0.0) && spawn_ok && past_entry && !b.off_track());
                         let immune = $s.defs[b.kind].bad_immunity
                             && ($s.mutator_data.bad_immunity_ids.iter().any(|$p| "Knockback".starts_with($p.as_str())) || $s.mutator_data.bad_immunity_tags.iter().any(|t| "Knockback".contains(t.as_str())));
                         if immune {
@@ -5779,6 +5792,7 @@ macro_rules! collide_pass {
                 // its MoabDot where it was.)
                 let at = if pr.pierce <= 0.0 { pr.prev } else { pr.pos };
                 ex.src = pr.uid;
+                ex.src_born = pr.born;
                 ex.target_off = pr.inst_off;
                 $exhausted.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
             }
@@ -6898,7 +6912,7 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
-        self.bloons.push(Bloon { held: false, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
+        self.bloons.push(Bloon { held: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
         if self.defs[kind].rotate_to_follow_path {
@@ -7597,7 +7611,8 @@ impl Game {
             if b.born >= pr.born {
                 continue;
             }
-            let q = [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]];
+            let at = if b.held && pr.born < b.held_at { b.held_prev } else { b.pos };
+            let q = [at[0] + pr.inst_off[0], at[1] + pr.inst_off[1]];
             let ar = ar.clone();
             let pr = &mut self.projectiles[p];
             let mut tg = pr.arrive_at.unwrap().2;
@@ -9741,6 +9756,9 @@ impl Game {
                                 let n = held.len() as f32;
                                 self.bloons[i].path = p;
                                 self.bloons[i].dist = centre - (n + n);
+                                if !self.bloons[i].held || self.bloons[i].held_at == 0 {
+                                    self.bloons[i].held_at = self.sim_elapsed * 4 + 3;
+                                }
                                 self.bloons[i].held = true;
                                 // All but the first sit 1 off the bird, (0, 1) turned by a NextDouble
                                 // x 360 (recording beast_001 rt 404).
@@ -9816,6 +9834,7 @@ impl Game {
 
     /// Held bloons sit on the bird and don't move (after this frame's bloon moves).
     fn hold_bird_bloons(&mut self) {
+        let now4 = self.sim_elapsed * 4;
         for t in 0..self.towers.len() {
             let Some(a) = self.towers[t].air.as_ref() else { continue };
             if a.grab.is_empty() {
@@ -9825,7 +9844,14 @@ impl Game {
             for h in &held {
                 if let Some(b) = self.bloons.iter_mut().find(|b| b.id == *h) {
                     let off = dists.iter().find(|d| d.0 == *h).map_or([0.0; 2], |d| d.2);
+                    let was = b.pos;
+                    // (First carried this frame: a snatch, or a copy that carries on in the claws.)
+                    if b.held_at == 0 {
+                        b.held_at = now4 + 3;
+                    }
                     b.pos = [pos[0] + off[0], pos[1] + off[1]];
+                    // (Snatched this frame: the bird put it here; later frames: its last spot.)
+                    b.held_prev = if b.held_at >= now4 { b.pos } else { was };
                     b.prev = b.pos;
                     if let Some(d) = dists.iter().find(|d| d.0 == *h) {
                         b.dist = d.1;
@@ -9844,6 +9870,7 @@ impl Game {
             if let Some(b) = self.bloons.iter_mut().find(|b| b.id == h) {
                 b.effects.retain(|e| e.id != "BeastGrab");
                 b.held = false;
+                b.held_at = 0;
                 let off = st.dists.iter().find(|d| d.0 == h).map_or([0.0; 2], |d| d.2);
                 b.pos = [st.last_pos[0] + off[0], st.last_pos[1] + off[1]];
                 b.prev = b.pos;
@@ -14351,6 +14378,8 @@ impl Game {
         let parent_seg = b.seg_dist;
         let parent_chill = if self.defs[kind].is_moab { (0, 0) } else { b.chill };
         let parent_id = b.id;
+        // (A carried bloon's degrade keeps the bird's hold: the first child is the same object.)
+        let parent_held = (b.held_at, b.held_prev);
         let lineage: std::sync::Arc<[u64]> = b.lineage.iter().flat_map(|l| l.iter().copied()).chain(std::iter::once(b.layer)).collect();
         let parent_place = if self.grid_on && self.has_grid_rank { self.ggrid.place_of(i) } else { (EMPTY, EMPTY) };
         let pp0 = b.pos;
@@ -14593,6 +14622,7 @@ impl Game {
                     // (spawn_on listed it under a new id: it is the parent, still listed.)
                     let fresh = ch.id;
                     ch.id = parent_id;
+                    (ch.held_at, ch.held_prev) = parent_held;
                     id = parent_id;
                     if let Some(&(p, k)) = self.path_rank.get(&parent_id) {
                         // The parent's entry carries on; drop the one just made (wherever it is:
@@ -15673,7 +15703,12 @@ impl Game {
         // createdAtPosition: the bloon's Position (a MOAB's centre, not the bite's spot above it:
         // recording map_haunted_beast_402_r40 rt 375, the first thrash 36 / 96 of the way from
         // MOAB 348's (-27.04, 47.70) to the pet).
-        let from = b.pos;
+        // (A bloon the Gyrfalcon carries: where it was as the frame began if the bite whose
+        // Process makes this Explosion is older than the snatch, as ArriveAtTarget's follow;
+        // recording map_haunted_beast_402_r60 rt 1908 / 1944, the thrash 36 / 56 of the way from
+        // carried PinkRegrow 498's spot of the frame before.)
+        let src = if self.projectiles[p].src_born > 0 { self.projectiles[p].src_born } else { self.projectiles[p].born };
+        let from = if b.held && src < b.held_at { b.held_prev } else { b.pos };
         let kind = b.kind;
         let to = self.towers[t].pos;
         // SetCooldown(postDragTimeFrames x (1/60) + f): limitUntil = (int)(s / (1/60)) + time.
@@ -22453,6 +22488,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     ex.stale_target = pr.target_obj.map(|o| (o, pr.inst_off));
                 }
                 ex.src = pr.uid;
+                ex.src_born = pr.born;
                 ex.target_off = pr.inst_off;
                 // (An arrived shot's spot is its ArriveAtTarget Target; see `arrive_target`.)
                 if pr.arrive_at.is_some() {
@@ -22594,6 +22630,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // Process ends it (vfunc 0x808), so the Explosion lives only the frame it is made
             // (recording map_haunted_beast_402_r40: P 365 made at rt 339, x365 at 340).
             for pr in &mut self.projectiles[start..] {
+                pr.src_born = ex.src_born;
                 if pr.spec.great_white.is_some() {
                     pr.frames_left = pr.frames_left.min(1.0);
                 }
@@ -23287,6 +23324,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 origin: pos,
                 wait: 0.0,
                 retarget_at: None,
+                src_born: 0,
                 born: self.sim_elapsed * 4 + self.phase as u64,
                 bounces: 0,
                 camo: true,
@@ -23357,7 +23395,12 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let mut exhausted: Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32))> = Vec::new();
         if !self.instant_hits.is_empty() {
             let only = std::mem::take(&mut self.instant_hits);
-            self.grid_on = true;
+            // (The grid is the last collision pass's: bloons made or removed since (with it off)
+            // leave it out of step, and these direct hits don't look anything up in it, so it is
+            // only kept up while it still matches the bloon list. Recording
+            // map_haunted_beast_402_r60 rt 3135: a Great White grab's chained pops in a bite's
+            // collideOnSubProjectile hit.)
+            self.grid_on = self.grid.of.len() == self.bloons.len();
             let mut cand2 = std::mem::take(&mut self.grid_cand);
             let mut ex2 = Vec::new();
             let mut pi = 0;

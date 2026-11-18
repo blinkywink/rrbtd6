@@ -136,7 +136,7 @@ class StaticClip:
 def main():
     bundle = glob.glob(os.path.join(AA, BUNDLE + "*.bundle"))[0]
     # Batch runs (export_animated_batch.py) load each bundle once.
-    env = em._envs.get(os.path.basename(bundle)) or UnityPy.load(bundle)
+    env = em._envs.get(os.path.basename(bundle)) or em.load_bundle(bundle)
     em._envs[os.path.basename(bundle)] = env
     os.makedirs(OUT, exist_ok=True)
     parent_world = np.eye(4)

@@ -1827,6 +1827,20 @@ static class SimulatePatch
                     w.WriteLine($"PT {pr.Id.Id} {(tb == null ? -1 : tb.Id.Id)} {(tg.IsValid ? 1 : 0)}");
                 }
                 catch (Exception) { }
+                // Read-only: ArriveAtTarget state: "AA projectile targetPos.x targetPos.y arrivedAtTarget"
+                // and the Target's bloon Position as this line is written.
+                try
+                {
+                    var pbs = pr.projectileBehaviors?.list;
+                    for (int j = 0; pbs != null && j < pbs.Count; j++)
+                    {
+                        var aa = pbs[j]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Projectiles.Behaviors.ArriveAtTarget>();
+                        if (aa == null) continue;
+                        var tp = aa.targetPos;
+                        w.WriteLine($"AA {pr.Id.Id} {Recorder.F(tp.x)} {Recorder.F(tp.y)} {(aa.arrivedAtTarget ? 1 : 0)}");
+                    }
+                }
+                catch (Exception) { }
             }
         });
     }

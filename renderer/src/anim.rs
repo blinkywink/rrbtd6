@@ -223,6 +223,8 @@ pub struct AnimModel {
     /// MonkeyAnimationController.animationStates' clip names in order (states.json,
     /// export_anim_states.py): Weapon.SetAnimation's state n plays states[n].
     states: Vec<Option<String>>,
+    /// [priority, interruptibleBehaviour, looping] per state (state_flags.json, same order).
+    state_flags: Vec<[i32; 3]>,
     legacy_scratch:Option<(Vec<Vertex>,Vec<Vertex>)>,
     /// Set before a draw: (pitch, roll, scale) applied in the model's own space before its yaw
     /// (nose up about x, roll about its forward z, left wing down for positive roll).
@@ -357,6 +359,7 @@ pub struct Staged {
     frames: std::sync::Arc<Frames>,
     attach: Option<std::sync::Arc<Attach>>,
     states: Vec<Option<String>>,
+    state_flags: Vec<[i32; 3]>,
 }
 
 /// export_animated.py attach.bin: the transforms carrying particle systems (paths from the prefab
@@ -542,7 +545,7 @@ impl AnimModel {
             .collect::<Vec<_>>();
         let fx = parts.iter().map(|p| p.fx_spec.as_ref().and_then(|s| make_fx(s))).collect();
         let shadow = st.shadow.map(|s| Shadow { tex: upload_shadow(&s.tex), size: s.size, pos: s.pos });
-        Self { shadow, parts, fx, clips: st.clips, nverts: st.nverts, frames: st.frames, attach: st.attach, states: st.states, legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt: None }
+        Self { shadow, parts, fx, clips: st.clips, nverts: st.nverts, frames: st.frames, attach: st.attach, states: st.states, state_flags: st.state_flags, legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt: None }
     }
 
     async fn from_staged_cooperative(st:Staged)->Self{
@@ -562,7 +565,7 @@ impl AnimModel {
         }
         let fx=parts.iter().map(|p|p.fx_spec.as_ref().and_then(|s|make_fx(s))).collect();
         let shadow=if let Some(s)=st.shadow{let tex=upload_shadow_cooperative(&s.tex).await;Some(Shadow{tex,size:s.size,pos:s.pos})}else{None};
-        Self{shadow,parts,fx,clips:st.clips,nverts:st.nverts,frames:st.frames,attach:st.attach,states:st.states,legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt:None}
+        Self{shadow,parts,fx,clips:st.clips,nverts:st.nverts,frames:st.frames,attach:st.attach,states:st.states,state_flags:st.state_flags,legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt:None}
     }
 
     /// Reads and decodes a model directory without touching the GPU (safe off the main thread).
@@ -695,7 +698,8 @@ impl AnimModel {
             })
         });
         let states: Vec<Option<String>> = std::fs::read_to_string(dir.join("states.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-        Some(Staged { shadow, parts, clips, nverts, frames, attach, states })
+        let state_flags: Vec<[i32; 3]> = std::fs::read_to_string(dir.join("state_flags.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        Some(Staged { shadow, parts, clips, nverts, frames, attach, states, state_flags })
     }
 
     pub fn vertex_count(&self) -> usize {
@@ -818,6 +822,20 @@ impl AnimModel {
         self.states.is_empty() || (n as usize) < self.states.len()
     }
 
+    /// Whether state `n` arriving while state `cur` plays restarts at once (PlayableAnimator.Play
+    /// @0x1815296e0): the playing state's interruptibleBehaviour 0 lets an equal or higher priority
+    /// in, 1 only a higher one, 2 any; otherwise the new state is queued for the clip's end.
+    /// Without exported flags: queued (the old behaviour).
+    pub fn state_interrupts(&self, cur: i32, n: i32) -> bool {
+        let (Some(c), Some(f)) = (self.state_flags.get(cur.max(0) as usize), self.state_flags.get(n.max(0) as usize)) else { return false };
+        match c[1] {
+            0 => f[0] >= c[0],
+            1 => f[0] > c[0],
+            2 => true,
+            _ => false,
+        }
+    }
+
     pub fn state_clip(&self, n: i32) -> Option<usize> {
         let name = self.states.get(usize::try_from(n).ok()?)?.as_deref()?;
         self.clips.iter().position(|c| c.name == name)
@@ -841,6 +859,13 @@ impl AnimModel {
     }
 
     pub fn idle_clip(&self) -> usize {
+        // State 0 is the idle: MonkeyAnimationController.SetState (@0x1815264c0) clamps to 0 and
+        // SelectIdleHighQuality (@0x181526070) picks between it and the IdleVariants. Name order
+        // picked another controller's clip on 116 models (Druid 3xx's body idled as Ball
+        // Lightning's BallLightningIdle, Desperado 030+ as "Idle" instead of IdleRifle).
+        if let Some(c) = self.state_clip(0) {
+            return c;
+        }
         self.clips
             .iter()
             .position(|c| c.name.ends_with("Idle") && !c.name.ends_with("AttackIdle"))

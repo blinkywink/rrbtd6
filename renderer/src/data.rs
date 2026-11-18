@@ -1810,6 +1810,9 @@ pub struct Exhaust {
     /// (Runtime: the uid of the projectile it came from, for the process-list order.)
     #[serde(skip)]
     pub src: u64,
+    /// (Runtime: that projectile's place in the process list, Projectile.born.)
+    #[serde(skip)]
+    pub src_born: u64,
     /// (Runtime: the bloon its ArriveAtTarget was flying at, when it went at the Target.)
     #[serde(skip)]
     pub arrive_target: Option<u64>,

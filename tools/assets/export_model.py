@@ -89,9 +89,26 @@ def bundle_file(name):
     return f if os.path.exists(f) or not os.path.exists(half) else half
 
 
+def load_bundle(path):
+    """UnityPy.load(path); a bundle too big to decompress in memory (asset_references_assets_all,
+    MemoryError) loads from its decompressed files in local_extracted/_bundle_cache/<name>-*/."""
+    try:
+        return UnityPy.load(path)
+    except MemoryError:
+        base = os.path.basename(path)
+        cache = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                             "local_extracted", "_bundle_cache")
+        for d in sorted(glob.glob(os.path.join(cache, glob.escape(base) + "-*"))):
+            if os.path.isdir(d) and os.path.exists(os.path.join(d, ".complete")):
+                files = [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.startswith("CAB-")]
+                print("(loading", base, "from the bundle cache)", flush=True)
+                return UnityPy.load(*files)
+        raise
+
+
 def env_for_bundle(name):
     if name not in _envs:
-        _envs[name] = UnityPy.load(bundle_file(name))
+        _envs[name] = load_bundle(bundle_file(name))
     return _envs[name]
 
 

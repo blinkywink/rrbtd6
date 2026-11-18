@@ -27,3 +27,11 @@ every frame, so the clone can be checked against it.
   tools/mod/build.sh` builds without touching the game's Mods folder (while the game runs).
 
 Each run starts a new game on the scenario's map, which replaces a saved game on that map.
+
+## InfiniteGeraldo
+
+A separate gameplay mod: Geraldo's shop has infinite stock (items still cost cash; no stock is
+used up and no per-game purchase caps apply), and tower buffs (Hot Sauce, Pickles, Sharpening
+Stone, Fertilizer, See Invisibility) stack any number of times on one tower. Build with `MOD=InfiniteGeraldo sh tools/mod/build.sh`
+(installs `<game>/Mods/InfiniteGeraldo.dll`). Remove it from `Mods` before recording with
+SimRecorder, or Geraldo recordings won't match the real game.

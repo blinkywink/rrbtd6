@@ -92,7 +92,9 @@ for i in range(0, len(todo), CHUNK):
 
 # Sun Temple / True Sun God clips grafted from the original prefabs (export_tower_assets.py).
 src = open("tools/assets/export_tower_assets.py", encoding="utf-8").read()
-grafts = eval(src[src.index("GRAFTS = [") + len("GRAFTS = "):src.index("]\nfor t, target, source, only, clips, flags in GRAFTS")] + "]")
+# (The list ends at its first line that is just "]"; a comment can follow it.)
+start = src.index("GRAFTS = [") + len("GRAFTS = ")
+grafts = eval(src[start:src.index("\n]\n", start)] + "\n]")
 for t, target, source, only, clips, flags in grafts:
     s = f"local_extracted/models/_originals/{only or source}"
     d = f"local_extracted/models/{t}/tiers/{target}"

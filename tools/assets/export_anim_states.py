@@ -89,14 +89,18 @@ def states_of(root):
                 # MonkeyAnimationController.WriteHighQualityAnimationIndices (VERIFIED-DECOMP
                 # @0x1815272b0): animationStatesByIndex is animationStates, then placementConfigs,
                 # attackIdleConfigs and IdleVariants; SetState(n) plays entry n (@0x1815264c0).
-                out = []
+                out, flags = [], []
                 for s in [x for k in ("animationStates", "placementConfigs", "attackIdleConfigs", "IdleVariants") for x in t.get(k, [])]:
                     co = resolve(af, s.get("animationClip"))
                     if co is not None:
                         co = over.get(co.path_id, co)
                     # (A clip that can't be resolved: None; the renderer then falls back to names.)
                     out.append(co.read_typetree()["m_Name"] if co is not None else None)
-                return out
+                    # PlayableAnimator.Play (@0x1815296e0): the playing clip's interruptibleBehaviour
+                    # (0: a state of equal or higher priority interrupts it, 1: only a higher one,
+                    # 2: any) decides whether a new state restarts at once or waits for its end.
+                    flags.append([s.get("priority", 0), s.get("interruptibleBehaviour", 0), s.get("looping", 0)])
+                return out, flags
     return None
 
 
@@ -138,7 +142,10 @@ def main():
                 print("skip", folder, e)
                 continue
             if st is not None:
+                st, flags = st
                 (folder / "states.json").write_text(json.dumps(st), encoding="utf-8")
+                # [priority, interruptibleBehaviour, looping] per state, same order.
+                (folder / "state_flags.json").write_text(json.dumps(flags), encoding="utf-8")
                 n += 1
         pi.bundles.clear()
         em._envs.clear()

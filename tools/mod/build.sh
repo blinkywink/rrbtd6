@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build tools/mod/SimRecorder into <game>/Mods/SimRecorder.dll with Visual Studio's csc against
+# Build tools/mod/$MOD (default SimRecorder) into <game>/Mods/$MOD.dll with Visual Studio's csc against
 # the .NET 6 runtime, MelonLoader and the game's interop assemblies (no .NET SDK needed).
 set -e
 # The install: $BTD6, else Steam (the launcher's first choice), else Epic.
@@ -8,6 +8,8 @@ GAME="${BTD6:-}"
 CSC="/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/Roslyn/csc.exe"
 NET6=$(ls -d "/c/Program Files/dotnet/shared/Microsoft.NETCore.App/6.0."* | sort -V | tail -1)
 HERE=$(cd "$(dirname "$0")" && pwd)
+# MOD picks the mod folder under tools/mod (default SimRecorder).
+MOD="${MOD:-SimRecorder}"
 OUT="$HERE/bin"
 mkdir -p "$OUT"
 RSP="$OUT/refs.rsp"
@@ -20,11 +22,11 @@ for f in "$NET6"/*.dll "$GAME"/MelonLoader/net6/*.dll "$GAME"/MelonLoader/Il2Cpp
   echo "-r:\"$(cygpath -w "$f")\"" >> "$RSP"
 done
 "$CSC" -nologo -noconfig -nostdlib -target:library -langversion:10 -nullable:disable -optimize+ -unsafe+ \
-  -out:"$(cygpath -w "$OUT/SimRecorder.dll")" @"$(cygpath -w "$RSP")" "$(cygpath -w "$HERE/SimRecorder/SimRecorder.cs")"
+  -out:"$(cygpath -w "$OUT/$MOD.dll")" @"$(cygpath -w "$RSP")" "$(cygpath -w "$HERE/$MOD/$MOD.cs")"
 # NO_INSTALL=1: build into tools/mod/bin only (the game may be running and holding the old DLL).
 if [ -n "$NO_INSTALL" ]; then
-  echo "built -> $OUT/SimRecorder.dll (not installed)"
+  echo "built -> $OUT/$MOD.dll (not installed)"
   exit 0
 fi
-cp "$OUT/SimRecorder.dll" "$GAME/Mods/SimRecorder.dll"
-echo "built -> $GAME/Mods/SimRecorder.dll"
+cp "$OUT/$MOD.dll" "$GAME/Mods/$MOD.dll"
+echo "built -> $GAME/Mods/$MOD.dll"

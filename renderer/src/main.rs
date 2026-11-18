@@ -2542,12 +2542,16 @@ async fn game_main() {
                 // (seconds into the attack clip of length `dur`, throw pending): it runs on from
                 // the last frame; a throw restarts it only once it has finished, one that came
                 // while it played starts it again from its end.
-                let phase = |dur: f32| -> (f32, bool) {
+                // `restart`: the state may interrupt itself (its interruptibleBehaviour lets an
+                // equal priority in, PlayableAnimator.Play @0x1815296e0): a throw then starts the
+                // clip again at once (Druid's attack) instead of after its end.
+                let phase = |dur: f32, restart: bool| -> (f32, bool) {
                     if !attacked {
                         return (f32::MAX, false);
                     }
                     let (p, pending) = match prev_phase {
                         Some((ph, last, pending)) if t.attack_t >= last => (ph + (t.attack_t - last), pending),
+                        Some(_) if restart => (t.attack_t, false),
                         Some((ph, _, _)) if ph < dur => (ph + t.attack_t, true),
                         _ => (t.attack_t, false),
                     };
@@ -2562,8 +2566,8 @@ async fn game_main() {
                         last_pose.set((c, at));
                         m.meshes(c, at, pos, yaw, outline_scale, blink, sel_outline)
                     }
-                    Some(a) if phase(m.clip_duration(a)).0 < m.clip_duration(a) => {
-                        let (ph, pending) = phase(m.clip_duration(a));
+                    Some(a) if phase(m.clip_duration(a), t.anim_state >= 1 && m.state_interrupts(t.anim_state, t.anim_state)).0 < m.clip_duration(a) => {
+                        let (ph, pending) = phase(m.clip_duration(a), t.anim_state >= 1 && m.state_interrupts(t.anim_state, t.anim_state));
                         if body {
                             body_phase = Some((ph, t.attack_t, pending));
                         }
@@ -2627,7 +2631,15 @@ async fn game_main() {
                         if let Some(m) = tier_anims.get_mut(&(t.def, dir.clone())).and_then(|m| m.as_mut()) {
                             let (s, c) = aim_yaw.sin_cos();
                             let p = [pos[0] + off[0] * c + off[2] * s, pos[1] + off[1], pos[2] - off[0] * s + off[2] * c];
-                            let (b, o) = match m.attack_clip() {
+                            // The weapon's animation state picks the clip here as on the body
+                            // (Weapon.SetAnimation sets it on the attack's display: Rocket Storm's
+                            // gun cycles RocketSwivelAttack01-04; by name it only ever played 01).
+                            let clip = if t.anim_state >= 1 && !m.state_in_range(t.anim_state) {
+                                None
+                            } else {
+                                (t.anim_state >= 1).then(|| m.state_clip(t.anim_state)).flatten().or_else(|| m.attack_clip_n(throws))
+                            };
+                            let (b, o) = match clip {
                                 _ if shown(m).is_some() => {
                                     let (c, at) = shown(m).unwrap();
                                     m.meshes(c, at, p, aim_yaw, outline_scale, blink, sel_outline)

@@ -65,6 +65,35 @@ effect names, model behaviours the data builder never reads).
   now chain links every 12 from 12 out along the tower-to-hook line and the hook at its end (Buccaneer
   x-4-x MonkeyPirateHook, x-5-x PirateLordHook). STAND-IN: from the tower's centre, not its eject point.
 
+## Done (2026-11-17, animation clips)
+
+- **Idle is state 0**: MonkeyAnimationController.SetState (@0x1815264c0) clamps to 0 and
+  SelectIdleHighQuality (@0x181526070) picks between state 0 and the IdleVariants, so `AnimModel::idle_clip`
+  now plays states.json[0]. The old "first clip ending in Idle" rule was wrong on 116 models: Druid 3xx /
+  4xx bodies idled as Ball Lightning (BallLightningIdle instead of DruidSpearIdle), Desperado 030+ as "Idle"
+  instead of IdleRifle / IdleShotgun / IdleRevolver, Chinook air units on their attack clip.
+- **Missing state clips re-exported**: 136 models listed states whose clips were never exported (exported
+  before export_animated.py added the "state" role, and export_tower_tiers skips existing folders). Now
+  re-exported: every Heli air unit (HeliPilotIdle missing: it idled on HeliPilotAttack), Banana Farmer Pro
+  (BFPro_Idle / Scoop / Throw: it played the plain Farmer's clips), Desperado (Idle), Druid
+  (DruidAttackaLightning), Skywarden (SkywardenAttackAbilityShoot1), the Bomb Paragon, the SMS Pro beacon
+  turret, Sheriff. `export_model.load_bundle` loads asset_references_assets_all from _bundle_cache on
+  MemoryError (it aborted every batch). Audit: 10 left (Rosalia's weapon extras, Wererabbit, the fan Super
+  Monkey's placement, the Heli / Farmer Pro base folders, which only hold the pad / base).
+- **Attack restarts** (PlayableAnimator.Play @0x1815296e0): a new state interrupts the playing clip
+  by the playing state's interruptibleBehaviour (0: equal or higher priority, 1: only higher, 2: any,
+  else queued as the return state and played from its end) and restarts from frame 0. 1531 models'
+  attack state is (priority 1, interruptible 0), so every throw restarts the attack clip at once; the
+  clone queued it after the clip's end for all. export_anim_states.py writes state_flags.json
+  ([priority, interruptibleBehaviour, looping] per state); `AnimModel::state_interrupts`. Scene.PresentModels
+  (@0x18150e410) hands the node the frame's state then resets it to 0, and UnityDisplayNode.set_AnimationState
+  (@0x181516280) acts only on a change, so a throw is a 0 -> n change. AnimationSpeed stays 1 (no sim
+  caller found).
+- **Attack displays follow the weapon's state** like the body (Rocket Storm's gun cycles
+  RocketSwivelAttack01-04; by name it always played 01).
+- LEFT: several models have more than one clip with the same name (Admiral Brickell's three "Idle"
+  states); `state_clip` looks clips up by name, so a state naming a duplicate gets the first one.
+
 ## Audit entries that aren't gaps
 
 - `CreateEffectOnExpireModel`: read for projectiles (`expire_fx`) and sub-towers (`expire_fx`); the
