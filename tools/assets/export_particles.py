@@ -439,7 +439,17 @@ def load_bundle(path):
     # copy of the bundle alive (asset_references_assets_all, ~900 MB, then ran out of memory).
     name = os.path.basename(path)
     mono = glob.glob(os.path.join(AA, "*_monoscripts_*.bundle"))
-    env = UnityPy.load(path, *mono)
+    try:
+        env = UnityPy.load(path, *mono)
+    except MemoryError:
+        # Too big to decompress here (asset_references_assets_all): its decompressed files in
+        # local_extracted/_bundle_cache/<name>-*/ (as export_model.load_bundle).
+        cache = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "local_extracted", "_bundle_cache")
+        dirs = [d for d in sorted(glob.glob(os.path.join(cache, glob.escape(name) + "-*"))) if os.path.exists(os.path.join(d, ".complete"))]
+        if not dirs:
+            raise
+        gc.collect()
+        env = UnityPy.load(*[os.path.join(dirs[0], f) for f in sorted(os.listdir(dirs[0])) if f.startswith("CAB-")], *mono)
     deps = set()
     for f in list(env.files.values()):
         for af in getattr(f, "files", {}).values():

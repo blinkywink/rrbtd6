@@ -64,6 +64,17 @@ def main():
 
     empty_displays = {g for g, n in catalog_prefabs.items() if n in ("Empty.prefab", "EmptyPrefab.prefab", "#EmptyAsset.prefab")}
 
+    def pet_power(pf):
+        """BeastHandlerPetModel's merge numbers (ContributionMutator.Mutate @0x181208b50)."""
+        return {"tier": pf.get("tier", 0), "base": pf.get("basePower", 0), "max": pf.get("maxPower", 0),
+                "enable": bool(pf.get("enableContribution")), "cd": pf.get("cooldownScaleRange", 0.0),
+                "pierce": pf.get("pierceRange", 0), "damage": pf.get("damageRange", 0),
+                "destroy": pf.get("destroyTimeScaleRangePiranha", 0.0),
+                "knockback": pf.get("thrashKnockbackLifetimeRange", 0.0),
+                "stun_div": pf.get("stunBonusDivideMicroraptor", 0.0),
+                "grapple": pf.get("damageRangeGrappleGyrfalcon", 0),
+                "speed": pf.get("speedRangeGyrfalcon", 0.0)}
+
     def deref(v):
         if isinstance(v, dict) and "$ref" in v:
             i = v["$ref"]
@@ -141,6 +152,11 @@ def main():
                 name = prefab_name(em["f"].get("assetId")) if em else None
                 if name:
                     out.append([name, em["f"].get("scale", 1.0) or 1.0])
+                # The projectile CreateEffectOnExpireModel / CreateEffectOnExhaustedModel can hold
+                # the effect as their own assetId with no effectModel (Monkey Sub 030+'s missiles'
+                # ExplosionLarge, Spike Factory mines, Wall of Fire's exit: audit_dropped_displays.py).
+                elif b["f"].get("assetId") and prefab_name(b["f"]["assetId"]):
+                    out.append([prefab_name(b["f"]["assetId"]), 1.0])
         return out
 
     def model3d(guid):
@@ -711,6 +727,23 @@ def main():
             # syncedRandom.Next(minLifespan x 60, maxLifespan x 60) as the shot is made.
             "age_random": [int(pb["AgeRandomModel"][0]["f"].get("minLifespan", 0.0) * 60), int(pb["AgeRandomModel"][0]["f"].get("maxLifespan", 0.0) * 60)] if pb.get("AgeRandomModel") and not pb.get("AgeModel") else None,
             "effect_after_target": next((int(m["f"]["time"] * 60) for m in pb.get("CreateEffectProjectileAfterTimeModel", []) if m["f"].get("useTargetPosition")), None),
+            # CreateEffectProjectileAfterTime (VERIFIED-DECOMP Process @0x180ca04c0, SpawnEffect
+            # @0x180ca0540): its effect once timeFrames have passed since countFrom (the creation
+            # frame), at the projectile or, useTargetPosition, its target; repeat counts again from
+            # then. Display only (the Sub's missile-pod FXDown, Tack Paragon meteors).
+            # ScaleProjectileOverTimeModel's effect (VERIFIED-DECOMP Process @0x180cdaa20, ProcessEffect
+            # @0x180cda5e0): made once, then each frame at the projectile + its direction x effectOffset,
+            # scaled to min(baseScale + scalePerSecond x seconds, maxScale). Display only (Riptide).
+            "scale_fx": next(({"fx": prefab_name(em["f"].get("assetId")), "offset": m["f"].get("effectOffset", 0.0),
+                               "base": m["f"].get("baseScale", 1.0), "max": m["f"].get("maxScale", 1.0),
+                               "per_sec": m["f"].get("scalePerSecond", 0.0)}
+                              for m in pb.get("ScaleProjectileOverTimeModel", [])
+                              for em in [deref(m["f"].get("effectModel"))] if em and prefab_name(em["f"].get("assetId"))), None),
+            "after_fx": [{"fx": prefab_name(em["f"].get("assetId")), "scale": em["f"].get("scale", 1.0) or 1.0,
+                          "frames": int(m["f"]["time"] * 60), "repeat": bool(m["f"].get("repeat")),
+                          "target": bool(m["f"].get("useTargetPosition"))}
+                         for m in pb.get("CreateEffectProjectileAfterTimeModel", [])
+                         for em in [deref(m["f"].get("effectModel"))] if em and prefab_name(em["f"].get("assetId"))],
             "display": "#empty" if disp.get("display") in empty_displays else disp.get("display"),
             "tag_mods": [tag_mod(b) for b in pb.get("DamageModifierForTagModel", [])],
             # DamageModifierWrathModel (Avatar of Wrath): + total RBE on screen / rbeThreshold x
@@ -980,7 +1013,9 @@ def main():
             out["scale_damage"] = [sf.get("baseDamage", 1.0), sf.get("scalePerSecond", 0.0), sf.get("maxDamage", 1.0)]
         out["state_mods"] = [{"states": ([sf["bloonState"]] if sf.get("bloonState") else [])
                               + [t for t in items(sf.get("bloonStates")) if isinstance(t, str)],
-                              "mult": sf.get("damageMultiplier", 1.0), "add": sf.get("damageAdditive", 0.0)}
+                              "mult": sf.get("damageMultiplier", 1.0), "add": sf.get("damageAdditive", 0.0),
+                              # bloonState alone: ContributionMutator.Mutate tests it for "Stun".
+                              "state": sf.get("bloonState") or ""}
                              for sf in (s["f"] for s in pb.get("DamageModifierForBloonStateModel", []))]
         # SilasApplyRimeModel (Silas): hit bloons get Rime, a lasting slow (speedModifier, MOABs
         # moabSpeedModifier), and IncreaseDamageFromTypeModel adds `amount` damage to hits on
@@ -1852,6 +1887,9 @@ def main():
                    # activateOnPreLeak (Bomb Blitz), maxActivationsPerRound, resetCooldownOnTierUpgrade.
                    "pre_leak": bool(bf.get("activateOnPreLeak")), "per_round": bf.get("maxActivationsPerRound", 0),
                    "full_start": bool(bf.get("resetCooldownOnTierUpgrade")),
+                   # cooldownSpeedScale (+0x88): Ability.Process (@0x180dfafc0) takes 1 / (1 - it)
+                   # off the cooldown a frame (a Beast Handler ContributionMutator raises it).
+                   "speed_scale": bf.get("cooldownSpeedScale", 0.0),
                    # canActivateBetweenRounds: Ability.IsReady (VERIFIED-DECOMP @0x180df9e80) skips
                    # its AreRoundsActive check (Overclock, Supply Drop...).
                    "between_rounds": bool(bf.get("canActivateBetweenRounds")),
@@ -2458,6 +2496,7 @@ def main():
         # spawned as permanent sub-towers inside the handler's range (HYPOTHESIS P-PET).
         pets = []
         leash_rotate = False
+        leash_power = {}
         paragon_towers = []
         for b in items(tobj["f"]["behaviors"]):
             # TowerCreateTowerModel (Corvus's Spirit, Lord Phoenix's PermaPhoenix): a permanent
@@ -2487,6 +2526,12 @@ def main():
             if b and b["type"] == "BeastHandlerLeashModel":
                 # rotateToLeashedTower (+0x4c): RotateToLeashedTower turns the handler to a moved pet.
                 leash_rotate = bool(b["f"].get("rotateToLeashedTower"))
+                # piranhaPetModel / microraptorPetModel / gyrfalconPetModel (+0x90 / 0x98 / 0xa0):
+                # GetMatchingPetModel by beast (merges: GetTotalPowerForBeast, the contributor cap).
+                for beast, key in (("Piranha", "piranhaPetModel"), ("Microraptor", "microraptorPetModel"), ("Gyrfalcon", "gyrfalconPetModel")):
+                    pm = deref(b["f"].get(key))
+                    if pm:
+                        leash_power[beast] = pet_power(pm["f"])
                 for key in ("towerModel", "towerModelSecond"):
                     sp = sub_tower(deref(b["f"].get(key)), None)
                     if sp:
@@ -2531,6 +2576,10 @@ def main():
                            "grapple_moab": dmg("grapplingDamageMoabModifierModel").get("damageAddative", 0.0),
                            "regrow_add": dmg("regrowDamageModifierModel").get("damageAddative", 0.0),
                            "amount": xf.get("grabAmount", 1), "radius": xf.get("grabRadius", 10.0),
+                           # extraGrabAmount (+0x100, a float): UpdateMovement (@0x180dc8130) adds it
+                           # to grabAmount (a Beast Handler ContributionMutator sets it).
+                           "extra": xf.get("extraGrabAmount", 0.0),
+                           "rot_speed": xf.get("rotationSpeed", 0.0),
                            "keep": bool(xf.get("keepPickingUpBloons")), "keep_range": xf.get("keepPickingBloonsRange", 0.0),
                            "penalty": {"Lead": xf.get("leadPiercePenalty", 0), "Ceramic": xf.get("ceramicPiercePenalty", 0),
                                        "Moab": xf.get("moabPiercePenalty", 0), "Bfb": xf.get("bfbPiercePenalty", 0),
@@ -2680,7 +2729,7 @@ def main():
                 "range_links": [[prefab_name(b["f"].get("displayPath")), b["f"].get("displayRadius", 0.0)]
                                 for b in items(f["behaviors"]) if b and b["type"] == "LinkDisplayScaleToTowerRangeModel"
                                 and prefab_name(b["f"].get("displayPath")) and b["f"].get("displayRadius")],
-                "attacks": attacks, "pets": pets, "leash_rotate": leash_rotate, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
+                "attacks": attacks, "pets": pets, "leash_rotate": leash_rotate, "leash_power": leash_power, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
                 "round_start_rate": round_start_rate, "vigilante": vigilante, "bank": bank, "supports": supports,
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
                 # SpiritOfTheForestModel (Druid x-x-4+): vines along the track; each zone's
@@ -2898,6 +2947,8 @@ def main():
                 # BeastHandlerLeash.ApplyCustomInputData @0x180cfa7d0 turns it to the new point).
                 "can_move": any(b["type"] == "BeastHandlerPetModel" and b["f"].get("canMove") for b in bs),
                 "rotate_moved": any(b["type"] == "BeastHandlerPetModel" and b["f"].get("rotateWhenMoved") for b in bs),
+                # BeastHandlerPetModel's merge numbers (ContributionMutator.Mutate @0x181208b50).
+                "power": next((pet_power(b["f"]) for b in bs if b["type"] == "BeastHandlerPetModel"), None),
                 "on_destroy": on_destroy,
                 # TowerModel.ignoreTowerForSelection: Phoenixes can't be clicked; Sentries can.
                 "selectable": not f.get("ignoreTowerForSelection", False),

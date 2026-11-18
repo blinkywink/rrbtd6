@@ -94,6 +94,39 @@ effect names, model behaviours the data builder never reads).
 - LEFT: several models have more than one clip with the same name (Admiral Brickell's three "Idle"
   states); `state_clip` looks clips up by name, so a state naming a duplicate gets the first one.
 
+## Display audits (2026-11-17)
+
+- `python -I tools/assets/audit_displays.py`: every projectile display GUID in game.json vs
+  models/projectiles/index.json. 3769 checked: all resolve (4 named differently in the catalog, 3 missing:
+  Final Strike's fallout, the Fan Club "projectiles").
+- `python -I tools/assets/audit_dropped_displays.py [--tower X]`: every prefab GUID each tower tier's
+  model reaches in the game (sub-towers included, other towers and upgrades not) vs what the tier's
+  game.json / display plan carries, grouped by the holding behaviour. Note: catalog_prefabs names one
+  prefab per GUID and a GUID can have several (the Bomb Shooter's body GUID is listed as BombBlitz), so
+  compare GUIDs, not names.
+- `tools/.venv/Scripts/python.exe tools/assets/display_sheet.py <dir> [Tower]`: contact sheets of each
+  tower's projectile art with game / clone names.
+- FIXED: projectile CreateEffectOnExpireModel / CreateEffectOnExhaustedModel holding the effect as their own
+  assetId (no effectModel) were dropped by `fx_list`: Monkey Sub 030+'s ExplosionLarge, First Strike,
+  Mortar's Shell Shock explosions, Spike Factory mines, Wall of Fire's exit, Buccaneer skulls (152 refs).
+  The 29 effects behind them are exported (export_pending_models EFFECT_FIELDS; export_particles loads
+  asset_references from _bundle_cache on MemoryError).
+- DONE: CreateEffectProjectileAfterTime (`after_fx`, main.rs: Tack Paragon meteors, missile pods, Great
+  White thrash splashes; STAND-IN: isBuffedByRate's rate scaling not applied); ScaleProjectileOverTime's
+  effect (`scale_fx`: Riptide's aura ahead of the projectile, growing); ability attack displays (Glue Storm's
+  hose, build_display_plan `attack: -1`, drawn while a `Tower.temp` attack runs). The Super Monkey arm
+  entries in the audit are catalog-name noise (401 / 410 are mapped).
+- LEFT, need a sim event (game.rs: the matching session's file): Druid 030+'s jungle vines
+  (JungleVineEffect.Collide / Process @0x180cc23b0 / @0x180cc3140: back + front displays and a stand-in
+  bloon stepping down a bloon list per stepCount, anim state 2 and AgeingDestroy after effectFrames),
+  LineProjectileEmission effectAtStart / effectAtEnd / effectAtCollision (Emit @0x180c42910: one of each
+  kept and moved to the line's start / end each Emit, collision effects up to maxCollisionEffects;
+  Desperado rifle, Sniper Paragon), Sniper 030+'s BouncingBulletTracer (CreateEffectFromCollisionToCollision,
+  effectLength), Bloon Trap's collect (EatBloonModel.effectOnEatModel).
+- LEFT, rest: Boomerang FlipFollowPath AmbiRangTransformation (effectOnFlip), Sniper ammo-swap VFX, Paragon
+  degree orbs, Desperado's Blazing Sun muzzle flashes, Buccaneer HookHit, Dark Shift, Thunder's Decree.
+  Selection-only markers (target reticles, patrol points, Beast leash lines) are UI.
+
 ## Audit entries that aren't gaps
 
 - `CreateEffectOnExpireModel`: read for projectiles (`expire_fx`) and sub-towers (`expire_fx`); the

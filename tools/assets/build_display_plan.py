@@ -286,6 +286,30 @@ for tower in TOWERS:
                     attack.append({"prefab": c2[0][0], "bundle": c2[0][1], "attack": ai,
                                    "offset": [off.get("x", 0.0), off.get("y", 0.0), off.get("z", 0.0)],
                                    "scale": x["f"].get("scale", 1.0)})
+            # An ability's attacks' displays (ActivateAttackModel: Glue Storm's hose), drawn only
+            # while that ability's attack runs ("attack": -1).
+            for b in items(r["f"]["behaviors"]):
+                if not b or b["type"] != "AbilityModel":
+                    continue
+                for ab in items(b["f"].get("behaviors")):
+                    if not ab or ab["type"] != "ActivateAttackModel":
+                        continue
+                    for am in items(ab["f"].get("attacks")):
+                        for x in items(am["f"].get("behaviors")) if am else []:
+                            if not x or x["type"] != "DisplayModel":
+                                continue
+                            g = x["f"].get("display")
+                            nm = guids.get(g) or catalog_prefabs.get(g)
+                            if not nm or nm == "EmptyPrefab.prefab":
+                                continue
+                            c2 = sorted(by_base.get(nm, []), key=lambda c: (f"/Monkeys/{tower}/" not in c[0], "/Effects/" in c[0], c[0]))
+                            if not c2:
+                                continue
+                            off = deref(x["f"].get("positionOffset")) or {}
+                            off = off.get("f", off) if isinstance(off, dict) else {}
+                            attack.append({"prefab": c2[0][0], "bundle": c2[0][1], "attack": -1, "ability": True,
+                                           "offset": [off.get("x", 0.0), off.get("y", 0.0), off.get("z", 0.0)],
+                                           "scale": x["f"].get("scale", 1.0)})
             if attack:
                 plan["towers"][key]["attack_displays"] = attack
         else:

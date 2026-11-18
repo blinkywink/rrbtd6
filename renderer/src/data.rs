@@ -688,6 +688,10 @@ pub struct Tier {
     /// BeastHandlerLeashModel.rotateToLeashedTower: a pet move turns the handler to the pet.
     #[serde(default)]
     pub leash_rotate: bool,
+    /// BeastHandlerLeashModel's piranhaPetModel / microraptorPetModel / gyrfalconPetModel by
+    /// beast (GetMatchingPetModel).
+    #[serde(default)]
+    pub leash_power: std::collections::HashMap<String, PetPower>,
     pub range: f32,
     /// OverrideCamoDetectionModel.detectCamo (Monkey Sense): it and its sub-towers see camo.
     #[serde(default)]
@@ -2008,6 +2012,12 @@ pub struct Proj {
     /// CreateEffectProjectileAfterTimeModel with useTargetPosition: its timeFrames.
     #[serde(default)]
     pub effect_after_target: Option<i32>,
+    /// CreateEffectProjectileAfterTimeModel effects (display only; build_game_data.py).
+    #[serde(default)]
+    pub after_fx: Vec<AfterFx>,
+    /// ScaleProjectileOverTimeModel's effect (display only).
+    #[serde(default)]
+    pub scale_fx: Option<ScaleFx>,
     pub pierce: f32,
     /// Shinobi Tactics' base: the pierce of the tower's first projectile with this one's id.
     #[serde(default)]
@@ -2390,6 +2400,10 @@ pub struct Ability {
     /// AbilityModel.resetCooldownOnTierUpgrade: it starts on its full cooldown.
     #[serde(default)]
     pub full_start: bool,
+    /// AbilityModel.cooldownSpeedScale: Ability.Process (@0x180dfafc0) takes 1 / (1 - it) off
+    /// the cooldown a frame.
+    #[serde(default)]
+    pub speed_scale: f32,
     /// AbilityModel.canActivateBetweenRounds: usable while no round is running.
     #[serde(default)]
     pub between_rounds: bool,
@@ -2624,6 +2638,12 @@ pub struct DamageSpeed {
 #[derive(Deserialize, Clone)]
 pub struct Grapple {
     pub speed: f32,
+    /// extraGrabAmount: added to `amount` (a merge sets it).
+    #[serde(default)]
+    pub extra: f32,
+    /// rotationSpeed (display only here).
+    #[serde(default)]
+    pub rot_speed: f32,
     /// The attack's filters.
     #[serde(default)]
     pub exclude_tags: Vec<String>,
@@ -2745,8 +2765,11 @@ pub struct AirPattern {
     pub use_tower: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct SubTowerSpec {
+    /// BeastHandlerPetModel's merge numbers (a Beast Handler pet).
+    #[serde(default)]
+    pub power: Option<PetPower>,
     /// BeastHandlerPetModel.canMove: the handler's TSM move button moves it.
     #[serde(default)]
     pub can_move: bool,
@@ -3107,6 +3130,28 @@ pub struct StateMod {
     pub states: Vec<String>,
     pub mult: f32,
     pub add: f32,
+    /// bloonState alone (empty: none).
+    #[serde(default)]
+    pub state: String,
+}
+
+/// BeastHandlerPetModel (tier, basePower, maxPower, enableContribution, cooldownScaleRange,
+/// pierceRange, damageRange, destroyTimeScaleRangePiranha, thrashKnockbackLifetimeRange,
+/// stunBonusDivideMicroraptor, damageRangeGrappleGyrfalcon, speedRangeGyrfalcon).
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct PetPower {
+    pub tier: i32,
+    pub base: i32,
+    pub max: i32,
+    pub enable: bool,
+    pub cd: f32,
+    pub pierce: i32,
+    pub damage: i32,
+    pub destroy: f32,
+    pub knockback: f32,
+    pub stun_div: f32,
+    pub grapple: i32,
+    pub speed: f32,
 }
 
 /// A bloon effect: "slow" (mult = speed multiplier; glue level), "freeze", "dot" or "brittle"
@@ -3583,4 +3628,33 @@ pub struct Latch {
     pub post_frames: i64,
     pub post_time: f32,
     pub speed: f32,
+}
+
+/// CreateEffectProjectileAfterTime: `fx` after `frames` (from creation; again every `frames` with
+/// `repeat`), at the projectile or its target.
+#[derive(Deserialize, Clone, Debug)]
+pub struct AfterFx {
+    pub fx: String,
+    #[serde(default = "one")]
+    pub scale: f32,
+    pub frames: i32,
+    #[serde(default)]
+    pub repeat: bool,
+    #[serde(default)]
+    pub target: bool,
+}
+
+/// ScaleProjectileOverTime's effect: at the projectile + its direction x `offset`, scaled
+/// min(`base` + `per_sec` x seconds, `max`).
+#[derive(Deserialize, Clone, Debug)]
+pub struct ScaleFx {
+    pub fx: String,
+    #[serde(default)]
+    pub offset: f32,
+    #[serde(default = "one")]
+    pub base: f32,
+    #[serde(default = "one")]
+    pub max: f32,
+    #[serde(default)]
+    pub per_sec: f32,
 }

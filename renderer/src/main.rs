@@ -85,7 +85,8 @@ fn tower_metadata(root:&std::path::Path,names:&[String])->(Vec<HashMap<String,St
                                 l.iter()
                                     .filter_map(|e| {
                                         let off = e["offset"].as_array().map(|o| [0, 1, 2].map(|i| o.get(i).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32)).unwrap_or([0.0; 3]);
-                                        Some((e["dir"].as_str()?.to_string(), off, e["attack"].as_u64().unwrap_or(0) as usize))
+                                        // ("attack": -1: an ability's attack display, usize::MAX: drawn only while it runs.)
+                                        Some((e["dir"].as_str()?.to_string(), off, e["attack"].as_i64().map_or(0, |a| if a < 0 { usize::MAX } else { a as usize })))
                                     })
                                     .collect()
                             });
@@ -798,6 +799,8 @@ async fn game_main() {
     let mut extra_kind: HashMap<String, (bool, bool)> = HashMap::new();
     // Per sub-tower with a parent-attack effect: its attack_t last frame (a new throw restarts it).
     let mut parent_fx_seen: HashMap<u64, f32> = HashMap::new();
+    // CreateEffectProjectileAfterTime: per (projectile uid, effect index) the age its effect is next due (-1 done).
+    let mut after_fx_seen: HashMap<(u64, usize), f32> = HashMap::new();
     let outline_scale: f32 = std::env::var("RRBTD6_OUTLINE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.7);
     mark("tower index");
     // Loads tower def `d`'s base models if not yet loaded.
@@ -993,6 +996,8 @@ async fn game_main() {
     let mut while_fx_live: HashMap<u64, [f32; 2]> = HashMap::new();
     /// With PROJ_FX_TAG: an orbiting glaive's effect (tower id << 8 | glaive), apart from projectile uids.
     const ORBIT_FX_TAG: u64 = 1 << 61;
+    /// With PROJ_FX_TAG: a projectile's ScaleProjectileOverTime effect (projectile uid).
+    const SCALE_FX_TAG: u64 = 1 << 59;
     // NecromancerTargetTrackWithinRange.StartDraw: its display (TargetGreen) on the chosen spawn
     // segment while the tower is selected.
     const NECRO_FX_TAG: u64 = (1 << 62) - 1;
@@ -2623,6 +2628,11 @@ async fn game_main() {
                     // the attack's aim, animating with its throws.
                     let (mut ab, mut ao) = (Vec::new(), Vec::new());
                     for (dir, off, ai) in attack_index[t.def].get(&key).into_iter().flatten() {
+                        // An ability's attack display (Glue Storm's hose): only while one of the
+                        // tower's ability attacks (ActivateAttack) runs.
+                        if *ai == usize::MAX && t.temp.is_empty() {
+                            continue;
+                        }
                         // Each attack display turns with its own attack (Robo Monkey's arms).
                         // A RotateToPointer attack (Dartling) turns smoothly at its rate: its gun
                         // follows the tower's turning angle, not the aim of its last shot.
@@ -3150,6 +3160,25 @@ async fn game_main() {
             for (p, fx, k) in game.place_fx.drain(..) {
                 particles.spawn(&fx, [p[0], 0.0, p[1]], k);
             }
+            // CreateEffectProjectileAfterTime (Process @0x180ca04c0): its effect once timeFrames
+            // have passed since it was made (again every timeFrames with repeat), at the projectile
+            // or, useTargetPosition, its target (the Sub's missile-pod FXDown, Tack Paragon meteors).
+            // STAND-IN: isBuffedByRate's rate scaling of timeFrames isn't applied.
+            after_fx_seen.retain(|(uid, _), _| game.projectiles.iter().any(|p| p.uid == *uid));
+            for p in &game.projectiles {
+                for (i, a) in p.spec.after_fx.iter().enumerate() {
+                    if a.frames < 1 {
+                        continue;
+                    }
+                    let next = after_fx_seen.entry((p.uid, i)).or_insert(a.frames as f32);
+                    if *next < 0.0 || p.age < *next {
+                        continue;
+                    }
+                    *next = if a.repeat { p.age + a.frames as f32 } else { -1.0 };
+                    let at = if a.target { p.target.and_then(|id| game.bloons.iter().find(|b| b.id == id)).map_or(p.pos, |b| b.pos) } else { p.pos };
+                    particles.spawn(&a.fx, [at[0], 0.0, at[1]], a.scale);
+                }
+            }
             // CreateEffectOnParentOnAttackModel: as a sub-tower attacks (a new throw restarts its
             // attack_t), its effect on the parent tower (the Trance Totem's spiral on its Mermonkey).
             for t in 0..game.towers.len() {
@@ -3489,6 +3518,23 @@ async fn game_main() {
                             particles.set_pos(PROJ_FX_TAG | uid, at);
                         }
                     }
+                }
+                // ScaleProjectileOverTime's effect (Riptide's aura): ahead of the projectile by
+                // effectOffset, growing with its age up to maxScale.
+                for p in &game.projectiles {
+                    let Some(sf) = p.spec.scale_fx.as_ref() else { continue };
+                    let uid = SCALE_FX_TAG | p.uid;
+                    let l = p.vel[0].hypot(p.vel[1]);
+                    let d = if l > 1e-6 { [p.vel[0] / l, p.vel[1] / l] } else { [0.0, 0.0] };
+                    let (x, y) = (p.pos[0] + d[0] * sf.offset, p.pos[1] + d[1] * sf.offset);
+                    let at = [x, 10.0, y - 10.0 * tilt];
+                    seen.insert(uid);
+                    if proj_fx_live.insert(uid) {
+                        particles.spawn_tagged(&sf.fx, at, PROJ_FX_TAG | uid);
+                    } else {
+                        particles.set_pos(PROJ_FX_TAG | uid, at);
+                    }
+                    particles.set_scale(PROJ_FX_TAG | uid, (sf.base + sf.per_sec * p.age / FPS).min(sf.max));
                 }
                 proj_fx_live.retain(|uid| {
                     let keep = seen.contains(uid);

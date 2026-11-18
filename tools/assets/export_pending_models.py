@@ -53,6 +53,11 @@ EFFECT_FIELDS = {
     ("BankModel", "fullBankAssetId"),
     ("OverclockModel", "buffDisplayPath"),
     ("MagusPerfectusGraveyardStateManagerModel", "textDisplayPrefab"),
+    # Their effect as their own assetId, no EffectModel (Mortar's Shell Shock explosions, First
+    # Strike's, Wall of Fire's exit; tools/assets/audit_dropped_displays.py).
+    ("Assets_Scripts_Models_Towers_Projectiles_Behaviors_CreateEffectOnExpireModel", "assetId"),
+    ("CreateEffectOnExhaustedModel", "assetId"),
+    ("CreateProjectileOnExhaustPierceModel", "assetId"),
 }
 
 
