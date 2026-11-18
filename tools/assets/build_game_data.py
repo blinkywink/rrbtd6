@@ -1115,6 +1115,9 @@ def main():
         if depth < 3 and pb.get("CreateProjectileOnIntervalModel"):
             cf = pb["CreateProjectileOnIntervalModel"][0]["f"]
             out["on_interval"] = {"frames": cf["intervalFrames"], "range": cf.get("range", 0.0),
+                                  # isBuffedByRate: OnEmit (@0x180ca5400) scales intervalFrames by
+                                  # Tower.GetTotalRateModifier.
+                                  "buffed": bool(cf.get("isBuffedByRate")),
                                   "only_if_target": cf.get("onlyIfHasTarget", True),
                                   # onlyEmitOnce (DanDMonke's net): one shot, then no more.
                                   "once": bool(cf.get("onlyEmitOnce")),

@@ -53,12 +53,23 @@ public class TowerSpec
     /// (InputManager.CreateTowerAt, as at the start; -1 = at the start). List such towers last
     /// (the upgrade indices count placed towers in creation order).
     public int place_frame { get; set; } = -1;
+    /// Beast Handler merges (the TSM "MergeButton" / "MergeButtonSecond" input): after frame
+    /// `frame`, this handler's leash slot `slot` beast goes into handler `into` (both counted among
+    /// the placed towers that aren't sub-towers, in creation order).
+    public List<MergeSpec> merges { get; set; } = new();
 }
 
 public class UpgradeSpec
 {
     public int frame { get; set; }
     public int path { get; set; }
+}
+
+public class MergeSpec
+{
+    public int frame { get; set; }
+    public int into { get; set; }
+    public int slot { get; set; }
 }
 
 public class Scenario
@@ -424,6 +435,7 @@ public class Recorder : MelonMod
                     if (Sc.towers[k].flip) Out.WriteLine($"# flip {k}");
                     if (Sc.towers[k].point.Count == 2) Out.WriteLine($"# point {k} {F(Sc.towers[k].point[0])} {F(Sc.towers[k].point[1])}");
                     foreach (var u in Sc.towers[k].upgrades) Out.WriteLine($"# upgrade {k} {u.path} {u.frame}");
+                    foreach (var m in Sc.towers[k].merges) Out.WriteLine($"# merge {k} {m.into} {m.slot} {m.frame}");
                     if (Sc.towers[k].place_frame >= 0) Out.WriteLine($"# place {k} {Sc.towers[k].place_frame}");
                 }
                 if (Sc.fx || Sc.shots.Count > 0)
@@ -1458,6 +1470,44 @@ static class SimulatePatch
                             MelonLogger.Msg($"SimRecorder upgrade tower {kk} path {path} at frame {Recorder.Recorded}: {before} -> {tw.towerModel.name} worth {tw.worth}");
                             break;
                         }
+                    });
+                }
+        // Merges: BeastHandlerLeash.ApplyCustomInputData's Merge branch (@0x180cfa7d0) is
+        // Contribute(the target's leash, this leash, towerModel / towerModelSecond).
+        for (int k = 0; k < Recorder.Sc.towers.Count; k++)
+            foreach (var m in Recorder.Sc.towers[k].merges)
+                if (m.frame == Recorder.Recorded)
+                {
+                    int kk = k; var mm = m;
+                    Part("merge", () =>
+                    {
+                        var list = __instance.factory.GetFactory<Tower>().up.list;
+                        var mains = new List<Tower>();
+                        for (int j = 0; j < list.Count; j++)
+                        {
+                            var tw = list[j];
+                            if (tw == null || tw.IsDestroyed || tw.towerModel.isSubTower) continue;
+                            mains.Add(tw);
+                        }
+                        Il2CppAssets.Scripts.Simulation.Towers.Behaviors.BeastHandlerLeash Leash(Tower tw)
+                        {
+                            var tb = tw.towerBehaviors?.list;
+                            for (int q = 0; tb != null && q < tb.Count; q++)
+                            {
+                                var l = tb[q]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.BeastHandlerLeash>();
+                                if (l != null) return l;
+                            }
+                            return null;
+                        }
+                        if (kk >= mains.Count || mm.into >= mains.Count) { MelonLogger.Msg($"SimRecorder merge {kk} -> {mm.into}: no tower"); return; }
+                        var src = Leash(mains[kk]);
+                        var dst = Leash(mains[mm.into]);
+                        if (src == null || dst == null) { MelonLogger.Msg($"SimRecorder merge {kk} -> {mm.into}: no leash"); return; }
+                        var lm = src.beastHandlerLeashModel;
+                        var pm = mm.slot == 0 ? lm.towerModel : lm.towerModelSecond;
+                        bool ok = dst.Contribute(src, pm);
+                        MelonLogger.Msg($"SimRecorder merge {kk} slot {mm.slot} -> {mm.into} at frame {Recorder.Recorded}: {ok}");
+                        Recorder.Out?.WriteLine($"# merged {kk} {mm.into} {mm.slot} {Recorder.Recorded} {ok}");
                     });
                 }
         var sim = __instance;

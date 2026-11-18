@@ -2928,6 +2928,9 @@ pub struct SwitchDisplay {
 #[derive(Deserialize, Clone)]
 pub struct OnInterval {
     pub frames: f32,
+    /// isBuffedByRate: OnEmit scales intervalFrames by the tower's GetTotalRateModifier.
+    #[serde(default)]
+    pub buffed: bool,
     pub range: f32,
     pub only_if_target: bool,
     /// onlyEmitOnce: a single shot.

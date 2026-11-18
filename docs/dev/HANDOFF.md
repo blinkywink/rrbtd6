@@ -116,9 +116,9 @@ Ground rules follow.
 
 ## Regression baseline (must not drop)
 
-Current (2026-11-15): every set full. Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
+Current (2026-11-18): every set full (merge 14). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
 sniper tack sub beast engineer desperado dartling mortar bucc druid super ace heli spike farm mermonkey village
-paragon sky quincy moab logs maps maptowers` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 88, sky 39, quincy 14, moab 5,
+paragon sky quincy moab logs maps maptowers merge` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 88, sky 39, quincy 14, moab 5,
 logs 3, dart 70, boomerang 99, paragon 12).
 
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
@@ -171,6 +171,34 @@ have SimRecorder set the input manager's cursor from the scenario each frame, so
 TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
+
+### DONE: Beast Handler merges (BeastHandlerLeash.Contribute; 2026-11-18, set `merge`)
+New regression set `merge` (research/dumps/recordings/pending/merge, scenarios beast_merge_*): SimRecorder's
+per-tower `"merges": [{"frame", "into", "slot"}]` calls the target leash's Contribute(this leash,
+towerModel / towerModelSecond) as ApplyCustomInputData's Merge branch does (@0x180cfa7d0); `# merge src into slot
+frame` lines; the harness calls Game::merge_beast (towers counted among non-sub towers). PORTED (VERIFIED-DECOMP):
+Contribute (@0x180cfadf0), GetTotalPowerForBeast (@0x180cfc560: basePower + each contributor's total, capped at
+maxPower), IsTowerValidForMerge (@0x180cfdc70, `merge_ok`), ProcessLeashedTower (@0x180cffd80: a lost beast's pet
+destroyed in the handler's turn; `leash_step` at the start of the towers phase), UpdatePowerMutator /
+ContributionMutator.Mutate (@0x181208b50, `pet_power_spec`; floats checked in the disasm: 1 - r x
+destroyTimeScaleRangePiranha, maxMoabDamagePercentPerSecond = (1 - (1 - s x it)) + it, set_Rate / set_Lifespan
+(int)(x * 60)), OnDestroy / RemoveContribution (a sold target gives its contributors their beasts back). Birds:
+IsBloonValidAndInsideTowerRange (@0x180dc52a0) also takes bloons in a contributing handler's TowerModel.range
+(beast_merge_003_max: the max-power eagle's MOAB); IsBloonValid (@0x180dc5620) skips another bird's currentTarget
+(beast_merge_002: two Horned Owls) and has no grab-cost test (the clone's old `grab_cost <= amount` filter is gone,
+beast / maptowers unchanged); a bird destroyed by a merge lets go of its bloons after the frame's moves, where it is
+(beast_merge_002 rt 301). Data: pets' `power` (BeastHandlerPetModel), tiers' `leash_power` (piranhaPetModel /
+microraptorPetModel / gyrfalconPetModel), Grapple `extra` (extraGrabAmount) / `rot_speed`, StateMod `state`, Ability
+`speed_scale` (cooldownSpeedScale: Ability.Process takes 1 / (1 - it) a frame). Tutorial has no water: the Piranha
+merges are recorded on Haunted (beast_merge_h*). Piranhas: a lost pet's latched follow goes with it
+(LatchToBloon.Process @0x180cc7200: emittedByTower destroyed) and its slow comes off after the frame's moves;
+each latch has its own slow, so another latch on the bloon keeps it slowed (h300_max rt 452: the clone's one
+"LatchToBloon" effect id was being dropped by any latch's end); CreateProjectileOnInterval.OnEmit (@0x180ca5400)
+isBuffedByRate makes the follow's thrash interval (int)(Tower.GetTotalRateModifier x 36), GetTotalRateModifier
+(@0x180c0ef90) = the model's first weapon rate / the unmutated pet model's (`model_rate_mod`; h300 rt 390: 33
+frames); the pulled GreatWhiteEffect's thrash rate takes it too. merge 14/14. OPEN: GetTowerTarget's enableAdjacentHover (@0x180dc4800: a tier
+3+ bird hovers over the contributing handler nearest its destination segment; IsValidForHovering); the merge UI
+(the upgrade panel's MergeBtnContainer, target picking) and texts (merged / power / buffed); not checked on screen.
 
 ### DONE: map_haunted_beast_402_r60 MATCH (2026-11-17; moved to pending/maptowers, maptowers 91/91)
 Fixed, each from the recording (SimRecorder's new read-only "AA projectile targetPos.x targetPos.y arrived"
@@ -595,7 +623,7 @@ the game code / recordings), or it hides problems later.
   the 120-frame cooldown and its fill (timesOfLastMoves from -999999999, Simulation.time), the point's
   validity (pet areas without 4 / 6, the handler's range), the pet turned when rotateWhenMoved (pet
   `rotate_moved`: Microraptor), placed there, the handler turned to it (RotateToLeashedTower @0x180d00ae0,
-  leash `leash_rotate`), OnPlace's PlacementEffect. STAND-IN: Merge / contributing handlers, the handler's
+  leash `leash_rotate`), OnPlace's PlacementEffect. STAND-IN (merges themselves are done, above; a move point may be in a contributor's range): the handler's
   moveAnimationState clip, and co-op (no pet move action) aren't done; not checked on screen.
   RESEARCHED (2026-11-16). Move flow, VERIFIED-DECOMP:
   TSMThemeBeastHandler.CanMovePet (@0x180b8d110): the slot's pet model has BeastHandlerPetModel (TypeInfo slot

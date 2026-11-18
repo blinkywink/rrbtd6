@@ -2166,7 +2166,7 @@ pub struct ActiveTurbo {
 }
 
 /// GyrfalconPattern's Target.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub enum GyrTarget {
     #[default]
     None,
@@ -2349,6 +2349,9 @@ pub struct SubTower {
     /// OrbitingTower: Processes so far, and currentDirection (game frame; Vector2.up at Initialise).
     pub orbit_turns: u32,
     pub orbit_dir: [f32; 2],
+    /// A pet: the merge power its spec was made for (ContributionMutator.power; 0: its model's
+    /// own).
+    pub power: i32,
 }
 
 #[derive(Clone)]
@@ -3638,6 +3641,16 @@ pub struct Game {
     ghost_cell: Option<[f32; 2]>,
     /// TranceTotemSpawner: totems its next Process makes (parent id, spec, spot).
     pending_pets: Vec<(u64, std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2])>,
+    /// Beast Handler merges, in order: (target handler id, beast base id, contributing handler
+    /// id): the target's contributingHandlersByBeast and the source's
+    /// beastsLostThroughContribution (BeastHandlerLeash.Contribute @0x180cfadf0).
+    pub merges: Vec<(u64, String, u64)>,
+    /// Handlers given a beast back (a merge undone): their pets are made again.
+    merge_respawn: Vec<u64>,
+    /// Birds destroyed this frame (a merge) and what they carried: let go after the bloons move.
+    late_release: Vec<(Vec<u64>, GyrState)>,
+    /// Bloons whose latch went with its pet this frame: the LatchToBloon slow comes off after the moves.
+    late_unlatch: Vec<u64>,
     /// This round's EmissionsPerRoundFilter entry (start, duration) and the step it began at, for
     /// weapons whose state is made after (the game's exist from placement).
     round_banana: Option<((i64, i32), u64)>,
@@ -6043,6 +6056,10 @@ impl Game {
             fill_first_id: None,
             ghost_cell: None,
             pending_pets: Vec::new(),
+            merges: Vec::new(),
+            merge_respawn: Vec::new(),
+            late_release: Vec::new(),
+            late_unlatch: Vec::new(),
             round_banana: None,
             grid_rank_pre: None,
             plist_rank_pre: None,
@@ -9572,6 +9589,11 @@ impl Game {
             let home = self.towers[pi].pos;
             let mode = self.towers[pi].target;
             let range = self.range(pi);
+            // (IsBloonValidAndInsideTowerRange @0x180dc52a0: outside the handler's range, a bloon
+            // inside the TowerModel.range of a handler contributing its Gyrfalcon counts too.)
+            let pid_ = self.towers[pi].id;
+            let alt: Vec<([f32; 2], f32)> = self.merges.iter().filter(|m| m.0 == pid_ && m.1 == "Gyrfalcon")
+                .filter_map(|m| self.towers.iter().position(|o| o.id == m.2)).map(|c| (self.towers[c].pos, self.tier(c).map_or(0.0, |x| x.range))).collect();
             let cd = (g.cooldown * FPS) as i64;
             let rate = (g.rate * FPS) as i64;
             let snap = g.snap;
@@ -9614,7 +9636,7 @@ impl Game {
                     self.bird_release(&mut held, &mut st, rt);
                     st.target = GyrTarget::None;
                 } else if !self.gyr_valid(&st) {
-                    st.target = match self.bird_target(home, range, mode, &g, pos, st.stamp, None, &[], &[]) {
+                    st.target = match self.bird_target(home, range, &alt, mode, &g, pos, st.stamp, None, &[], &[]) {
                         Some(b) => {
                             // handlerSendAnimationState.
                             if st.hover {
@@ -9739,7 +9761,8 @@ impl Game {
                             dseg.is_some_and(|(p, k)| self.seg_span(p as usize, k).is_some_and(|(_, max)| max <= xd))
                                 && !self.defs[x.kind].tags.iter().any(|t| t == "Bad")
                         };
-                        let mut left = g.amount as f32;
+                        // (grabAmount + extraGrabAmount, UpdateMovement @0x180dc8130.)
+                        let mut left = g.amount as f32 + g.extra;
                         for x in std::iter::once(b).chain(self.bird_grab(dest, g.radius, &g, st.stamp, &held, b)) {
                             let Some(i) = self.bloons.iter().position(|o| o.id == x) else { continue };
                             let use_ = self.grab_cost(&self.bloons[i], &g) as f32;
@@ -9792,7 +9815,7 @@ impl Game {
                         // What's next: keepPickingUpBloons flies on to a bloon near the bird that
                         // hasn't passed the segment; with none it carries what it has.
                         let next = if can_all && g.keep && left > 0.0 {
-                            self.bird_target(home, range, mode, &g, pos, st.stamp, Some((g.keep_range, dseg)), &held, &tagged)
+                            self.bird_target(home, range, &alt, mode, &g, pos, st.stamp, Some((g.keep_range, dseg)), &held, &tagged)
                         } else {
                             None
                         };
@@ -9872,6 +9895,13 @@ impl Game {
     }
 
     fn bird_release(&mut self, held: &mut Vec<u64>, st: &mut GyrState, rt: i64) {
+        self.bird_release_ex(held, st, rt, false);
+    }
+
+    /// `destroyed`: the bird's tower was destroyed (a merge): its bloons are let go as the frame
+    /// ends, with no move this frame (recording beast_merge_002 rt 301: the Green where the bird
+    /// was, at its distance, moving on from 302).
+    fn bird_release_ex(&mut self, held: &mut Vec<u64>, st: &mut GyrState, rt: i64, destroyed: bool) {
         for h in held.drain(..) {
             if let Some(b) = self.bloons.iter_mut().find(|b| b.id == h) {
                 b.effects.retain(|e| e.id != "BeastGrab");
@@ -9884,7 +9914,7 @@ impl Game {
                     b.dist = d.1;
                 }
                 // (A bloon made after the bird is processed after it: its move is this frame.)
-                if b.born > st.stamp {
+                if b.born > st.stamp && !destroyed {
                     let (kind, path, dist) = (b.kind, b.path, b.dist);
                     let step = speed_frames(self.defs[kind].speed) * b.speed_mult(&self.defs[kind]) * self.map_speed;
                     let d = self.held_at_spawn(kind, path, dist + step);
@@ -9926,7 +9956,7 @@ impl Game {
     }
 
     /// GetBloonTarget: a bloon the handler's range covers, best by its target type.
-    fn bird_target(&self, home: [f32; 2], range: f32, mode: TargetMode, g: &crate::data::Grapple, pos: [f32; 2], stamp: u64, near: Option<(f32, Option<(u8, usize)>)>, held: &[u64], tagged: &[u64]) -> Option<(u64, u64)> {
+    fn bird_target(&self, home: [f32; 2], range: f32, alt: &[([f32; 2], f32)], mode: TargetMode, g: &crate::data::Grapple, pos: [f32; 2], stamp: u64, near: Option<(f32, Option<(u8, usize)>)>, held: &[u64], tagged: &[u64]) -> Option<(u64, u64)> {
         let rr = range * range;
         // Targetting.GetTargets' order for the handler's target type (parent tower, its position):
         // by path segment, the first of a segment's bloons in the path's list (recording beast_502).
@@ -9953,9 +9983,15 @@ impl Game {
         } };
         self.bloons
             .iter()
-            .filter(|b| { let q = Self::gyr_at(b, stamp); (q[0] - home[0]).powi(2) + (q[1] - home[1]).powi(2) <= rr })
+            .filter(|b| { let q = Self::gyr_at(b, stamp); (q[0] - home[0]).powi(2) + (q[1] - home[1]).powi(2) <= rr
+                || alt.iter().any(|(c, r)| (q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2) <= r * r) })
             .filter(|b| !self.towers.iter().any(|tw| tw.air.as_ref().is_some_and(|a| a.grab.contains(&b.id))))
-            .filter(|b| self.grab_cost(b, g) <= g.amount)
+            // (IsBloonValid @0x180dc5620: not another GyrfalconPattern's currentTarget; the bird's
+            // own state is out of its tower while it runs. Recording beast_merge_002: two Horned
+            // Owls, the second waits at rt 59.)
+            .filter(|b| !self.towers.iter().any(|tw| tw.air.as_ref().is_some_and(|a| matches!(a.gy.target, GyrTarget::Bloon(x, _) if x == b.id))))
+            // (No grab-cost test: GyrfalconPattern.IsBloonValid @0x180dc5620 has none; a bloon too heavy
+            // to carry is hit instead: recording beast_merge_003_max, the max-power eagle on a MOAB.)
             // (A bloon made after the bird isn't a target until it has moved: recording beast_502.)
             .filter(|b| b.born <= stamp || b.born / 4 + 1 <= self.sim_elapsed || (b.born % 4 == 0 && b.lineage.is_some()))
             .filter(|b| self.bird_filter(b, g))
@@ -11158,7 +11194,7 @@ impl Game {
             brews: Vec::new(),
             acid_pts: None,
             acid_splashes: 0,
-            sub: Some(SubTower { frames_left: if spec.lifespan > 0.0 { spec.lifespan * FPS } else { f32::INFINITY }, age: 0.0, rounds_left: spec.rounds, pet, spec, parent, path_index: None, z: 250.0, born: self.round_clock, orbit_turns: 0, orbit_dir: [0.0, 1.0] }),
+            sub: Some(SubTower { frames_left: if spec.lifespan > 0.0 { spec.lifespan * FPS } else { f32::INFINITY }, age: 0.0, rounds_left: spec.rounds, pet, spec, parent, path_index: None, z: 250.0, born: self.round_clock, orbit_turns: 0, orbit_dir: [0.0, 1.0], power: 0 }),
             air: None,
             ability_cd: HashMap::new(),
             turn_vel: 0.0,
@@ -11368,8 +11404,10 @@ impl Game {
 
     /// DeployInput.IsPositionValid (VERIFIED-DECOMP @0x180a59dd0) for a pet move: the pet's model
     /// (BeastHandlerLeash.GetTowerBehaviorCustomInputData @0x180cfc930: a copy without areaTypes 4
-    /// and 6) can be placed there, and IsSimTowerValid (@0x180a5a460): within the handler's range.
-    /// STAND-IN: contributing handlers (Merge) aren't simulated, so only the own handler counts.
+    /// and 6) can be placed there, and IsSimTowerValid (@0x180a5a460): within the handler's range,
+    /// or (useBeastHandlerContribution) within the TowerModel.range of a handler contributing that
+    /// beast whose distance to the handler is at most its range + the handler's
+    /// (withinCircleIntersectRange).
     pub fn pet_move_ok(&self, t: usize, slot: usize, p: [f32; 2]) -> bool {
         let Some(pet) = self.tier(t).and_then(|x| x.pets.get(slot)).cloned() else { return false };
         if self.leashed_pet(t, slot).is_none() {
@@ -11377,7 +11415,13 @@ impl Game {
         }
         let h = self.towers[t].pos;
         let r = self.range(t);
-        if (p[0] - h[0]).powi(2) + (p[1] - h[1]).powi(2) > r * r {
+        let id = self.towers[t].id;
+        let d2 = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2);
+        let via = self.merges.iter().filter(|m| m.0 == id && m.1 == pet.id).filter_map(|m| self.towers.iter().position(|o| o.id == m.2)).any(|c| {
+            let (cp, cr) = (self.towers[c].pos, self.tier(c).map_or(0.0, |x| x.range));
+            d2(cp, h).sqrt() <= cr + r && d2(p, cp) <= cr * cr
+        });
+        if d2(p, h) > r * r && !via {
             return false;
         }
         let areas: Vec<i32> = pet.areas.iter().copied().filter(|&a| a != 4 && a != 6).collect();
@@ -11429,6 +11473,368 @@ impl Game {
             self.place_fx.push((p, name, scale));
         }
         true
+    }
+
+    /// The live pet of handler `t` whose base id is `beast` (BeastHandlerLeash.GetMatchingBeast
+    /// @0x180cfbd30 with tier -1: leashedTower first, then leashedTowerSecond).
+    pub fn matching_pet(&self, t: usize, beast: &str) -> Option<usize> {
+        let id = self.towers.get(t)?.id;
+        let pets = self.tier(t)?.pets.clone();
+        pets.iter().filter(|p| p.id == beast).find_map(|p| self.towers.iter().position(|o| o.sub.as_ref().is_some_and(|s| s.pet && s.parent == id && s.spec.id == p.id)))
+    }
+
+    /// BeastHandlerLeash.GetTotalPowerForBeast (VERIFIED-DECOMP @0x180cfc560): the handler's
+    /// matching pet model's basePower plus each contributing handler's own total.
+    pub fn beast_power(&self, id: u64, beast: &str) -> i32 {
+        let Some(t) = self.towers.iter().position(|o| o.id == id) else { return 0 };
+        let Some(pp) = self.tier(t).and_then(|x| x.leash_power.get(beast)) else { return 0 };
+        let mut p = pp.base;
+        for (dst, b, src) in &self.merges {
+            if *dst == id && b == beast && *src != id {
+                p += self.beast_power(*src, beast);
+            }
+        }
+        p
+    }
+
+    /// Handler `src` lost its `beast` to a merge (IsBeastLostThroughContribution @0x180cfd7d0).
+    pub fn beast_lost(&self, src: u64, beast: &str) -> bool {
+        self.merges.iter().any(|m| m.2 == src && m.1 == beast)
+    }
+
+    /// IsPartOfContributionChain (VERIFIED-DECOMP @0x180cfd930): `of` reaches `me` through the
+    /// handlers it contributes `beast` to.
+    fn in_merge_chain(&self, me: u64, of: u64, beast: &str) -> bool {
+        let mut cur = of;
+        for _ in 0..64 {
+            let Some(next) = self.merges.iter().find(|m| m.2 == cur && m.1 == beast).map(|m| m.0) else { return false };
+            if next == me {
+                return true;
+            }
+            cur = next;
+        }
+        false
+    }
+
+    /// BeastHandlerLeash.IsTowerValidForMerge (VERIFIED-DECOMP @0x180cfdc70): handler `src`'s slot
+    /// `slot` pet may go into handler `dst` (the TSM merge button lists such towers): another
+    /// Beast Handler with that beast (alive, or itself lost to a merge), whose pet model is of
+    /// that pet's tier or higher, has maxPower 2+, isn't at maxPower yet, hasn't lost that beast
+    /// itself, and isn't merged into `src` along a chain.
+    pub fn merge_ok(&self, src: usize, slot: usize, dst: usize) -> bool {
+        if src == dst || self.towers[dst].sub.is_some() || self.towers[dst].def != self.towers[src].def {
+            return false;
+        }
+        let Some(pet) = self.tier(src).and_then(|x| x.pets.get(slot)).cloned() else { return false };
+        let Some(pp) = pet.power.clone() else { return false };
+        if self.matching_pet(src, &pet.id).is_none() {
+            return false;
+        }
+        let Some(dp) = self.tier(dst).and_then(|x| x.leash_power.get(&pet.id)).cloned() else { return false };
+        let did = self.towers[dst].id;
+        if self.matching_pet(dst, &pet.id).is_none() && !self.beast_lost(did, &pet.id) {
+            return false;
+        }
+        if dp.tier < pp.tier || dp.max < 2 || dp.max <= self.beast_power(did, &pet.id) || self.beast_lost(did, &pet.id) {
+            return false;
+        }
+        !self.in_merge_chain(self.towers[src].id, did, &pet.id)
+    }
+
+    /// The handlers tower `src`'s slot `slot` pet can be merged into (merge_ok).
+    pub fn merge_targets(&self, src: usize, slot: usize) -> Vec<usize> {
+        (0..self.towers.len()).filter(|&d| self.merge_ok(src, slot, d)).collect()
+    }
+
+    /// BeastHandlerLeash.ApplyCustomInputData, Merge (VERIFIED-DECOMP @0x180cfa7d0):
+    /// Contribute(the target's leash, this one, towerModel / towerModelSecond); Contribute
+    /// (VERIFIED-DECOMP @0x180cfadf0): both handlers have that beast alive, `src` isn't
+    /// contributing to `dst` yet and `dst` has fewer contributors than its pet model's maxPower;
+    /// then `src` is added to dst's contributingHandlersByBeast, `dst` to src's
+    /// beastsLostThroughContribution, `src` turns to face `dst` (RotateTower((Rotation(dst - src)
+    /// - rotation) x Deg2Rad)) and the merge sound and texts play. The pets change on the
+    /// handlers' next Process (leash_step).
+    pub fn merge_beast(&mut self, src: usize, slot: usize, dst: usize) -> bool {
+        let Some(pet) = self.tier(src).and_then(|x| x.pets.get(slot)).cloned() else { return false };
+        let beast = pet.id.clone();
+        if self.matching_pet(src, &beast).is_none() || self.matching_pet(dst, &beast).is_none() {
+            return false;
+        }
+        let (sid, did) = (self.towers[src].id, self.towers[dst].id);
+        let Some(max) = self.tier(dst).and_then(|x| x.leash_power.get(&beast)).map(|p| p.max) else { return false };
+        if self.merges.iter().any(|m| m.0 == did && m.1 == beast && m.2 == sid) {
+            return false;
+        }
+        if max <= self.merges.iter().filter(|m| m.0 == did && m.1 == beast).count() as i32 {
+            return false;
+        }
+        self.merges.push((did, beast.clone(), sid));
+        let (sp, dp) = (self.towers[src].pos, self.towers[dst].pos);
+        {
+            let tw = &mut self.towers[src];
+            let want = RAD2DEG * crt_atan2(dp[0] - sp[0], -(dp[1] - sp[1]));
+            let cur = tw.game_rot.unwrap_or(0.0);
+            let new = cur + (want - cur) * DEG2RAD * RAD2DEG;
+            tw.game_rot = Some(new);
+            tw.angle = (new - 90.0) * DEG2RAD;
+        }
+        true
+    }
+
+    /// OnTowerDestroyed / OnDestroy (VERIFIED-DECOMP @0x180cfee90, @0x180cfe700) for a handler
+    /// that is gone: every merge into it is undone (RemoveContribution: its contributors get
+    /// their beast back, made again by their next ProcessLeashedTower), and so is its own.
+    fn unmerge_handler(&mut self, id: u64) {
+        let back: Vec<u64> = self.merges.iter().filter(|m| m.0 == id).map(|m| m.2).collect();
+        self.merges.retain(|m| m.0 != id && m.2 != id);
+        for src in back {
+            if !self.merge_respawn.contains(&src) {
+                self.merge_respawn.push(src);
+            }
+        }
+    }
+
+    /// BeastHandlerLeash.Process's leash work for every handler (ProcessLeashedTower
+    /// @0x180cffd80, UpdateContributionBuffForPet @0x180d01970): a pet lost to a merge is
+    /// destroyed; one given back is made again; each live pet takes the ContributionMutator of
+    /// min(GetTotalPowerForBeast, its pet model's maxPower) (UpdatePowerMutator @0x180d01af0: a
+    /// changed power swaps the mutator).
+    fn leash_step(&mut self) {
+        if self.merges.is_empty() && self.merge_respawn.is_empty() && !self.towers.iter().any(|t| t.sub.as_ref().is_some_and(|s| s.power != 0)) {
+            return;
+        }
+        for id in std::mem::take(&mut self.merge_respawn) {
+            if let Some(t) = self.towers.iter().position(|o| o.id == id) {
+                self.sync_pets(t);
+            }
+        }
+        let mut t = 0;
+        while t < self.towers.len() {
+            if self.towers[t].sub.is_some() || self.tier(t).is_none_or(|x| x.leash_power.is_empty()) {
+                t += 1;
+                continue;
+            }
+            let id = self.towers[t].id;
+            let pets = self.tier(t).map(|x| x.pets.clone()).unwrap_or_default();
+            for base in pets {
+                if self.beast_lost(id, &base.id) {
+                    if let Some(pi) = self.matching_pet(t, &base.id) {
+                        // (TowerManager.DestroyTower: a bird lets go of what it carries,
+                        // GyrfalconPattern.ReleaseBloons; recording beast_merge_002 rt 301.)
+                        // (TowerManager.DestroyTower: its bird lets go of what it carries
+                        // (GyrfalconPattern.ReleaseBloons) once the frame's objects have run: the
+                        // carried bloons don't move this frame. Recording beast_merge_002 rt 301.)
+                        if let Some(a) = self.towers[pi].air.as_mut().filter(|a| !a.grab.is_empty()) {
+                            let mut late = (std::mem::take(&mut a.grab), std::mem::take(&mut a.gy));
+                            // (Where the bird is now: it doesn't move again.)
+                            late.1.last_pos = a.pos;
+                            self.late_release.push(late);
+                        }
+                        // (LatchToBloon.Process @0x180cc7200: its emittedByTower destroyed, the
+                        // latched follow goes, and its OnDestroy takes the slow off the bloon.
+                        // Recording beast_merge_h300_max rt 301.)
+                        for w in 0..self.towers[pi].weapons.len() {
+                            let st = &mut self.towers[pi].weapons[w];
+                            let (u, bid) = (st.gw_attached.take(), st.gw_latch_bloon.take());
+                            if let Some(u) = u {
+                                self.projectiles.retain(|q| q.uid != u);
+                            }
+                            // (The slow comes off after this frame's moves: h300_max rt 301.)
+                            self.late_unlatch.extend(bid);
+                        }
+                        self.towers.remove(pi);
+                        self.removed.push((pi, usize::MAX));
+                        if pi < t {
+                            t -= 1;
+                        }
+                    }
+                    continue;
+                }
+                let Some(pi) = self.matching_pet(t, &base.id) else { continue };
+                let Some(pp) = self.tier(t).and_then(|x| x.leash_power.get(&base.id)).cloned() else { continue };
+                let power = self.beast_power(id, &base.id).min(pp.max);
+                if self.towers[pi].sub.as_ref().is_some_and(|s| s.power == power || (s.power == 0 && power == pp.base)) {
+                    continue;
+                }
+                let spec = self.pet_power_spec(&base, &pp, power);
+                if let Some(s) = self.towers[pi].sub.as_mut() {
+                    s.spec = std::sync::Arc::new(spec);
+                    s.power = power;
+                }
+            }
+            t += 1;
+        }
+    }
+
+    /// ContributionMutator.Mutate (VERIFIED-DECOMP / DISASM @0x181208b50) on pet model `base` for
+    /// `power`, with the handler's pet model `pp`: nothing unless enableContribution and maxPower
+    /// != basePower; r = (power - base) / (max - base), nothing unless r > 0. Then:
+    /// Piranha: each CreateGreatWhiteEffectModel's bloonPopTimeScale, maxMoabGrabTime and
+    /// maxMoabGrabTimeMegalodon x s (s = 1 - r x destroyTimeScaleRangePiranha),
+    /// moabDamagePerSecond = (int)(it x (1 / s)), maxMoabDamagePercentPerSecond = (1 - (1 - s x
+    /// it)) + it, and at maxPower maxGrabBloonName "Moab" (tier 3) / "Zomg" (tier 4); each
+    /// KnockbackModel's lifespan + r x thrashKnockbackLifetimeRange. Microraptor: with
+    /// stunBonusDivideMicroraptor > 0 each DamageModifierForBloonStateModel whose bloonState has
+    /// "Stun" gets damageAdditive + (int)(damage / it); at maxPower above tier 3 every
+    /// DamageModel overrides distribute blockers. Gyrfalcon: each GyrfalconPatternModel's
+    /// cooldown - r x cooldownScaleRange, initial damage + damage, grappling damage + (int)(r x
+    /// damageRangeGrappleGyrfalcon), maxSpeed + r x speedRangeGyrfalcon (rotationSpeed scaled
+    /// with it), extraGrabAmount = pierce; at maxPower tier 3 the attack's FilterOutTag "Moabs"
+    /// becomes Bfb / Zomg / Ddt ones, tier 4 drops its FilterOutBloon "Bad". Others: every
+    /// DamageModel + damage. All: every ProjectileModel not named GrabProjectile + pierce, every
+    /// WeaponModel's rate - r x cooldownScaleRange (set_Rate), every AbilityModel's
+    /// cooldownSpeedScale + (the first weapon's old rate / new rate - 1). (damage = (int)(r x
+    /// damageRange), pierce = r x pierceRange.)
+    pub fn pet_power_spec(&self, base: &crate::data::SubTowerSpec, pp: &crate::data::PetPower, power: i32) -> crate::data::SubTowerSpec {
+        let mut spec = base.clone();
+        if !pp.enable || pp.max == pp.base {
+            return spec;
+        }
+        let r = (power - pp.base) as f32 / (pp.max - pp.base) as f32;
+        if r <= 0.0 {
+            return spec;
+        }
+        let cd = r * pp.cd;
+        let pierce = pp.pierce as f32 * r;
+        let damage = (pp.damage as f32 * r) as i32;
+        let beast = base.id.as_str();
+        let at_max = power == pp.max;
+        let layer = |name: &str| self.names.iter().position(|n| n == name).map(|k| self.defs[k].layer_number);
+        fn walk(p: &mut crate::data::Proj, f: &mut dyn FnMut(&mut crate::data::Proj)) {
+            f(p);
+            for c in &mut p.on_contact {
+                walk(&mut c.projectile, f);
+            }
+            for c in &mut p.on_exhaust {
+                walk(&mut c.projectile, f);
+            }
+            if let Some(gw) = p.great_white.as_mut() {
+                if let Some(x) = gw.thrash.as_mut() {
+                    walk(x, f);
+                }
+                if let Some(x) = gw.follow.as_mut() {
+                    walk(x, f);
+                }
+            }
+            if let Some(oi) = p.on_interval.as_mut() {
+                walk(&mut oi.projectile, f);
+            }
+        }
+        fn each(t: &mut crate::data::Tier, f: &mut dyn FnMut(&mut crate::data::Proj)) {
+            for a in &mut t.attacks {
+                for w in &mut a.weapons {
+                    walk(&mut w.projectile, f);
+                }
+            }
+            for ab in &mut t.abilities {
+                for aa in &mut ab.activate {
+                    for a in &mut aa.attacks {
+                        for w in &mut a.weapons {
+                            walk(&mut w.projectile, f);
+                        }
+                    }
+                }
+            }
+        }
+        let t = &mut spec.tier;
+        match beast {
+            "Piranha" => {
+                let s = 1.0 - r * pp.destroy;
+                let max_layer = if at_max && pp.tier == 3 { layer("Moab") } else if at_max && pp.tier == 4 { layer("Zomg") } else { None };
+                each(t, &mut |p| {
+                    if let Some(gw) = p.great_white.as_mut() {
+                        gw.pop_scale *= s;
+                        gw.max_moab_time *= s;
+                        gw.max_moab_time_mega *= s;
+                        gw.moab_dps = (gw.moab_dps as f32 * (1.0 / s)) as i32;
+                        gw.moab_pct = (1.0 - (1.0 - s * gw.moab_pct)) + gw.moab_pct;
+                        if max_layer.is_some() {
+                            gw.max_layer = max_layer;
+                        }
+                    }
+                });
+                each(t, &mut |p| {
+                    if let Some(kb) = p.knockback.as_mut() {
+                        kb.lifespan = r * pp.knockback + kb.lifespan;
+                    }
+                });
+            }
+            "Microraptor" => {
+                if pp.stun_div > 0.0 {
+                    let add = ((damage as f32 / pp.stun_div) as i32) as f32;
+                    each(t, &mut |p| {
+                        for m in &mut p.state_mods {
+                            if m.state.contains("Stun") {
+                                m.add += add;
+                            }
+                        }
+                    });
+                }
+                if at_max && pp.tier > 3 {
+                    each(t, &mut |p| {
+                        if p.damage_model {
+                            p.distribute_override = true;
+                        }
+                    });
+                }
+            }
+            _ => {}
+        }
+        if beast == "Gyrfalcon" {
+            if let Some(g) = t.grapple.as_mut() {
+                g.cooldown -= cd;
+                g.initial += damage as f32;
+                g.grapple += ((pp.grapple as f32 * r) as i32) as f32;
+                let old = g.speed;
+                g.speed = r * pp.speed + old;
+                g.rot_speed *= g.speed / old;
+                g.extra = pierce;
+                if at_max && pp.tier == 3 {
+                    g.exclude_tags.retain(|x| x != "Moabs");
+                    g.exclude_tags.extend(["Bfb", "Zomg", "Ddt"].map(String::from));
+                }
+                if at_max && pp.tier == 4 {
+                    g.exclude_bloons.retain(|x| x != "Bad");
+                }
+            }
+        } else {
+            each(t, &mut |p| {
+                if p.damage_model {
+                    p.damage += damage as f32;
+                }
+            });
+        }
+        each(t, &mut |p| {
+            if !p.pid.contains("GrabProjectile") {
+                p.pierce += pierce;
+            }
+        });
+        let mut ratio = 0.0f32;
+        let mut rate = |w: &mut crate::data::Weapon| {
+            let old = w.rate;
+            w.rate = old - cd;
+            if ratio == 0.0 {
+                ratio = old / w.rate - 1.0;
+            }
+        };
+        for a in &mut t.attacks {
+            for w in &mut a.weapons {
+                rate(w);
+            }
+        }
+        for ab in &mut t.abilities {
+            for aa in &mut ab.activate {
+                for a in &mut aa.attacks {
+                    for w in &mut a.weapons {
+                        rate(w);
+                    }
+                }
+            }
+        }
+        for ab in &mut t.abilities {
+            ab.speed_scale += ratio;
+        }
+        spec
     }
 
     /// Replaces tower `t`'s pets with its current tier's (Beast Handler).
@@ -11487,6 +11893,10 @@ impl Game {
             }
         }
         for pet in fresh {
+            // (ProcessLeashedTower makes no pet for a beast lost to a merge.)
+            if self.beast_lost(id, &pet.id) {
+                continue;
+            }
             // (TranceTotemSpawner.Process makes it (shouldSpawnTotem), from the next frame, on the
             // Mermonkey's spot with no placement test (CreateSubtower): recording mermonkey_004,
             // its weapon's start cooldown from rt 1; map_peninsula_mermonkey_204_r40, a spot in a
@@ -13536,6 +13946,9 @@ impl Game {
         let tw = self.towers.remove(t);
         self.cash += (tw.invested * frac).floor() + tw.bank.floor();
         self.towers.retain(|o| !o.sub.as_ref().is_some_and(|s| (s.pet || s.spec.with_parent) && s.parent == tw.id));
+        if self.merges.iter().any(|m| m.0 == tw.id || m.2 == tw.id) {
+            self.unmerge_handler(tw.id);
+        }
     }
 
     /// Supports reaching a tower of type `def` at `p` (`skip`: the tower itself), grouped by
@@ -15646,6 +16059,20 @@ impl Game {
         (0..self.towers.len()).filter(|&o| self.towers[o].sub.as_ref().is_some_and(|s| s.parent == owner)).find_map(|o| slot(o).map(|wi| (o, wi)))
     }
 
+    /// Tower.GetTotalRateModifier (VERIFIED-DECOMP @0x180c0ef90): the model's first WeaponModel
+    /// rate over the unmutated model's (GameModel.GetTowerWithName; a pet's
+    /// GetBeastHandlerPetTowerModel). The clone's mutated models are merged pets (their handler
+    /// tier's pet model is the base); supports are `buffs` rate_mult.
+    fn model_rate_mod(&self, t: usize) -> f32 {
+        let Some(s) = self.towers.get(t).and_then(|tw| tw.sub.as_ref()).filter(|s| s.pet && s.power != 0) else { return 1.0 };
+        let first = |sp: &crate::data::SubTowerSpec| sp.tier.attacks.iter().flat_map(|a| a.weapons.iter()).next().map(|w| w.rate);
+        let base = self.towers.iter().position(|o| o.id == s.parent).and_then(|h| self.tier(h)).and_then(|x| x.pets.iter().find(|p| p.id == s.spec.id)).and_then(|p| first(p));
+        match (first(&s.spec), base) {
+            (Some(a), Some(b)) => a / b,
+            _ => 1.0,
+        }
+    }
+
     /// BloonDegradeStepper.GetTotalBloonHealth: its health and every layer below it.
     fn total_bloon_health(&self, i: usize) -> i32 {
         fn below(g: &Game, k: usize) -> i64 {
@@ -15744,7 +16171,7 @@ impl Game {
         let secs = gw.post_drag_frames as f32 * (1.0 / 60.0f32) + f;
         let until = (secs / (1.0 / 60.0f32)) as i64 + self.sim_elapsed as i64;
         // thrashingProjectileRateFrames = (int)(Tower.GetTotalRateModifier x the model's).
-        let rate_mod = self.buffs.get(t).map_or(1.0, |bf| bf.rate_mult);
+        let rate_mod = self.buffs.get(t).map_or(1.0, |bf| bf.rate_mult) * self.model_rate_mod(t);
         let thrash_rate = (rate_mod * gw.thrash_frames as f32) as i64;
         if let Some(st) = self.towers[t].weapons.get_mut(wi) {
             st.gw_effect = true;
@@ -15860,7 +16287,10 @@ impl Game {
                 let st = &mut self.towers[t].weapons[w];
                 st.gw_attached = None;
                 st.gw_until = (post / (1.0 / 60.0f32)) as i64 + now;
-                if let Some(bid) = st.gw_latch_bloon.take() {
+                let bid = st.gw_latch_bloon.take();
+                // (Each latch has its own slow: another Great White's latch on the bloon keeps it
+                // slowed; recording beast_merge_h300_max rt 452, follow 574 on the MOAB 484 left.)
+                if let Some(bid) = bid.filter(|&bid| !self.projectiles.iter().any(|q| q.latch_on.is_some_and(|l| l.0 == bid))) {
                     if let Some(b) = self.bloons.iter_mut().find(|b| b.id == bid) {
                         b.effects.retain(|e| e.id != "LatchToBloon");
                     }
@@ -16405,6 +16835,10 @@ impl Game {
                 let abilities_now: Vec<(String, f32, bool, bool)> = self.tier(t).map(|tr| tr.abilities.iter()
                     .filter(|a| !self.towers[t].ability_cd.contains_key(&a.name))
                     .map(|a| (a.name.clone(), a.cooldown, a.ready, a.full_start)).collect()).unwrap_or_default();
+                // AbilityModel.cooldownSpeedScale (0 unless a merge raised it): Ability.Process
+                // (@0x180dfafc0) takes 1 / (1 - it) a frame.
+                let ab_scales: Vec<(String, f32)> = self.tier(t).map(|tr| tr.abilities.iter().filter(|a| a.speed_scale != 0.0)
+                    .map(|a| (a.name.clone(), 1.0 / (1.0 - a.speed_scale))).collect()).unwrap_or_default();
                 let tw = &mut self.towers[t];
                 if tw.attack_t < f32::MAX {
                     tw.attack_t += 1.0 / FPS;
@@ -16457,8 +16891,9 @@ impl Game {
                 // Ability.Process (VERIFIED-DISASM @0xdfafc0): the cooldown runs while AreRoundsActive.
                 if rounds_on {
                     let speed = cd_speed[t] * self.buffs.get(t).map_or(1.0, |b| b.ability_cd_mult);
-                    for cd in tw.ability_cd.values_mut() {
-                        *cd = (*cd - speed).max(0.0);
+                    for (name, cd) in tw.ability_cd.iter_mut() {
+                        let k = ab_scales.iter().find(|x| &x.0 == name).map_or(1.0, |x| x.1);
+                        *cd = (*cd - speed * k).max(0.0);
                     }
                 }
                 for (_, f, _) in &mut tw.temp_supports {
@@ -22923,9 +23358,18 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             if self.projectiles[p].born >= self.sim_elapsed * 4 {
                 continue;
             }
+            // OnEmit (VERIFIED-DECOMP @0x180ca5400): isBuffedByRate makes intervalFrames (int)(its
+            // tower's GetTotalRateModifier x the model's). STAND-IN: only for a Great White's
+            // follow (its tower: the pet with the limiter), whose merged pet changes it (recording
+            // beast_merge_h300 rt 390: 36 -> 33).
+            let frames = if oi.buffed && self.projectiles[p].spec.latch.is_some() {
+                self.gw_limiter(self.projectiles[p].owner).map_or(oi.frames, |(t, _)| (self.model_rate_mod(t) * oi.frames) as i32 as f32)
+            } else {
+                oi.frames
+            };
             let pr = &mut self.projectiles[p];
             pr.interval_t += 1.0;
-            if pr.interval_t < oi.frames {
+            if pr.interval_t < frames {
                 continue;
             }
             // (A latched one's CreateProjectileOnInterval comes before its LatchToBloon in the
@@ -23862,6 +24306,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let round_clock = self.round_clock;
         let p1 = std::time::Instant::now();
         // Towers.
+        // (BeastHandlerLeash.Process, in the handler's turn: after the bloons' moves, before its
+        // pets (recording beast_merge_002 rt 301: the lost bird's Green let go where the bird was).)
+        self.leash_step();
         self.expire_subs(false);
         self.leak_immune = (self.leak_immune - 1.0).max(0.0);
         self.syphon = (self.syphon - 1.0).max(0.0);
@@ -24047,6 +24494,19 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // (The bird's process is after the bloons': recording beast_001; and, a tower's, before the
         // projectiles': a bite at a bloon it carries follows and expires where the bird has it this
         // frame (recording map_spillway_beast_302_r40 rt 1919 / 1942).)
+        for bid in std::mem::take(&mut self.late_unlatch) {
+            // (Another Great White's latch on it keeps it slowed: h300_max, A's follow 484 on the MOAB.)
+            if self.projectiles.iter().any(|q| q.latch_on.is_some_and(|l| l.0 == bid)) {
+                continue;
+            }
+            if let Some(b) = self.bloons.iter_mut().find(|b| b.id == bid) {
+                b.effects.retain(|e| e.id != "LatchToBloon");
+            }
+        }
+        for (mut held, mut st) in std::mem::take(&mut self.late_release) {
+            let rt = self.round_clock;
+            self.bird_release_ex(&mut held, &mut st, rt, true);
+        }
         self.fly_birds();
         self.hold_bird_bloons();
         self.arrive_follow();
@@ -25379,6 +25839,8 @@ mod tests {
         let mut forced: Vec<usize> = Vec::new();
         let mut flips: Vec<usize> = Vec::new();
         let mut upgrades: Vec<(usize, usize, usize)> = Vec::new();
+        // SimRecorder's `# merge src into slot frame`: a Beast Handler merge after that frame.
+        let mut merges_in: Vec<(usize, usize, usize, usize)> = Vec::new();
         // SimRecorder's `# place k frame`: tower k placed between recorded frames frame and
         // frame + 1 (InputManager.CreateTowerAt, as at the start) instead of before the first.
         let mut late: Vec<(usize, usize)> = Vec::new();
@@ -25431,6 +25893,7 @@ mod tests {
                 Some("#") if f.get(1) == Some(&"forced") => forced.push(f[2].parse().unwrap()),
                 Some("#") if f.get(1) == Some(&"flip") => flips.push(f[2].parse().unwrap()),
                 Some("#") if f.get(1) == Some(&"upgrade") => upgrades.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap())),
+                Some("#") if f.get(1) == Some(&"merge") => merges_in.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap(), f[5].parse().unwrap())),
                 Some("#") if f.get(1) == Some(&"place") => late.push((f[2].parse().unwrap(), f[3].parse().unwrap())),
                 Some("F") => {
                     if first_time.is_none() {
@@ -25633,6 +26096,18 @@ mod tests {
                     g.cash = cash;
                     if verbose {
                         eprintln!("    upgrade tower {k} path {path} at frame {fi}: {ok}, tiers {:?}, paragon {:?}", g.towers[t].tiers, g.towers[t].paragon.as_ref().map(|p| p.0));
+                    }
+                }
+            }
+            for &(k, into, slot, at) in &merges_in {
+                if at == fi {
+                    let nth = |g: &Game, k: usize| g.towers.iter().enumerate().filter(|(_, t)| t.sub.is_none()).nth(k).map(|(i, _)| i);
+                    let ok = match (nth(&g, k), nth(&g, into)) {
+                        (Some(a), Some(b)) => g.merge_beast(a, slot, b),
+                        _ => false,
+                    };
+                    if verbose {
+                        eprintln!("    merge tower {k} slot {slot} into {into} at frame {fi}: {ok}");
                     }
                 }
             }
@@ -26482,6 +26957,50 @@ mod beast_tests {
         assert_eq!(g.pet_move_state(t, 0), Some(0.0));
         let pi = g.leashed_pet(t, 0).unwrap();
         assert_eq!(g.towers[pi].pos, spot, "it stays there");
+    }
+
+    /// BeastHandlerLeash merges: two 0-2-0 handlers, one merged into the other: its Microraptor
+    /// goes, the other's takes power 6 (its maxPower: r = 1, rate - 0.3439, pierce + 12, damage
+    /// + 2), and selling the target gives the beast back.
+    #[test]
+    fn beast_merge() {
+        let mut g = game();
+        g.cash = 1e7;
+        let bh = g.tower_defs.iter().position(|(n, _)| n == "BeastHandler").unwrap();
+        let a = place_near(&mut g, bh, 300.0);
+        let b = place_near(&mut g, bh, 300.0);
+        for t in [a, b] {
+            assert!(g.upgrade(t, 1));
+            assert!(g.upgrade(t, 1));
+        }
+        g.start_round();
+        for _ in 0..5 {
+            g.step();
+        }
+        let hs: Vec<usize> = (0..g.towers.len()).filter(|&t| g.towers[t].sub.is_none() && g.towers[t].tiers == [0, 2, 0]).collect();
+        let (a, b) = (hs[0], hs[1]);
+        let (aid, bid) = (g.towers[a].id, g.towers[b].id);
+        assert!(g.merge_ok(b, 0, a), "valid target");
+        assert!(!g.merge_ok(b, 0, b), "not itself");
+        let base = g.tier(a).unwrap().pets[0].clone();
+        assert!(g.merge_beast(b, 0, a));
+        assert!(!g.merge_beast(b, 0, a), "once");
+        g.step();
+        let a = g.towers.iter().position(|t| t.id == aid).unwrap();
+        let b = g.towers.iter().position(|t| t.id == bid).unwrap();
+        assert!(g.leashed_pet(b, 0).is_none(), "the merged beast goes");
+        assert_eq!(g.beast_power(aid, "Microraptor"), 6);
+        let pi = g.leashed_pet(a, 0).unwrap();
+        let s = g.towers[pi].sub.as_ref().unwrap();
+        assert_eq!(s.power, 6);
+        let (w0, w1) = (&base.tier.attacks[0].weapons[0], &s.spec.tier.attacks[0].weapons[0]);
+        assert_eq!(w1.rate, w0.rate - 0.34389999508857727f32);
+        assert_eq!(w1.projectile.pierce, w0.projectile.pierce + 12.0);
+        g.sell(a);
+        g.step();
+        let b = g.towers.iter().position(|t| t.id == bid).unwrap();
+        assert!(g.merges.is_empty());
+        assert!(g.leashed_pet(b, 0).is_some(), "given back");
     }
 
     #[test]
