@@ -203,6 +203,12 @@ by the bloon's rotation change, z + the MOAB height offset), SetTarget @0x180cc7
 (SetBeastHandlerIntoCooldown: limitUntil = (int)(postBloonDestroyTime / (1/60)) + time, the slow mutator
 removed); needs a recording where a ZOMG+ reaches the pet.
 
+### DONE: Megalodon (Beast Handler 5-x-x) grab (2026-11-18)
+map_haunted_beast_502_r80 MATCH (scenario of the same name; pending/maptowers). SetGrabbedBloon's percent
+branch (maxMoabDamagePercentPerSecond 0.25 at tier 5: min(maxHealth x percent, health / 5000)) is capped by
+GreatWhiteEffectModel +0x6c, maxMoabGrabTimeMegalodon (6), not maxMoabGrabTime (0 at tier 5), unless Tag
+Bad (game.json great_white `max_moab_time_mega`). The ZOMG (layer 12 <= 13) is pulled.
+
 ### DONE: Great White no-pull branch (LatchToBloon; 2026-11-17)
 map_haunted_beast_402_r80 MATCH (scenario of the same name, round 80's ZOMG; pending/maptowers, maptowers 92/92).
 A bloon CanPullBloon refuses gets bloonFollowProjectileModel (game.json great_white `follow`, projectile

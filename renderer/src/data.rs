@@ -3559,6 +3559,9 @@ pub struct GreatWhite {
     pub pop_scale: f32,
     pub post_drag_frames: i32,
     pub max_moab_time: f32,
+    /// maxMoabGrabTimeMegalodon: the cap in SetGrabbedBloon's percent branch.
+    #[serde(default)]
+    pub max_moab_time_mega: f32,
     pub moab_dps: i32,
     pub moab_pct: f32,
     pub exit_frames: i32,

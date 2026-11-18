@@ -1050,6 +1050,8 @@ def main():
                 "max_layer": layer, "max_pull_rbe": gf.get("maxPullRbe", 0),
                 "pop_scale": gf.get("bloonPopTimeScale", 1.0), "post_drag_frames": frames(gf.get("postDragTime", 0.0)),
                 "max_moab_time": gf.get("maxMoabGrabTime", 0.0), "moab_dps": gf.get("moabDamagePerSecond", 1),
+                # SetGrabbedBloon's percent branch caps by GreatWhiteEffectModel +0x6c, this one.
+                "max_moab_time_mega": gf.get("maxMoabGrabTimeMegalodon", 0.0),
                 "moab_pct": gf.get("maxMoabDamagePercentPerSecond", 0.0),
                 "exit_frames": frames(gf.get("exitAnimationTime", 0.0)), "retreat_frames": frames(gf.get("playRetreatAnimationAt", 0.0)),
                 "thrash_frames": frames(gf.get("thrashingProjectileRate", 0.0)),

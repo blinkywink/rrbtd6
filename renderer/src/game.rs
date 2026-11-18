@@ -15720,8 +15720,10 @@ impl Game {
             }
             v * 0.25 * gw.pop_scale
         } else if gw.moab_pct > 0.0 {
+            // (min(maxHealth x percent, health / moabDamagePerSecond), capped by
+            // maxMoabGrabTimeMegalodon (+0x6c) unless Tag Bad (0x1000).)
             let a = (d.max_health as f32 * gw.moab_pct).min(b.hp as f32 / gw.moab_dps as f32);
-            if tags.iter().any(|x| x == "Bad") { a } else { a.min(gw.max_moab_time) }
+            if tags.iter().any(|x| x == "Bad") { a } else { a.min(gw.max_moab_time_mega) }
         } else {
             (b.hp as f32 / gw.moab_dps as f32).min(gw.max_moab_time)
         };
