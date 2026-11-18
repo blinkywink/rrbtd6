@@ -1277,6 +1277,9 @@ pub struct Weapon {
     /// FlipFollowPathModel: (flipTowerDisplayX, flipTowerDisplayY), when the weapon has one.
     #[serde(default)]
     pub flip_eject: Option<[bool; 2]>,
+    /// FlipFollowPathModel.effectOnFlip (prefab, scale): played at the tower on a hand switch.
+    #[serde(default)]
+    pub flip_fx: Option<(String, f32)>,
     /// WeaponModel.startInCooldown / customStartCooldown (seconds).
     #[serde(default)]
     pub start_cooldown: bool,
@@ -1292,6 +1295,9 @@ pub struct Weapon {
     /// eject point on each throw, visual only.
     #[serde(default)]
     pub eject_fx: Vec<(String, f32)>,
+    /// TheBlazingSun's muzzle effects (prefab, scale): [under stacksToBurn, overheated].
+    #[serde(default)]
+    pub blazing_fx: Option<[Option<(String, f32)>; 2]>,
     /// LineEffectModel (Ray of Doom): the beam drawn along its line shots.
     #[serde(default)]
     pub line_fx: Option<LineFx>,
@@ -1574,6 +1580,9 @@ pub struct Takedown {
     pub turn: f32,
     #[serde(default)]
     pub eject: [f32; 3],
+    /// The hook projectile's CreateEffectOnContactModel effect (prefab, scale), display only.
+    #[serde(default)]
+    pub hit_fx: Option<(String, f32)>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2602,6 +2611,9 @@ pub struct AmmoSwap {
     pub lifespan_mult: f32,
     /// newImmuneBloonProperties when overrideDamageType.
     pub immune: Option<u32>,
+    /// mainMonkeyAbilityEffect (prefab, scale): on the tower when the ammo arrives (display only).
+    #[serde(default)]
+    pub fx: Option<(String, f32)>,
 }
 
 /// ActivateAttackModel: `attacks` run for `lifespan` seconds (one volley when `one_shot`).
@@ -2639,6 +2651,9 @@ pub struct Turbo {
     pub lifespan: f32,
     pub mult: f32,
     pub extra_damage: f32,
+    /// projectileDisplay: the weapons' projectiles' display while it runs (display only).
+    #[serde(default)]
+    pub display: Option<String>,
 }
 
 /// ToggleFocusStanceModel: in Focus stance range x `range`, weapon intervals x `rate`, projectile
@@ -2924,6 +2939,11 @@ pub struct Darkshift {
     /// The input's helper message (a localization key): the model's helperMessageLocsKey.
     #[serde(default)]
     pub helper: String,
+    /// disappearEffectModel / reappearEffectModel (prefab, scale), display only.
+    #[serde(default)]
+    pub out_fx: Option<(String, f32)>,
+    #[serde(default)]
+    pub in_fx: Option<(String, f32)>,
 }
 
 #[derive(Deserialize, Clone)]

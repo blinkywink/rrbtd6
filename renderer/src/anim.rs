@@ -229,6 +229,9 @@ pub struct AnimModel {
     /// Set before a draw: (pitch, roll, scale) applied in the model's own space before its yaw
     /// (nose up about x, roll about its forward z, left wing down for positive roll).
     pub tilt: Option<(f32, f32, f32)>,
+    /// Set before a draw: mirrored in its own x (FlipFollowPath.Flip with flipTowerDisplayX,
+    /// VERIFIED-DECOMP @0x180c81de0: the display's x scale negated). Culled parts swap sides.
+    pub mirror_x: bool,
 }
 
 pub struct PosedMesh{
@@ -545,7 +548,7 @@ impl AnimModel {
             .collect::<Vec<_>>();
         let fx = parts.iter().map(|p| p.fx_spec.as_ref().and_then(|s| make_fx(s))).collect();
         let shadow = st.shadow.map(|s| Shadow { tex: upload_shadow(&s.tex), size: s.size, pos: s.pos });
-        Self { shadow, parts, fx, clips: st.clips, nverts: st.nverts, frames: st.frames, attach: st.attach, states: st.states, state_flags: st.state_flags, legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt: None }
+        Self { shadow, parts, fx, clips: st.clips, nverts: st.nverts, frames: st.frames, attach: st.attach, states: st.states, state_flags: st.state_flags, legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt: None, mirror_x: false }
     }
 
     async fn from_staged_cooperative(st:Staged)->Self{
@@ -565,7 +568,7 @@ impl AnimModel {
         }
         let fx=parts.iter().map(|p|p.fx_spec.as_ref().and_then(|s|make_fx(s))).collect();
         let shadow=if let Some(s)=st.shadow{let tex=upload_shadow_cooperative(&s.tex).await;Some(Shadow{tex,size:s.size,pos:s.pos})}else{None};
-        Self{shadow,parts,fx,clips:st.clips,nverts:st.nverts,frames:st.frames,attach:st.attach,states:st.states,state_flags:st.state_flags,legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt:None}
+        Self{shadow,parts,fx,clips:st.clips,nverts:st.nverts,frames:st.frames,attach:st.attach,states:st.states,state_flags:st.state_flags,legacy_scratch:(!pose_reuse_enabled()).then(Default::default),tilt:None,mirror_x:false}
     }
 
     /// Reads and decodes a model directory without touching the GPU (safe off the main thread).
@@ -969,6 +972,12 @@ impl AnimModel {
             [x, y, z]
         };
         let scale = tilt.map_or(1.0, |t| t.2);
+        let mirror = self.mirror_x;
+        let cull_of = |c: CullFace| match (mirror, c) {
+            (true, CullFace::Front) => CullFace::Back,
+            (true, CullFace::Back) => CullFace::Front,
+            (_, c) => c,
+        };
         let mut meshes = Vec::with_capacity(self.parts.len());
         let mut outlines = Vec::new();
         for (pi, part) in self.parts.iter().enumerate().filter(|(_, p)|blink||!p.blink_only){
@@ -976,7 +985,11 @@ impl AnimModel {
                 (take_pose_vertices(part.vcount),if part.outline>0.0{take_pose_vertices(part.vcount)}else{Vec::new()})
             }else{let (mut v,mut o)=self.legacy_scratch.take().unwrap_or_default();v.clear();o.clear();(v,o)};
             for k in 0..part.vcount {
-                let (vp, vn) = self.frames.lerp(base0 + part.voff + k, base1 + part.voff + k, u);
+                let (mut vp, mut vn) = self.frames.lerp(base0 + part.voff + k, base1 + part.voff + k, u);
+                if mirror {
+                    vp[0] = -vp[0];
+                    vn[0] = -vn[0];
+                }
                 let (vp, vn) = (tilted(vp, scale), tilted(vn, 1.0));
                 let (px, pz) = rot(vp[0], vp[2]);
                 let (nx, nz) = rot(vn[0], vn[2]);
@@ -1006,9 +1019,9 @@ impl AnimModel {
             for (vs, idx) in &part.chunks {
                 let pick = |src:&mut Vec<Vertex>| if !reuse{if vs.is_empty(){src.clone()}else{vs.iter().map(|&v|src[v as usize]).collect()}}else if vs.is_empty(){std::mem::take(src)}else{let mut out=take_pose_vertices(vs.len());out.extend(vs.iter().map(|&v|src[v as usize]));out};
                 let has_outline=!outline_vertices.is_empty();
-                meshes.push(PosedMesh { vertices: pick(&mut vertices), indices: idx.clone(), texture: part.tex.clone(), cull: part.cull });
+                meshes.push(PosedMesh { vertices: pick(&mut vertices), indices: idx.clone(), texture: part.tex.clone(), cull: cull_of(part.cull) });
                 if has_outline {
-                    outlines.push(PosedMesh { vertices: pick(&mut outline_vertices), indices: idx.clone(), texture: None, cull: part.cull });
+                    outlines.push(PosedMesh { vertices: pick(&mut outline_vertices), indices: idx.clone(), texture: None, cull: cull_of(part.cull) });
                 }
             }
             if reuse{recycle_pose_vertices(vertices);recycle_pose_vertices(outline_vertices);}else{self.legacy_scratch=Some((vertices,outline_vertices));}

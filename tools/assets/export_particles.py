@@ -439,17 +439,15 @@ def load_bundle(path):
     # copy of the bundle alive (asset_references_assets_all, ~900 MB, then ran out of memory).
     name = os.path.basename(path)
     mono = glob.glob(os.path.join(AA, "*_monoscripts_*.bundle"))
-    try:
-        env = UnityPy.load(path, *mono)
-    except MemoryError:
-        # Too big to decompress here (asset_references_assets_all): its decompressed files in
-        # local_extracted/_bundle_cache/<name>-*/ (as export_model.load_bundle).
-        cache = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "local_extracted", "_bundle_cache")
-        dirs = [d for d in sorted(glob.glob(os.path.join(cache, glob.escape(name) + "-*"))) if os.path.exists(os.path.join(d, ".complete"))]
-        if not dirs:
-            raise
-        gc.collect()
+    # Too big to decompress here (asset_references_assets_all): its decompressed files in
+    # local_extracted/_bundle_cache/<name>-*/ when there (as export_model.load_bundle). UnityPy
+    # reports a failed decompression as a parse error and loads nothing, so the cache comes first.
+    cache = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "local_extracted", "_bundle_cache")
+    dirs = [d for d in sorted(glob.glob(os.path.join(cache, glob.escape(name) + "-*"))) if os.path.exists(os.path.join(d, ".complete"))]
+    if dirs:
         env = UnityPy.load(*[os.path.join(dirs[0], f) for f in sorted(os.listdir(dirs[0])) if f.startswith("CAB-")], *mono)
+    else:
+        env = UnityPy.load(path, *mono)
     deps = set()
     for f in list(env.files.values()):
         for af in getattr(f, "files", {}).values():
@@ -458,7 +456,14 @@ def load_bundle(path):
                 if cab in CABS and CABS[cab] != name and bpath(CABS[cab]) not in mono:
                     deps.add(CABS[cab])
     for d in sorted(deps):
-        env.load_file(bpath(d))
+        # (A dependency too big to decompress loads from its cache, as above.)
+        dd = [x for x in sorted(glob.glob(os.path.join(cache, glob.escape(d) + "-*"))) if os.path.exists(os.path.join(x, ".complete"))]
+        if dd:
+            for f in sorted(os.listdir(dd[0])):
+                if f.startswith("CAB-"):
+                    env.load_file(os.path.join(dd[0], f))
+        else:
+            env.load_file(bpath(d))
     return env
 
 
@@ -647,7 +652,32 @@ def export_projectiles(after=None):
     print(len(out), "projectiles with particle effects")
 
 
+def export_one_projectile(prefab):
+    """`proj:<prefab>`: one projectile prefab's particles as proj_<name>, merged into
+    proj_index.json (newly planned displays, without re-running every projectile)."""
+    name = os.path.splitext(os.path.basename(prefab))[0]
+    b = INDEX[prefab]
+    env = load_bundle(bpath(b))
+    obj = find_prefab(env, prefab)
+    if obj is None:
+        print(prefab, "-> not in", b, flush=True)
+        return
+    eff = f"proj_{name}"
+    idx_path = os.path.join(OUT, "proj_index.json")
+    idx = json.load(open(idx_path)) if os.path.exists(idx_path) else {}
+    if export_root(env, obj.read(), eff, None, prefab, parts=False):
+        idx[name] = eff
+    else:
+        import shutil
+        shutil.rmtree(os.path.join(OUT, eff), ignore_errors=True)
+        idx.pop(name, None)
+    json.dump(idx, open(idx_path, "w"), indent=1)
+
+
 def export(prefab):
+    if prefab.startswith("proj:"):
+        export_one_projectile(prefab[5:])
+        return
     if prefab == "projectiles" or prefab.startswith("projectiles>"):
         export_projectiles(prefab.partition(">")[2] or None)
         return

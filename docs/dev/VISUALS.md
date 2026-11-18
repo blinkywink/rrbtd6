@@ -125,9 +125,27 @@ effect names, model behaviours the data builder never reads).
   JungleVineWrap / Grow models exported with no mesh (vertex_count 0), so the exporter needs work first.
   Sniper 030+'s BouncingBulletTracer (CreateEffectFromCollisionToCollision @0x180c9ea30: spawned along the
   segment, stretched by length / effectLength): its prefab has no particles, so the streak stand-in stays.
-- LEFT, rest: Boomerang FlipFollowPath AmbiRangTransformation (effectOnFlip), Sniper ammo-swap VFX, Paragon
-  degree orbs, Desperado's Blazing Sun muzzle flashes, Buccaneer HookHit, Dark Shift, Thunder's Decree.
-  Selection-only markers (target reticles, patrol points, Beast leash lines) are UI.
+- DONE (2026-11-18): Boomerang hand switch (FlipFollowPath.Flip @0x180c81de0): flipTowerDisplayX mirrors
+  the tower's model (`AnimModel::mirror_x`, culled parts swap sides) and effectOnFlip
+  (AmbiRangTransformation) plays at the tower on a switch (weapon `flip_fx`; main.rs watches each tower's
+  hand). Autotest: `RRBTD6_FLIP=<frame>` switches every tower's hand.
+- DONE: Desperado 5xx Blazing Sun muzzle flashes (TheBlazingSun.ProjectilesCreated @0x180c961a0: the
+  ejectEffect under stacksToBurn stacks, the overheat one from there; weapon `blazing_fx`).
+- DONE: MOAB Takedown hooks' HookHit at the snap (the hook projectile's CreateEffectOnContactModel;
+  takedown `hit_fx`, game.rs hooks_step, display only).
+- DONE: Dark Shift / Spirit Walk effects (StartDarkshift @0x180e22bd0 disappearEffect at the old spot,
+  EndDarkshift @0x180e214a0 reappearEffect at the new one; darkshift `out_fx` / `in_fx`).
+- DONE: Turbo Charge / Perma Charge projectiles (TurboMutator.Mutate @0x180e7ac90: each weapon's projectile
+  takes projectileDisplay while the ability runs; turbo `display`, main.rs `proj_look` by uid at creation).
+  The six ability rang / glaive displays exported (sprites + particle trails; export_particles
+  `proj:<prefab>` adds one projectile's particles to proj_index.json).
+- LEFT, rest: Sniper ammo-swap VFX, Paragon degree orbs (ParagonFXOrb...), Thunder's Decree, Ice Monkey
+  FreezeNearbyWater platforms, Acidic Mixture buff bubbles, Vigilante buff, Super Monkey ImmunityModel
+  (Legend of the Night track radial), Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects,
+  Pre-emptive Strike pod flash. Selection-only markers (target reticles, patrol points, Beast leash lines)
+  are UI.
+- Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy
+  reports a failed decompression as a parse error and loads nothing, so the MemoryError fallback never ran).
 
 ## Audit entries that aren't gaps
 

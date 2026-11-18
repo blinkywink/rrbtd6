@@ -800,6 +800,10 @@ async fn game_main() {
     // Per sub-tower with a parent-attack effect: its attack_t last frame (a new throw restarts it).
     let mut parent_fx_seen: HashMap<u64, f32> = HashMap::new();
     // CreateEffectProjectileAfterTime: per (projectile uid, effect index) the age its effect is next due (-1 done).
+    // Each tower's hand last frame (FlipFollowPath): a switch plays its effectOnFlip.
+    let mut flip_seen: HashMap<u64, bool> = HashMap::new();
+    // Towers whose ammo crate had arrived last frame (SniperAmmoSwap).
+    let mut ammo_seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut after_fx_seen: HashMap<(u64, usize), f32> = HashMap::new();
     let outline_scale: f32 = std::env::var("RRBTD6_OUTLINE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.7);
     mark("tower index");
@@ -838,6 +842,9 @@ async fn game_main() {
     // Loaded when a projectile (or orbit) first shows them, not all at startup.
     let mut proj_displays: HashMap<String, ProjDisplay> = HashMap::new();
     let mut proj_tried: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Each projectile's display swapped in when it was made (TurboMutator: Turbo Charge / Perma
+    // Charge's projectileDisplay), by uid.
+    let mut proj_look: HashMap<u64, Option<String>> = HashMap::new();
     // MOAB Takedown ropes' chain links and hooks (models/extra/<name>), loaded when first drawn.
     let mut rope_models: HashMap<String, Option<render3d::Model>> = HashMap::new();
     async fn load_proj(dir: std::path::PathBuf) -> Option<ProjDisplay> {
@@ -2640,7 +2647,11 @@ async fn game_main() {
                 }
                 let body_dir = (fan_model.is_none() && tier_model.is_some()).then(|| tier_index[t.def].get(&key).cloned()).flatten();
                 if let Some(m) = fan_model.or(tier_model).or(tower_anims[t.def].as_mut()) {
+                    // FlipFollowPath.Flip (VERIFIED-DECOMP @0x180c81de0): thrown with the other hand,
+                    // flipTowerDisplayX negates the tower display's x scale (Boomerang).
+                    m.mirror_x = t.flip && game.tier_of(t).is_some_and(|tr| tr.attacks.iter().flat_map(|a| a.weapons.iter()).any(|w| w.flip_eject.is_some_and(|f| f[0])));
                     let (body, outline) = pose(m, true, yaw);
+                    m.mirror_x = false;
                     if let Some(dir) = body_dir.clone() {
                         let (c, at) = last_pose.get();
                         model_poses.insert((t.id, dir), (c, at, pos, yaw));
@@ -2875,11 +2886,23 @@ async fn game_main() {
             }
             bloon_time += get_time() - bloon_t0;
             let tilt = 1.0 / 60f32.to_radians().tan();
+            // TurboMutator.Mutate (VERIFIED-DECOMP @0x180e7ac90): while Turbo Charge / Perma Charge
+            // runs, the tower's weapons' projectiles are made with its projectileDisplay; ones
+            // already flying keep theirs.
+            proj_look.retain(|uid, _| game.projectiles.iter().any(|p| p.uid == *uid));
+            for p in &game.projectiles {
+                proj_look.entry(p.uid).or_insert_with(|| {
+                    let t = game.towers.iter().find(|o| o.id == p.owner).filter(|o| o.turbo.is_some())?;
+                    let tr = game.tier_of(t)?;
+                    let own = tr.attacks.iter().flat_map(|a| a.weapons.iter()).any(|w| w.projectile.display.is_some() && w.projectile.display == p.spec.display);
+                    own.then(|| tr.abilities.iter().find_map(|a| a.turbo.as_ref().and_then(|tb| tb.display.clone()))).flatten()
+                });
+            }
             // Projectile displays seen for the first time this frame (projectiles and orbits).
             let wanted: Vec<String> = game
                 .projectiles
                 .iter()
-                .flat_map(|p| p.spec.pierce_sprites.iter().chain(p.spec.display.iter()))
+                .flat_map(|p| p.spec.pierce_sprites.iter().chain(p.spec.display.iter()).chain(proj_look.get(&p.uid).into_iter().flatten()))
                 .chain((0..game.towers.len()).filter_map(|t| game.tier(t).and_then(|tr| tr.orbit.as_ref()).and_then(|o| o.display.as_ref())))
                 .filter_map(|g| proj_index.get(g))
                 .filter(|n| !proj_tried.contains(*n))
@@ -2942,7 +2965,7 @@ async fn game_main() {
                     let k = p.pierce.ceil() as usize;
                     p.spec.pierce_sprites.get(k.clamp(1, n) - 1)
                 } else {
-                    wrath_display.as_ref().or(p.spec.display.as_ref())
+                    wrath_display.as_ref().or(proj_look.get(&p.uid).and_then(|l| l.as_ref())).or(p.spec.display.as_ref())
                 };
                 // Ring and explosion hits have no projectile graphic (drawn as bursts); "#empty" is
                 // a display whose prefab is the game's empty placeholder (nothing drawn).
@@ -3202,7 +3225,30 @@ async fn game_main() {
             // have passed since it was made (again every timeFrames with repeat), at the projectile
             // or, useTargetPosition, its target (the Sub's missile-pod FXDown, Tack Paragon meteors).
             // STAND-IN: isBuffedByRate's rate scaling of timeFrames isn't applied.
-            after_fx_seen.retain(|(uid, _), _| game.projectiles.iter().any(|p| p.uid == *uid));
+            // FlipFollowPath.Flip (VERIFIED-DECOMP @0x180c81de0) with its effect flag (the hand button,
+    // OnTsmThemeAction): effectOnFlip at the tower when its hand changes.
+    for t in &game.towers {
+        let was = flip_seen.insert(t.id, t.flip);
+        if was.is_some_and(|w| w != t.flip) {
+            if let Some((fx, k)) = game.tier_of(t).and_then(|tr| tr.attacks.iter().flat_map(|a| a.weapons.iter()).find_map(|w| w.flip_fx.clone())) {
+                particles.spawn(&fx, [t.pos[0], 0.0, t.pos[1]], k);
+            }
+        }
+    }
+    flip_seen.retain(|id, _| game.towers.iter().any(|t| t.id == *id));
+    // SniperAmmoSwapBehavior.DoAbility (VERIFIED-DECOMP @0x180e56250): when the ammo arrives
+    // (initialDelay after the ability), mainMonkeyAbilityEffect plays on the tower.
+    for t in &game.towers {
+        let on = t.ammo.as_ref().is_some_and(|(d, _, _)| *d <= 0.0);
+        if on && ammo_seen.insert(t.id) {
+            if let Some((fx, k)) = t.ammo.as_ref().and_then(|(_, _, am)| am.fx.clone()) {
+                particles.spawn(&fx, [t.pos[0], 0.0, t.pos[1]], k);
+            }
+        } else if !on {
+            ammo_seen.remove(&t.id);
+        }
+    }
+    after_fx_seen.retain(|(uid, _), _| game.projectiles.iter().any(|p| p.uid == *uid));
             for p in &game.projectiles {
                 for (i, a) in p.spec.after_fx.iter().enumerate() {
                     if a.frames < 1 {
@@ -3546,7 +3592,9 @@ async fn game_main() {
                 let tilt = 1.0 / 60f32.to_radians().tan();
                 let mut seen = std::collections::HashSet::new();
                 for p in &game.projectiles {
-                    let Some(fx) = p.spec.display.as_ref().and_then(|g| proj_index.get(g)).and_then(|n| proj_fx.get(n)) else { continue };
+                    // (A Turbo Charge / Perma Charge shot: its swapped display's trail.)
+                    let disp = proj_look.get(&p.uid).and_then(|l| l.as_ref()).or(p.spec.display.as_ref());
+                    let Some(fx) = disp.and_then(|g| proj_index.get(g)).and_then(|n| proj_fx.get(n)) else { continue };
                     let tag = PROJ_FX_TAG | p.uid;
                     let at = [p.pos[0], 10.0, p.pos[1] - 10.0 * tilt];
                     seen.insert(p.uid);
@@ -4262,6 +4310,12 @@ async fn game_main() {
             if frames < last && frames + burst >= last {
                 get_screen_data().export_png(&format!("{path}.{frames}.png"));
                 eprintln!("burst {frames}: projectiles {:?}", game.projectiles.iter().map(|p| (p.owner, p.pos.map(|v| v.round()))).collect::<Vec<_>>());
+            }
+            // RRBTD6_FLIP=n: every tower switches hands at frame n (the hand button).
+            if std::env::var("RRBTD6_FLIP").ok().and_then(|v| v.parse::<u32>().ok()) == Some(frames) {
+                for tw in &mut game.towers {
+                    tw.flip = !tw.flip;
+                }
             }
             // RRBTD6_ABILITY=n: uses every ready ability at frame n.
             if std::env::var("RRBTD6_ABILITY").ok().and_then(|v| v.parse::<u32>().ok()) == Some(frames) {

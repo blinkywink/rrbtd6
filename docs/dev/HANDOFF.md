@@ -172,7 +172,7 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
-### NEXT: cash parity (2026-11-18; every sim matches, the cash differs in 20 of 1141 recordings)
+### NEXT: cash parity (2026-11-18; every sim matches, the cash differs in 8 of 1141 recordings)
 Cash was never part of the match. Check: `sh tools/rec/cash_sweep.sh 'pending/<set>/*.rec' ...` (paths or
 quoted globs under research/dumps/recordings; per recording MATCH/DIFF and its first cash difference,
 tools/rec/cashcmp.py, tolerance 1e-5). The harness starts the clone at the recording's own cash (first F line)
@@ -186,7 +186,10 @@ and places scripted towers free, as SimRecorder's CreateTowerAt does. DONE this 
   CashPerTowerInRange nothing (Jungle's Bounty), DesperadoMark x1, MoabTakedown plain worth (Monkey Pirates),
   ImfLoan none, Monkeyopolis cashFromCrate 0, EatBloon x1, CashIncrease (Monkey Town) x1.
   NOT DONE (no recording reaches them yet): SkimBloons, DepletionToCash, IncreaseBloonWorth(+WithTier),
-  WallOfTrees, Syphon, BonusCashZone, Vigilante, MonkeyCityIncomeSupport (incomeModifier 0), GiveCashOnPop.
+  WallOfTrees, Syphon, BonusCashZone, Vigilante, MonkeyCityIncomeSupport (incomeModifier 0).
+  DONE: GiveCashOnPop (Lead to Gold) flatCashAmount and cashMultiplier 0 (8 bytes at +0x30): pays $0 in
+  CHIMPS (alch_003). Its PreDegrade (@0x180ff00e0) pays n x income x cashMultiplier + flat (n = DamageResult
+  +0x30, unnamed); the clone still pays the flat amount only outside CHIMPS (P-LEADGOLD).
 - Held bloons (blockSpawnChildrenCount): the children a hit doesn't make still pay their whole worth
   (cash_in x the income multiplier) in that hit (beast_001..205, merge, maptowers beast now cash-exact; left:
   beast_030 rt 2477 (+4 in the clone), map_haunted_beast_402_r60 rt 2678 (+0.2 in the clone)).
@@ -203,44 +206,41 @@ and places scripted towers free, as SimRecorder's CreateTowerAt does. DONE this 
   sub_030, tack_052, mortar_upgrades_r30, beast_030, engineer_004 / 025.
 - MorphBloon (Bloon Master Alchemist): lowest = min(it, 1) first; its Damage pays nothing (INFERRED from
   alch_005 / 025 / 205 rt 65; the Damage call's flags aren't named yet).
-- OPEN (tiny): the game pays a hit's layers as ONE f32 sum (BloonDegradeStepper.GetCashForLayers sums
-  cash + additional per layer in f32; a hit of 10 layers at x0.2 pays 2.0000002384 = ten 0.2f32 summed in f32),
-  where the clone adds each layer's 0.2000000030 to the double cash separately: high-round runs drift by ~1e-6
-  (boomerang_paragon_r78/r90/r98, quincy_l17/l20, moab_sniper_024_r78, map_haunted_beast_*_r60/r80,
-  beast_merge_h400 / h500). Where the income multiplier enters per layer isn't found yet (PostDegrade multiplies
-  the sum once, which would give 2.0): read Bloon.Damage / the DamageResult cash (+0x34) path next.
-Remaining (besides the f32-drift ones above):
+- STAGED CASH (VERIFIED-DECOMP / DISASM, 2026-11-18): DistributeCash.PostDegrade (@0x180fea0e0) runs once
+  per Bloon.Damage on its DamageResult cash: GetCashForLayers' sum of the paid layers' raw cash, x the income
+  multiplier, x the model multiplier + additive, x Thrive, all f32 (clone `pay_hit`, `hit_acc`). With a tower
+  that isn't destroyed it goes to Tower.appliedCash (AddPoppedCash @0x180c0ac90, f32 +=); Simulation.Simulate
+  calls UpdateStagedCash (@0x180b50f80) after every root object's Process: the non-destroyed towers'
+  GetAppliedCash (@0x180c0dbd0: value, reset, x max(1, CashIncrease.increase)) summed in double, one
+  AddSharedCash (clone `pay_staged_cash` at the end of step_native). A destroyed tower's staged cash is lost
+  (spike_paragon_r40 rt 61: the sacrificed 0-0-5's pops pay nothing). This fixed every f32-drift recording
+  (boomerang_paragon_r78/r90/r98, beast_merge_h400/h500, map_haunted_beast_502_r80, moab_sniper_024_r78,
+  quincy_l20). A Bloon.Damage in another (the destroy ticks after a degrade) is a hit of its own: the outer
+  hit pays first (boomerang_paragon_r98 rt 3318).
+- The hit's whole cascade pays against the hit bloon's lowestLayerNumber (`hit_lowest`): CreatedChildren's
+  lowest 0 for a regrown layer's extra children only matters for later hits (quincy_l17_r70 rt 421,
+  map_haunted_beast_402_r60, desperado_300 rt 3122).
+- The clone's cash log (RRBTD6_REC_CASH) now prints full precision (it was 3 decimals, which hid sub-0.001
+  differences). That showed village_004_std / 005_std rt 3 (clone +0.000001): a Banana Farm beside Monkey
+  City pays base x income_mult in double, 24.00000095; the game pays 24 (f32). MonkeyCityIncomeSupport's
+  MutatorTower.Mutate (@0x180d45eb0) multiplies several model floats in f32 (+0x28/+0x2c, +0x30 and an int
+  array at +0x38, ...); which branch is the CashModel isn't mapped yet (CashModel.minimum is +0x30). OPEN.
+- Debug: RRBTD6_REC_POPS also logs HIT (each hit's pay), STAGED (the frame's flush), NOPAY (unpaid layers).
+Remaining:
 - engineer_420_close / 420_last / 500 / 502_last / 502_strong (clone +3..11), engineer_005 rt 3482 (+1).
   FOUND for 502_last rt 1510 (`RRBTD6_REC_POPS=1 RRBTD6_REC_CASH=1 sh tools/rec/compare.sh --one ...` logs
   each paid pop): in the collision pass the clone pops Green 265 (game id 2406, at 175.47, the track end),
   while the game's projectile 2380 hits 2414 (H line) and 2406 leaks unpaid in the move. A hit-target
   difference the comparator can't see (the bloon is gone either way; H lines aren't compared): find
   which clone projectile hit 265 and why 2380 prefers 2414 in the game.
-- alch_003 rt 92 (game +23, clone +73).
-- desperado_300 rt 3122 (clone 1 less).
-- map_haunted_beast_402_r60 rt 2678 (clone 1 less).
-- spike_paragon_r40: the Paragon costs 3 more in the game.
 Full list (first differing frame):
-  boomerang_paragon_r78: rt 621 game -404431.79998996854 clone -404431.80000000075
-  boomerang_paragon_r90: rt 1047 game -404499.5999898985 clone -404499.5999999996
-  boomerang_paragon_r90_t: rt 1047 game -404499.5999898985 clone -404499.5999999996
-  boomerang_paragon_r98: rt 425 game -403592.0002113506 clone -403592.0
-  pending/alch/alch_003: rt 92 game 23.0 clone 73.0
-  pending/desperado/desperado_300: rt 3122 game 500.0 clone 499.0
   pending/engineer/engineer_005: rt 3482 game 2940.0 clone 2941.0
   pending/engineer/engineer_420_close: rt 3015 game 811.0 clone 818.0
   pending/engineer/engineer_420_last: rt 2112 game 555.0 clone 558.0
   pending/engineer/engineer_500: rt 3315 game 2156.0 clone 2167.0
   pending/engineer/engineer_502_last: rt 1510 game 399.0 clone 402.0
   pending/engineer/engineer_502_strong: rt 2118 game 1327.0 clone 1330.0
-  pending/maptowers/map_haunted_beast_402_r60: rt 2678 game 1386.4999952316284 clone 1385.5
-  pending/maptowers/map_haunted_beast_502_r80: rt 1630 game 1220.2000732421875 clone 1220.199999999255
-  pending/merge/beast_merge_h500: rt 1630 game 1220.2000732421875 clone 1220.199999999255
-  pending/merge/beast_merge_h400: rt 3398 game 1500.700011253357 clone 1500.699999999255
-  pending/moab/moab_sniper_024_r78: rt 883 game 179.2000100761652 clone 179.19999999925494
-  pending/paragon/spike_paragon_r40: rt 61 game -809987.0 clone -809984.0
-  pending/quincy/quincy_l20_r60: rt 1747 game 1204.8999895304441 clone 1204.9000000003725
-  pending/quincy/quincy_l17_r70: rt 421 game 140.59999184310436 clone 139.59999999962747
+  pending/village_std/village_004_std / 005_std: rt 525 game 264.0 clone 264.0000104904175 (rt 3 banana, above)
 
 NOTE for the owner (not changed): website/public/hero/*.webp (7 images, commit 18e44a2 of 2026-11-09) are
 tracked and have been in the public repo since then, though the rules say hero/ stays uncommitted. Removing
@@ -1494,6 +1494,11 @@ P-OFFTRACKORDER: newest factory object first). (The wind_seg filing above now on
 seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
+
+- 2026-11-18: staged pop cash (DistributeCash.PostDegrade once per hit into Tower.appliedCash, paid by
+  UpdateStagedCash at the frame's end; destroyed towers' lost) and the hit's cascade paying against the hit
+  bloon's lowestLayerNumber: cash diffs 20 -> 9 (every f32-drift one gone, spike_paragon, quincy_l17,
+  haunted_beast_402, desperado_300); Lead to Gold pays 0 in CHIMPS (alch_003) -> 8; the cash log prints full precision.
 
 - 2026-11-18: lowestLayerNumber (regrown layers pay nothing), MorphBloon pays nothing: cash diffs 67 -> 20.
 

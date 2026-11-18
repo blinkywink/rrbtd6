@@ -1883,6 +1883,9 @@ pub struct Tower {
     pub idle_t: f32,
     /// Monkey Bank balance.
     pub bank: f64,
+    /// Tower.appliedCash: the pop cash its hits earned this frame, in f32 (Tower.AddPoppedCash),
+    /// paid out by Simulation.UpdateStagedCash at the frame's end (`pay_staged_cash`).
+    pub staged_cash: f32,
     /// Alchemist brews on this tower.
     pub brews: Vec<ActiveBrew>,
     /// TargetTrackOrDefaultAcidPool's points (shuffled track segments) and its index, with the
@@ -3593,6 +3596,8 @@ pub struct Hook {
     pub back: bool,
     pub mult: f64,
     pub add: f64,
+    /// Its CreateEffectOnContactModel effect (prefab, scale; display only: HookHit).
+    pub fx: Option<(String, f32)>,
 }
 
 pub struct Game {
@@ -3776,6 +3781,15 @@ pub struct Game {
     /// The damaging tower's Monkey Town (CashIncrease): (multiplier, increase) for the pops of
     /// the damage being dealt (`hit_cash_for`).
     hit_cash: (f64, f64),
+    /// The tower id the damage being dealt is from (Bloon.Damage's tower: its pop cash is staged
+    /// on it, `pay_pop`); None pays at once.
+    hit_tower: Option<u64>,
+    /// The cash of the hit being dealt (one Bloon.Damage: its DamageResult, `pay_hit`): the paid
+    /// layers' raw cash (x a Mark) summed in f32, Worth's additions, and the income multiplier.
+    hit_acc: (f32, f32, f32),
+    /// The lowestLayerNumber of the bloon the hit being dealt is on: its whole cascade's layers
+    /// pay against it (`damage_inner`).
+    hit_lowest: u32,
     /// The damage being dealt pays no pop cash (MorphBloon's).
     no_pop_cash: bool,
     /// DistributeToChildrenSet on the bloon this hit is on: its own layer passes overkill on.
@@ -4787,7 +4801,7 @@ macro_rules! collide_pass {
                 let inc_e = $s.income_mult_for(round_e);
                 let hc = $s.hit_cash_for($s.projectiles[$p].owner);
                 let pay = ((($s.cash_in[kind_e] as f32) * inc_e) * hc.0 as f32 + hc.1 as f32) as f64 * $s.sim_cash_modifier();
-                $s.earn(pay);
+                $s.pay_pop(Some($s.projectiles[$p].owner), pay);
                 let layers_e = $s.pops_in[kind_e] as f32;
                 let len0 = $s.bloons.len();
                 $s.remove_bloon(i);
@@ -5201,8 +5215,10 @@ macro_rules! collide_pass {
                 // (A galvanized bloon, before the hit: GalvanizedBehavior.OnBloonDamaged below.)
                 let galv_pre = { let b = &$s.bloons[i]; (b.galv.0 > 0 && b.galv.1 > $s.sim_elapsed).then(|| b.galv_chain.clone()).flatten().map(|c| (c, b.pos, b.id)) };
                 $s.hit_cash = $s.hit_cash_for($s.projectiles[$p].owner);
+                $s.hit_tower = Some($s.projectiles[$p].owner);
                 let n = $s.damage(i, dmg.round() as i32, &mut $kids);
                 $s.hit_cash = (1.0, 0.0);
+                $s.hit_tower = None;
                 $s.distribute = (true, false);
                 $s.dist_set = false;
                 // (Chilled's slow goes when one hit pops 2 layers or more at once, not after two
@@ -5429,6 +5445,11 @@ macro_rules! collide_pass {
                     $s.state_emit($p, pre_state, gone);
                 }
                 if let (Some((v, fx, life)), true) = (gold, n > 0) {
+                    // ChimpsModModel.Mutate (VERIFIED-DECOMP @0x1811189b0) zeroes every
+                    // GiveCashOnPopModel's flatCashAmount and cashMultiplier, so PreDegrade
+                    // (@0x180ff00e0: AddCash(n x income x cashMultiplier + flatCashAmount)) adds 0
+                    // (recording alch_003: Lead to Gold pays nothing in CHIMPS).
+                    let v = if $s.chimps() { 0.0 } else { v };
                     $s.earn(v);
                     // GiveCashOnPop.PreDegrade: its text effect, "${0}" of the cash.
                     if !fx.is_empty() {
@@ -6267,6 +6288,9 @@ impl Game {
             proj_cursor: usize::MAX,
             distribute: (true, false),
             hit_cash: (1.0, 0.0),
+            hit_tower: None,
+            hit_acc: (0.0, 0.0, 1.0),
+            hit_lowest: 0,
             no_pop_cash: false,
             dist_set: false,
             next_uid: 0,
@@ -8764,6 +8788,7 @@ impl Game {
             attack_t: f32::MAX,
             idle_t: 0.0,
             bank: 0.0,
+            staged_cash: 0.0,
             brews: Vec::new(),
             acid_pts: None,
             acid_splashes: 0,
@@ -10956,8 +10981,10 @@ impl Game {
             let extra = if tags.iter().any(|t| t == "Moabs") { moab } else { 0.0 } + if tags.iter().any(|t| t == "Grow") { g.regrow_add } else { 0.0 };
             let tally0 = self.damage_tally;
             self.hit_cash = self.hit_cash_for(owner);
+            self.hit_tower = Some(owner);
             let n = self.damage(i, (dmg + extra).round() as i32, &mut kids);
             self.hit_cash = (1.0, 0.0);
+            self.hit_tower = None;
             let self_tally_dealt = self.damage_tally - tally0;
             if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
                 tw.pops += n;
@@ -11353,6 +11380,7 @@ impl Game {
             attack_t: f32::MAX,
             idle_t: 0.0,
             bank: 0.0,
+            staged_cash: 0.0,
             brews: Vec::new(),
             acid_pts: None,
             acid_splashes: 0,
@@ -12572,6 +12600,10 @@ impl Game {
             self.towers[t].ability_cd.insert(name.to_string(), a.cooldown * FPS);
             if ds.delay > 0 {
                 self.towers[t].shift = Some((self.sim_elapsed + ds.delay as u64, p));
+                // StartDarkshift (VERIFIED-DECOMP @0x180e22bd0, display only): disappearEffect.
+                if let Some((fx, k)) = ds.out_fx.clone() {
+                    self.place_fx.push((from, fx, k));
+                }
             } else {
                 self.towers[t].pos = p;
             }
@@ -12892,6 +12924,9 @@ impl Game {
         if let Some(ds) = a.darkshift.as_ref().filter(|d| d.delay > 0) {
             if self.towers[t].shift.is_none() {
                 self.towers[t].shift = Some((self.sim_elapsed + ds.delay as u64, [0.0, 0.0]));
+                if let Some((fx, k)) = ds.out_fx.clone() {
+                    self.place_fx.push((self.towers[t].pos, fx, k));
+                }
             }
         }
         // AbilityDamageAll.Activate (VERIFIED-DISASM @0x180df6800), each model in turn: every bloon in
@@ -12907,7 +12942,9 @@ impl Game {
                 let Some(j) = self.bloons.iter().position(|b| b.id == id) else { continue };
                 let (tally0, saved) = (self.damage_tally, self.distribute);
                 self.distribute = (true, true);
+                self.hit_tower = Some(owner);
                 let n = self.damage(j, da.damage, &mut Vec::new());
+                self.hit_tower = None;
                 self.distribute = saved;
                 let dealt = self.damage_tally - tally0;
                 if let Some(tw) = self.towers.iter_mut().find(|x| x.id == owner) {
@@ -13192,6 +13229,69 @@ impl Game {
         let pay = (v * self.debt_rate).min(self.debt).max(0.0);
         self.debt -= pay;
         self.cash += v - pay;
+    }
+
+    /// The end of a hit (the outermost `damage`): DistributeCash.PostDegrade (VERIFIED-DECOMP
+    /// @0x180fea0e0) on its DamageResult's cash, in f32: BloonDegradeStepper.GetCashForLayers'
+    /// sum of the paid layers' cash x GetIncomeMultiplierForRound(spawnRound), x the
+    /// DistributeCashModel's multiplier (Monkey Town's BloonWorthMutator, `hit_cash_for`), + its
+    /// additive, x Simulation.GetCashModifierFromSimBehaviors (Thrive), then `pay_pop`. Once per
+    /// hit, not per layer (recording boomerang_paragon_r98 rt 306: 60 Fortified Ceramics popped
+    /// through, (87 + 8) x 0.1 each, pay exactly 570). STAND-IN P-THRIVEORDER: Mark and Worth
+    /// (their own behaviours) are folded in per layer before the multipliers / after.
+    fn pay_hit(&mut self) {
+        let (raw, worth, inc) = std::mem::replace(&mut self.hit_acc, (0.0, 0.0, 1.0));
+        if raw == 0.0 && worth == 0.0 {
+            return;
+        }
+        let v = ((raw * inc) * self.hit_cash.0 as f32 + self.hit_cash.1 as f32) + worth;
+        let v = v * self.sim_cash_modifier() as f32;
+        #[cfg(test)]
+        if std::env::var_os("RRBTD6_REC_POPS").is_some() {
+            eprintln!("DBGAIM HIT rt {} tower {:?} raw {} inc {} v {}", self.round_clock, self.hit_tower, raw, inc, v);
+        }
+        self.pay_pop(self.hit_tower, v as f64);
+    }
+
+    /// DistributeCash.PostDegrade's payout (VERIFIED-DISASM @0x180fea2e3): a pop by a tower that
+    /// isn't destroyed goes to its appliedCash (Tower.AddPoppedCash @0x180c0ac90, an f32 sum),
+    /// paid by Simulation.UpdateStagedCash at the frame's end (`pay_staged_cash`); with no tower
+    /// it's AddSharedCash at once. A tower destroyed before the frame's end loses what it staged
+    /// (UpdateStagedCash skips it): recording spike_paragon_r40 rt 61, the sacrificed 0-0-5's
+    /// spikes pop 3 layers in the frame it goes and nothing is paid.
+    fn pay_pop(&mut self, tower: Option<u64>, v: f64) {
+        if let Some(t) = tower.and_then(|id| self.towers.iter().position(|t| t.id == id)) {
+            self.towers[t].staged_cash += v as f32;
+            return;
+        }
+        #[cfg(test)]
+        if std::env::var_os("RRBTD6_REC_POPS").is_some() {
+            eprintln!("DBGAIM UNSTAGED rt {} tower {:?} towers {:?} v {}", self.round_clock, tower, self.towers.iter().map(|t| t.id).collect::<Vec<_>>(), v);
+        }
+        self.earn(v);
+    }
+
+    /// Simulation.UpdateStagedCash (VERIFIED-DECOMP @0x180b50f80; Simulate calls it after every
+    /// root object's Process): over the towers in factory order, those not destroyed, the sum in
+    /// double of Tower.GetAppliedCash (VERIFIED-DECOMP @0x180c0dbd0: appliedCash, reset to 0, and
+    /// when > 0 times the largest of 1 and its CashIncrease behaviours' increase, in f32), paid
+    /// with one AddSharedCash when > 0.
+    fn pay_staged_cash(&mut self) {
+        let mut sum = 0.0f64;
+        for t in 0..self.towers.len() {
+            let v = std::mem::take(&mut self.towers[t].staged_cash);
+            if v > 0.0 {
+                let inc = self.buffs.get(t).map_or(0.0, |b| b.cash_add).max(1.0);
+                sum += (v * inc) as f64;
+            }
+        }
+        #[cfg(test)]
+        if sum > 0.0 && std::env::var_os("RRBTD6_REC_POPS").is_some() {
+            eprintln!("DBGAIM STAGED rt {} sum {}", self.round_clock, sum);
+        }
+        if sum > 0.0 {
+            self.earn(sum);
+        }
     }
 
     /// Empties tower `t`'s bank into the player's cash.
@@ -14922,7 +15022,14 @@ impl Game {
         // (A WindlashBehavior goes with its bloon object: popped through, or a MOAB-class pop
         // dropping its mutators; a degrade's first child keeps it.)
         let wl_pre = (self.pop_depth == 0).then(|| self.bloons[i].wl.as_ref().filter(|w| w.obj != usize::MAX).map(|w| (self.bloons[i].id, w.obj, w.interval))).flatten();
+        let top = self.pop_depth == 0;
+        if top {
+            self.hit_acc = (0.0, 0.0, 1.0);
+        }
         let n = self.damage_wl(i, dmg, out_children);
+        if top {
+            self.pay_hit();
+        }
         if let Some((id, obj, iv)) = wl_pre {
             if !self.bloons.iter().any(|b| b.id == id && b.wl.as_ref().is_some_and(|w| w.obj == obj)) {
                 self.wlf_int[obj] = iv;
@@ -14964,9 +15071,9 @@ impl Game {
                     // .GetCashForLayers summed: the hit pays the whole worth of each child it
                     // doesn't make; recording beast_005 rt 201, a held MOAB pays 1 + 3 Ceramics' 95.)
                     let (k2, r) = (self.bloons[j].kind, self.bloons[j].spawn_round);
-                    let v = ((self.cash_in[k2] as f32) * self.income_mult_for(r)) as f64 * self.sim_cash_modifier();
                     if !self.no_pop_cash && self.bloons[j].lowest != 0 {
-                        self.earn(v);
+                        self.hit_acc.0 += self.cash_in[k2] as f32;
+                        self.hit_acc.2 = self.income_mult_for(r);
                     }
                     self.unmake_bloon(j);
                 }
@@ -15165,18 +15272,16 @@ impl Game {
         let b = &mut self.bloons[i];
         // Mark / Trojan: pop cash x the mark, + worth per layer; Strip: no children.
         // DistributeCashModel: cash + additionalCash for the layer (a Super Ceramic's 86).
-        let mut pop_cash = 1.0f64 + self.extra_cash[kind];
-        // DistributeCash.PostDegrade (VERIFIED-DECOMP @0x180fea0e0), in f32: the cash x
-        // GetIncomeMultiplierForRound(spawnRound), x the DistributeCashModel's multiplier (Monkey
-        // Town's BloonWorthMutator, `hit_cash_for`), + its additive.
-        pop_cash = (((pop_cash as f32) * inc) * self.hit_cash.0 as f32 + self.hit_cash.1 as f32) as f64;
+        // (The layer's raw cash, summed into the hit's, `pay_hit`.)
+        let mut raw = (1.0f64 + self.extra_cash[kind]) as f32;
+        let mut worth = 0.0f32;
         let mut strip = false;
         for e in &b.effects {
             match e.kind {
                 // (ChimpsModModel: DesperadoMarkModel.popCashMultiplier 1; recording
                 // desperado_050, a marked pop pays $1.)
-                EffectKind::Mark { cash_mult, .. } => if !chimps { pop_cash *= cash_mult as f64 },
-                EffectKind::Worth { per_tier } => pop_cash += (per_tier * self.defs[kind].layer_number as f32) as f64,
+                EffectKind::Mark { cash_mult, .. } => if !chimps { raw *= cash_mult },
+                EffectKind::Worth { per_tier } => worth += per_tier * self.defs[kind].layer_number as f32,
                 EffectKind::Strip => strip = true,
                 _ => {}
             }
@@ -15198,6 +15303,15 @@ impl Game {
         let parent_round = b.spawn_round;
         // (CreatedChildren: iVar5 lowestLayerNumber < iVar4 the popped model's layerNumber.)
         let (parent_lowest, parent_regrown) = (b.lowest, b.lowest < self.defs[kind].layer_number);
+        // BloonDegradeStepper works the hit's cash out before SpawnChildren makes the children,
+        // from the hit bloon's lowestLayerNumber (GetNonRegrowDamageForLayers takes it): an extra
+        // child of a regrown layer, made with lowest 0, still pays the layers this hit pops of it
+        // (recording quincy_l17_r70 rt 421: a regrown White (lowest 5) popped through pays both
+        // Pinks' chains, 2 x 5 layers).
+        if top {
+            self.hit_lowest = parent_lowest;
+        }
+        let pay_lowest = if top { parent_lowest } else { self.hit_lowest };
         // A pop in the bloon's own Process after its Move (DamageOverTime): children start from
         // where it is now, the first (the bloon itself) having moved already (recording
         // boomerang_500: the MOAB's DoT pop leaves Ceramics at 213.08 back by 6.675 each).
@@ -15288,20 +15402,23 @@ impl Game {
         // (Its WindlashBehavior carries on in the first child or goes: see damage.)
         self.bloons[i].wl = None;
         self.remove_bloon(i);
-        // DistributeCash.PostDegrade (@0x180fea0e0): the cash x Simulation.GetCashModifierFromSimBehaviors
-        // (Thrive). HYPOTHESIS P-THRIVEORDER: after Mark / Worth.
-        pop_cash *= self.sim_cash_modifier();
         // BloonDegradeStepper.GetCashForLayers (VERIFIED-DECOMP @0x180fe5ba0): a layer pays only
         // when its model's layerNumber <= the bloon's lowestLayerNumber: a regrown layer pays
         // nothing (recording dart_002 rt 2601: Regrow 682, popped down to Blue, regrown to Green,
         // pops for $0), nor does anything at 0.
-        if self.defs[kind].layer_number <= parent_lowest && !self.no_pop_cash {
-            self.earn(pop_cash); // P-CASH
+        #[cfg(test)]
+        if std::env::var_os("RRBTD6_REC_POPS").is_some() && !(self.defs[kind].layer_number <= pay_lowest && !self.no_pop_cash) {
+            eprintln!("DBGAIM NOPAY rt {} kind {} layer {} lowest {} nopop {}", self.round_clock, self.names[kind], self.defs[kind].layer_number, parent_lowest, self.no_pop_cash);
+        }
+        if self.defs[kind].layer_number <= pay_lowest && !self.no_pop_cash {
+            self.hit_acc.0 += raw;
+            self.hit_acc.1 += worth;
+            self.hit_acc.2 = inc;
             // RRBTD6_REC_POPS (with --one): every paid pop (DBGAIM so compare.sh keeps it), to
             // find which pop a cash difference comes from.
             #[cfg(test)]
             if std::env::var_os("RRBTD6_REC_POPS").is_some() {
-                eprintln!("DBGAIM POP rt {} kind {} id {} phase {} cash {} dist {}", self.round_clock, self.names[kind], self.bloons.get(i).map_or(0, |b| b.id), self.phase, pop_cash, start_dist);
+                eprintln!("DBGAIM POP rt {} depth {} acc {:?} owner {} kind {} id {} phase {} cash {} dist {}", self.round_clock, self.pop_depth, self.hit_acc, self.hit_tower.unwrap_or(u64::MAX), self.names[kind], self.bloons.get(i).map_or(0, |b| b.id), self.phase, raw * inc + worth, start_dist);
             }
         }
         // GetNonRegrowLayersForLayers: a layer counts 1 + its layerCountOffset.
@@ -15758,6 +15875,13 @@ impl Game {
         // (They come once the degrade has placed its children, each a pop of its own: recording
         // glue_205, a Corrosive MOAB's tick takes its first Ceramic and the other three stay
         // spaced as four.)
+        // (The hit's own cash is paid first: its PostDegrade is in the degrade, and each tick is a
+        // Bloon.Damage of its own; recording boomerang_paragon_r98 rt 3318, the BAD's layer pays
+        // 0.1 with the ticks after it.)
+        if top && !destroy_ticks.is_empty() {
+            self.pay_hit();
+        }
+        let hit_ctx = (self.hit_cash, self.hit_tower);
         for (damage, immune, owner, distribute) in destroy_ticks {
             let Some(j) = self.bloons.iter().position(|b| b.id == parent_id) else { break };
             if immune & self.bloons[j].properties(&self.defs[self.bloons[j].kind]) != 0 {
@@ -15766,8 +15890,9 @@ impl Game {
             let (tally0, saved) = (self.damage_tally, self.distribute);
             self.distribute = distribute;
             self.hit_cash = self.hit_cash_for(owner);
+            self.hit_tower = Some(owner);
             let n = self.damage(j, damage.round() as i32, out_children);
-            self.hit_cash = (1.0, 0.0);
+            (self.hit_cash, self.hit_tower) = hit_ctx;
             self.distribute = saved;
             let dealt = self.damage_tally - tally0;
             if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
@@ -16338,7 +16463,7 @@ impl Game {
             let (sa, ca) = crt_sin_cos(DEG2RAD * -tr);
             let (ox, oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
             let from = [pos[0] + ox, pos[1] + -(oy - ez / TAN60)];
-            self.hooks.push(Hook { owner, target: id, pos: from, z: ez, start: from, back: false, mult: td.mult, add: td.add });
+            self.hooks.push(Hook { owner, target: id, pos: from, z: ez, start: from, back: false, mult: td.mult, add: td.add, fx: td.hit_fx.clone() });
             let (slot, now) = (self.towers[t].weapons.len(), self.round_clock);
             if self.towers[t].takedown_throws.last() != Some(&(slot, now)) {
                 self.towers[t].takedown_throws.push((slot, now));
@@ -16490,7 +16615,9 @@ impl Game {
         self.gw_effects.push(GwEffect { tower: pet, credit: owner, weapon: wi, spec: std::sync::Arc::new(*gw), created: now, total: total_frames, from, to, pos: from, exited: false, last_thrash: now, thrash_rate, blocking: true, kind });
         let (tally0, saved) = (self.damage_tally, self.distribute);
         self.distribute = (true, true);
+        self.hit_tower = Some(owner);
         let n = self.damage(i, total, &mut Vec::new());
+        self.hit_tower = None;
         self.distribute = saved;
         let dealt = self.damage_tally - tally0;
         if let Some(tw) = self.towers.iter_mut().find(|x| x.id == owner) {
@@ -16680,6 +16807,10 @@ impl Game {
             self.hooks[k].pos = b.pos;
             self.hooks[k].z = bz;
             self.hooks[k].back = true;
+            // CreateEffectOnContact.Collide (display only): its effect where it hit.
+            if let Some((fx, sc)) = h.fx.clone() {
+                self.place_fx.push((b.pos, fx, sc));
+            }
             let tally0 = self.damage_tally;
             let cash = self.cash_in[self.bloons[i].kind];
             let n = self.destroy_whole(i);
@@ -19796,6 +19927,14 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                     let k = *k * link.map_or(1.0, |r| self.range(t) / r);
                                     self.place_fx.push((from, fx.clone(), k));
                                 }
+                                // TheBlazingSun.ProjectilesCreated (VERIFIED-DECOMP @0x180c961a0, display
+                                // only): the overheat muzzle flash from stacksToBurn stacks.
+                                if let (Some(fxs), Some([_, burn, ..])) = (&weapon.blazing_fx, weapon.blazing_sun) {
+                                    let hot = self.towers[t].weapons[w].sun_stacks >= burn as i32;
+                                    if let Some((fx, k)) = &fxs[hot as usize] {
+                                        self.place_fx.push((from, fx.clone(), *k));
+                                    }
+                                }
                                 // MultiEmissionModel: its secondary projectile, at the same eject
                                 // point (recording ice_250: Absolute Zero's pierce-999 pulse with
                                 // the blast, both at z 7).
@@ -20801,6 +20940,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     if self.sim_elapsed >= at {
                         self.towers[t].shift = None;
                         self.towers[t].pos = p;
+                        // EndDarkshift (VERIFIED-DECOMP @0x180e214a0, display only): reappearEffect.
+                        if let Some((fx, k)) = self.tier(t).and_then(|tr| tr.abilities.iter().find_map(|a| a.darkshift.as_ref().and_then(|d| d.in_fx.clone()))) {
+                            self.place_fx.push((p, fx, k));
+                        }
                     }
                 }
             }
@@ -24619,8 +24762,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             let tally0 = self.damage_tally;
             self.distribute = distribute;
             self.hit_cash = self.hit_cash_for(owner);
+            self.hit_tower = Some(owner);
             let n = self.damage(i, dmg.round() as i32, &mut kids);
             self.hit_cash = (1.0, 0.0);
+            self.hit_tower = None;
             self.distribute = (true, false);
             let dealt = self.damage_tally - tally0;
             if dealt > 0 {
@@ -24984,8 +25129,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             self.pop_after_move = true;
             self.distribute = distribute;
             self.hit_cash = self.hit_cash_for(owner);
+            self.hit_tower = Some(owner);
             let n = self.damage(i, damage.round() as i32, &mut kids);
             self.hit_cash = (1.0, 0.0);
+            self.hit_tower = None;
             (self.pop_after_move, self.distribute) = (false, (true, false));
             if self.bloons.iter().find(|b| b.id == id).is_some_and(|b| b.kind != kind0) || !self.bloons.iter().any(|b| b.id == id) {
                 degraded.push(id);
@@ -25275,6 +25422,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             self.latch_release(false);
         }
         self.remove_sacrificed();
+        self.pay_staged_cash();
         self.in_step = false;
     }
     /// Removes the towers a Paragon purchase sacrificed (with their sub-towers): the end of the
@@ -26509,7 +26657,7 @@ mod tests {
             // RRBTD6_REC_CASH: the clone's cash each recorded frame (DBGAIM so --one keeps it), to
             // set against the F lines' cash.
             if std::env::var_os("RRBTD6_REC_CASH").is_some() {
-                eprintln!("DBGAIM CASH {} {:.3}", rt, g.cash);
+                eprintln!("DBGAIM CASH {} {}", rt, g.cash);
             }
             // SimRecorder activates after its `ability`-th frame and before writing that frame's
             // lines: after stepping the frame at index ability - 1.

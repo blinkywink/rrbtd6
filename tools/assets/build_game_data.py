@@ -159,6 +159,11 @@ def main():
                     out.append([prefab_name(b["f"]["assetId"]), 1.0])
         return out
 
+    def blazing_one(ref):
+        em = deref(ref)
+        n = prefab_name(em["f"].get("assetId")) if em else None
+        return [n, em["f"].get("scale", 1.0) or 1.0] if n else None
+
     def line_fx(f):
         def one(k):
             em = deref(f.get(k))
@@ -1699,6 +1704,11 @@ def main():
                                 # axes mirrored when thrown with the left hand.
                                 "flip_eject": next(([bool(x["f"].get("flipTowerDisplayX")), bool(x["f"].get("flipTowerDisplayY"))]
                                                     for x in items(w["f"].get("behaviors")) if x and x["type"] == "FlipFollowPathModel"), None),
+                                # FlipFollowPath.Flip (VERIFIED-DECOMP @0x180c81de0): effectOnFlip at the tower
+                                # when the player switches hands (visual).
+                                "flip_fx": next(([prefab_name(deref(x["f"]["effectOnFlip"])["f"].get("assetId")), deref(x["f"]["effectOnFlip"])["f"].get("scale", 1.0) or 1.0]
+                                                 for x in items(w["f"].get("behaviors")) if x and x["type"] == "FlipFollowPathModel" and deref(x["f"].get("effectOnFlip"))
+                                                 and prefab_name(deref(x["f"]["effectOnFlip"])["f"].get("assetId"))), None),
                                 "start_cooldown": bool(w["f"].get("startInCooldown")),
                                 # SpinModel.rotationPerSecond (Blade Maelstrom, The Tack Zone): Spin turns
                                 # each shot by its running angle.
@@ -1716,6 +1726,11 @@ def main():
                                                 else []),
                                 # EjectEffectModel / AlternatingEjectEffectModel: the muzzle effect at
                                 # the eject point on each throw (visual only).
+                                # TheBlazingSun.ProjectilesCreated (VERIFIED-DECOMP @0x180c961a0): each shot's
+                                # muzzle effect, ejectEffectModel under stacksToBurn stacks, else
+                                # ejectEffectOverheatModel (visual).
+                                "blazing_fx": next(([blazing_one(x["f"].get("ejectEffectModel")), blazing_one(x["f"].get("ejectEffectOverheatModel"))]
+                                                    for x in items(w["f"].get("behaviors")) if x and x["type"] == "TheBlazingSunModel"), None),
                                 "eject_fx": fx_list(items(w["f"].get("behaviors")), "EjectEffectModel", "AlternatingEjectEffectModel", "EjectEffectWithOffsetsModel"),
                                 # LineEffectModel (Ray of Doom): the beam display (lineDisplayPath, a
                                 # projectile-style display GUID) tiled every lineDisplayLength from the
@@ -1963,6 +1978,10 @@ def main():
                                                       for y in items((deref(w["f"]["projectile"]) or {"f": {}})["f"].get("behaviors"))
                                                       if y and y["type"] == "CreateRopeEffectModel"), None)}
                     if takedown:
+                        # The hook's CreateEffectOnContactModel (HookHit; display only).
+                        hit = next((fx for w in items(a["f"].get("weapons")) if w
+                                    for fx in fx_list(items((deref(w["f"]["projectile"]) or {"f": {}})["f"].get("behaviors")), "CreateEffectOnContactModel")), None)
+                        takedown["hit_fx"] = hit
                         out["takedown"] = takedown
                 # FinalStrikeModel (the Navarch's Final Strike, VERIFIED-DECOMP FinalStrike.*): a
                 # countdown of countdownFrames, then three missiles launchRateFrames apart (Strong,
@@ -1987,10 +2006,14 @@ def main():
                                             "attacks": [parse_attack(deref(xf["markingAttackModel"])), parse_attack(deref(xf["executionAttackModel"]))]})
                 if x["type"] == "TurboModel":
                     out["turbo"] = {"lifespan": xf.get("lifespan", 0.0), "mult": xf.get("multiplier", 1.0),
-                                    "extra_damage": xf.get("extraDamage", 0)}
+                                    "extra_damage": xf.get("extraDamage", 0),
+                                    # TurboMutator.Mutate (VERIFIED-DECOMP @0x180e7ac90): each weapon's
+                                    # projectile takes projectileDisplay while it runs (visual).
+                                    "display": (deref(xf.get("projectileDisplay")) or {"f": {}})["f"].get("assetPath") or None}
                 if x["type"] == "DamageUpModel":
                     out["turbo"] = {"lifespan": xf.get("lifespanFrames", 0) / 60.0, "mult": 1.0,
-                                    "extra_damage": xf.get("additionalDamage", 0)}
+                                    "extra_damage": xf.get("additionalDamage", 0),
+                                    "display": (deref(xf.get("projectileDisplay")) or {"f": {}})["f"].get("assetPath") or None}
                 if x["type"] == "ImfLoanModel":
                     out["loan"] = {"amount": xf.get("amount", 0.0), "rate": xf.get("incomeRecoveryRate", 0.5)}
                 # OverclockModel (Engineer): boosts one chosen tower; OverclockPermanentModel
@@ -2076,7 +2099,11 @@ def main():
                                         "delay": int(round(xf.get("towerSpawnDelay", 0.0) * 60)),
                                         # (Darkshift.GetCustomInputData @0x180e21b30: RepositionTowerCIData.
                                         # helperMsg = helperMessageLocsKey, RepositionTowerInput's message.)
-                                        "helper": xf.get("helperMessageLocsKey") or ""}
+                                        "helper": xf.get("helperMessageLocsKey") or "",
+                                        # StartDarkshift / EndDarkshift: disappearEffectModel at the old
+                                        # spot, reappearEffectModel at the new one (visual).
+                                        "out_fx": blazing_one(xf.get("disappearEffectModel")),
+                                        "in_fx": blazing_one(xf.get("reappearEffectModel"))}
                 # TakeAimModel (Desperado): range x rangeModifier on a picked tower.
                 if x["type"] == "TakeAimModel":
                     out["overclock"] = {"frames": xf.get("lifespanFrames", 0), "rate": 1.0, "village_range": 1.0,
@@ -2170,7 +2197,10 @@ def main():
                     out["ammo"] = {"delay": xf.get("initialDelay", 0.0), "shots": xf.get("amtOfAttacksBeforeExpire", 1),
                                    "pierce": xf.get("pierceIncrease", 0), "damage_mult": xf.get("damageMultiplier", 1.0),
                                    "lifespan_mult": xf.get("lifeSpanMultiplier", 1.0),
-                                   "immune": xf.get("newImmuneBloonProperties", 0) if xf.get("overrideDamageType") else None}
+                                   "immune": xf.get("newImmuneBloonProperties", 0) if xf.get("overrideDamageType") else None,
+                                   # DoAbility (VERIFIED-DECOMP @0x180e56250): mainMonkeyAbilityEffect on
+                                   # the tower when the ammo arrives (visual).
+                                   "fx": blazing_one(xf.get("mainMonkeyAbilityEffect"))}
                 # Timed support zones, in the same shape as the tower's own supports.
                 kind = {"ActivateRateSupportZoneModel": "rate", "CallToArmsModel": "cta",
                         "ActivateRangeSupportZoneModel": "range", "ActivatePierceSupportZoneModel": "pierce",
