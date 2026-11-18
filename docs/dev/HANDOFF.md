@@ -172,6 +172,76 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### NEXT: cash parity (2026-11-18; every sim matches, the cash differs in 20 of 1141 recordings)
+Cash was never part of the match. Check: `sh tools/rec/cash_sweep.sh 'pending/<set>/*.rec' ...` (paths or
+quoted globs under research/dumps/recordings; per recording MATCH/DIFF and its first cash difference,
+tools/rec/cashcmp.py, tolerance 1e-5). The harness starts the clone at the recording's own cash (first F line)
+and places scripted towers free, as SimRecorder's CreateTowerAt does. DONE this session (109 -> 20):
+- Simulation.GetIncomeMultiplierForRound (VERIFIED-DECOMP @0x180b47310): DefaultIncomeSet (game.json
+  `income_set`: round index < 50 x1, < 60 x0.5, < 85 x0.2, < 100 x0.1, < 120 x0.05, < 140 x0.04, else 0.02) on
+  the bloon's spawnRound (Bloon +0x178; children copy it in SpawnChildren.CreatedChildren @0x181008930), in f32
+  in DistributeCash.PostDegrade.
+- CHIMPS (Game::chimps, ChimpsModModel list in the Village item below), at each pay site: CashModel 0
+  (bananas, SendToBank deposits), PerRoundCashBonusTower 0 (Merchantman), TradeEmpire per ship 0,
+  CashPerTowerInRange nothing (Jungle's Bounty), DesperadoMark x1, MoabTakedown plain worth (Monkey Pirates),
+  ImfLoan none, Monkeyopolis cashFromCrate 0, EatBloon x1, CashIncrease (Monkey Town) x1.
+  NOT DONE (no recording reaches them yet): SkimBloons, DepletionToCash, IncreaseBloonWorth(+WithTier),
+  WallOfTrees, Syphon, BonusCashZone, Vigilante, MonkeyCityIncomeSupport (incomeModifier 0), GiveCashOnPop.
+- Held bloons (blockSpawnChildrenCount): the children a hit doesn't make still pay their whole worth
+  (cash_in x the income multiplier) in that hit (beast_001..205, merge, maptowers beast now cash-exact; left:
+  beast_030 rt 2477 (+4 in the clone), map_haunted_beast_402_r60 rt 2678 (+0.2 in the clone)).
+- EatBloon (Bloon Trap / XXXL Trap; Collide @0x180cb96c0, EmitCash @0x180cb98d0, VERIFIED-DECOMP): an eaten
+  bloon pays its whole worth at once (the trap's Bloon.Damage; clone: cash_in x income mult x Monkey Town),
+  cashCollected += income mult x total layers (clone: pops_in, INFERRED equal to GetModifiedTotalLayers), the
+  full trap is worth (rbeCashMultiplier - 1) x cashCollected (0 in CHIMPS). engineer_004 and every maptowers
+  Engineer now cash-exact; engineer_005 / 025 / 205 first off at rt ~3300 (+1..3). OPEN: the trap still removes
+  the bloon instead of Bloon.Damage (other pop effects), and Collide's tag-bitmask 0x80 skip isn't checked.
+- Bloon.lowestLayerNumber (`Bloon.lowest`): Initialise = model layerNumber, UpdatedModel (VERIFIED-DECOMP
+  @0x180fb7b40) min with each new model's, CreatedChildren gives the extra children of a regrown parent 0, and
+  GetCashForLayers (@0x180fe5ba0) pays a layer only when its layerNumber <= it: regrown layers pay nothing
+  (dart_002 rt 2601). Fixed dart_002, ace_030, alch_030 / 300 / upgrades, glue_300, heli_003, ninja_300,
+  sub_030, tack_052, mortar_upgrades_r30, beast_030, engineer_004 / 025.
+- MorphBloon (Bloon Master Alchemist): lowest = min(it, 1) first; its Damage pays nothing (INFERRED from
+  alch_005 / 025 / 205 rt 65; the Damage call's flags aren't named yet).
+- OPEN (tiny): the game pays a hit's layers as ONE f32 sum (BloonDegradeStepper.GetCashForLayers sums
+  cash + additional per layer in f32; a hit of 10 layers at x0.2 pays 2.0000002384 = ten 0.2f32 summed in f32),
+  where the clone adds each layer's 0.2000000030 to the double cash separately: high-round runs drift by ~1e-6
+  (boomerang_paragon_r78/r90/r98, quincy_l17/l20, moab_sniper_024_r78, map_haunted_beast_*_r60/r80,
+  beast_merge_h400 / h500). Where the income multiplier enters per layer isn't found yet (PostDegrade multiplies
+  the sum once, which would give 2.0): read Bloon.Damage / the DamageResult cash (+0x34) path next.
+Remaining (besides the f32-drift ones above):
+- engineer_420_close / 420_last / 500 / 502_last / 502_strong (clone +3..11: Sentry-related pops?),
+  engineer_005 rt 3482 (+1).
+- alch_003 rt 92 (game +23, clone +73).
+- desperado_300 rt 3122 (clone 1 less).
+- map_haunted_beast_402_r60 rt 2678 (clone 1 less).
+- spike_paragon_r40: the Paragon costs 3 more in the game.
+Full list (first differing frame):
+  boomerang_paragon_r78: rt 621 game -404431.79998996854 clone -404431.80000000075
+  boomerang_paragon_r90: rt 1047 game -404499.5999898985 clone -404499.5999999996
+  boomerang_paragon_r90_t: rt 1047 game -404499.5999898985 clone -404499.5999999996
+  boomerang_paragon_r98: rt 425 game -403592.0002113506 clone -403592.0
+  pending/alch/alch_003: rt 92 game 23.0 clone 73.0
+  pending/desperado/desperado_300: rt 3122 game 500.0 clone 499.0
+  pending/engineer/engineer_005: rt 3482 game 2940.0 clone 2941.0
+  pending/engineer/engineer_420_close: rt 3015 game 811.0 clone 818.0
+  pending/engineer/engineer_420_last: rt 2112 game 555.0 clone 558.0
+  pending/engineer/engineer_500: rt 3315 game 2156.0 clone 2167.0
+  pending/engineer/engineer_502_last: rt 1510 game 399.0 clone 402.0
+  pending/engineer/engineer_502_strong: rt 2118 game 1327.0 clone 1330.0
+  pending/maptowers/map_haunted_beast_402_r60: rt 2678 game 1386.4999952316284 clone 1385.5
+  pending/maptowers/map_haunted_beast_502_r80: rt 1630 game 1220.2000732421875 clone 1220.199999999255
+  pending/merge/beast_merge_h500: rt 1630 game 1220.2000732421875 clone 1220.199999999255
+  pending/merge/beast_merge_h400: rt 3398 game 1500.700011253357 clone 1500.699999999255
+  pending/moab/moab_sniper_024_r78: rt 883 game 179.2000100761652 clone 179.19999999925494
+  pending/paragon/spike_paragon_r40: rt 61 game -809987.0 clone -809984.0
+  pending/quincy/quincy_l20_r60: rt 1747 game 1204.8999895304441 clone 1204.9000000003725
+  pending/quincy/quincy_l17_r70: rt 421 game 140.59999184310436 clone 139.59999999962747
+
+NOTE for the owner (not changed): website/public/hero/*.webp (7 images, commit 18e44a2 of 2026-11-09) are
+tracked and have been in the public repo since then, though the rules say hero/ stays uncommitted. Removing
+them from the public history is the owner's call.
+
 ### DONE: Monkey Village money effects, cash-exact (2026-11-18, set `village_std`)
 New set pending/village_std (scenarios village_00{2,3,4,5}_std: Standard Hard, not CHIMPS, round 30): Commerce
 discount on four Dart upgrades, Monkey Town pops, Monkey City with a Marketplace (BananaFarm-003) beside, and a
@@ -1420,6 +1490,19 @@ P-OFFTRACKORDER: newest factory object first). (The wind_seg filing above now on
 seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
+
+- 2026-11-18: lowestLayerNumber (regrown layers pay nothing), MorphBloon pays nothing: cash diffs 67 -> 20.
+
+- 2026-11-18: EatBloon cash (trap pays eaten bloons' worth at once; full trap (mult - 1) x layers).
+
+- 2026-11-18: A held bloon's unmade children pay their whole worth (Beast Handler cash diffs gone but 2).
+
+- 2026-11-18: CHIMPS income strips at the pay sites (bananas, bank, Merchantman, Trade Empire, Jungle's Bounty,
+  Desperado mark, MOAB Takedown, IMF Loan, Monkeyopolis crates, Eat): cash diffs 109 -> 67. Regression full.
+
+- 2026-11-18: Cash parity started: pop cash x GetIncomeMultiplierForRound(spawnRound); harness starts at the
+  recording's cash, places free; tools/rec/cash_sweep.sh + cashcmp.py; 109 recordings' cash still differ (listed in
+  Now). Regression: every set full.
 
 - 2026-11-18: Village money effects cash-exact (village_std 4/4): upgrade cost int rounding, Monkeyopolis
   cost unscaled, Monkey Town x1.5 outside CHIMPS (ChimpsModModel), CHIMPS round bonus kept.

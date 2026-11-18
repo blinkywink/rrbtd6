@@ -41,6 +41,10 @@ pub struct GameData {
     /// Other round sets by name (RoundSetModModel: "AlternateRoundSet").
     #[serde(default)]
     pub round_sets: HashMap<String, Vec<Vec<Group>>>,
+    /// GameModel's IncomeSetModel (DefaultIncomeSet): (threshold, multiplier) pairs and
+    /// finalMultiplier, for Simulation.GetIncomeMultiplierForRound.
+    #[serde(default)]
+    pub income_set: Option<IncomeSet>,
     /// GameData.bloonMutatorData.
     #[serde(default)]
     pub bloon_mutator_data: BloonMutatorData,
@@ -3675,4 +3679,11 @@ pub struct ScaleFx {
     pub max: f32,
     #[serde(default)]
     pub per_sec: f32,
+}
+
+/// IncomeSetModel: a round below a threshold pays its multiplier (the first such), else `final_mult`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct IncomeSet {
+    pub thresholds: Vec<(i32, f32)>,
+    pub final_mult: f32,
 }

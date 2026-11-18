@@ -3352,6 +3352,10 @@ def main():
                        json.load(open(os.path.join(root, "data", "round_sets.json"))).items() if k == "AlternateRoundSet"},
         "end_round": medium.get("EndRoundModModel", {}).get("round", len(rounds)),
         "freeplay": freeplay_groups(),
+        # GameModel.incomeSet (DefaultIncomeSet; export_rounds.py): GetIncomeMultiplierForRound.
+        "income_set": (lambda st: {"thresholds": [[t["threshold"], t["multiplier"]] for t in st["thresholds"]["items"]],
+                                   "final_mult": st["finalMultiplier"]})(
+            json.load(open(os.path.join(root, "data", "income_sets.json")))["DefaultIncomeSet"]),
         # GameData.bloonMutatorData (export_rounds.py): BadImmunity.FilterMutation's lists.
         "bloon_mutator_data": (json.load(open(md)) if os.path.exists(md := os.path.join(root, "data", "bloon_mutator_data.json")) else {}),
         "shop": shop,

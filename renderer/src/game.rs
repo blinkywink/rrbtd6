@@ -403,6 +403,15 @@ pub struct Bloon {
     /// The factory object it lives in (see `Game::fact`): a degraded bloon's first child keeps
     /// its parent's.
     pub obj: u32,
+    /// Bloon.spawnRound: the round (0-based) whose spawner made it; children copy their parent's
+    /// (SpawnChildren.CreatedChildren @0x181008930). DistributeCash pays x the income
+    /// multiplier of this round (`income_mult_for`).
+    pub spawn_round: u32,
+    /// Bloon.lowestLayerNumber: Initialise sets the model's layerNumber, UpdatedModel
+    /// (VERIFIED-DECOMP @0x180fb7b40) lowers it to each new model's; SpawnChildren.CreatedChildren
+    /// (@0x181008930) gives the extra children of a bloon that has regrown above it 0, and
+    /// GetCashForLayers pays only for layers at or below it (regrown layers pay nothing).
+    pub lowest: u32,
 }
 
 /// List<T>.Sort(Comparison<T>) as IL2CPP's mscorlib does it (ArraySortHelper.IntrospectiveSort):
@@ -2926,6 +2935,8 @@ pub struct Projectile {
     /// Cash projectiles (bananas): what collecting it pays.
     pub value: f64,
     pub cash_base: f64,
+    /// EatBloon.cashCollected: income multiplier x total layers of what it ate.
+    pub eat_cash: f32,
     /// RefreshPierce.lastRefresh: the sim time of the last refresh (the creation time at first).
     refresh_t: f32,
     /// Frames since the last interval sub-projectile (CreateProjectileOnIntervalModel).
@@ -3765,6 +3776,8 @@ pub struct Game {
     /// The damaging tower's Monkey Town (CashIncrease): (multiplier, increase) for the pops of
     /// the damage being dealt (`hit_cash_for`).
     hit_cash: (f64, f64),
+    /// The damage being dealt pays no pop cash (MorphBloon's).
+    no_pop_cash: bool,
     /// DistributeToChildrenSet on the bloon this hit is on: its own layer passes overkill on.
     dist_set: bool,
     /// The step's phase (process-list order of things made in it): 0 collisions, 1 towers,
@@ -3989,6 +4002,8 @@ pub struct Game {
     /// Health at the start of this step, to notice it changing (Simulation's health events).
     lives_at_step: f64,
     pub mode_name: String,
+    /// The GameModel's income set (GetIncomeMultiplierForRound).
+    pub income_set: Option<crate::data::IncomeSet>,
     /// The mode's difficulty (Easy / Medium / Hard): ReadonlyInGameData.selectedDifficulty.
     pub difficulty: String,
     /// What the end screens' player stats show (AnalyticsGameSessionInfo).
@@ -4762,15 +4777,32 @@ macro_rules! collide_pass {
             // collected for the eaten RBE x rbeCashMultiplier.
             if let Some(eat) = pr.spec.eat.clone() {
                 let rbe = $s.rbe[b.kind] as f64;
+                // EatBloon.Collide (VERIFIED-DECOMP @0x180cb96c0): rbeCollected += the bloon's
+                // leak damage; cashCollected += GetIncomeMultiplierForRound(spawnRound) x its total
+                // layers; then Bloon.Damage with a huge hit by the trap, so the bloon's whole worth
+                // is paid as pop cash at once (recording engineer_005 rt 91: a trapped MOAB pays
+                // 381 in CHIMPS). STAND-IN: the clone removes the bloon and pays that cash (no other
+                // pop effects of the Damage call).
+                let (kind_e, round_e) = ($s.bloons[i].kind, $s.bloons[i].spawn_round);
+                let inc_e = $s.income_mult_for(round_e);
+                let hc = $s.hit_cash_for($s.projectiles[$p].owner);
+                let pay = ((($s.cash_in[kind_e] as f32) * inc_e) * hc.0 as f32 + hc.1 as f32) as f64 * $s.sim_cash_modifier();
+                $s.earn(pay);
+                let layers_e = $s.pops_in[kind_e] as f32;
                 let len0 = $s.bloons.len();
                 $s.remove_bloon(i);
                 // The old last bloon now sits in slot i.
                 remap_moved(&mut $cand, k, i, len0);
                 k += 1;
+                let eat_chimps = $s.chimps();
                 let pr = &mut $s.projectiles[$p];
                 pr.value += rbe;
+                pr.eat_cash += inc_e * layers_e;
                 if pr.value >= eat.capacity as f64 {
-                    pr.value *= eat.cash_mult as f64;
+                    // EatBloon.EmitCash (VERIFIED-DECOMP @0x180cb98d0): the full trap is worth
+                    // (rbeCashMultiplier - 1) x cashCollected (ChimpsModModel: multiplier 1, so 0).
+                    let m = if eat_chimps { 1.0 } else { eat.cash_mult };
+                    pr.value = ((m - 1.0) * pr.eat_cash) as f64;
                     pr.cash_base=pr.value;
                     // STAND-IN pickup reach (a quarter of this: 15 units), like bananas.
                     // (EmitCash: the Full trap is a CashModel + PickupModel projectile, collect radius
@@ -5122,8 +5154,14 @@ macro_rules! collide_pass {
                             k = c;
                         }
                         let id0 = $s.bloons[i].id;
+                        // (MorphBloon.Collide @0x180ccec80: lowestLayerNumber = min(it, 1) first.
+                        // INFERRED from recording alch_005 rt 65 (no cash that frame): its
+                        // Bloon.Damage pays nothing, the blocked children's worth included.)
+                        $s.bloons[i].lowest = $s.bloons[i].lowest.min(1);
                         $s.block_children = true;
+                        $s.no_pop_cash = true;
                         $s.damage(i, total - 1, &mut $kids);
+                        $s.no_pop_cash = false;
                         $s.block_children = false;
                         if let (Some(j), Some(r)) = ($s.bloons.iter().position(|b| b.id == id0), $s.names.iter().position(|n| *n == to)) {
                             $s.bloons[j].kind = r;
@@ -6223,6 +6261,7 @@ impl Game {
             proj_cursor: usize::MAX,
             distribute: (true, false),
             hit_cash: (1.0, 0.0),
+            no_pop_cash: false,
             dist_set: false,
             next_uid: 0,
             active_rbe: 0.0,
@@ -6286,6 +6325,7 @@ impl Game {
             no_sell: mode.no_sell,
             health_mods: mode.health.clone(),
             mode_name: if d.modes.contains_key(&d.mode) { d.mode.clone() } else { "Medium".into() },
+            income_set: d.income_set.clone(),
             difficulty: mode.difficulty.clone().unwrap_or_else(|| "Medium".into()),
             stats: SessionStats::default(),
             leaks: Vec::new(),
@@ -6964,7 +7004,7 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
-        self.bloons.push(Bloon { held: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj });
+        self.bloons.push(Bloon { held: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
         if self.defs[kind].rotate_to_follow_path {
@@ -13125,7 +13165,9 @@ impl Game {
                 self.towers[o].morph = Some((m.tier.clone(), m.display.clone(), m.lifespan * FPS + 1.0));
             }
         }
-        if let Some(l) = &a.loan {
+        // (ChimpsModModel: ImfLoanModel.amount and incomeRecoveryRate 0: no loan; recording
+        // farm_040, nothing at the ability.)
+        if let Some(l) = a.loan.as_ref().filter(|_| !self.chimps()) {
             if self.coop_wallets.is_some(){self.coop_loan(self.towers[t].id,l.amount,l.rate);}else{
             self.cash += l.amount;
             self.debt += l.amount;
@@ -13310,7 +13352,9 @@ impl Game {
             gone.push(self.towers[o].id);
         }
         let crates = (total / m.value.max(1)).max(1);
-        let per = (crates as f32 * m.crate_cash + m.base as f32) / m.crates.max(1) as f32;
+        // (ChimpsModModel: MonkeyopolisModel.cashFromCrate 0.)
+        let crate_cash = if self.chimps() { 0.0 } else { m.crate_cash };
+        let per = (crates as f32 * crate_cash + m.base as f32) / m.crates.max(1) as f32;
         let tw = &mut self.towers[t];
         tw.mopolis_cash = Some(per);
         tw.mopolis_done = true;
@@ -14820,8 +14864,23 @@ impl Game {
     /// village_003_std, Standard Hard: every pop of the Dart beside a 0-0-3 pays $1.5).
     /// ChimpsModModel.Mutate (VERIFIED-DECOMP @0x1811189b0) sets every CashIncreaseModel's
     /// increase to 0 and multiplier to 1: none in CHIMPS (recording village_003, $1 a pop).
+    /// Simulation.GetIncomeMultiplierForRound (VERIFIED-DECOMP @0x180b47310): the first
+    /// IncomeSet threshold above `round` gives the multiplier, else its finalMultiplier
+    /// (DefaultIncomeSet: 1 below round index 50, 0.5 below 60, 0.2 below 85...; recordings
+    /// boomerang_paragon_r63 / r78, quincy_l12_r60: pops pay 0.2 / 0.5).
+    fn income_mult_for(&self, round: u32) -> f32 {
+        let Some(set) = &self.income_set else { return 1.0 };
+        set.thresholds.iter().find(|t| (round as i32) < t.0).map_or(set.final_mult, |t| t.1)
+    }
+
+    /// CHIMPS: ChimpsModModel.Mutate (VERIFIED-DECOMP @0x1811189b0) strips the tower income
+    /// models (see HANDOFF's Village item for the list); each pay site checks this.
+    pub fn chimps(&self) -> bool {
+        self.mode_name == "CHIMPS"
+    }
+
     fn hit_cash_for(&self, owner: u64) -> (f64, f64) {
-        if self.mode_name == "CHIMPS" {
+        if self.chimps() {
             return (1.0, 0.0);
         }
         self.towers.iter().position(|t| t.id == owner).and_then(|ti| self.buffs.get(ti)).map_or((1.0, 0.0), |b| (b.cash_mult as f64, b.cash_add as f64))
@@ -14895,6 +14954,14 @@ impl Game {
         if held {
             for k in out_children[start..].iter().rev().copied().filter(|k| *k != id).collect::<Vec<_>>() {
                 if let Some(j) = self.bloons.iter().position(|b| b.id == k) {
+                    // (Its layers' cash is still in the hit's damage result, BloonDegradeStepper
+                    // .GetCashForLayers summed: the hit pays the whole worth of each child it
+                    // doesn't make; recording beast_005 rt 201, a held MOAB pays 1 + 3 Ceramics' 95.)
+                    let (k2, r) = (self.bloons[j].kind, self.bloons[j].spawn_round);
+                    let v = ((self.cash_in[k2] as f32) * self.income_mult_for(r)) as f64 * self.sim_cash_modifier();
+                    if !self.no_pop_cash && self.bloons[j].lowest != 0 {
+                        self.earn(v);
+                    }
                     self.unmake_bloon(j);
                 }
             }
@@ -15087,16 +15154,22 @@ impl Game {
         } else {
             self.pop_emits.extend(pop_emits);
         }
+        let inc = self.income_mult_for(self.bloons[i].spawn_round);
+        let chimps = self.chimps();
         let b = &mut self.bloons[i];
         // Mark / Trojan: pop cash x the mark, + worth per layer; Strip: no children.
         // DistributeCashModel: cash + additionalCash for the layer (a Super Ceramic's 86).
         let mut pop_cash = 1.0f64 + self.extra_cash[kind];
-        // (Monkey Town: the damage's BloonWorthMutator, `hit_cash_for`.)
-        pop_cash = pop_cash * self.hit_cash.0 + self.hit_cash.1;
+        // DistributeCash.PostDegrade (VERIFIED-DECOMP @0x180fea0e0), in f32: the cash x
+        // GetIncomeMultiplierForRound(spawnRound), x the DistributeCashModel's multiplier (Monkey
+        // Town's BloonWorthMutator, `hit_cash_for`), + its additive.
+        pop_cash = (((pop_cash as f32) * inc) * self.hit_cash.0 as f32 + self.hit_cash.1 as f32) as f64;
         let mut strip = false;
         for e in &b.effects {
             match e.kind {
-                EffectKind::Mark { cash_mult, .. } => pop_cash *= cash_mult as f64,
+                // (ChimpsModModel: DesperadoMarkModel.popCashMultiplier 1; recording
+                // desperado_050, a marked pop pays $1.)
+                EffectKind::Mark { cash_mult, .. } => if !chimps { pop_cash *= cash_mult as f64 },
                 EffectKind::Worth { per_tier } => pop_cash += (per_tier * self.defs[kind].layer_number as f32) as f64,
                 EffectKind::Strip => strip = true,
                 _ => {}
@@ -15116,6 +15189,9 @@ impl Game {
         let start = if self.phase == 0 || (self.phase == 1 && self.moved_early.contains(&b.id)) { b.dist } else { b.prev_dist };
         let (mut start_dist, mut moved, mult, parent_tm, parent_fresh) = (start, self.phase >= 2 && b.dist != b.prev_dist, b.mult, b.track_mult, b.fresh);
         let parent_unplaced = b.unplaced;
+        let parent_round = b.spawn_round;
+        // (CreatedChildren: iVar5 lowestLayerNumber < iVar4 the popped model's layerNumber.)
+        let (parent_lowest, parent_regrown) = (b.lowest, b.lowest < self.defs[kind].layer_number);
         // A pop in the bloon's own Process after its Move (DamageOverTime): children start from
         // where it is now, the first (the bloon itself) having moved already (recording
         // boomerang_500: the MOAB's DoT pop leaves Ceramics at 213.08 back by 6.675 each).
@@ -15209,7 +15285,13 @@ impl Game {
         // DistributeCash.PostDegrade (@0x180fea0e0): the cash x Simulation.GetCashModifierFromSimBehaviors
         // (Thrive). HYPOTHESIS P-THRIVEORDER: after Mark / Worth.
         pop_cash *= self.sim_cash_modifier();
-        self.earn(pop_cash); // P-CASH
+        // BloonDegradeStepper.GetCashForLayers (VERIFIED-DECOMP @0x180fe5ba0): a layer pays only
+        // when its model's layerNumber <= the bloon's lowestLayerNumber: a regrown layer pays
+        // nothing (recording dart_002 rt 2601: Regrow 682, popped down to Blue, regrown to Green,
+        // pops for $0), nor does anything at 0.
+        if self.defs[kind].layer_number <= parent_lowest && !self.no_pop_cash {
+            self.earn(pop_cash); // P-CASH
+        }
         // GetNonRegrowLayersForLayers: a layer counts 1 + its layerCountOffset.
         popped += self.layer_offset[kind];
         self.popped += 1 + self.layer_offset[kind];
@@ -15243,6 +15325,10 @@ impl Game {
             self.ghost_cell = None;
             let mut id = self.spawn_at(c, d1, path);
             if let Some(ch) = self.bloons.last_mut() {
+                ch.spawn_round = parent_round;
+                // (The first child is the parent object: UpdatedModel's min; the others are new
+                // bloons at their model's layer, or 0 under a regrown parent.)
+                ch.lowest = if n == 0 { parent_lowest.min(ch.lowest) } else if parent_regrown { 0 } else { ch.lowest };
                 // The first child is the parent object: projectiles that hit it already, and
                 // throws locked onto it, still know it.
                 if n == 0 {
@@ -16586,7 +16672,9 @@ impl Game {
             let cash = self.cash_in[self.bloons[i].kind];
             let n = self.destroy_whole(i);
             let dealt = self.damage_tally - tally0;
-            self.earn(cash * h.mult + h.add);
+            // (ChimpsModModel: MoabTakedownModel.increaseMoabBloonWorth false: the plain worth;
+            // recording bucc_040, a hooked MOAB pays 381 in CHIMPS.)
+            self.earn(if self.chimps() { cash } else { cash * h.mult + h.add });
             if let Some(tw) = self.towers.iter_mut().find(|x| x.id == h.owner) {
                 tw.pops += n;
                 tw.sun_destroyed(self.last_destroyed);
@@ -19139,6 +19227,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             if weapon.to_bank {
                                 if let (Some(c), Some(bank)) = (&weapon.projectile.cash, &tier.bank) {
                                     let v = cash_value(c, self.rand());
+                                    // (ChimpsModModel: the CashModel pays 0; recording farm_032.)
+                                    let v = if self.chimps() { 0.0 } else { v };
                                     let tw = &mut self.towers[t];
                                     tw.bank = (tw.bank + v).min(bank.capacity as f64);
                                 }
@@ -23944,6 +24034,12 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     let inc = self.towers.iter().position(|t| t.id == owner).and_then(|ti| self.buffs.get(ti)).map_or(1.0, |b| b.income_mult);
                     // (Monkeyopolis's EmissionMutator: its CashModels' minimum and maximum.)
                     let mut cm = cm.clone();
+                    // ChimpsModModel: every CashModel's minimum and maximum 0 (recording farm_003:
+                    // no banana pays in CHIMPS).
+                    if self.chimps() {
+                        cm.min = 0.0;
+                        cm.max = 0.0;
+                    }
                     if let Some(v) = self.towers.iter().find(|t| t.id == owner).and_then(|t| t.mopolis_cash) {
                         cm.min = v;
                         cm.max = v;
@@ -24154,6 +24250,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 rounds_left: spec.rounds,
                 value,
                 cash_base,
+                eat_cash: 0.0,
                 refresh_t: self.sim_elapsed as f32,
                 check_t: 0,
                 interval_t: 0.0,
@@ -25282,7 +25379,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 let abilities: Vec<crate::data::Ability> = tier.abilities.iter().filter(|a| a.round_end).cloned().collect();
                 for a in abilities {
                     if let Some(b) = &a.bounty {
-                        if b.base != 0.0 || b.per_tier.iter().any(|&x| x != 0.0) {
+                        // (ChimpsModModel: CashPerTowerInRangeModel.baseCash 0, extraCashPerTier a
+                        // new zeroed array: nothing.)
+                        if !self.chimps() && (b.base != 0.0 || b.per_tier.iter().any(|&x| x != 0.0)) {
                             let (pos, range) = (self.towers[t].pos, self.tier(t).map_or(self.tower_defs[self.towers[t].def].1.range, |tr| tr.range) + b.range_add);
                             let mut cash = b.base;
                             for o in 0..self.towers.len() {
@@ -25307,7 +25406,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             }
             // PerRoundCashBonusTowerModel: each tower's per-round cash, shown over it.
             for t in 0..self.towers.len() {
-                let v = self.tier(t).map_or(0.0, |tr| tr.round_cash) * self.buffs.get(t).map_or(1.0, |b| b.income_mult) as f64;
+                // (ChimpsModModel: PerRoundCashBonusTowerModel.cashPerRound 0.)
+                let v = if self.chimps() { 0.0 } else { self.tier(t).map_or(0.0, |tr| tr.round_cash) * self.buffs.get(t).map_or(1.0, |b| b.income_mult) as f64 };
                 if v > 0.0 {
                     if self.coop_wallets.is_some(){
                         let shared=self.tier(t).map_or(0.0,|tr|tr.round_cash_shared)*self.buffs.get(t).map_or(1.0,|b|b.income_mult) as f64;
@@ -25324,7 +25424,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             if let Some((te_t, te)) = te {
                 let ships = (0..self.towers.len()).filter(|&o| o != te_t && self.tier(o).is_some_and(|tr| tr.merchant)).count().min(te.cap as usize);
                 let favoured = (0..self.towers.len()).filter(|&o| o != te_t && self.tier(o).is_some_and(|tr| tr.cashback.is_some())).count();
-                let v = ships as f64 * te.per_ship + favoured as f64 * te.per_favoured;
+                // (ChimpsModModel: TradeEmpireBuffModel.cashPerRoundPerMechantship 0.)
+                let per_ship = if self.chimps() { 0.0 } else { te.per_ship };
+                let v = ships as f64 * per_ship + favoured as f64 * te.per_favoured;
                 if v > 0.0 {
                     self.earn_for(self.towers[te_t].id,v);
                     self.cash_pops.push((self.towers[te_t].pos, v));
@@ -26077,6 +26179,8 @@ mod tests {
         let mut lists: Vec<Option<Vec<(String, u32)>>> = Vec::new();
         let mut ids: std::collections::HashMap<u64, (String, u32)> = Default::default();
         let (mut first_time, mut times): (Option<i64>, Vec<i64>) = (None, Vec::new());
+        // The game's cash at the first recorded frame (F lines' 5th field).
+        let mut first_cash: Option<f64> = None;
         let bits = |v: f32| (v + 0.0).to_bits();
         for line in text.lines() {
             let f: Vec<&str> = line.split_whitespace().collect();
@@ -26115,6 +26219,7 @@ mod tests {
                 Some("F") => {
                     if first_time.is_none() {
                         first_time = f[1].parse::<i64>().ok();
+                        first_cash = f.get(4).and_then(|c| c.parse::<f64>().ok());
                     }
                     times.push(f[1].parse::<i64>().unwrap_or(0));
                     frames.push((f[2].parse().unwrap(), Vec::new(), Vec::new()));
@@ -26195,7 +26300,10 @@ mod tests {
             // Banana Farm in CHIMPS).
             let locked = std::mem::take(&mut g.locked);
             let rng_before = g.synced.clone();
+            // (SimRecorder's CreateTowerAt places free: the game's cash doesn't drop.)
+            let cash0 = g.cash;
             assert!(g.place_at(def, [*x, -*y], false), "can't place {id} at {x},{}", -y);
+            g.cash = cash0;
             g.locked = locked;
             let t = g.towers.iter().rposition(|t| t.sub.is_none()).unwrap();
             if forced.contains(&ti) {
@@ -26243,6 +26351,11 @@ mod tests {
             if !late.iter().any(|l| l.0 == ti) {
                 place_tower(&mut g, ti);
             }
+        }
+        // The game's own starting cash, so the clone's cash compares to the F lines' exactly
+        // (RRBTD6_REC_CASH; at 1e9 a double can't hold 0.2-dollar pops exactly).
+        if let Some(c) = first_cash.filter(|c| *c > 0.0) {
+            g.cash = c;
         }
         for &(k, level, xp) in &hero_levels {
             let t = g.towers.iter().enumerate().filter(|(_, t)| t.sub.is_none()).nth(k).map(|(i, _)| i).unwrap();
