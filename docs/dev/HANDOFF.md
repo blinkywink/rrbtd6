@@ -208,6 +208,8 @@ map_haunted_beast_502_r80 MATCH (scenario of the same name; pending/maptowers). 
 branch (maxMoabDamagePercentPerSecond 0.25 at tier 5: min(maxHealth x percent, health / 5000)) is capped by
 GreatWhiteEffectModel +0x6c, maxMoabGrabTimeMegalodon (6), not maxMoabGrabTime (0 at tier 5), unless Tag
 Bad (game.json great_white `max_moab_time_mega`). The ZOMG (layer 12 <= 13) is pulled.
+Also MATCH as recorded (no change needed): map_haunted_beast_050_r80 (T-Rex on round 80's ZOMG) and
+map_haunted_beast_005_r80 (Giant Condor; pops nothing there, weak coverage). maptowers 95/95.
 
 ### DONE: Great White no-pull branch (LatchToBloon; 2026-11-17)
 map_haunted_beast_402_r80 MATCH (scenario of the same name, round 80's ZOMG; pending/maptowers, maptowers 92/92).
