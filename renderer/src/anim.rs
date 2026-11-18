@@ -173,9 +173,9 @@ pub struct Clip {
 /// MonkeyAnimationController.attackReadyIdleSustain (.ctor: 2.0): seconds AttackIdle plays after
 /// an attack.
 const ATTACK_IDLE_SUSTAIN: f32 = 2.0;
-/// HYPOTHESIS P-IDLEWEIGHT: the idle loop's weight in idleSelector (SetUpHighQualityAnimator adds
-/// it with a constant we couldn't read; the variants add their variantWeight, 0.08 for the Dart
-/// Monkey's Look / Scratch).
+/// The idle loop's weight in idleSelector (VERIFIED-DECOMP MonkeyAnimationController.Awake
+/// @0x181525850: idleSelector.Add(0, the f32 at 0x183e4fc30 = 1.0), then each IdleVariant with its
+/// variantWeight, 0.08 for the Dart Monkey's Look / Scratch).
 const IDLE_WEIGHT: f32 = 1.0;
 
 struct Part<T = Texture2D> {
@@ -1397,5 +1397,38 @@ pub async fn verify_prefetch(root:&Path){
         assert_eq!(p.pending.len(),4);
         for path in paths{assert!(p.load(&path).is_none());}
         assert!(p.pending.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod state_clip_tests {
+    use super::*;
+    /// Models re-exported 2026-11-17 for their missing state clips (VISUALS.md): each stages from
+    /// disk, every state names a clip it has, and state_flags.json has one entry per state.
+    #[test]
+    fn reexported_models_have_every_state_clip() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../local_extracted/models");
+        if !root.exists() {
+            return;
+        }
+        let dirs = [
+            "Druid/tiers/HeartOfVengeance",
+            "Druid/tiers/301-Druid",
+            "air/011-HeliPilot",
+            "BananaFarmerPro/tiers/BananaFarmerPro010",
+            "Desperado/tiers/000-Desperado",
+            "Desperado/tiers/030-Desperado",
+            "Skywarden/tiers/SkyWarden140",
+            "BombShooter/tiers/BOMBParagonLvl3",
+            "DartlingGunner/tiers/031-DartlingGunner",
+        ];
+        for d in dirs {
+            let st = AnimModel::stage(&root.join(d)).unwrap_or_else(|| panic!("{d} doesn't stage"));
+            assert!(!st.states.is_empty(), "{d}: no states.json");
+            for s in st.states.iter().flatten() {
+                assert!(st.clips.iter().any(|c| &c.name == s), "{d}: state clip {s:?} missing");
+            }
+            assert_eq!(st.state_flags.len(), st.states.len(), "{d}: state_flags.json");
+        }
     }
 }
