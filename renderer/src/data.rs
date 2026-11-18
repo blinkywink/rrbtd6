@@ -2228,6 +2228,9 @@ pub struct Proj {
     /// CreateGreatWhiteEffectModel: its hit grabs and pulls the bloon (Beast Handler 3xx+).
     #[serde(default)]
     pub great_white: Option<Box<GreatWhite>>,
+    /// LatchToBloonModel: it rides the bloon it is made on (the Great White's BloonFollowProjectile).
+    #[serde(default)]
+    pub latch: Option<Latch>,
     /// RefreshPierceModel.interval: pierce is restored every this many seconds (Druid vines).
     #[serde(default)]
     pub refresh_pierce: Option<f32>,
@@ -3564,4 +3567,17 @@ pub struct GreatWhite {
     #[serde(default)]
     pub thrash: Option<Proj>,
     pub emission: Emission,
+    /// bloonFollowProjectileModel: latched onto a bloon it can't pull.
+    #[serde(default)]
+    pub follow: Option<Proj>,
+}
+
+/// LatchToBloonModel (rotateWithBloon, postBloonDestroyTimeFrames, postBloonDestroyTime,
+/// bloonSpeedMultiplier).
+#[derive(Deserialize, Clone)]
+pub struct Latch {
+    pub rotate: bool,
+    pub post_frames: i64,
+    pub post_time: f32,
+    pub speed: f32,
 }

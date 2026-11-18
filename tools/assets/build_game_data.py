@@ -1055,6 +1055,8 @@ def main():
                 "thrash_frames": frames(gf.get("thrashingProjectileRate", 0.0)),
                 "thrash": projectile(deref(gf.get("thrashingProjectileModel")), depth + 1) if deref(gf.get("thrashingProjectileModel")) else None,
                 "emission": emission(deref(gf.get("emissionModel"))),
+                # bloonFollowProjectileModel: what a bloon it can't pull gets latched with.
+                "follow": projectile(deref(gf.get("bloonFollowProjectileModel")), depth + 1) if deref(gf.get("bloonFollowProjectileModel")) else None,
             }
         if pb.get("RefreshPierceModel"):
             out["refresh_pierce"] = pb["RefreshPierceModel"][0]["f"]["interval"]
@@ -1066,6 +1068,13 @@ def main():
         out["remove_effects"] = [k.strip() for r in pb.get("RemoveMutatorsFromBloonModel", [])
                                  for k in (r["f"].get("key") or "").split(",") if k.strip()] +                                 ["=" + k.strip() for r in pb.get("RemoveMutatorsFromBloonModel", [])
                                  for k in (r["f"].get("mutatorIds") or "").split(",") if k.strip()]
+        # LatchToBloonModel (the Great White's BloonFollowProjectile; LatchToBloon.Process
+        # @0x180cc7200, SetTarget @0x180cc7670, OnDestroy @0x180cc7110): it rides its bloon,
+        # slowing it, until the bloon is lost or it ages out.
+        if pb.get("LatchToBloonModel"):
+            lf = pb["LatchToBloonModel"][0]["f"]
+            out["latch"] = {"rotate": bool(lf.get("rotateWithBloon")), "post_frames": lf.get("postBloonDestroyTimeFrames", 0),
+                            "post_time": lf.get("postBloonDestroyTime", 0.0), "speed": lf.get("bloonSpeedMultiplier", 1.0)}
         if depth < 3 and pb.get("CreateProjectileOnIntervalModel"):
             cf = pb["CreateProjectileOnIntervalModel"][0]["f"]
             out["on_interval"] = {"frames": cf["intervalFrames"], "range": cf.get("range", 0.0),

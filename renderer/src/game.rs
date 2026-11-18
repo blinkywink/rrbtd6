@@ -1434,6 +1434,8 @@ pub struct WeaponState {
     pub gw_attached: Option<u64>,
     pub gw_until: i64,
     pub gw_effect: bool,
+    /// The bloon its attached (latched) projectile rides, for the slow's removal.
+    pub gw_latch_bloon: Option<u64>,
     /// Where that throw was aimed, and at which bloon (0: a point): the throw stays on the
     /// target it started with (recorded: the tower keeps turning to it as it leaves range).
     pub aim_at: [f32; 2],
@@ -1533,6 +1535,7 @@ impl WeaponState {
             gw_attached: None,
             gw_until: 0,
             gw_effect: false,
+            gw_latch_bloon: None,
             aim_at: [0.0; 2],
             aim_z0: 0.0,
             aim_id: 0,
@@ -2803,6 +2806,9 @@ pub struct Projectile {
     born: u64,
     /// For one made by another's exhaust, that one's `born` (its Process made it; 0 otherwise).
     src_born: u64,
+    /// LatchToBloon.SetTarget's state: (bloon id, offsetFromBloon, startingBloonRotation,
+    /// startingProjectileRotation, layerId).
+    latch_on: Option<(u64, [f32; 2], f32, f32, u64)>,
     camo: bool,
     /// Its tower sees camo by a support buff (which turns the FilterInvisibles off).
     buff_camo: bool,
@@ -15656,8 +15662,8 @@ impl Game {
     /// boss, a Tombstone, a Rock below tier 5, nor with GetTotalBloonHealth >= maxPullRbe; its
     /// layerNumber <= maxGrabBloonName's. Pulled: a GreatWhiteEffect (SetGrabbedBloon
     /// @0x18102cbd0), then Bloon.Damage(GetTotalBloonHealth, the Explosion, distributed with the
-    /// blocker overridden, no effect, the tower). STAND-IN: not pulled, the game attaches
-    /// bloonFollowProjectileModel (latching, thrashing); the clone does nothing.
+    /// blocker overridden, no effect, the tower). Not pulled: the latched bloonFollowProjectileModel
+    /// (Game::latch_set / latch_step).
     fn great_white_hit(&mut self, p: usize, id: u64, gw: Box<crate::data::GreatWhite>) {
         let Some(i) = self.bloons.iter().position(|b| b.id == id) else { return };
         let owner = self.projectiles[p].owner;
@@ -15678,6 +15684,27 @@ impl Game {
             && (total as f32) < gw.max_pull_rbe
             && gw.max_layer.is_none_or(|m| d.layer_number <= m);
         if !pull {
+            // Not pulled: emissionModel makes bloonFollowProjectileModel from the Explosion at
+            // Target(bloon); limit.SetAttachedProjectile(the first made); its LatchToBloon.SetTarget
+            // (@0x180cc7670) latches it on.
+            let Some(follow) = gw.follow.clone() else { return };
+            let at = self.projectiles[p].pos;
+            let (tiers, start) = (self.towers[t].tiers, self.projectiles.len());
+            self.emit_target = Some(id);
+            self.emit(at, 0.0, &gw.emission, &follow, None, tiers, owner);
+            self.emit_target = None;
+            if self.projectiles.len() > start {
+                let uid = self.projectiles[start].uid;
+                // (Its Age expires it in its own Process, after the bloons have moved and its
+                // interval has fired; the clone ages projectiles out as the next frame begins, so
+                // it is kept one more and its OnDestroy dated a frame back (latch_release).)
+                self.projectiles[start].frames_left += 1.0;
+                self.latch_set(start, id);
+                if let Some(st) = self.towers[t].weapons.get_mut(wi) {
+                    st.gw_attached = Some(uid);
+                    st.gw_latch_bloon = Some(id);
+                }
+            }
             return;
         }
         // SetGrabbedBloon: f = non-MOAB (sqrt(GetTotalLeakDamage) + 1, + 2 with Lead) x 0.25 x
@@ -15746,6 +15773,100 @@ impl Game {
     /// plays (hasExitAnimationPlayed); UpdateThrashingProjectile (@0x18102d5f0): until then, every
     /// thrashingProjectileRateFrames (roundTime) the thrashing projectile by its emission at the
     /// effect's position, owner the tower.
+    /// LatchToBloon.SetTarget (VERIFIED-DECOMP @0x180cc7670) for projectile `p` on bloon `id`:
+    /// offsetFromBloon = the nearest to the projectile of the bloon's Position and each of its
+    /// collision circles (Position + precalculatedOffset), less the Position; the starting bloon
+    /// and projectile rotations; layerId; the model's slow mutator (bloonSpeedMultiplier) on the
+    /// bloon for every layer until OnDestroy removes it.
+    fn latch_set(&mut self, p: usize, id: u64) {
+        let Some(latch) = self.projectiles[p].spec.latch.clone() else { return };
+        let Some(i) = self.bloons.iter().position(|b| b.id == id) else { return };
+        let pp = self.projectiles[p].pos;
+        let b = &self.bloons[i];
+        let mut best = b.pos;
+        let d2 = |q: [f32; 2]| (q[0] - pp[0]) * (q[0] - pp[0]) + (q[1] - pp[1]) * (q[1] - pp[1]);
+        for ci in 0..self.defs[b.kind].circles.len() {
+            let o = self.circle_off(b, ci);
+            let q = [b.pos[0] + o[0], b.pos[1] + o[1]];
+            if d2(q) < d2(best) {
+                best = q;
+            }
+        }
+        let off = [best[0] - b.pos[0], best[1] - b.pos[1]];
+        let (brot, layer) = (b.rot, b.layer);
+        let prot = self.projectiles[p].grot.unwrap_or(0.0);
+        self.projectiles[p].latch_on = Some((id, off, brot, prot, layer));
+        self.projectiles[p].target = Some(id);
+        let now = self.sim_elapsed;
+        let b = &mut self.bloons[i];
+        b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Slow { mult: latch.speed, glue: 0 }, id: "LatchToBloon".into(), frames_left: 999_999_999.0, total: 999_999_999.0, added: now, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
+    }
+
+    /// LatchToBloon.Process (VERIFIED-DECOMP @0x180cc7200), each latched projectile, after the
+    /// bloons have moved: while its bloon lives on the same layer, it sits at the bloon's Position +
+    /// offsetFromBloon turned by the bloon's rotation since (Vector2.Rotate), turning with it
+    /// (rotateWithBloon); lost, a Piranha's (emittedByTower baseId) is destroyed at once
+    /// (SetBeastHandlerIntoCooldown first; another's after postBloonDestroyTimeFrames, not modelled).
+    /// Then OnDestroy (@0x180cc7110) for any limiter whose attached projectile is gone:
+    /// SetBeastHandlerIntoCooldown (@0x180cc75b0: limitUntil = (int)(postBloonDestroyTime / (1/60)) +
+    /// Simulation.time) and the slow mutator removed from the bloon.
+    fn latch_step(&mut self) {
+        let mut k = 0;
+        while k < self.projectiles.len() {
+            let Some((id, off, brot, prot, layer)) = self.projectiles[k].latch_on else { k += 1; continue };
+            let rotate = self.projectiles[k].spec.latch.as_ref().is_some_and(|l| l.rotate);
+            match self.bloons.iter().find(|b| b.id == id).filter(|b| b.layer == layer) {
+                Some(b) => {
+                    let delta = b.rot - brot;
+                    let (sa, ca) = crt_sin_cos(DEG2RAD * -delta);
+                    let g = [off[0], -off[1]];
+                    let r = [ca * g[0] - sa * g[1], ca * g[1] + sa * g[0]];
+                    let q = [b.pos[0] + r[0], b.pos[1] - r[1]];
+                    let pr = &mut self.projectiles[k];
+                    pr.prev = pr.pos;
+                    pr.pos = q;
+                    if rotate {
+                        pr.grot = Some(delta + prot);
+                    }
+                    k += 1;
+                }
+                None => {
+                    self.projectiles.remove(k);
+                }
+            }
+        }
+        self.latch_release(false);
+    }
+
+    /// LatchToBloon.OnDestroy for each limiter whose attached projectile has gone since: run as it
+    /// goes, before the towers' turn too, as the game destroys it in its own Process (after the
+    /// towers': recording map_haunted_beast_402_r80 rt 2058, the follow ages out and the weapon
+    /// waits 66 more frames, to 2124).
+    /// `aged`: found before the towers' turn, gone by its Age as this frame began: the game's
+    /// OnDestroy ran at the end of the last frame.
+    fn latch_release(&mut self, aged: bool) {
+        let now = self.sim_elapsed as i64 - aged as i64;
+        for t in 0..self.towers.len() {
+            for w in 0..self.towers[t].weapons.len() {
+                let Some(u) = self.towers[t].weapons[w].gw_attached else { continue };
+                if self.projectiles.iter().any(|q| q.uid == u) {
+                    continue;
+                }
+                let post = self.tier(t).and_then(|tr| tr.attacks.iter().flat_map(|a| a.weapons.iter()).nth(w))
+                    .and_then(|wd| wd.projectile.on_exhaust.iter().find_map(|e| e.projectile.great_white.as_ref()))
+                    .and_then(|gw| gw.follow.as_ref()).and_then(|f| f.latch.as_ref()).map_or(0.0, |l| l.post_time);
+                let st = &mut self.towers[t].weapons[w];
+                st.gw_attached = None;
+                st.gw_until = (post / (1.0 / 60.0f32)) as i64 + now;
+                if let Some(bid) = st.gw_latch_bloon.take() {
+                    if let Some(b) = self.bloons.iter_mut().find(|b| b.id == bid) {
+                        b.effects.retain(|e| e.id != "LatchToBloon");
+                    }
+                }
+            }
+        }
+    }
+
     fn gw_step(&mut self) {
         let now = self.round_clock;
         let mut k = 0;
@@ -16152,6 +16273,7 @@ impl Game {
         zones: &[([f32; 2], f32, crate::data::Zone)], shoves: &[([f32; 2], crate::data::MoabShove)], leak_voice: &mut bool) {
         // Bloons moved, popped and spawned since the last tower phase.
         self.target_index = None;
+        self.latch_release(true);
         let rounds_on = self.rounds_active();
         // Simulation.Simulate's process list is in creation order across towers too: an attack
         // newer than one on a later tower waits for it (recording alch_upgrades_r30: the
@@ -22804,7 +22926,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             if pr.interval_t < oi.frames {
                 continue;
             }
-            let (pos, camo, tiers, owner) = (pr.pos, pr.camo, pr.tiers, pr.owner);
+            // (A latched one's CreateProjectileOnInterval comes before its LatchToBloon in the
+            // model's behaviours: it fires from where the projectile was before this frame's latch
+            // move; recording map_haunted_beast_402_r80 rt 1914, the thrash at the 1913 spot.)
+            let (pos, camo, tiers, owner) = (if pr.latch_on.is_some() { pr.prev } else { pr.pos }, pr.camo, pr.tiers, pr.owner);
             // CreateProjectileOnInterval.Process (VERIFIED-DECOMP @0x180ca55e0): with
             // onlyIfHasTarget, BloonManager.GetTarget (`interval_target`); none, and it returns
             // before createNextProjAt moves, so it looks again each frame.
@@ -23325,6 +23450,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 wait: 0.0,
                 retarget_at: None,
                 src_born: 0,
+                latch_on: None,
                 born: self.sim_elapsed * 4 + self.phase as u64,
                 bounces: 0,
                 camo: true,
@@ -23922,6 +24048,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         self.fly_birds();
         self.hold_bird_bloons();
         self.arrive_follow();
+        self.latch_step();
         let mut p = 0;
         while p < self.projectiles.len() {
             let pr = &self.projectiles[p];
@@ -24337,6 +24464,12 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 tw.necro_points = true;
             }
             self.finish_round();
+        }
+        // A latched projectile whose Age ends now goes in its own Process this frame (after the
+        // bloons' moves and its interval's shot), with OnDestroy: not at the next frame's start.
+        if self.projectiles.iter().any(|p| p.latch_on.is_some() && p.frames_left <= 1.0) {
+            self.projectiles.retain(|p| !(p.latch_on.is_some() && p.frames_left <= 1.0));
+            self.latch_release(false);
         }
         self.remove_sacrificed();
         self.in_step = false;

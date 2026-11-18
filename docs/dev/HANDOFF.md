@@ -203,7 +203,22 @@ by the bloon's rotation change, z + the MOAB height offset), SetTarget @0x180cc7
 (SetBeastHandlerIntoCooldown: limitUntil = (int)(postBloonDestroyTime / (1/60)) + time, the slow mutator
 removed); needs a recording where a ZOMG+ reaches the pet.
 
-### DONE: Beast Handler Great White grab (2026-11-17; no-pull branch a STAND-IN)
+### DONE: Great White no-pull branch (LatchToBloon; 2026-11-17)
+map_haunted_beast_402_r80 MATCH (scenario of the same name, round 80's ZOMG; pending/maptowers, maptowers 92/92).
+A bloon CanPullBloon refuses gets bloonFollowProjectileModel (game.json great_white `follow`, projectile
+`latch`) emitted from the Explosion at it and set as the limiter's attachedProjectile (blocking the weapon).
+LatchToBloon.SetTarget (VERIFIED-DECOMP @0x180cc7670; Game::latch_set): offsetFromBloon = the nearest of the
+bloon's Position and its collision circles, less the Position; starting rotations; layerId; the slow mutator
+(bloonSpeedMultiplier 0.6) on the bloon. Process (@0x180cc7200; Game::latch_step, after the bloons move):
+Position + offset turned by the bloon's rotation since (rotateWithBloon), else lost: a Piranha's ends at once.
+Its CreateProjectileOnInterval (thrash every 36) is listed before LatchToBloon, so it fires from the spot
+before that frame's latch move. Its Age (3 s, roundTime) ends it in its own Process after the towers' turn,
+the bloons' moves and that frame's thrash (the clone ends it at the frame's end). OnDestroy (@0x180cc7110;
+Game::latch_release): SetBeastHandlerIntoCooldown (limitUntil = (int)(postBloonDestroyTime / (1/60)) + time,
+66) and the slow removed (rt 2058: next bite at 2124). NOT MODELLED: a non-Piranha emitter's
+postBloonDestroyTimeFrames delay (none exists), the animation states.
+
+### DONE: Beast Handler Great White grab (2026-11-17; no-pull branch since done, above)
 PORTED (game.json projectile `great_white`, weapon `gw_limit`; Game::great_white_hit / gw_step / gw_limiter,
 GwEffect, WeaponState gw_*): GreatWhiteLimitProjectile.FilterEmission (no current effect, Simulation.time >=
 limitUntil, no live bite in flight or attached projectile; OnRoundEnd limitUntil = time);
