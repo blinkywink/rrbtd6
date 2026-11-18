@@ -159,6 +159,15 @@ def main():
                     out.append([prefab_name(b["f"]["assetId"]), 1.0])
         return out
 
+    def line_fx(f):
+        def one(k):
+            em = deref(f.get(k))
+            n = prefab_name(em["f"].get("assetId")) if em else None
+            return [n, em["f"].get("scale", 1.0) or 1.0] if n else None
+        out = {"start": one("effectAtStartModel"), "end": one("effectAtEndModel"), "hit": one("effectAtCollision"),
+               "max_hits": f.get("maxCollisionEffects", 0)}
+        return out if out["start"] or out["end"] or out["hit"] else None
+
     def model3d(guid):
         n = prefab_name(guid) or ""
         return n if "3D" in n else None
@@ -1266,6 +1275,12 @@ def main():
         # EatBloonModel (Bloon Trap): swallows bloons up to rbeCapacity, then pays out.
         eat = (pb.get("EatBloonModel") or [None])[0]
         out["eat"] = {"capacity": eat["f"]["rbeCapacity"], "cash_mult": eat["f"]["rbeCashMultiplier"]} if eat else None
+        # EatBloon.PlayEffect (VERIFIED-DECOMP @0x180cba040): effectOnEatModel at the trap on each eat
+        # that doesn't fill it (visual).
+        if eat:
+            em = deref(eat["f"].get("effectOnEatModel"))
+            n = prefab_name(em["f"].get("assetId")) if em else None
+            out["eat"]["fx"] = [n, em["f"].get("scale", 1.0) or 1.0] if n else None
         # EatBloon.EmitCash (@0x180cb98d0): a full trap is destroyed and its EatBloonModel.projectile
         # (the "Full" trap) made in its place; that one's AgeModel lifespan (recording
         # map_geared_engineer_204_r40: Full 1149 lives 300 frames).
@@ -1366,7 +1381,10 @@ def main():
                     "line_grow": f.get("lengthPerFrame", 0.0) if f.get("useLengthSpeed") else None,
                     "line_end": projectile(deref(f["projectileAtEndModel"]), 1) if deref(f.get("projectileAtEndModel")) else None,
                     "line_target_end": bool(f.get("useTargetAsEndPoint")),
-                    "line_initial": projectile(deref(f["projectileInitialHitModel"]), 1) if deref(f.get("projectileInitialHitModel")) else None}
+                    "line_initial": projectile(deref(f["projectileInitialHitModel"]), 1) if deref(f.get("projectileInitialHitModel")) else None,
+                    # Emit's effectAtStart / effectAtEnd (moved to the line's ends each Emit) and
+                    # effectAtCollision on up to maxCollisionEffects bloons hit (visual).
+                    "line_fx": line_fx(f)}
         # STAND-IN P-WERERABBIT: the Wererabbit leaps onto its target; its blast lands there.
         if e["type"] == "InstantDamageEmissionModel":
             return {"kind": "InstantDamage", "count": 1}

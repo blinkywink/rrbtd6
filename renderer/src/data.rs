@@ -1709,6 +1709,10 @@ pub struct Emission {
     /// projectileInitialHitModel: made on the first bloon the line meets and collided at once.
     #[serde(default)]
     pub line_initial: Option<Box<Proj>>,
+    /// LineProjectileEmission.Emit's effects (visual): effectAtStart / effectAtEnd at the line's
+    /// ends, effectAtCollision on up to `max_hits` of the bloons it hit.
+    #[serde(default)]
+    pub line_fx: Option<LineEmitFx>,
 }
 
 fn one_u() -> u32 {
@@ -1799,6 +1803,15 @@ pub struct ParentDamage {
 pub struct Bolts {
     pub displays: Vec<String>,
     pub life: f32,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct LineEmitFx {
+    pub start: Option<(String, f32)>,
+    pub end: Option<(String, f32)>,
+    pub hit: Option<(String, f32)>,
+    #[serde(default)]
+    pub max_hits: i64,
 }
 
 /// LineEffectModel: `beam` (display GUID) tiled every `len` along the shot, out to the map's
@@ -2339,6 +2352,9 @@ pub struct Eat {
     /// The Full trap's CashModel / PickupModel (EmitCash overwrites its min / max).
     #[serde(default)]
     pub full_cash: Option<Cash>,
+    /// effectOnEatModel (prefab, scale), played at the trap on each eat (visual).
+    #[serde(default)]
+    pub fx: Option<(String, f32)>,
 }
 
 /// A temporary tower spawned by a projectile (Sentry): its own tier, gone after `lifespan` seconds.

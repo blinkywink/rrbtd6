@@ -116,13 +116,15 @@ effect names, model behaviours the data builder never reads).
   effect (`scale_fx`: Riptide's aura ahead of the projectile, growing); ability attack displays (Glue Storm's
   hose, build_display_plan `attack: -1`, drawn while a `Tower.temp` attack runs). The Super Monkey arm
   entries in the audit are catalog-name noise (401 / 410 are mapped).
-- LEFT, need a sim event (game.rs: the matching session's file): Druid 030+'s jungle vines
-  (JungleVineEffect.Collide / Process @0x180cc23b0 / @0x180cc3140: back + front displays and a stand-in
-  bloon stepping down a bloon list per stepCount, anim state 2 and AgeingDestroy after effectFrames),
-  LineProjectileEmission effectAtStart / effectAtEnd / effectAtCollision (Emit @0x180c42910: one of each
-  kept and moved to the line's start / end each Emit, collision effects up to maxCollisionEffects;
-  Desperado rifle, Sniper Paragon), Sniper 030+'s BouncingBulletTracer (CreateEffectFromCollisionToCollision,
-  effectLength), Bloon Trap's collect (EatBloonModel.effectOnEatModel).
+- DONE (display hooks in game.rs, `place_fx` only): LineProjectileEmission effectAtStart / effectAtEnd /
+  effectAtCollision on the plain line (emission `line_fx`; Emit @0x180c42910: Desperado's rifle line start /
+  end, the Sniper Paragon's muzzle flash, beam hits up to maxCollisionEffects). STAND-IN: a new effect each
+  Emit, not the one kept and moved. Bloon Trap's BloonTrapBloonCollect on each eat that doesn't fill it
+  (eat `fx`; EatBloon.PlayEffect @0x180cba040 at the trap). STAND-IN: the game skips it while the last plays.
+- LEFT: Druid 030+'s jungle vines (JungleVineEffect.Collide / Process @0x180cc23b0 / @0x180cc3140): the
+  JungleVineWrap / Grow models exported with no mesh (vertex_count 0), so the exporter needs work first.
+  Sniper 030+'s BouncingBulletTracer (CreateEffectFromCollisionToCollision @0x180c9ea30: spawned along the
+  segment, stretched by length / effectLength): its prefab has no particles, so the streak stand-in stays.
 - LEFT, rest: Boomerang FlipFollowPath AmbiRangTransformation (effectOnFlip), Sniper ammo-swap VFX, Paragon
   degree orbs, Desperado's Blazing Sun muzzle flashes, Buccaneer HookHit, Dark Shift, Thunder's Decree.
   Selection-only markers (target reticles, patrol points, Beast leash lines) are UI.

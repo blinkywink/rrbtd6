@@ -210,8 +210,12 @@ and places scripted towers free, as SimRecorder's CreateTowerAt does. DONE this 
   beast_merge_h400 / h500). Where the income multiplier enters per layer isn't found yet (PostDegrade multiplies
   the sum once, which would give 2.0): read Bloon.Damage / the DamageResult cash (+0x34) path next.
 Remaining (besides the f32-drift ones above):
-- engineer_420_close / 420_last / 500 / 502_last / 502_strong (clone +3..11: Sentry-related pops?),
-  engineer_005 rt 3482 (+1).
+- engineer_420_close / 420_last / 500 / 502_last / 502_strong (clone +3..11), engineer_005 rt 3482 (+1).
+  FOUND for 502_last rt 1510 (`RRBTD6_REC_POPS=1 RRBTD6_REC_CASH=1 sh tools/rec/compare.sh --one ...` logs
+  each paid pop): in the collision pass the clone pops Green 265 (game id 2406, at 175.47, the track end),
+  while the game's projectile 2380 hits 2414 (H line) and 2406 leaks unpaid in the move. A hit-target
+  difference the comparator can't see (the bloon is gone either way; H lines aren't compared): find
+  which clone projectile hit 265 and why 2380 prefers 2414 in the game.
 - alch_003 rt 92 (game +23, clone +73).
 - desperado_300 rt 3122 (clone 1 less).
 - map_haunted_beast_402_r60 rt 2678 (clone 1 less).
