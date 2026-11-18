@@ -2583,7 +2583,7 @@ def main():
                            # to grabAmount (a Beast Handler ContributionMutator sets it).
                            "extra": xf.get("extraGrabAmount", 0.0),
                            "rot_speed": xf.get("rotationSpeed", 0.0),
-                           "keep": bool(xf.get("keepPickingUpBloons")), "keep_range": xf.get("keepPickingBloonsRange", 0.0),
+                           "keep": bool(xf.get("keepPickingUpBloons")), "adjacent": bool(xf.get("enableAdjacentHover")), "keep_range": xf.get("keepPickingBloonsRange", 0.0),
                            "penalty": {"Lead": xf.get("leadPiercePenalty", 0), "Ceramic": xf.get("ceramicPiercePenalty", 0),
                                        "Moab": xf.get("moabPiercePenalty", 0), "Bfb": xf.get("bfbPiercePenalty", 0),
                                        "Zomg": xf.get("zomgPiercePenalty", 0), "Ddt": xf.get("ddtPiercePenalty", 0)}}

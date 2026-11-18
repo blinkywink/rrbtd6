@@ -2674,6 +2674,9 @@ pub struct Grapple {
     pub amount: u32,
     pub radius: f32,
     pub keep: bool,
+    /// enableAdjacentHover: the bird may hover over a handler contributing it (GetTowerTarget).
+    #[serde(default)]
+    pub adjacent: bool,
     pub keep_range: f32,
     /// Extra grab cost per bloon tag (Lead, Ceramic, Moab, Bfb, Zomg, Ddt).
     pub penalty: std::collections::HashMap<String, u32>,

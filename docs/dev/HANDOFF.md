@@ -116,7 +116,7 @@ Ground rules follow.
 
 ## Regression baseline (must not drop)
 
-Current (2026-11-18): every set full (merge 14). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
+Current (2026-11-18): every set full (merge 15). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
 sniper tack sub beast engineer desperado dartling mortar bucc druid super ace heli spike farm mermonkey village
 paragon sky quincy moab logs maps maptowers merge` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 88, sky 39, quincy 14, moab 5,
 logs 3, dart 70, boomerang 99, paragon 12).
@@ -196,9 +196,28 @@ each latch has its own slow, so another latch on the bloon keeps it slowed (h300
 "LatchToBloon" effect id was being dropped by any latch's end); CreateProjectileOnInterval.OnEmit (@0x180ca5400)
 isBuffedByRate makes the follow's thrash interval (int)(Tower.GetTotalRateModifier x 36), GetTotalRateModifier
 (@0x180c0ef90) = the model's first weapon rate / the unmutated pet model's (`model_rate_mod`; h300 rt 390: 33
-frames); the pulled GreatWhiteEffect's thrash rate takes it too. merge 14/14. OPEN: GetTowerTarget's enableAdjacentHover (@0x180dc4800: a tier
-3+ bird hovers over the contributing handler nearest its destination segment; IsValidForHovering); the merge UI
+frames); the pulled GreatWhiteEffect's thrash rate takes it too. merge 14/14. OPEN: the merge UI
 (the upgrade panel's MergeBtnContainer, target picking) and texts (merged / power / buffed); not checked on screen.
+
+### DONE: Gyrfalcon enableAdjacentHover (GetTowerTarget; 2026-11-18)
+PORTED (VERIFIED-DECOMP): GyrfalconPattern.GetTowerTarget (@0x180dc4800): without enableAdjacentHover (game.json
+grapple `adjacent`; true on the x-x-3+ birds) the parent handler; with it, the parent, replaced by each handler in
+the parent leash's contributingHandlersByBeast["Gyrfalcon"] (a HashSet: `Game::leash_sets` keeps its entry slots and
+LIFO free list, so a merge after a removal takes the freed slot) that is strictly nearer (Vector2.DistanceSquared)
+to GetDestinationPathSegment's point; with no destination segment, the last of them. IsValidForHovering
+(@0x180dc5f40): the parent's own leash or one in that set (`hover_ok`). UpdateTargeting (@0x180dc93c0): no bloon
+and nothing hovered -> Target(GetTowerTarget); hovering over a handler no longer valid -> the same; a Tower target
+(or an idle move, whose Target is the hovered tower) re-asks GetTowerTarget each frame and switches (idle point
+dropped) when it differs. `GyrState.hov` = hoveredTower: the idle move goes round it within its range; HoverOverTower
+(@0x180dc4bd0) sets it, and with no idle point turns that handler to the bird (rotation = Vector2.Rotation(bird -
+handler)) with handlerHoverAnimationState; finding a bloon turns the hovered handler to it (handlerSendAnimationState).
+UpdateMovement lets hoveredTower go whenever it gets past its early returns (cooldown, or no target while hovering),
+snapped or not; Process drops a destroyed one; a bloon target clears the idle point (+300). Verified: merge 14/14 and
+beast 34/34 unchanged; with the distance test reversed beast_merge_003 diverges at rt 332 (the merged Golden Eagle
+then flies to the contributor), so the rule is exercised and the game kept the parent there. RECORDED
+beast_merge_003_adj (contributor at (-128.8, -30.9), nearer the destination segment (-169.1, -18.9) than the parent):
+the game's merged bird hovers over the contributor (GY hoveredTower 428, 1360 frames); MATCH first time (merge 15/15).
+Not yet recorded: a hovered contributor sold (Process drops it; IsValidForHovering) or a merge after a removal.
 
 ### DONE: map_haunted_beast_402_r60 MATCH (2026-11-17; moved to pending/maptowers, maptowers 91/91)
 Fixed, each from the recording (SimRecorder's new read-only "AA projectile targetPos.x targetPos.y arrived"

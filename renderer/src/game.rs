@@ -2172,8 +2172,10 @@ pub enum GyrTarget {
     None,
     Bloon(u64, u64),
     Seg(u8, usize),
-    Tower,
-    Point([f32; 2]),
+    /// Target(tower): flying back to that handler.
+    Tower(u64),
+    /// An idle move: Target(hoveredTower) with the point it flies to (GyrfalconPattern +300).
+    Point([f32; 2], u64),
 }
 
 /// GyrfalconPattern's state.
@@ -2181,6 +2183,9 @@ pub enum GyrTarget {
 pub struct GyrState {
     pub init: bool,
     pub hover: bool,
+    /// hoveredTower (+0xe0): the handler it hovers over (its own or a contributing one; with
+    /// `hover`).
+    pub hov: u64,
     pub target: GyrTarget,
     pub cd_start: i64,
     pub last_grapple: i64,
@@ -3645,6 +3650,9 @@ pub struct Game {
     /// id): the target's contributingHandlersByBeast and the source's
     /// beastsLostThroughContribution (BeastHandlerLeash.Contribute @0x180cfadf0).
     pub merges: Vec<(u64, String, u64)>,
+    /// Each target's contributingHandlersByBeast[beast] HashSet in its enumeration order: entry
+    /// slots (None once removed) and the free list a later Add takes first (last freed first).
+    pub leash_sets: HashMap<(u64, String), (Vec<Option<u64>>, Vec<usize>)>,
     /// Handlers given a beast back (a merge undone): their pets are made again.
     merge_respawn: Vec<u64>,
     /// Birds destroyed this frame (a merge) and what they carried: let go after the bloons move.
@@ -6057,6 +6065,7 @@ impl Game {
             ghost_cell: None,
             pending_pets: Vec::new(),
             merges: Vec::new(),
+            leash_sets: HashMap::new(),
             merge_respawn: Vec::new(),
             late_release: Vec::new(),
             late_unlatch: Vec::new(),
@@ -9612,6 +9621,7 @@ impl Game {
                 pos = [home[0], home[1] + g.y_offset];
                 st.idle = Some(pos);
                 st.hover = true;
+                st.hov = self.towers[pi].id;
                 st.cd_start = -1;
                 st.next_idle = -1;
                 // (The pet's made here, and processes from the next frame: recording beast_003, its
@@ -9620,6 +9630,11 @@ impl Game {
                 a.pos = pos;
                 a.gy = st;
                 continue;
+            }
+            // (Process: a destroyed hoveredTower is let go.)
+            if st.hover && !self.towers.iter().any(|o| o.id == st.hov) {
+                st.hover = false;
+                st.hov = 0;
             }
             held.retain(|b| self.bloons.iter().any(|x| x.id == *b));
             // UpdateGrappleDamage.
@@ -9638,15 +9653,33 @@ impl Game {
                 } else if !self.gyr_valid(&st) {
                     st.target = match self.bird_target(home, range, &alt, mode, &g, pos, st.stamp, None, &[], &[]) {
                         Some(b) => {
+                            // The hovered handler turns to the target (its rotation set to
+                            // Vector2.Rotation(target - handler)) and plays
                             // handlerSendAnimationState.
                             if st.hover {
-                                self.towers[pi].show = Some(("IdleBirdGo".into(), 0.0));
+                                if let Some(hi) = self.towers.iter().position(|o| o.id == st.hov) {
+                                    let bp = self.bloons.iter().find(|x| x.id == b.0).map_or(pos, |x| x.pos);
+                                    Self::face_point(&mut self.towers[hi], bp);
+                                    self.towers[hi].show = Some(("IdleBirdGo".into(), 0.0));
+                                }
                             }
+                            // (Process: a bloon target clears the idle point.)
+                            st.idle = None;
                             GyrTarget::Bloon(b.0, b.1)
                         }
-                        None if !st.hover => GyrTarget::Tower,
-                        None => GyrTarget::None,
+                        None if !st.hover => GyrTarget::Tower(self.bird_tower_target(t, pi, &g)),
+                        // (Still hovering over its own handler or a contributing one: stays.)
+                        None if self.hover_ok(pi, st.hov) => GyrTarget::None,
+                        None => GyrTarget::Tower(self.bird_tower_target(t, pi, &g)),
                     };
+                } else if let GyrTarget::Tower(c) | GyrTarget::Point(_, c) = st.target {
+                    // (Flying to a handler: GetTowerTarget again; another one is the new target,
+                    // the idle point dropped.)
+                    let n = self.bird_tower_target(t, pi, &g);
+                    if n != c {
+                        st.target = GyrTarget::Tower(n);
+                        st.idle = None;
+                    }
                 }
             }
             // Process: with nothing to do it plans an idle move. timeOfNextIdleMove is on
@@ -9662,13 +9695,17 @@ impl Game {
                 }
                 // The idle move: a random spot within the hovered tower's range, on the map.
                 if st.next_idle <= now_t && st.hover {
+                    // (Around the hovered handler, within its TowerModel.range.)
+                    let hi = self.towers.iter().position(|o| o.id == st.hov).unwrap_or(pi);
+                    let (hp, hr) = (self.towers[hi].pos, self.range(hi));
                     let (d1, d2) = (self.synced_double() as f32, self.synced_double() as f32);
                     let (sa, ca) = crt_sin_cos(DEG2RAD * -(d1 * 360.0));
-                    let r = d2 * range;
-                    let q = [home[0] - sa * r, home[1] - ca * r];
+                    let r = d2 * hr;
+                    let q = [hp[0] - sa * r, hp[1] - ca * r];
                     // Map.GetPointWithinMap @0xf5a0c0: Constants' world bounds.
                     let q = [q[0].clamp(-WORLD_X, WORLD_X), q[1].clamp(-WORLD_Z, WORLD_Z)];
-                    st.target = GyrTarget::Point(q);
+                    st.target = GyrTarget::Point(q, st.hov);
+                    st.idle = Some(q);
                     st.next_idle = -1;
                     idle_started = true;
                 }
@@ -9679,31 +9716,37 @@ impl Game {
             let dest = match st.target {
                 GyrTarget::Bloon(b, _) => self.bloons.iter().find(|x| x.id == b).map_or(home, |x| Self::gyr_at(x, st.stamp)),
                 GyrTarget::Seg(p, k) => self.track_segs[p as usize][k],
-                GyrTarget::Point(q) => q,
-                GyrTarget::Tower | GyrTarget::None => if st.hover { st.idle.unwrap_or(home) } else { home },
+                GyrTarget::Point(q, _) => q,
+                // (Target(tower): its position, or the idle point while one is set.)
+                GyrTarget::Tower(c) => st.idle.unwrap_or_else(|| self.towers.iter().find(|o| o.id == c).map_or(home, |o| o.pos)),
+                GyrTarget::None => if st.hover { st.idle.unwrap_or(home) } else { home },
             };
+            let hov_pos = self.towers.iter().find(|o| o.id == st.hov).map_or(home, |o| o.pos);
             let in_cooldown = st.cd_start >= 0 && rt < st.cd_start + cd;
             st.last_pos = pos;
             // (UpdateMovement returns while cooling down: it waits where it let go; invalid target
             // and hovering, it stays too.)
-            let mut stay = in_cooldown || (!self.gyr_valid(&st) && st.hover);
-            if !matches!(st.target, GyrTarget::Point(_)) && (st.hover || st.cd_start >= 0) && (dest[0] - pos[0]).hypot(dest[1] - pos[1]) <= snap {
+            let early = in_cooldown || (!self.gyr_valid(&st) && st.hover);
+            let mut stay = early;
+            if !matches!(st.target, GyrTarget::Point(..)) && (st.hover || st.cd_start >= 0) && (dest[0] - pos[0]).hypot(dest[1] - pos[1]) <= snap {
                 stay = true;
             }
             // (The idle move's Target is the hovered tower: on the frame it starts, still hovering,
             // UpdateMovement's check is against the tower's position, so within snapDistance of it
             // the bird waits a frame; recording map_winterpark_beast_204_r40 rt 820, 4.16 from the
             // handler.)
-            if idle_started && (home[0] - pos[0]).hypot(home[1] - pos[1]) <= snap {
+            if idle_started && (hov_pos[0] - pos[0]).hypot(hov_pos[1] - pos[1]) <= snap {
                 stay = true;
             }
             if st.cd_start >= 0 && !in_cooldown {
                 st.cd_start = -1;
             }
+            // (Past UpdateMovement's early returns hoveredTower is let go, snapped or not; an
+            // idle move keeps it here, as its Target.)
+            if !early && !matches!(st.target, GyrTarget::Point(..)) {
+                st.hover = false;
+            }
             if !stay {
-                if !matches!(st.target, GyrTarget::Point(_)) {
-                    st.hover = false;
-                }
                 // ApplyMovement: maxSpeed, x bloonTargetSpeedMultiplier flying empty at a bloon,
                 // x moabSpeedScale carrying a MOAB-class bloon; direction, speed x dt.
                 let mut speed = g.speed;
@@ -9723,14 +9766,22 @@ impl Game {
             let close = (dest[0] - pos[0]).powi(2) + (dest[1] - pos[1]).powi(2) <= snap * snap;
             if close && !in_cooldown {
                 match st.target {
-                    GyrTarget::Tower => {
+                    GyrTarget::Tower(c) => {
+                        // HoverOverTower (VERIFIED-DECOMP @0x180dc4bd0): with no idle point the
+                        // handler turns to the bird and plays handlerHoverAnimationState.
                         st.hover = true;
+                        st.hov = c;
                         st.target = GyrTarget::None;
-                        // handlerHoverAnimationState.
-                        self.towers[pi].show = Some(("IdleBirdCome".into(), 0.0));
+                        if st.idle.is_none() {
+                            if let Some(ci) = self.towers.iter().position(|o| o.id == c) {
+                                Self::face_point(&mut self.towers[ci], pos);
+                                self.towers[ci].show = Some(("IdleBirdCome".into(), 0.0));
+                            }
+                        }
                     }
-                    GyrTarget::Point(q) => {
+                    GyrTarget::Point(q, c) => {
                         st.hover = true;
+                        st.hov = c;
                         st.idle = Some(q);
                         st.target = GyrTarget::None;
                     }
@@ -9740,6 +9791,7 @@ impl Game {
                     }
                     GyrTarget::None if !st.hover => {
                         st.hover = true;
+                        st.hov = self.towers[pi].id;
                         st.idle = None;
                     }
                     GyrTarget::Bloon(b, _) if self.bloons.iter().any(|x| x.id == b) => {
@@ -9856,6 +9908,7 @@ impl Game {
     fn gyr_valid(&self, st: &GyrState) -> bool {
         match st.target {
             GyrTarget::Bloon(b, _) => self.bloons.iter().any(|x| x.id == b),
+            GyrTarget::Tower(c) | GyrTarget::Point(_, c) => self.towers.iter().any(|o| o.id == c),
             GyrTarget::None => false,
             _ => true,
         }
@@ -9934,6 +9987,47 @@ impl Game {
 
     /// GetDestinationPathSegment (VERIFIED-DECOMP @0x180dc3fe0): of Attack.GetPathSegmentsInRange,
     /// the largest distanceUntilLeak, strictly.
+    /// GyrfalconPattern.GetTowerTarget (VERIFIED-DECOMP @0x180dc4800): the parent handler, or
+    /// with enableAdjacentHover each handler in its contributingHandlersByBeast["Gyrfalcon"]
+    /// (HashSet order) that is nearer (Vector2.DistanceSquared, strictly) to
+    /// GetDestinationPathSegment's point; with no destination segment, the last of them.
+    fn bird_tower_target(&self, t: usize, pi: usize, g: &crate::data::Grapple) -> u64 {
+        let pid = self.towers[pi].id;
+        if !g.adjacent {
+            return pid;
+        }
+        let Some((slots, _)) = self.leash_sets.get(&(pid, "Gyrfalcon".to_string())) else { return pid };
+        let seg = self.bird_dest_segment(t, pi).map(|(p, k)| self.track_segs[p as usize][k]);
+        let d2 = |a: [f32; 2], q: [f32; 2]| {
+            let (dx, dy) = (a[0] - q[0], a[1] - q[1]);
+            dx * dx + dy * dy
+        };
+        let mut best = pi;
+        for c in slots.iter().flatten() {
+            let Some(ci) = self.towers.iter().position(|o| o.id == *c) else { continue };
+            match seg {
+                None => best = ci,
+                Some(q) if d2(self.towers[ci].pos, q) < d2(self.towers[best].pos, q) => best = ci,
+                _ => {}
+            }
+        }
+        self.towers[best].id
+    }
+
+    /// GyrfalconPattern.IsValidForHovering (VERIFIED-DECOMP @0x180dc5f40): the hovered tower's
+    /// leash is the parent's own, or in its contributingHandlersByBeast["Gyrfalcon"].
+    fn hover_ok(&self, pi: usize, hov: u64) -> bool {
+        let pid = self.towers[pi].id;
+        hov == pid || self.leash_sets.get(&(pid, "Gyrfalcon".to_string())).is_some_and(|(s, _)| s.contains(&Some(hov)))
+    }
+
+    /// A tower's rotation set straight to Vector2.Rotation(point - tower) (the game's frame).
+    fn face_point(tw: &mut Tower, p: [f32; 2]) {
+        let want = RAD2DEG * crt_atan2(p[0] - tw.pos[0], -(p[1] - tw.pos[1]));
+        tw.game_rot = Some(want);
+        tw.angle = (want - 90.0) * DEG2RAD;
+    }
+
     fn bird_dest_segment(&self, t: usize, pi: usize) -> Option<(u8, usize)> {
         let _ = t;
         let range = self.range(pi);
@@ -11569,6 +11663,14 @@ impl Game {
             return false;
         }
         self.merges.push((did, beast.clone(), sid));
+        {
+            // (HashSet<BeastHandlerLeash>.Add: a freed entry slot first, else the next one.)
+            let (slots, free) = self.leash_sets.entry((did, beast.clone())).or_default();
+            match free.pop() {
+                Some(i) => slots[i] = Some(sid),
+                None => slots.push(Some(sid)),
+            }
+        }
         let (sp, dp) = (self.towers[src].pos, self.towers[dst].pos);
         {
             let tw = &mut self.towers[src];
@@ -11587,6 +11689,15 @@ impl Game {
     fn unmerge_handler(&mut self, id: u64) {
         let back: Vec<u64> = self.merges.iter().filter(|m| m.0 == id).map(|m| m.2).collect();
         self.merges.retain(|m| m.0 != id && m.2 != id);
+        self.leash_sets.retain(|k, _| k.0 != id);
+        for (slots, free) in self.leash_sets.values_mut() {
+            for (i, x) in slots.iter_mut().enumerate() {
+                if *x == Some(id) {
+                    *x = None;
+                    free.push(i);
+                }
+            }
+        }
         for src in back {
             if !self.merge_respawn.contains(&src) {
                 self.merge_respawn.push(src);
