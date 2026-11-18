@@ -121,7 +121,7 @@ pub struct Mode {
     pub speed_add: f32,
     pub start_round: usize,
     pub end_round: usize,
-    /// BonusCashPerRoundModModel (baseCash, roundMultiple); none in CHIMPS.
+    /// BonusCashPerRoundModModel (baseCash, roundMultiple); CHIMPS keeps Hard's.
     pub bonus: Option<[f64; 2]>,
     #[serde(default)]
     pub locked: Vec<String>,
@@ -688,6 +688,18 @@ pub struct Tier {
     /// BeastHandlerLeashModel.rotateToLeashedTower: a pet move turns the handler to the pet.
     #[serde(default)]
     pub leash_rotate: bool,
+    /// BeastHandlerLeashModel.validMergeTargetObjectPath (+0x88): the marker on each tower a
+    /// merge may go into (BeastHandlerMergeInput.EnterInputMode @0x180a3e9c0).
+    #[serde(default)]
+    pub merge_fx: Option<String>,
+    /// BeastHandlerLeashModel.mergedTextDisplayPrefab / powerTextDisplayPrefab (+0x78 / +0x80)
+    /// and mergeSound (+0xa8): what Contribute shows and plays.
+    #[serde(default)]
+    pub merged_fx: Option<String>,
+    #[serde(default)]
+    pub power_fx: Option<String>,
+    #[serde(default)]
+    pub merge_sound: Vec<String>,
     /// BeastHandlerLeashModel's piranhaPetModel / microraptorPetModel / gyrfalconPetModel by
     /// beast (GetMatchingPetModel).
     #[serde(default)]

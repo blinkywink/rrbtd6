@@ -57,6 +57,10 @@ public class TowerSpec
     /// `frame`, this handler's leash slot `slot` beast goes into handler `into` (both counted among
     /// the placed towers that aren't sub-towers, in creation order).
     public List<MergeSpec> merges { get; set; } = new();
+    /// Sold between recorded frames: after frame `sell_frame` (UnityToSimulation.SellTower, the
+    /// sell button's call), counted among the placed non-sub towers in creation order at that
+    /// time; -1 never.
+    public int sell_frame { get; set; } = -1;
 }
 
 public class UpgradeSpec
@@ -437,6 +441,7 @@ public class Recorder : MelonMod
                     foreach (var u in Sc.towers[k].upgrades) Out.WriteLine($"# upgrade {k} {u.path} {u.frame}");
                     foreach (var m in Sc.towers[k].merges) Out.WriteLine($"# merge {k} {m.into} {m.slot} {m.frame}");
                     if (Sc.towers[k].place_frame >= 0) Out.WriteLine($"# place {k} {Sc.towers[k].place_frame}");
+                    if (Sc.towers[k].sell_frame >= 0) Out.WriteLine($"# sell {k} {Sc.towers[k].sell_frame}");
                 }
                 if (Sc.fx || Sc.shots.Count > 0)
                 {
@@ -1510,6 +1515,30 @@ static class SimulatePatch
                         Recorder.Out?.WriteLine($"# merged {kk} {mm.into} {mm.slot} {Recorder.Recorded} {ok}");
                     });
                 }
+        // Sells: the sell button's UnityToSimulation.SellTower (@0x181591b80 -> SellTower_Impl).
+        for (int k = 0; k < Recorder.Sc.towers.Count; k++)
+            if (Recorder.Sc.towers[k].sell_frame == Recorder.Recorded)
+            {
+                int kk = k;
+                Part("sell", () =>
+                {
+                    var list = __instance.factory.GetFactory<Tower>().up.list;
+                    var mains = new List<Tower>();
+                    for (int j = 0; j < list.Count; j++)
+                    {
+                        var tw = list[j];
+                        if (tw == null || tw.IsDestroyed || tw.towerModel.isSubTower) continue;
+                        mains.Add(tw);
+                    }
+                    if (kk >= mains.Count) { MelonLogger.Msg($"SimRecorder sell {kk}: no tower"); return; }
+                    var bridge = InGame.instance.bridge;
+                    var name = mains[kk].towerModel.name;
+                    double before = __instance.GetCash(-1);
+                    bridge.SellTower(bridge.GetInputId(), mains[kk].Id);
+                    MelonLogger.Msg($"SimRecorder sold tower {kk} {name} at frame {Recorder.Recorded}: cash {before} -> {__instance.GetCash(-1)}");
+                    Recorder.Out?.WriteLine($"# sold {kk} {name} {Recorder.Recorded} {mains[kk].IsDestroyed}");
+                });
+            }
         var sim = __instance;
         long t = -1, rt = -1; int round = -1; double cash = -1;
         Part("time", () => t = sim.time.elapsed);

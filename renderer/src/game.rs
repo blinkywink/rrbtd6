@@ -3159,6 +3159,8 @@ pub struct Buff {
     /// DamageModels lose the Lead immunity bit (immuneBloonProperties & ~1).
     pub acid: bool,
     pub cash_mult: f32,
+    /// CashIncreaseModel.increase (Monkey Town's), added to each pop's cash.
+    pub cash_add: f32,
     /// MonkeyCityIncomeSupportModel: the tower's cash generation x this.
     pub income_mult: f32,
     /// AbilityCooldownScaleSupportModel: its ability cooldowns run this much faster.
@@ -3201,6 +3203,7 @@ impl Default for Buff {
             acid: false,
             cash_mult: 1.0,
             income_mult: 1.0,
+            cash_add: 0.0,
             ability_cd_mult: 1.0,
             unfilter: false,
             damage_add: 0.0,
@@ -3492,7 +3495,23 @@ impl Buff {
 /// 0x18054EEC0: x / 5 rounded half to even, times 5, truncated; all in f32).
 pub fn game_cost(cost: f64, mult: f32, d: f64) -> f64 {
     let c = cost as f32;
-    let scaled = c + (mult - 1.0) * c;
+    round_cost(c + (mult - 1.0) * c, d)
+}
+
+/// What an upgrade (or a Paragon's UpgradeModel) of base cost `cost` costs. UpgradeModel.cost is
+/// an int: GlobalCostModModel.Mutate (VERIFIED-DECOMP @0x181121130) adds
+/// (int)((mult - 1) x cost) in f32 (truncated) to it, where a TowerModel's float cost keeps the
+/// fraction; TowerManager.GetTowerUpgradeCost (VERIFIED-DECOMP @0x180c2acc0) then rounds
+/// (1 - discounts) x that int (recording village_002_std: Hard Long Range Darts 90 -> 97 -> 80
+/// with 15% off, not 85 from 97.2).
+pub fn upgrade_cost(cost: f64, mult: f32, d: f64) -> f64 {
+    let c = cost as i32;
+    round_cost((c + ((mult - 1.0) * c as f32) as i32) as f32, d)
+}
+
+/// The rounding of GetTowerCost / GetTowerUpgradeCost: (1 - d) x `scaled` to a multiple of 5
+/// (helper @0x18054EEC0).
+pub fn round_cost(scaled: f32, d: f64) -> f64 {
     let q = (1.0 - d as f32) * scaled / 5.0;
     let (t, fr) = ((q as f64).trunc(), (q as f64).fract());
     let r = if fr == 0.5 || fr == -0.5 {
@@ -3743,6 +3762,9 @@ pub struct Game {
     proj_cursor: usize,
     /// The damage being dealt: (distributeToChildren, overrideDistributeBlocker).
     distribute: (bool, bool),
+    /// The damaging tower's Monkey Town (CashIncrease): (multiplier, increase) for the pops of
+    /// the damage being dealt (`hit_cash_for`).
+    hit_cash: (f64, f64),
     /// DistributeToChildrenSet on the bloon this hit is on: its own layer passes overkill on.
     dist_set: bool,
     /// The step's phase (process-list order of things made in it): 0 collisions, 1 towers,
@@ -3922,8 +3944,8 @@ pub struct Game {
     /// Towers placed this frame: (position, placement effect prefab, scale).
     pub place_fx: Vec<([f32; 2], String, f32)>,
     /// Simulation.CreateTextEffect this frame (display only): position, effect prefab, its text,
-    /// lifespan in seconds (Lead to Gold's "$50").
-    pub text_fx: Vec<([f32; 2], String, String, f32)>,
+    /// lifespan in seconds (Lead to Gold's "$50"), height (an air unit's).
+    pub text_fx: Vec<([f32; 2], String, String, f32, f32)>,
     /// The next `Effect::seq`.
     pub effect_seq: u64,
     /// The round Monkey City's free Dart Monkey was taken.
@@ -5134,7 +5156,9 @@ macro_rules! collide_pass {
                 $s.dist_set = $s.projectiles[$p].spec.distribute_set.as_ref().is_some_and(|tags| tags.is_empty() || $s.defs[$s.bloons[i].kind].tags.iter().any(|t| tags.contains(t)));
                 // (A galvanized bloon, before the hit: GalvanizedBehavior.OnBloonDamaged below.)
                 let galv_pre = { let b = &$s.bloons[i]; (b.galv.0 > 0 && b.galv.1 > $s.sim_elapsed).then(|| b.galv_chain.clone()).flatten().map(|c| (c, b.pos, b.id)) };
+                $s.hit_cash = $s.hit_cash_for($s.projectiles[$p].owner);
                 let n = $s.damage(i, dmg.round() as i32, &mut $kids);
+                $s.hit_cash = (1.0, 0.0);
                 $s.distribute = (true, false);
                 $s.dist_set = false;
                 // (Chilled's slow goes when one hit pops 2 layers or more at once, not after two
@@ -5364,7 +5388,7 @@ macro_rules! collide_pass {
                     $s.earn(v);
                     // GiveCashOnPop.PreDegrade: its text effect, "${0}" of the cash.
                     if !fx.is_empty() {
-                        $s.text_fx.push((bp, fx, format!("${v}"), life));
+                        $s.text_fx.push((bp, fx, format!("${v}"), life, 0.0));
                     }
                 }
                 let owner = $s.projectiles[$p].owner;
@@ -5385,12 +5409,7 @@ macro_rules! collide_pass {
                     $s.towers[ti].damage += self_tally_dealt;
                     $s.stats.pops += n;
                     $s.stats.damage += self_tally_dealt;
-                    // Monkey Town's CashIncrease (OnBloonDamaged @0x180d05d80) puts a BloonWorthMutator
-                    // (@0x180d03a30: DistributeCashModel multiplier + (m - 1)) on a bloon its tower
-                    // degraded; it is not dontRemoveOnBloonDegrade, so it is gone before the bloon's
-                    // next DistributeCash.PostDegrade reads the model: no pop pays more (recording
-                    // village_003, F cash: Dart 816 pops Black 752 at rt 2804, its next pop at 2989
-                    // by Dart 923 pays $1; every pop in the run pays $1, as without the Village).
+                    // (Monkey Town's pop cash: `hit_cash_for`, around the damage.)
                 }
             }
             // WindModel (Distraction): Wind.Collide runs after the DamageModel (recording
@@ -6203,6 +6222,7 @@ impl Game {
             pop_in_process: false,
             proj_cursor: usize::MAX,
             distribute: (true, false),
+            hit_cash: (1.0, 0.0),
             dist_set: false,
             next_uid: 0,
             active_rbe: 0.0,
@@ -10889,7 +10909,9 @@ impl Game {
             let tags = &self.defs[self.bloons[i].kind].tags;
             let extra = if tags.iter().any(|t| t == "Moabs") { moab } else { 0.0 } + if tags.iter().any(|t| t == "Grow") { g.regrow_add } else { 0.0 };
             let tally0 = self.damage_tally;
+            self.hit_cash = self.hit_cash_for(owner);
             let n = self.damage(i, (dmg + extra).round() as i32, &mut kids);
+            self.hit_cash = (1.0, 0.0);
             let self_tally_dealt = self.damage_tally - tally0;
             if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
                 tw.pops += n;
@@ -11640,6 +11662,37 @@ impl Game {
         (0..self.towers.len()).filter(|&d| self.merge_ok(src, slot, d)).collect()
     }
 
+    /// The leash slot of upgrade path `path`'s beast (BeastHandlerLeashModel.beastTowerTypeByPath,
+    /// .cctor @0x1811f40b0: Piranha, Microraptor, Gyrfalcon; BeastHandlerToSimulation.GetBeastIndex),
+    /// for a Beast Handler.
+    pub fn merge_slot(&self, t: usize, path: usize) -> Option<usize> {
+        let beast = ["Piranha", "Microraptor", "Gyrfalcon"].get(path)?;
+        if self.towers.get(t)?.sub.is_some() || self.tower_defs.get(self.towers[t].def)?.0 != "BeastHandler" {
+            return None;
+        }
+        self.tier(t)?.pets.iter().position(|p| p.id == *beast)
+    }
+
+    /// BeastHandlerToSimulation.CanBeastHandlerMergeBeast (VERIFIED-DECOMP @0x18157dc50), the
+    /// path's merge button (UpgradeObject.UpdateSpecialButtons @0x180b9e6d0): a Beast Handler
+    /// whose leash has that beast alive (GetMatchingBeast), its pet model's tier at most 4
+    /// (BeastHandlerPetModel.tier), and some tower IsTowerValidForMerge accepts
+    /// (DoesValidTowerExistForMerge @0x180cfb440).
+    pub fn can_merge_button(&self, t: usize, path: usize) -> bool {
+        let Some(slot) = self.merge_slot(t, path) else { return false };
+        let Some(pet) = self.tier(t).and_then(|x| x.pets.get(slot)) else { return false };
+        if self.matching_pet(t, &pet.id).is_none() || pet.power.as_ref().is_none_or(|p| p.tier > 4) {
+            return false;
+        }
+        (0..self.towers.len()).any(|d| self.merge_ok(t, slot, d))
+    }
+
+    /// BeastHandlerLeashModel.validMergeTargetObjectPath: the marker BeastHandlerMergeInput puts
+    /// on each valid target.
+    pub fn merge_marker(&self, t: usize) -> Option<String> {
+        self.tier(t)?.merge_fx.clone()
+    }
+
     /// BeastHandlerLeash.ApplyCustomInputData, Merge (VERIFIED-DECOMP @0x180cfa7d0):
     /// Contribute(the target's leash, this one, towerModel / towerModelSecond); Contribute
     /// (VERIFIED-DECOMP @0x180cfadf0): both handlers have that beast alive, `src` isn't
@@ -11679,6 +11732,29 @@ impl Game {
             let new = cur + (want - cur) * DEG2RAD * RAD2DEG;
             tw.game_rot = Some(new);
             tw.angle = (new - 90.0) * DEG2RAD;
+        }
+        // Then (Contribute @0x180cfadf0) the leash model's mergeSound (AudioManagerSim.PlaySound,
+        // id "MergeSound"), and over the target's matching pet (a Gyrfalcon: its AirUnit's
+        // position) Simulation.CreateTextEffect(mergedTextDisplayPrefab, 2 s, "Merged") and
+        // (powerTextDisplayPrefab, 2 s, min(the pet model's maxPower, GetTotalPowerForBeast)
+        // formatted "N0").
+        let tier = self.tier(dst).cloned();
+        if let Some(tr) = &tier {
+            self.sound(&tr.merge_sound.clone(), None);
+        }
+        if let (Some(tr), Some(pi)) = (tier, self.matching_pet(dst, &beast)) {
+            let (at, z) = match self.towers[pi].air.as_ref().filter(|_| beast == "Gyrfalcon") {
+                Some(a) => (a.pos, a.height),
+                None => (self.towers[pi].pos, 0.0),
+            };
+            if let Some(fx) = &tr.merged_fx {
+                self.text_fx.push((at, fx.clone(), "Merged".into(), 2.0, z));
+            }
+            let max = self.towers[pi].sub.as_ref().and_then(|s| s.spec.power.as_ref()).map_or(i32::MAX, |p| p.max);
+            let power = self.beast_power(did, &beast).min(max);
+            if let Some(fx) = &tr.power_fx {
+                self.text_fx.push((at, fx.clone(), crate::tower_xp::format_n0(power as f64), 2.0, z));
+            }
         }
         true
     }
@@ -13258,7 +13334,7 @@ impl Game {
         }
         if path < 3 && self.towers[t].tiers[path] == 5 && self.paragon_ready(t) {
             let p = self.tower_tiers[self.towers[t].def].as_ref()?.paragon.as_ref()?;
-            return Some((p.name.clone(), game_cost(p.cost, self.cost_mult, 0.0)));
+            return Some((p.name.clone(), upgrade_cost(p.cost, self.cost_mult, 0.0)));
         }
         let tw = &self.towers[t];
         if tw.sub.is_some() {
@@ -13321,9 +13397,11 @@ impl Game {
                 return None;
             }
             let name = tt.upgrades.iter().find(|u| u.path == path && u.tier == cur)?.name.clone();
-            return Some((name, game_cost(n as f64 * mc.per_farm as f64, self.cost_mult, d)));
+            // (Its cost replaces the model's after the difficulty scaling: no cost multiplier;
+            // recording village_005_std, one farm on Hard: 5000.)
+            return Some((name, round_cost((n as f64 * mc.per_farm as f64) as f32, d)));
         }
-        tt.upgrades.iter().find(|u| u.path == path && u.tier == cur).map(|u| (u.name.clone(), game_cost(u.cost, self.cost_mult, d)))
+        tt.upgrades.iter().find(|u| u.path == path && u.tier == cur).map(|u| (u.name.clone(), upgrade_cost(u.cost, self.cost_mult, d)))
     }
 
     /// A Paragon's display level, 1-based (research: ParagonTower.GetDisplayDegreeIndex):
@@ -13380,7 +13458,7 @@ impl Game {
         }
         let def = self.towers[t].def;
         let pdef = self.tower_tiers[def].as_ref().and_then(|x| x.paragon.clone())?;
-        let cost = game_cost(pdef.cost, self.cost_mult, 0.0);
+        let cost = upgrade_cost(pdef.cost, self.cost_mult, 0.0);
         let all: Vec<usize> = (0..self.towers.len())
             .filter(|&o| self.towers[o].def == def && self.towers[o].sub.is_none() && self.towers[o].paragon.is_none())
             .collect();
@@ -13508,7 +13586,7 @@ impl Game {
         {
             let def = self.towers[t].def;
             let Some(pdef) = self.tower_tiers[def].as_ref().and_then(|x| x.paragon.clone()) else { return false };
-            let cost = game_cost(pdef.cost, self.cost_mult, 0.0);
+            let cost = upgrade_cost(pdef.cost, self.cost_mult, 0.0);
             let extra = extra.max(0.0);
             if self.cash < cost + extra || self.paragon_quote(t).is_none() {
                 return false;
@@ -14483,7 +14561,10 @@ impl Game {
                         "ricochet" => b.ricochet = sp.retarget.clone(),
                         "camo" => b.camo = true,
                         "immune" => b.immune = Some(b.immune.unwrap_or(u32::MAX) & sp.add as u32),
-                        "cash" => b.cash_mult *= sp.mult.powi(n as i32),
+                        "cash" => {
+                            b.cash_mult *= sp.mult.powi(n as i32);
+                            b.cash_add += sp.add * k;
+                        }
                         "income" => b.income_mult *= sp.mult.powi(n as i32),
                         "ability_cd" => b.ability_cd_mult *= sp.mult.powi(n as i32),
                         "unfilter" => b.unfilter = true,
@@ -14730,6 +14811,20 @@ impl Game {
                 (k, v)
             })
             .collect()
+    }
+
+    /// Monkey Town on the damage tower `owner` deals: CashIncrease.OnBloonDamaged (VERIFIED-DECOMP
+    /// @0x180d05d80) puts a BloonWorthMutator on the bloon (Mutate @0x180d03a30: the
+    /// DistributeCashModel's multiplier + (m - 1), additive + increase), which
+    /// DistributeCash.PostDegrade (@0x180fea0e0) applies to the pop's cash (recording
+    /// village_003_std, Standard Hard: every pop of the Dart beside a 0-0-3 pays $1.5).
+    /// ChimpsModModel.Mutate (VERIFIED-DECOMP @0x1811189b0) sets every CashIncreaseModel's
+    /// increase to 0 and multiplier to 1: none in CHIMPS (recording village_003, $1 a pop).
+    fn hit_cash_for(&self, owner: u64) -> (f64, f64) {
+        if self.mode_name == "CHIMPS" {
+            return (1.0, 0.0);
+        }
+        self.towers.iter().position(|t| t.id == owner).and_then(|ti| self.buffs.get(ti)).map_or((1.0, 0.0), |b| (b.cash_mult as f64, b.cash_add as f64))
     }
 
     pub fn tower_at(&self, p: [f32; 2]) -> Option<usize> {
@@ -14996,6 +15091,8 @@ impl Game {
         // Mark / Trojan: pop cash x the mark, + worth per layer; Strip: no children.
         // DistributeCashModel: cash + additionalCash for the layer (a Super Ceramic's 86).
         let mut pop_cash = 1.0f64 + self.extra_cash[kind];
+        // (Monkey Town: the damage's BloonWorthMutator, `hit_cash_for`.)
+        pop_cash = pop_cash * self.hit_cash.0 + self.hit_cash.1;
         let mut strip = false;
         for e in &b.effects {
             match e.kind {
@@ -15570,7 +15667,9 @@ impl Game {
             }
             let (tally0, saved) = (self.damage_tally, self.distribute);
             self.distribute = distribute;
+            self.hit_cash = self.hit_cash_for(owner);
             let n = self.damage(j, damage.round() as i32, out_children);
+            self.hit_cash = (1.0, 0.0);
             self.distribute = saved;
             let dealt = self.damage_tally - tally0;
             if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
@@ -24392,7 +24491,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             let dmg = dot_damage(damage, &mods, &self.defs[self.bloons[i].kind].tags);
             let tally0 = self.damage_tally;
             self.distribute = distribute;
+            self.hit_cash = self.hit_cash_for(owner);
             let n = self.damage(i, dmg.round() as i32, &mut kids);
+            self.hit_cash = (1.0, 0.0);
             self.distribute = (true, false);
             let dealt = self.damage_tally - tally0;
             if dealt > 0 {
@@ -24755,7 +24856,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             let tally0 = self.damage_tally;
             self.pop_after_move = true;
             self.distribute = distribute;
+            self.hit_cash = self.hit_cash_for(owner);
             let n = self.damage(i, damage.round() as i32, &mut kids);
+            self.hit_cash = (1.0, 0.0);
             (self.pop_after_move, self.distribute) = (false, (true, false));
             if self.bloons.iter().find(|b| b.id == id).is_some_and(|b| b.kind != kind0) || !self.bloons.iter().any(|b| b.id == id) {
                 degraded.push(id);
@@ -25233,7 +25336,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 }
             }
             self.expire_subs(true);
-            // BonusCashPerRoundModModel: baseCash + roundMultiple x round (none in CHIMPS).
+            // BonusCashPerRoundModModel: baseCash + roundMultiple x round (CHIMPS too).
             if let Some([base, per]) = self.round_bonus {
                 self.earn(base + per * self.round as f64);
             }
@@ -25952,6 +26055,8 @@ mod tests {
         let mut upgrades: Vec<(usize, usize, usize)> = Vec::new();
         // SimRecorder's `# merge src into slot frame`: a Beast Handler merge after that frame.
         let mut merges_in: Vec<(usize, usize, usize, usize)> = Vec::new();
+        // SimRecorder's `# sell k frame`: the k-th placed non-sub tower sold after that frame.
+        let mut sells_in: Vec<(usize, usize)> = Vec::new();
         // SimRecorder's `# place k frame`: tower k placed between recorded frames frame and
         // frame + 1 (InputManager.CreateTowerAt, as at the start) instead of before the first.
         let mut late: Vec<(usize, usize)> = Vec::new();
@@ -26005,6 +26110,7 @@ mod tests {
                 Some("#") if f.get(1) == Some(&"flip") => flips.push(f[2].parse().unwrap()),
                 Some("#") if f.get(1) == Some(&"upgrade") => upgrades.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap())),
                 Some("#") if f.get(1) == Some(&"merge") => merges_in.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap(), f[5].parse().unwrap())),
+                Some("#") if f.get(1) == Some(&"sell") => sells_in.push((f[2].parse().unwrap(), f[3].parse().unwrap())),
                 Some("#") if f.get(1) == Some(&"place") => late.push((f[2].parse().unwrap(), f[3].parse().unwrap())),
                 Some("F") => {
                     if first_time.is_none() {
@@ -26204,7 +26310,9 @@ mod tests {
                     g.cash = 1e12;
                     // Path 3 is the paragon's upgrade (its UpgradeModel.path; Tower.GetUpgrade).
                     let ok = if path == 3 { g.buy_paragon(t, 0.0) } else { g.upgrade(t, path) };
-                    g.cash = cash;
+                    // What it cost comes off the clone's cash as off the game's (the F lines'
+                    // cash: recording village_002_std's discounted Dart upgrades).
+                    g.cash = cash - (1e12 - g.cash);
                     if verbose {
                         eprintln!("    upgrade tower {k} path {path} at frame {fi}: {ok}, tiers {:?}, paragon {:?}", g.towers[t].tiers, g.towers[t].paragon.as_ref().map(|p| p.0));
                     }
@@ -26219,6 +26327,22 @@ mod tests {
                     };
                     if verbose {
                         eprintln!("    merge tower {k} slot {slot} into {into} at frame {fi}: {ok}");
+                    }
+                }
+            }
+            for &(k, at) in &sells_in {
+                if at == fi {
+                    let t = g.towers.iter().enumerate().filter(|(_, t)| t.sub.is_none()).nth(k).map(|(i, _)| i);
+                    // (UnityToSimulation.SellTower -> TowerManager.SellTower @0x180c2d0f0 has no
+                    // CHIMPS test: DisableSellTowerModModel only clears GameModel.towerSellEnabled,
+                    // which hides the sell button; recording beast_merge_003_sold sells in CHIMPS.)
+                    if let Some(t) = t {
+                        let ns = std::mem::replace(&mut g.no_sell, false);
+                        g.sell(t);
+                        g.no_sell = ns;
+                    }
+                    if verbose {
+                        eprintln!("    sell tower {k} at frame {fi}: {}", t.is_some());
                     }
                 }
             }
@@ -26997,7 +27121,7 @@ mod beast_tests {
         }
         assert_eq!(farms, 2);
         let (_, cost) = g.next_upgrade(t, 2).expect("two farms in range");
-        assert_eq!(cost, game_cost(10000.0, g.cost_mult, g.discount(g.towers[t].def, pos, Some(t), Some(2), 5, &g.tower_tiers[g.towers[t].def].as_ref().unwrap().upgrades.iter().find(|u| u.path == 2 && u.tier == 4).unwrap().name)));
+        assert_eq!(cost, round_cost(10000.0, g.discount(g.towers[t].def, pos, Some(t), Some(2), 5, &g.tower_tiers[g.towers[t].def].as_ref().unwrap().upgrades.iter().find(|u| u.path == 2 && u.tier == 4).unwrap().name)));
         let worth: f64 = g.towers.iter().filter(|o| o.def == farm).map(|o| o.invested as f32 as i32 as f64).sum();
         let id = g.towers[t].id;
         assert!(g.upgrade(t, 2));

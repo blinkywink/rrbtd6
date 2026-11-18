@@ -2499,6 +2499,8 @@ def main():
         # spawned as permanent sub-towers inside the handler's range (HYPOTHESIS P-PET).
         pets = []
         leash_rotate = False
+        merge_fx = merged_fx = power_fx = None
+        merge_sound = []
         leash_power = {}
         paragon_towers = []
         for b in items(tobj["f"]["behaviors"]):
@@ -2529,6 +2531,13 @@ def main():
             if b and b["type"] == "BeastHandlerLeashModel":
                 # rotateToLeashedTower (+0x4c): RotateToLeashedTower turns the handler to a moved pet.
                 leash_rotate = bool(b["f"].get("rotateToLeashedTower"))
+                # validMergeTargetObjectPath (+0x88): the merge input's marker on valid targets.
+                merge_fx = prefab_name(b["f"].get("validMergeTargetObjectPath"))
+                # mergedTextDisplayPrefab / powerTextDisplayPrefab / mergeSound: Contribute's texts
+                # and sound.
+                merged_fx = prefab_name(b["f"].get("mergedTextDisplayPrefab"))
+                power_fx = prefab_name(b["f"].get("powerTextDisplayPrefab"))
+                merge_sound = sounds(b, ["mergeSound"])
                 # piranhaPetModel / microraptorPetModel / gyrfalconPetModel (+0x90 / 0x98 / 0xa0):
                 # GetMatchingPetModel by beast (merges: GetTotalPowerForBeast, the contributor cap).
                 for beast, key in (("Piranha", "piranhaPetModel"), ("Microraptor", "microraptorPetModel"), ("Gyrfalcon", "gyrfalconPetModel")):
@@ -2732,7 +2741,7 @@ def main():
                 "range_links": [[prefab_name(b["f"].get("displayPath")), b["f"].get("displayRadius", 0.0)]
                                 for b in items(f["behaviors"]) if b and b["type"] == "LinkDisplayScaleToTowerRangeModel"
                                 and prefab_name(b["f"].get("displayPath")) and b["f"].get("displayRadius")],
-                "attacks": attacks, "pets": pets, "leash_rotate": leash_rotate, "leash_power": leash_power, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
+                "attacks": attacks, "pets": pets, "leash_rotate": leash_rotate, "merge_fx": merge_fx, "merged_fx": merged_fx, "power_fx": power_fx, "merge_sound": merge_sound, "leash_power": leash_power, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
                 "round_start_rate": round_start_rate, "vigilante": vigilante, "bank": bank, "supports": supports,
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
                 # SpiritOfTheForestModel (Druid x-x-4+): vines along the track; each zone's
@@ -3166,7 +3175,6 @@ def main():
         cost_mult = 1.0 + sum(x["multiplier"] - 1.0 for src in sources for x in src if x["class"] == "GlobalCostModModel")
         m = {x["class"]: x for x in mods}
         g = lambda c, k, d: m.get(c, {}).get(k, d)
-        chimps = "ChimpsModModel" in m
         # StartingCashModModel: changeBase replaces the cash (0 keeps it), then x multiplier (0:
         # unchanged) + addition, in mod order (Half Cash: 650 -> 325).
         cash = 650.0
@@ -3199,7 +3207,9 @@ def main():
             "cost_mult": cost_mult,
             "speed_mult": g("GlobalSpeedModModel", "multiplier", 1.0), "speed_add": g("GlobalSpeedModModel", "addition", 0.0),
             "start_round": g("StartingRoundModModel", "round", 1), "end_round": g("EndRoundModModel", "round", len(rounds)),
-            "bonus": None if chimps else [g("BonusCashPerRoundModModel", "baseCash", 100.0), g("BonusCashPerRoundModModel", "roundMultiple", 1.0)],
+            # (CHIMPS keeps Hard's BonusCashPerRoundModModel: ChimpsModModel.Mutate strips tower
+            # income only; recording village_003 pays $130 after round 30.)
+            "bonus": [g("BonusCashPerRoundModModel", "baseCash", 100.0), g("BonusCashPerRoundModModel", "roundMultiple", 1.0)],
             "locked": [x["towerToLock"] for x in mods if x["class"] == "LockTowerModModel"],
             "no_sell": "DisableSellTowerModModel" in m,
             # SetHealthForBloonModModel (Easy: round 40's MOAB at 2/3 health).

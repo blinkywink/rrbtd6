@@ -1043,6 +1043,13 @@ async fn game_main() {
     let mut pick_saved: Option<u64> = None;
     // OverclockInput.targetImages: the selectionObjectPath marker's tag on each tower it may pick.
     let mut pick_markers: HashMap<u64, u64> = HashMap::new();
+    // BeastHandlerMergeInput: (source handler id, leash slot, the MergeCIData's tower ids, fixed
+    // as the mode begins), the mode last frame, the tower selected when it began, and
+    // CannotMergeToTower pending.
+    let mut merge_pick: Option<(u64, usize, Vec<u64>)> = None;
+    let mut merge_was = false;
+    let mut merge_saved: Option<u64> = None;
+    let mut merge_invalid = false;
     // A Geraldo shop item in hand: the next map click uses it there.
     let mut item_pick: Option<usize> = None;
     // A Power picked in the Powers menu, used on the next map click.
@@ -1987,6 +1994,10 @@ async fn game_main() {
         if pet_pick.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right)) {
             pet_pick = None;
         }
+        merge_pick = merge_pick.filter(|(id, _, _)| placing.is_none() && game.towers.iter().any(|t| t.id == *id));
+        if merge_pick.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right)) {
+            merge_pick = None;
+        }
         if item_pick.is_some() && (is_key_pressed(KeyCode::Escape) || is_mouse_button_pressed(MouseButton::Right) || placing.is_some()) {
             item_pick = None;
         }
@@ -2050,6 +2061,32 @@ async fn game_main() {
             if !keep {
                 ability_pick = None;
             }
+        } else if let Some((id, slot, list)) = merge_pick.clone().filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
+            // BeastHandlerMergeInput.CursorUp (VERIFIED-DECOMP @0x180a3e520): of the towers within
+            // 20 of the click (DistanceSquared <= 400), the nearest in the list (a later one at an
+            // equal distance wins) gets the merge (TowerToSimulation.ApplyCustomInputData ->
+            // BeastHandlerLeash.ApplyCustomInputData's Contribute) and the mode ends; with only
+            // unlisted towers there, SetHelperMessage(CannotMergeToTower, -1); the mode stays.
+            let mut best: Option<(usize, f32)> = None;
+            let mut other = false;
+            for (i, t) in game.towers.iter().enumerate() {
+                let d = (t.pos[0] - mouse_world[0]).powi(2) + (t.pos[1] - mouse_world[1]).powi(2);
+                if d > 400.0 {
+                    continue;
+                }
+                if !list.contains(&t.id) {
+                    other = true;
+                } else if best.is_none_or(|(_, b)| !(b < d)) {
+                    best = Some((i, d));
+                }
+            }
+            match (best, game.towers.iter().position(|t| t.id == id)) {
+                (Some((dst, _)), Some(src)) => {
+                    game.merge_beast(src, slot, dst);
+                    merge_pick = None;
+                }
+                _ => merge_invalid = other,
+            }
         } else if let Some((id, slot)) = pet_pick.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
             // DeployInput (VERIFIED-DECOMP IsPositionValid @0x180a59dd0): a valid point applies the
             // custom input (BeastHandlerLeash.ApplyCustomInputData) and the mode ends; an invalid
@@ -2098,6 +2135,7 @@ async fn game_main() {
                     placing = None;
                     // (InputManager.CancelClicked in a custom mode: ExitCustomMode.)
                     ability_pick = None;
+                    merge_pick = None;
                 }
                 Some(hud::PlaceClick::Confirm) => try_place!(),
                 None => {}
@@ -3192,9 +3230,10 @@ async fn game_main() {
             }
             // Simulation.CreateTextEffect (Lead to Gold's "$50"): the prefab with its text set,
             // removed after its lifespan.
-            for (p, fx, text, life) in game.text_fx.drain(..) {
+            for (p, fx, text, life, h) in game.text_fx.drain(..) {
                 fx_tag += 1;
-                if particles.spawn_display(&fx, [p[0], 0.0, p[1]], 1.0, 0.0, false, Some(fx_tag)) {
+                // (At a height, moved back along the camera tilt as the air units are drawn.)
+                if particles.spawn_display(&fx, [p[0], h, p[1] - h / 60f32.to_radians().tan()], 1.0, 0.0, false, Some(fx_tag)) {
                     particles.set_text(fx_tag, &text);
                     degree_texts.push((fx_tag, game.sim_elapsed + (life * 60.0).round() as u64));
                 }
@@ -3432,11 +3471,24 @@ async fn game_main() {
                 // OverclockInput.EnterInputMode (@0x180aad4e0): the selectionObjectPath marker on
                 // every tower in the valid list; Update (@0x180aadba0) puts each at its tower every
                 // frame; ExitInputMode removes them.
-                let marker = ability_pick.as_deref().filter(|n| game.ability_targets_tower(n) && !game.ability_targets_point(n)).and_then(|n| game.ability_marker(n));
+                // BeastHandlerMergeInput.EnterInputMode (@0x180a3e9c0) the same with the leash's
+                // validMergeTargetObjectPath on each tower of its list.
+                let merge_mark = merge_pick.as_ref().and_then(|(id, _, list)| {
+                    let src = game.towers.iter().position(|t| t.id == *id)?;
+                    Some((game.merge_marker(src)?, list.clone()))
+                });
+                let marker = match &merge_mark {
+                    Some((fx, _)) => Some(fx.clone()),
+                    None => ability_pick.as_deref().filter(|n| game.ability_targets_tower(n) && !game.ability_targets_point(n)).and_then(|n| game.ability_marker(n)),
+                };
                 let mut want_marks = std::collections::HashSet::new();
                 if let Some(fx) = &marker {
                     for (i, t) in game.towers.iter().enumerate() {
-                        if !game.tap_target_valid(i) {
+                        let ok = match &merge_mark {
+                            Some((_, list)) => list.contains(&t.id),
+                            None => game.tap_target_valid(i),
+                        };
+                        if !ok {
                             continue;
                         }
                         want_marks.insert(t.id);
@@ -3839,6 +3891,24 @@ async fn game_main() {
                 }
                 pick_was = ability_pick.clone();
             }
+            // BeastHandlerMergeInput through Enter / ExitCustomMode, as above; its helper message
+            // is the MergeCIData's SelectBeastHandlerToMergeInto (GetHelperMessage @0x180a3ee30).
+            if merge_pick.is_some() != merge_was {
+                merge_was = merge_pick.is_some();
+                if merge_was {
+                    merge_saved = selected.and_then(|t| game.towers.get(t)).map(|t| t.id);
+                    selected = None;
+                    let msg = h.menus.loc.get("SelectBeastHandlerToMergeInto").cloned().unwrap_or_else(|| "Select a Beast Handler to merge into".into());
+                    h.helper.set(&msg, -1.0);
+                } else {
+                    h.helper.set("", -1.0);
+                    selected = merge_saved.take().and_then(|id| game.towers.iter().position(|t| t.id == id));
+                }
+            }
+            if std::mem::take(&mut merge_invalid) {
+                let msg = h.menus.loc.get("CannotMergeToTower").cloned().unwrap_or_else(|| "Cannot merge to this tower".into());
+                h.helper.set(&msg, -1.0);
+            }
             // A pet move's DeployCIData.helperMsg ("Select Point In Range"), localized, while it lasts.
             if pet_pick.is_some() != pet_pick_was {
                 pet_pick_was = pet_pick.is_some();
@@ -3850,7 +3920,7 @@ async fn game_main() {
                 let msg = h.menus.loc.get("InvalidTarget").cloned().unwrap_or_else(|| "Invalid Target".into());
                 h.helper.set(&msg, -1.0);
             }
-            h.show_placement_buttons(placing.is_some() || ability_pick.is_some(), placing.is_some() && !h.menus.drag_and_drop);
+            h.show_placement_buttons(placing.is_some() || ability_pick.is_some() || merge_pick.is_some(), placing.is_some() && !h.menus.drag_and_drop);
             if selected.is_some() || placing.is_some() { selected_removeable = None; }
             h.removeable = selected_removeable.and_then(|i| game.removeable(i)).map(|r| (r.cost, game.cash >= r.cost as f64));
             let mut actions = h.draw(&game, selected, placing, speed, auto_start);
@@ -3928,6 +3998,18 @@ async fn game_main() {
                     hud::Action::MovePet(slot) => {
                         if coop_runtime.is_none() {
                             pet_pick = selected.and_then(|t| game.towers.get(t)).map(|t| (t.id, slot));
+                        }
+                    }
+                    // STAND-IN: co-op has no merge action yet, so the button does nothing there.
+                    hud::Action::MergeBeast(path) => {
+                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
+                            // BeastHandlerLeash.GetTowerBehaviorCustomInputData, MergeButton /
+                            // MergeButtonSecond (VERIFIED-DECOMP @0x180cfc930): the towers
+                            // IsTowerValidForMerge accepts, in the tower list's order.
+                            if let Some(slot) = game.merge_slot(t, path).filter(|_| game.can_merge_button(t, path)) {
+                                let list = game.merge_targets(t, slot).into_iter().map(|d| game.towers[d].id).collect();
+                                merge_pick = Some((game.towers[t].id, slot, list));
+                            }
                         }
                     }
                     hud::Action::DefaultPoint => {

@@ -60,6 +60,8 @@ pub enum Action {
     SetPoint,
     /// A Beast Handler move button (leash slot): pick the pet's new point.
     MovePet(usize),
+    /// An InfoPanel row's merge button (upgrade path): pick the Beast Handler to merge into.
+    MergeBeast(usize),
     /// Back to the default target (Mermonkey's Select Default).
     DefaultPoint,
     Close,
@@ -1602,6 +1604,18 @@ impl Hud {
                         let title = self.menus.loc.get(&nm).cloned().unwrap_or(nm);
                         self.tsm.set_text(&format!("{row}/Title"), &title);
                         self.tsm.set_text(&format!("{row}/Description"), &d);
+                    }
+                }
+                // Each row's MergeBtnContainer (UpgradeObject.UpdateSpecialButtons @0x180b9e6d0:
+                // active for the owner's Beast Handler when CanBeastHandlerMergeBeast for the path's
+                // beast); its MergeButton is TowerSelectionMenu.BeastHandlerMergeButton
+                // (@0x180b801e0): the merge input for that beast's leash slot.
+                for path in 0..3 {
+                    let c = format!("{INFO}/Upgrade_{}/MergeBtnContainer", path + 1);
+                    let on = (self.info_open || popup == Some(path)) && game.can_merge_button(t, path);
+                    self.tsm.set_active(&c, on);
+                    if on && self.tsm.clicked(&format!("{c}/MergeButton")) {
+                        out.push(Action::MergeBeast(path));
                     }
                 }
                 if let Some(path) = popup {

@@ -116,9 +116,9 @@ Ground rules follow.
 
 ## Regression baseline (must not drop)
 
-Current (2026-11-18): every set full (merge 15). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
+Current (2026-11-18): every set full (merge 17). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
 sniper tack sub beast engineer desperado dartling mortar bucc druid super ace heli spike farm mermonkey village
-paragon sky quincy moab logs maps maptowers merge` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 88, sky 39, quincy 14, moab 5,
+paragon sky quincy moab logs maps maptowers merge village_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, sky 39, quincy 14, moab 5,
 logs 3, dart 70, boomerang 99, paragon 12).
 
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
@@ -172,6 +172,30 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### DONE: Monkey Village money effects, cash-exact (2026-11-18, set `village_std`)
+New set pending/village_std (scenarios village_00{2,3,4,5}_std: Standard Hard, not CHIMPS, round 30): Commerce
+discount on four Dart upgrades, Monkey Town pops, Monkey City with a Marketplace (BananaFarm-003) beside, and a
+0-0-4 -> 0-0-5 upgrade absorbing the farm. All four match and their CASH matches the F lines every frame
+(check: `RRBTD6_REC_CASH=1 sh tools/rec/compare.sh --one <rec>`, then set the `DBGAIM CASH rt cash` lines against
+the F lines' 3rd (roundTime) and 5th (cash) fields, as deltas from the first frame; the harness now charges
+scripted upgrades' cost). Fixed, VERIFIED-DECOMP:
+- Upgrade prices: GlobalCostModModel.Mutate (@0x181121130) stores an UpgradeModel's cost as the int
+  cost + (int)((mult - 1) x cost) (f32, truncated); TowerManager.GetTowerUpgradeCost (@0x180c2acc0) rounds
+  (1 - discounts) x that int. `upgrade_cost` (upgrades, Paragons); towers keep `game_cost` (float cost).
+  Hard Long Range Darts with Business + Commerce: 90 -> 97 -> 80 (was 85).
+- MonkeyopolisUpgradeCost's farms x 5000 replaces the scaled cost: no difficulty multiplier (5000, was 5400).
+- Monkey Town: CashIncrease.OnBloonDamaged's BloonWorthMutator does raise the pop's cash (DistributeCash
+  multiplier + 0.5): $1.5 a pop in Standard (`hit_cash_for`, set around the damage calls). The old "gone before
+  PostDegrade" note was wrong: ChimpsModModel.Mutate (@0x1811189b0) sets every CashIncreaseModel to increase 0,
+  multiplier 1, which is why CHIMPS village_003 pays $1. ChimpsModModel's full list (type_usage.py now names
+  MethodRef slots, GetDescendants<T>): CashPerTowerInRange, PerRoundCashBonusTower, TradeEmpireBuff, CashModel,
+  DepletionToCash, SkimBloons, ImfLoan, CashIncrease, IncreaseBloonWorth(+WithTier), Monkeyopolis, EatBloon,
+  WallOfTrees, MoabTakedown, Syphon, MonkeyCityIncomeSupport, BonusCashZone, VigilanteTowerBehavior,
+  DesperadoMark, GiveCashOnPop. OPEN: only CashIncrease is applied per mode in the clone; the others matter only
+  for CHIMPS towers that earn (Benjamin's skims, Wall of Trees, Merchantman...), check each with a recording.
+- CHIMPS keeps the round bonus ($100 + round): the clone's data had none (village_003 / upgrades_r30 cash now
+  exact). build_game_data.py fixed; local_extracted/game/game.json patched the same way.
+
 ### DONE: Beast Handler merges (BeastHandlerLeash.Contribute; 2026-11-18, set `merge`)
 New regression set `merge` (research/dumps/recordings/pending/merge, scenarios beast_merge_*): SimRecorder's
 per-tower `"merges": [{"frame", "into", "slot"}]` calls the target leash's Contribute(this leash,
@@ -196,8 +220,24 @@ each latch has its own slow, so another latch on the bloon keeps it slowed (h300
 "LatchToBloon" effect id was being dropped by any latch's end); CreateProjectileOnInterval.OnEmit (@0x180ca5400)
 isBuffedByRate makes the follow's thrash interval (int)(Tower.GetTotalRateModifier x 36), GetTotalRateModifier
 (@0x180c0ef90) = the model's first weapon rate / the unmutated pet model's (`model_rate_mod`; h300 rt 390: 33
-frames); the pulled GreatWhiteEffect's thrash rate takes it too. merge 14/14. OPEN: the merge UI
-(the upgrade panel's MergeBtnContainer, target picking) and texts (merged / power / buffed); not checked on screen.
+frames); the pulled GreatWhiteEffect's thrash rate takes it too. merge 14/14. MERGE UI (2026-11-18, coded, NOT checked on screen): the InfoPanel's
+Upgrade_N/MergeBtnContainer (UpgradeObject.UpdateSpecialButtons @0x180b9e6d0: active when
+BeastHandlerToSimulation.CanBeastHandlerMergeBeast @0x18157dc50 for beastTowerTypeByPath[path] (.cctor
+@0x1811f40b0: Piranha, Microraptor, Gyrfalcon): beast alive, its pet model tier <= 4, some tower
+IsTowerValidForMerge; Game::can_merge_button / merge_slot); MergeButton (TowerSelectionMenu.BeastHandlerMergeButton
+@0x180b801e0) primes BeastHandlerMergeInput with the MergeCIData (GetTowerBehaviorCustomInputData @0x180cfc930:
+validMergeTargetObjectPath = BeastHandlerSelectedTowerMarker, the valid tower ids, helper
+SelectBeastHandlerToMergeInto, invalid CannotMergeToTower); main.rs `merge_pick`: Enter/ExitCustomMode like
+Overclock, the marker on each listed tower, CursorUp (@0x180a3e520): nearest listed tower within 20 (d^2 <= 400,
+ties to the later) gets the merge, else with an unlisted one there the CannotMergeToTower message. Contribute's
+presentation: mergeSound (SoundModel_UIMerged), CreateTextEffect(mergedTextDisplayPrefab, 2 s, "Merged") and
+(powerTextDisplayPrefab, 2 s, N0 of min(maxPower, total power)) over the target's pet (a Gyrfalcon: its air unit,
+text_fx now has a height). game.json tier fields merge_fx / merged_fx / power_fx / merge_sound: data rebuilt
+2026-11-18 (BeastHandlerSelectedTowerMarker / BeastMergeTextFloat / BeastMergeFx, sound UIMerged; the three
+effects exported with export_particles.py, one per process with OPENBLAS_NUM_THREADS=1 after an OpenBLAS
+allocation failure; extract_all picks *_fx keys up). BTD6.exe rebuilt; not published (UI not seen on screen yet). OPEN: co-op merge
+action; the contribution dot lines (contributedTo/FromLineDisplayPath, dot offset / spacing / speed);
+buffedTextDisplayPrefab and dontShowBuffedText.
 
 ### DONE: Gyrfalcon enableAdjacentHover (GetTowerTarget; 2026-11-18)
 PORTED (VERIFIED-DECOMP): GyrfalconPattern.GetTowerTarget (@0x180dc4800): without enableAdjacentHover (game.json
@@ -217,7 +257,17 @@ beast 34/34 unchanged; with the distance test reversed beast_merge_003 diverges 
 then flies to the contributor), so the rule is exercised and the game kept the parent there. RECORDED
 beast_merge_003_adj (contributor at (-128.8, -30.9), nearer the destination segment (-169.1, -18.9) than the parent):
 the game's merged bird hovers over the contributor (GY hoveredTower 428, 1360 frames); MATCH first time (merge 15/15).
-Not yet recorded: a hovered contributor sold (Process drops it; IsValidForHovering) or a merge after a removal.
+RECORDED (2026-11-18) with SimRecorder's new tower `"sell_frame": N` (UnityToSimulation.SellTower after recorded
+frame N, the k-th placed non-sub tower at that time; `# sell k N` header, `# sold ...` log line; the harness
+calls Game::sell): beast_merge_003_sold (the contributor the merged bird hovers over, sold at 1450: Process
+drops hoveredTower, UpdateTargeting targets the parent, UpdateMovement skips the snap test with no hovered
+tower, so the bird takes one step toward its idle point, then hovers over the parent) and
+beast_merge_003_readd (contributors merged at 300 / 600, the first sold at 1200, a third merges at 1500 into the
+freed HashSet slot): both MATCH first time once the harness's sell skips the clone's CHIMPS no_sell gate
+(TowerManager.SellTower @0x180c2d0f0 has no mode test; DisableSellTowerModModel.Mutate @0x18111d160 only clears
+GameModel.towerSellEnabled (+0x60), the sell button's flag). merge 17/17. Scenario note: a sale shifts the
+indices of later-created towers for later merges / sells, so list a tower that is sold after the ones that
+still act.
 
 ### DONE: map_haunted_beast_402_r60 MATCH (2026-11-17; moved to pending/maptowers, maptowers 91/91)
 Fixed, each from the recording (SimRecorder's new read-only "AA projectile targetPos.x targetPos.y arrived"
@@ -596,7 +646,8 @@ the game code / recordings), or it hides problems later.
   UpgradeButton.UpdateSpecialLockUI @0x180b9bca0). Monkeyopolis.Process (@0x180d49350), in the tower's
   turn: every such farm in max(rangeBeforeUpgrade, range) is destroyed without refund, its (int) worth added
   to the village's; crates = max(total / 2000, 1); crate cash (crates x 200 + 1000) / 10 (EmissionMutator).
-  OPEN: the bottom path's other money effects (Monkey Commerce discount, Monkey Town / City income) are
+  DONE (2026-11-18, set village_std, see Now): Commerce discount, Monkey Town / City income, Monkeyopolis cost, all cash-exact.
+  (Old:) the bottom path's other money effects (Monkey Commerce discount, Monkey Town / City income) are
   still to check one by one. FOUND: Monkey Town's CashIncrease (OnBloonDamaged @0x180d05d80) puts its
   mutator on every bloon the buffed tower damages (Bloon vtable +0x2a8 AddMutator, while it has health);
   the clone instead pays the buffed tower's own pops x multiplier (game.rs "Monkey Town (CashIncreaseModel)").
@@ -1369,6 +1420,9 @@ P-OFFTRACKORDER: newest factory object first). (The wind_seg filing above now on
 seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
+
+- 2026-11-18: Village money effects cash-exact (village_std 4/4): upgrade cost int rounding, Monkeyopolis
+  cost unscaled, Monkey Town x1.5 outside CHIMPS (ChimpsModModel), CHIMPS round bonus kept.
 
 - 2026-11-02: Sniper notes: H-line timing, the Instant-shot removal pattern in sniper_040 / 205_x.
 

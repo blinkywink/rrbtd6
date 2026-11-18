@@ -32,9 +32,13 @@ def main():
         q = struct.unpack_from(f"<{rsz // 8}Q", d, rptr)
         for k in range(4, len(q) - 3):
             if q[k] == n and q[k + 2] == n and pe.va_to_off(q[k + 1]) is not None:
-                reg.append(q[k - 3])
+                reg.append((q[k - 3], q[k - 1], q[k - 7]))
     assert len(reg) == 1, f"{len(reg)} metadata registration candidates"
-    table = pe.va_to_off(reg[0])
+    table = pe.va_to_off(reg[0][0])
+    # (Il2CppMetadataRegistration: ..., genericInsts, ..., types, methodSpecsCount, methodSpecs,
+    # fieldOffsetsCount.)
+    specs, insts = pe.va_to_off(reg[0][1]), pe.va_to_off(reg[0][2])
+    methods = None
 
     def full(ti):
         t = types[ti]
@@ -62,6 +66,25 @@ def main():
             continue
         token = (v >> 1) & 0xFFFFFFFF
         kind, index = token >> 28, token & 0x0FFFFFFF
+        if kind == 6:
+            # A MethodRef: Il2CppMethodSpec (methodDefinitionIndex, classIndexIndex,
+            # methodIndexIndex), the generic arguments from genericInsts.
+            if methods is None:
+                methods = list(md.methods())
+                owner = {}
+                for ti, t in enumerate(types):
+                    for m in range(t["method_start"], t["method_start"] + t["method_count"]):
+                        owner[m] = ti
+            mdef, cls_i, meth_i = struct.unpack_from("<iii", d, specs + 12 * index)
+
+            def inst(i):
+                if i < 0:
+                    return ""
+                ip, = struct.unpack_from("<Q", d, insts + 8 * i)
+                argc, argv = struct.unpack_from("<QQ", d, pe.va_to_off(ip))
+                return "<" + ", ".join(name(struct.unpack_from("<Q", d, pe.va_to_off(argv) + 8 * j)[0]) for j in range(argc)) + ">"
+            print(f"{a}: {full(owner.get(mdef, 0))}{inst(cls_i)}::{methods[mdef][0]}{inst(meth_i)}")
+            continue
         if kind != 1:
             print(f"{a}: usage kind {kind}, not a TypeInfo")
             continue
