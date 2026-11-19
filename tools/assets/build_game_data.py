@@ -1106,6 +1106,8 @@ def main():
                           if r["type"] == "BloonModel" and r["f"].get("_name") == grab_name), None) if grab_name else None
             out["great_white"] = {
                 "max_layer": layer, "max_pull_rbe": gf.get("maxPullRbe", 0),
+                # Its display (the shark holding the bloon; animated under models/extra), visual.
+                "display": prefab_name(gf.get("display")),
                 "pop_scale": gf.get("bloonPopTimeScale", 1.0), "post_drag_frames": frames(gf.get("postDragTime", 0.0)),
                 "max_moab_time": gf.get("maxMoabGrabTime", 0.0), "moab_dps": gf.get("moabDamagePerSecond", 1),
                 # SetGrabbedBloon's percent branch caps by GreatWhiteEffectModel +0x6c, this one.

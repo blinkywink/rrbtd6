@@ -185,6 +185,11 @@ effect names, model behaviours the data builder never reads).
 - DONE: merged Beast Handler pets' looks (ContributionMutator.Mutate @0x181208b50: the display step with the
   highest percent <= (power - basePower) / (maxPower - basePower) once above 0; pet power `steps`, models
   from models/extra). Unverified on screen (needs a merge). LEFT: the steps' projectileDisplay swap.
+- DONE: the Great White / Orca / Megalodon's held bloon (GwEffect `kind` at its `pos` while not exited) drawn
+  as a bloon, beside the vines' stand-ins. LEFT: the shark itself (CreateGreatWhiteEffectModel.display,
+  exported animated to models/extra by export_pending_models): drawn at the effect's position its mesh sits
+  ~200 px off the bloon (its geometry spans y -160..50 about the origin), so it needs the display's
+  transform chain first.
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

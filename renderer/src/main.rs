@@ -2945,6 +2945,18 @@ const VINE_END_FRAMES: i32 = 23;
             // BloonType.Construct(list entry, camo, regrow))'s display), drawn as a bloon is until
             // the grab ends. STAND-IN: between the bloons and the effects, not between the vines'
             // back and front displays.
+            // The Great White's held bloon (its display stays with the effect until it pops).
+            for gw in game.gw_effects.iter().filter(|g| !g.exited) {
+                let k = gw.kind;
+                let (Some(t), Some(l)) = (bloon_tex.get(k).and_then(|t| t.as_ref()), game.defs.get(k).and_then(|d| d.display.first())) else { continue };
+                let p = gw.pos;
+                let y = p[1] - 20.0 / 60f32.to_radians().tan();
+                sprite_batch.shift_next(l.trim);
+                match (&atlas, bloon_uv.get(k).copied().flatten()) {
+                    (Some(a), Some(uv)) => sprite_batch.billboard_uv(&a.tex, uv, p[0], y, 20.0, l.w, l.h, [255; 4]),
+                    _ => sprite_batch.billboard(t, p[0], y, 20.0, l.w, l.h, [255; 4]),
+                }
+            }
             for v in vines.iter().filter(|v| v.8.is_none()) {
                 const LIST: [&str; 9] = ["Red", "Blue", "Green", "Yellow", "Pink", "Black", "Zebra", "Rainbow", "Ceramic"];
                 let name = format!("{}{}{}", LIST[v.2], if v.4 { "Regrow" } else { "" }, if v.3 { "Camo" } else { "" });

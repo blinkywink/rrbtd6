@@ -3687,6 +3687,9 @@ pub struct CycleAnim {
 /// CreateGreatWhiteEffectModel (frames as GreatWhiteEffectModel.ctor: (int)(seconds x 60)).
 #[derive(Deserialize, Clone)]
 pub struct GreatWhite {
+    /// CreateGreatWhiteEffectModel.display (model under models/extra), display only.
+    #[serde(default)]
+    pub display: Option<String>,
     /// layerNumber of maxGrabBloonName's model (None: any).
     #[serde(default)]
     pub max_layer: Option<u32>,

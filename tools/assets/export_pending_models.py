@@ -41,6 +41,9 @@ FIELDS = {
     ("RosaliaMovementModel", None),
     ("JungleVineEffectModel", None),
     ("CreateRopeEffectModel", None),
+    # The Great White / Orca / Megalodon grab's display (CreateGreatWhiteEffectModel.display):
+    # animated, under models/extra (its static projectile copy has no clips).
+    ("CreateGreatWhiteEffectModel", "display"),
 }
 # (model type, field) whose prefab is a particle effect or text pop-up.
 EFFECT_FIELDS = {
@@ -90,7 +93,10 @@ def main():
                 if not isinstance(guid, str) or guid not in prefabs:
                     continue
                 name = os.path.splitext(prefabs[guid].rsplit("/", 1)[-1])[0]
-                if key(name) in have or key(name) in ("empty", "emptyprefab", "#emptyasset"):
+                # (The Great White grab display is wanted animated under models/extra even where a
+                # static projectile copy exists.)
+                gw = typ == "CreateGreatWhiteEffectModel"
+                if (key(name) in have and not (gw and not (L / "models/extra" / name.strip() / "meta.json").exists()))                         or key(name) in ("empty", "emptyprefab", "#emptyasset"):
                     continue
                 if effect:
                     effects.add(name)
