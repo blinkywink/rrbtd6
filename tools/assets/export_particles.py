@@ -44,7 +44,7 @@ CABS = json.load(open(_CAB_PATH)) if os.path.exists(_CAB_PATH) else {}
 
 SIMULATED = {"InitialModule", "CustomDataModule", "EmissionModule", "ShapeModule", "SizeModule", "ColorModule", "RotationModule",
              "VelocityModule", "ForceModule", "ClampVelocityModule", "UVModule", "SubModule", "NoiseModule",
-             "SizeBySpeedModule", "RotationBySpeedModule", "ColorBySpeedModule"}
+             "SizeBySpeedModule", "RotationBySpeedModule", "ColorBySpeedModule", "TrailModule"}
 
 
 def keys(c):
@@ -141,6 +141,20 @@ def system(ps, out_tex, env):
     cv = t["ClampVelocityModule"]
     if cv["enabled"]:
         s["limit"] = {"speed": curve(cv["magnitude"]), "dampen": cv.get("dampen", 1.0), "drag": curve(cv["drag"]) if "drag" in cv else None}
+    # TrailModule (particle mode): a ribbon behind each particle (ratio of them), its points
+    # lasting lifetime x the particle's lifetime, minVertexDistance apart, widthOverTrail /
+    # colorOverTrail along it, colorOverLifetime over the particle's life; the renderer's second
+    # material draws it (renderer `trail`).
+    tm = t.get("TrailModule", {})
+    if tm.get("enabled"):
+        s["trail"] = {"mode": tm.get("mode", 0), "ratio": tm.get("ratio", 1.0), "lifetime": curve(tm["lifetime"]) if "lifetime" in tm else None,
+                      "min_dist": tm.get("minVertexDistance", 0.2), "world": bool(tm.get("worldSpace")),
+                      "size_width": bool(tm.get("sizeAffectsWidth", True)), "size_life": bool(tm.get("sizeAffectsLifetime")),
+                      "inherit_color": bool(tm.get("inheritParticleColor", True)),
+                      "color_life": color(tm["colorOverLifetime"]) if "colorOverLifetime" in tm else None,
+                      "width": curve(tm["widthOverTrail"]) if "widthOverTrail" in tm else None,
+                      "color_trail": color(tm["colorOverTrail"]) if "colorOverTrail" in tm else None,
+                      "texture_mode": tm.get("textureMode", 0)}
     # Size / Rotation / Color by Speed: the curve (gradient) at the particle's speed placed in
     # `range` (min, max), clamped.
     for name, key in (("SizeBySpeedModule", "size_speed"), ("RotationBySpeedModule", "rot_speed")):
@@ -348,6 +362,15 @@ def renderer(r, out_tex):
         except Exception as e:
             print("  particle mesh not exported:", type(e).__name__, e, flush=True)
             out["mesh"] = "?"
+    # The trail material (m_Materials[1], TrailModule's ribbons): its texture, blend and tint.
+    allm = t.get("m_Materials", [])
+    if len(allm) > 1 and allm[1].get("m_PathID"):
+        try:
+            tr = trail_material(r, allm[1], out_tex)
+            if tr:
+                out["trail"] = tr
+        except Exception as e:
+            print("  trail material not exported:", type(e).__name__, e, flush=True)
     mats = [m for m in t.get("m_Materials", []) if m["m_PathID"]]
     if not mats:
         return out
@@ -367,6 +390,7 @@ def renderer(r, out_tex):
     floats = dict(props.get("m_Floats", []))
     cols = dict(props.get("m_Colors", []))
     out["material"] = m["m_Name"]
+    so = None
     try:
         sh = m["m_Shader"]
         so = mo.assets_file.objects.get(sh["m_PathID"]) if sh["m_FileID"] == 0 else None
@@ -379,12 +403,16 @@ def renderer(r, out_tex):
     # Blend: the material's _SrcBlend/_DstBlend (UnityEngine.Rendering.BlendMode: 1 One, 5 SrcAlpha,
     # 10 OneMinusSrcAlpha), else the legacy shader name.
     src, dst = floats.get("_SrcBlend"), floats.get("_DstBlend")
-    if src is not None and dst is not None:
+    sg = (out.get("shader") or "").startswith("Shader Graphs/") and so is not None and shader_blend(so)
+    if sg:
+        out["blend"] = sg
+    elif src is not None and dst is not None:
         out["blend"] = "add" if dst == 1 else ("premul" if src == 1 and dst == 10 else "alpha")
     else:
         n = (out.get("shader") or "").lower()
-        # (Legacy "Particles/Alpha Blended Premultiply": Blend One OneMinusSrcAlpha.)
-        out["blend"] = "add" if "add" in n else ("premul" if "premultipl" in n else "alpha")
+        # The shader's own pass blend (Shader Graphs: ParticleGlow is One One), else the legacy
+        # name ("Particles/Alpha Blended Premultiply": Blend One OneMinusSrcAlpha).
+        out["blend"] = (shader_blend(so) if so is not None else None) or ("add" if "add" in n else ("premul" if "premultipl" in n else "alpha"))
     # URP Particles/Unlit: _BaseColor (materials keep a stale legacy _TintColor). Legacy particle
     # shaders: 2 x _TintColor.
     urp = (out.get("shader") or "").startswith("Universal Render Pipeline") or "_BaseColor" in cols
@@ -415,6 +443,92 @@ def renderer(r, out_tex):
                 out["texture"] = "tex/" + name
                 out["uv_scale"] = [v["m_Scale"]["x"], v["m_Scale"]["y"]]
                 out["uv_offset"] = [v["m_Offset"]["x"], v["m_Offset"]["y"]]
+            break
+    return out
+
+
+def shader_blend(so):
+    """A shader's first pass's blend (its parsed form's rtBlend0 src / dst: 1 One, 5 SrcAlpha,
+    10 OneMinusSrcAlpha) as "add" / "premul" / "alpha", or None when it can't be read. Shader
+    Graphs keep it there with no _SrcBlend / _DstBlend on the material (ParticleGlow: One One)."""
+    try:
+        pf = so.read().m_ParsedForm
+        for ss in pf.m_SubShaders:
+            for ps in ss.m_Passes:
+                st = ps.m_State
+                rb = st.rtBlend[0] if isinstance(getattr(st, "rtBlend", None), list) else getattr(st, "rtBlend0", None)
+                if rb is None:
+                    continue
+                val = lambda x: getattr(x, "val", x)
+                src, dst = val(rb.srcBlend), val(rb.destBlend)
+                return "add" if dst == 1 else ("premul" if src == 1 and dst == 10 else "alpha")
+    except Exception:
+        return None
+    return None
+
+
+def trail_material(r, pp, out_tex):
+    """A renderer's material `pp` (the trail's): {texture, blend, tint} (as `renderer` reads the main one)."""
+    mo = r.assets_file.objects.get(pp["m_PathID"]) if pp["m_FileID"] == 0 else None
+    if mo is None:
+        ext = r.assets_file.externals[pp["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
+        for name, f in r.assets_file.environment.files.items():
+            subs = getattr(f, "files", None) if not hasattr(f, "objects") else {os.path.basename(str(name)): f}
+            for k, sf in (subs or {}).items():
+                if str(k).lower() == ext and hasattr(sf, "objects"):
+                    mo = sf.objects.get(pp["m_PathID"]) or mo
+    if mo is None:
+        return None
+    m = mo.read_typetree()
+    props = m["m_SavedProperties"]
+    floats = dict(props.get("m_Floats", []))
+    cols = dict(props.get("m_Colors", []))
+    out = {"material": m["m_Name"]}
+    shader = None
+    so = None
+    try:
+        sh = m["m_Shader"]
+        so = mo.assets_file.objects.get(sh["m_PathID"]) if sh["m_FileID"] == 0 else None
+        if so is None:
+            so = _pptr(mo.assets_file, sh)
+        shader = so.read().m_ParsedForm.m_Name if so else None
+    except Exception:
+        shader = None
+    out["shader"] = shader
+    src, dst = floats.get("_SrcBlend"), floats.get("_DstBlend")
+    # (A Shader Graph ignores the material's stale _SrcBlend / _DstBlend: its own pass blend.)
+    sg = (shader or "").startswith("Shader Graphs/") and so is not None and shader_blend(so)
+    if sg:
+        out["blend"] = sg
+    elif src is not None and dst is not None:
+        out["blend"] = "add" if dst == 1 else ("premul" if src == 1 and dst == 10 else "alpha")
+    else:
+        # (As the main material: the shader's own pass blend, else the legacy shader's name.)
+        n = (shader or "").lower()
+        out["blend"] = (shader_blend(so) if so is not None else None) or ("add" if "add" in n else ("premul" if "premultipl" in n else "alpha"))
+    urp = "_BaseColor" in cols
+    tint = cols.get("_BaseColor") if urp else (cols.get("_TintColor") or cols.get("_Color"))
+    if tint:
+        k = 1.0 if urp or "_TintColor" not in cols else 2.0
+        out["tint"] = [tint["r"] * k, tint["g"] * k, tint["b"] * k, tint["a"] * k]
+    for key, v in props.get("m_TexEnvs", []):
+        if key in ("_MainTex", "_BaseMap", "_Texture") and v["m_Texture"]["m_PathID"]:
+            tex_pp = v["m_Texture"]
+            to = mo.assets_file.objects.get(tex_pp["m_PathID"]) if tex_pp["m_FileID"] == 0 else None
+            if to is None:
+                ext = mo.assets_file.externals[tex_pp["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
+                for f in mo.assets_file.environment.files.values():
+                    for kk, sf in getattr(f, "files", {}).items():
+                        if str(kk).lower() == ext and hasattr(sf, "objects"):
+                            to = sf.objects.get(tex_pp["m_PathID"])
+            if to is not None:
+                tx = to.read()
+                name = f"{tx.m_Name}.png"
+                p = os.path.join(out_tex, name)
+                if not os.path.exists(p):
+                    os.makedirs(out_tex, exist_ok=True)
+                    tx.image.save(p)
+                out["texture"] = "tex/" + name
             break
     return out
 

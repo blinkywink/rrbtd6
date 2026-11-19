@@ -1999,6 +1999,9 @@ pub struct Tower {
     /// SpiritOfTheForest.AddObjectAtPosition's effects (display only): where, the prefab,
     /// rotation (degrees), scale.
     pub spirit_objs: Vec<([f32; 2], String, f32, f32)>,
+    /// Each spirit_v position's PathSegment.rotation (display only: the Spike Paragon's carpet
+    /// takes it as its pieces' rotation).
+    pub spirit_rot: Vec<f32>,
     /// Its DamageOverTimeZone's place in the process list (as Bloon.born): 0 when made with the
     /// tower (before every bloon), else when a Paragon purchase made it.
     pub spirit_born: u64,
@@ -2814,6 +2817,12 @@ pub struct Projectile {
     pub tiers: [u8; 3],
     /// Id of the tower that fired it (pop credit).
     pub owner: u64,
+    /// Projectile.EmittedBy: the tower that fired it, without CreditPopsToParentTowerModel (a
+    /// sentry, where `owner` is its Engineer); children made from it inherit it. Damage.Collide
+    /// (VERIFIED-DECOMP @0x180cb6b50) passes get_EmittedBy (vtable slot 104) to Bloon.Damage as
+    /// the tower its pop cash is staged on; CreateProjectileOnContact.Collide (@0x180ca2a60)
+    /// emits its children with it.
+    pub emitted_by: u64,
     /// Instant projectiles: the only bloon they can hit. Bouncing glaives: the bloon they home in on.
     pub target: Option<u64>,
     /// CollideOnlyWithTarget's Target for a travelling shot (SetTarget at emission and when its
@@ -3795,6 +3804,10 @@ pub struct Game {
     /// The lowestLayerNumber of the bloon the hit being dealt is on: its whole cascade's layers
     /// pay against it (`damage_inner`).
     hit_lowest: u32,
+    /// The emitter of the projectiles being made: (owner, EmittedBy) while a credit-parent
+    /// sub-tower fires or a projectile makes children; `emit` gives a new projectile with that
+    /// owner the EmittedBy, any other its owner.
+    emit_by: Option<(u64, u64)>,
     /// The damage being dealt pays no pop cash (MorphBloon's).
     no_pop_cash: bool,
     /// DistributeToChildrenSet on the bloon this hit is on: its own layer passes overkill on.
@@ -3807,7 +3820,7 @@ pub struct Game {
     /// Set while towers_phase runs one attack put off to its place in the process list.
     deferred_attack: Option<usize>,
     /// instant_pass's outputs (children, sub-towers, contact spawns, exhaust spawns) for the step.
-    instant_out: (Vec<u64>, Vec<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)>, Vec<([f32; 2], f32, crate::data::Contact, [u8; 3], u64, Option<u64>, f32)>, Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32))>),
+    instant_out: (Vec<u64>, Vec<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)>, Vec<([f32; 2], f32, crate::data::Contact, [u8; 3], (u64, u64), Option<u64>, f32)>, Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], (u64, u64), Option<u64>, (Option<f32>, f32, f32))>),
     /// Simulation.time.elapsed: frames simulated (the factory flush runs when it is a multiple
     /// of 60).
     pub sim_elapsed: u64,
@@ -4805,11 +4818,13 @@ macro_rules! collide_pass {
                 // is paid as pop cash at once (recording engineer_005 rt 91: a trapped MOAB pays
                 // 381 in CHIMPS). STAND-IN: the clone removes the bloon and pays that cash (no other
                 // pop effects of the Damage call).
-                let (kind_e, round_e) = ($s.bloons[i].kind, $s.bloons[i].spawn_round);
+                // (Its layers pay through GetCashForLayers against the bloon's lowestLayerNumber:
+                // recording engineer_005 rt 3482, a regrown Green eaten pays its Blue and Red only.)
+                let (kind_e, round_e, lowest_e) = ($s.bloons[i].kind, $s.bloons[i].spawn_round, $s.bloons[i].lowest);
                 let inc_e = $s.income_mult_for(round_e);
                 let hc = $s.hit_cash_for($s.projectiles[$p].owner);
-                let pay = ((($s.cash_in[kind_e] as f32) * inc_e) * hc.0 as f32 + hc.1 as f32) as f64 * $s.sim_cash_modifier();
-                $s.pay_pop(Some($s.projectiles[$p].owner), pay);
+                let pay = ((($s.cash_in_paid(kind_e, lowest_e) as f32) * inc_e) * hc.0 as f32 + hc.1 as f32) as f64 * $s.sim_cash_modifier();
+                $s.pay_pop(Some($s.projectiles[$p].emitted_by), pay);
                 let layers_e = $s.pops_in[kind_e] as f32;
                 let len0 = $s.bloons.len();
                 $s.remove_bloon(i);
@@ -4972,7 +4987,7 @@ macro_rules! collide_pass {
             if !immune && $s.projectiles[$p].spec.on_contact.iter().any(|c| c.on_damage && !c.on_pop) {
                 let pr = &$s.projectiles[$p];
                 let heading = if pr.spec.instant && pr.target.is_some() { (bp[1] - pr.origin[1]).atan2(bp[0] - pr.origin[0]) } else { pr.vel[1].atan2(pr.vel[0]) };
-                let (tiers, owner) = (pr.tiers, pr.owner);
+                let (tiers, owner, by) = (pr.tiers, pr.owner, pr.emitted_by);
                 let grot = pr.grot.or_else(|| $s.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).map(|r| { let d = game_dir(r); RAD2DEG * crt_atan2(d[0], -d[1]) }));
                 let early: Vec<_> = pr.spec.on_contact.iter().filter(|c| c.on_damage && !c.on_pop).cloned().collect();
                 // (They carry the shot's crit roll as it is then, rolled or not: recording
@@ -4984,7 +4999,7 @@ macro_rules! collide_pass {
                     let start = $s.projectiles.len();
                     $s.emit_z = hit_z;
                     $s.emit_rot = grot;
-                    $s.emit(bp, heading, &c.emission, &c.projectile, None, tiers, owner);
+                    $s.emit_as(by, bp, heading, &c.emission, &c.projectile, None, tiers, owner);
                     $s.emit_rot = None;
                     $s.emit_z = 0.0;
                     for pr in &mut $s.projectiles[start..] {
@@ -5038,7 +5053,7 @@ macro_rules! collide_pass {
                     .filter(|c| !c.on_damage && !c.on_pop && !c.after_damage && !c.map_only && !gated(c))
                     .map(|c| (if c.at_shot { pp } else { bp }, c.clone(), c.pass_on_collided.then_some(layer)))
                     .collect();
-                let (tiers, owner, grot) = (pr.tiers, pr.owner, pr.grot);
+                let (tiers, owner, grot, by) = (pr.tiers, pr.owner, pr.grot, pr.emitted_by);
                 if now.iter().any(|(_, c, _)| c.gap > 0.0) {
                     $s.projectiles[$p].exhaust_made = (clock, made + 1);
                 }
@@ -5058,7 +5073,7 @@ macro_rules! collide_pass {
                     } else {
                         grot
                     };
-                    $s.emit(at, heading, &c.emission, &c.projectile, None, tiers, owner);
+                    $s.emit_as(by, at, heading, &c.emission, &c.projectile, None, tiers, owner);
                     $s.emit_rot = None;
                     $s.emit_z = 0.0;
                     if let Some(id) = skip {
@@ -5111,6 +5126,7 @@ macro_rules! collide_pass {
             // Target (recording wizard_paragon_r40 rt 210: Spike 979 destroys 972, zombie 1001 there).
             if let Some(z) = $s.projectiles[$p].spec.zombie.clone().filter(|_| !immune) {
                 let owner = $s.projectiles[$p].owner;
+                let by = $s.projectiles[$p].emitted_by;
                 if $s.bird_will_destroy(i, dmg) {
                     if let Some(o) = $s.towers.iter().position(|t| t.id == owner).and_then(|t| $s.magus_owner(t)) {
                         if let Some(m) = $s.tier(o).and_then(|tr| tr.magus.clone()) {
@@ -5120,7 +5136,7 @@ macro_rules! collide_pass {
                                 let tiers = $s.towers[o].tiers;
                                 let start = $s.projectiles.len();
                                 $s.emit_target = Some(id);
-                                $s.emit(bp, 0.0, &z.emission, &z.projectile, None, tiers, owner);
+                                $s.emit_as(by, bp, 0.0, &z.emission, &z.projectile, None, tiers, owner);
                                 $s.emit_target = None;
                                 for pr in &mut $s.projectiles[start..] {
                                     pr.pos = bp;
@@ -5229,7 +5245,7 @@ macro_rules! collide_pass {
                 // (A galvanized bloon, before the hit: GalvanizedBehavior.OnBloonDamaged below.)
                 let galv_pre = { let b = &$s.bloons[i]; (b.galv.0 > 0 && b.galv.1 > $s.sim_elapsed).then(|| b.galv_chain.clone()).flatten().map(|c| (c, b.pos, b.id)) };
                 $s.hit_cash = $s.hit_cash_for($s.projectiles[$p].owner);
-                $s.hit_tower = Some($s.projectiles[$p].owner);
+                $s.hit_tower = Some($s.projectiles[$p].emitted_by);
                 let n = $s.damage(i, dmg.round() as i32, &mut $kids);
                 $s.hit_cash = (1.0, 0.0);
                 $s.hit_tower = None;
@@ -5257,13 +5273,14 @@ macro_rules! collide_pass {
                     let spec = &$s.projectiles[$p].spec;
                     if spec.damage_model && c.types.contains(&spec.immune) {
                         let owner = $s.projectiles[$p].owner;
+                        let by = $s.projectiles[$p].emitted_by;
                         let tiers = $s.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
                         let at = $s.bloons.iter().find(|b| b.id == bid).map_or(bp, |b| b.pos);
                         // (Bloon +0x170, its layer as the hit left it: what collidedWith holds.)
                         let blayer = $s.bloons.iter().find(|b| b.id == bid).map(|b| b.layer);
                         let start = $s.projectiles.len();
                         $s.emit_target = Some(bid);
-                        $s.emit(at, 0.0, &c.emission, &c.projectile, None, tiers, owner);
+                        $s.emit_as(by, at, 0.0, &c.emission, &c.projectile, None, tiers, owner);
                         $s.emit_target = None;
                         for pr in &mut $s.projectiles[start..] {
                             pr.pos = at;
@@ -5446,7 +5463,7 @@ macro_rules! collide_pass {
                     // @0x180c8c570): the blasts of shots already spent in this pass come before
                     // these, recording sky_025 rt 2491, FrozenRemains 2398 .. 2356's blasts 2749 ..
                     // 2847, then the Black's remains 2863 .., the blasts hitting first at 2492.)
-                    let (spent, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut $exhausted).into_iter().partition(|e: &([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32), bool)| e.7);
+                    let (spent, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut $exhausted).into_iter().partition(|e: &([f32; 2], f32, crate::data::Exhaust, [u8; 3], (u64, u64), Option<u64>, (Option<f32>, f32, f32), bool)| e.7);
                     $exhausted = rest;
                     if !spent.is_empty() {
                         let start = $s.projectiles.len();
@@ -5744,12 +5761,12 @@ macro_rules! collide_pass {
                 }
                 // (dontCreateAtBloon: where the shot is; recording tack_500, a meteor's blast.)
                 let at = if c.at_shot { pp } else { bp };
-                $contacts.push((at, heading, c.clone(), pr.tiers, pr.owner, skip, hit_z));
+                $contacts.push((at, heading, c.clone(), pr.tiers, (pr.owner, pr.emitted_by), skip, hit_z));
             }
             if !now_after.is_empty() {
                 // (Projectile.EjectRotation: an instant shot's is its tower's rotation as
                 // it fired.)
-                let (tiers, owner) = (pr.tiers, pr.owner);
+                let (tiers, owner, by) = (pr.tiers, pr.owner, pr.emitted_by);
                 let grot = pr.grot.or_else(|| $s.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).map(|r| { let d = game_dir(r); RAD2DEG * crt_atan2(d[0], -d[1]) }));
                 for (at, c, skip) in now_after {
                     let start = $s.projectiles.len();
@@ -5764,7 +5781,7 @@ macro_rules! collide_pass {
                     } else {
                         grot
                     };
-                    $s.emit(at, heading, &c.emission, &c.projectile, None, tiers, owner);
+                    $s.emit_as(by, at, heading, &c.emission, &c.projectile, None, tiers, owner);
                     $s.emit_rot = None;
                     $s.emit_z = 0.0;
                     if let Some(id) = skip {
@@ -5861,7 +5878,7 @@ macro_rules! collide_pass {
                     let now = ((pr.scale_t - 1.0).max(0.0) / 60.0) * sps + b0;
                     cs[0] = if now <= cs[1] { now } else { cs[1] };
                 }
-                $contacts.push((at, heading, c, pr.tiers, pr.owner, None, pr.z));
+                $contacts.push((at, heading, c, pr.tiers, (pr.owner, pr.emitted_by), None, pr.z));
             }
             // CollisionChecker.Process (VERIFIED-DISASM @0xf31590): CollideMap, then
             // RootObject.Destroy: no Expire, so no expire projectiles (recording sub_005: an
@@ -5923,7 +5940,7 @@ macro_rules! collide_pass {
                 ex.src = pr.uid;
                 ex.src_born = pr.born;
                 ex.target_off = pr.inst_off;
-                $exhausted.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, pr.aim.or(pr.target), (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
+                $exhausted.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, (pr.owner, pr.emitted_by), pr.aim.or(pr.target), (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
             }
         }
         if std::mem::take(&mut $s.projectiles[$p].refresh_due) {
@@ -6309,6 +6326,7 @@ impl Game {
             hit_tower: None,
             hit_acc: (0.0, 0.0, 1.0),
             hit_lowest: 0,
+            emit_by: None,
             no_pop_cash: false,
             dist_set: false,
             next_uid: 0,
@@ -7407,8 +7425,8 @@ impl Game {
         shoves: &[([f32; 2], crate::data::MoabShove)],
         leak_voice: &mut bool,
         subs: &mut Vec<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)>,
-        contacts: &mut Vec<([f32; 2], f32, crate::data::Contact, [u8; 3], u64, Option<u64>, f32)>,
-        exhausted: &mut Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32))>,
+        contacts: &mut Vec<([f32; 2], f32, crate::data::Contact, [u8; 3], (u64, u64), Option<u64>, f32)>,
+        exhausted: &mut Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], (u64, u64), Option<u64>, (Option<f32>, f32, f32))>,
     ) {
         let now4 = self.sim_elapsed * 4;
         let mut uids: Vec<u64> = self.projectiles.iter().filter(|pr| pr.spec.lightning && pr.uid < bound && pr.born < now4).map(|pr| pr.uid).collect();
@@ -7426,8 +7444,8 @@ impl Game {
         shoves: &[([f32; 2], crate::data::MoabShove)],
         leak_voice: &mut bool,
         subs: &mut Vec<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)>,
-        contacts: &mut Vec<([f32; 2], f32, crate::data::Contact, [u8; 3], u64, Option<u64>, f32)>,
-        exhausted: &mut Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32))>,
+        contacts: &mut Vec<([f32; 2], f32, crate::data::Contact, [u8; 3], (u64, u64), Option<u64>, f32)>,
+        exhausted: &mut Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], (u64, u64), Option<u64>, (Option<f32>, f32, f32))>,
     ) {
         let now4 = self.sim_elapsed * 4;
         // (No valid Target on its look, the hit due (hitTarget): the shot goes (0x808); recording
@@ -8353,22 +8371,36 @@ impl Game {
         // (Not a bloonsInvulnerable one: recording map_kartsndarts_druid_052_r40, no draws for the
         // tunnel's segments.)
         let inv = &self.track_seg_inv;
-        let segs: Vec<[f32; 2]> = self
+        // (With each segment's direction, display only: PathSegment.rotation, INFERRED as the
+        // segment's heading in game degrees, atan2 of the game y-up difference to the next point.)
+        let segs: Vec<([f32; 2], f32)> = self
             .track_segs
             .iter()
             .enumerate()
-            .flat_map(|(pi, sg)| sg.iter().enumerate().step_by(2).filter(move |(k, _)| inv.get(pi).and_then(|v| v.get(*k)).is_none_or(|f| f & 1 == 0)).map(|(_, q)| *q))
+            .flat_map(|(pi, sg)| {
+                sg.iter().enumerate().step_by(2).filter(move |(k, _)| inv.get(pi).and_then(|v| v.get(*k)).is_none_or(|f| f & 1 == 0)).map(move |(k, q)| {
+                    let (a, b) = match (sg.get(k + 1), k.checked_sub(1).and_then(|j| sg.get(j))) {
+                        (Some(n), _) => (*q, *n),
+                        (None, Some(pv)) => (*pv, *q),
+                        _ => (*q, *q),
+                    };
+                    (*q, (-(b[1] - a[1])).atan2(b[0] - a[0]).to_degrees())
+                })
+            })
             .collect();
         let mut pos = Vec::new();
-        for q in segs {
+        let mut rots = Vec::new();
+        for (q, rot) in segs {
             let (x, gy) = (q[0], -q[1]);
             let nx = self.synced_double() as f32 * sp.offset + (-sp.offset) * 0.5 + x;
             let ny = self.synced_double() as f32 * sp.offset + (-sp.offset) * 0.5 + gy;
             let p = [nx, -ny];
             if on_map(p, 0.0) {
                 pos.push(p);
+                rots.push(rot);
             }
         }
+        self.towers[t].spirit_rot = rots;
         self.towers[t].spirit_v = Some((range, 0.0, self.towers[t].pos, pos, self.round_clock));
     }
 
@@ -8389,22 +8421,22 @@ impl Game {
                 cur = sp.circle;
             }
             // (Each object's three draws in ring order: the same sequence as counting them first.)
-            let mut placed: Vec<[f32; 2]> = Vec::new();
+            let mut placed: Vec<([f32; 2], f32)> = Vec::new();
             let mut gap = cur - gnr;
             while sp.step < gap {
                 let (inner, outer) = (gnr, sp.step + gnr);
-                for p in &pos {
+                for (pi, p) in pos.iter().enumerate() {
                     let (dx, dy) = (p[0] - origin[0], p[1] - origin[1]);
                     let d2 = dx * dx + dy * dy;
                     if d2 > inner * inner && d2 < outer * outer {
-                        placed.push(*p);
+                        placed.push((*p, self.towers[t].spirit_rot.get(pi).copied().unwrap_or(0.0)));
                     }
                 }
                 gnr = sp.step + gnr;
                 gap = cur - gnr;
             }
             let tp = self.towers[t].pos;
-            for p in placed {
+            for (p, seg_rot) in placed {
                 let (d_obj, d_rot, d_scale) = (self.synced_double(), self.synced_double(), self.synced_double());
                 // AddObjectAtPosition (VERIFIED-DECOMP @0x180d92f10, display only): the list by
                 // distance from the tower (closeRange, middleRange, else far), entry
@@ -8414,7 +8446,8 @@ impl Game {
                 if let Some(list) = sp.objects.get(band).filter(|l| !l.is_empty()) {
                     let k = ((list.len() as f64 * d_obj) as usize).min(list.len() - 1);
                     if let Some(name) = list[k].clone() {
-                        let rot = d_rot as f32 * (sp.rot[1] - sp.rot[0]) + sp.rot[0];
+                        // (The Spike Paragon's: its position's segment rotation, @0x180d8dd10.)
+                        let rot = if sp.pos_rot { seg_rot } else { d_rot as f32 * (sp.rot[1] - sp.rot[0]) + sp.rot[0] };
                         let scale = d_scale as f32 * (sp.obj_scale[1] - sp.obj_scale[0]) + sp.obj_scale[0];
                         self.towers[t].spirit_objs.push((p, name, rot, scale));
                     }
@@ -8851,6 +8884,7 @@ impl Game {
             upgraded: false,
             spirit_v: None,
             spirit_objs: Vec::new(),
+            spirit_rot: Vec::new(),
             spirit_born: 0,
             preempt_n: 0,
             fstrike: None,
@@ -10422,7 +10456,7 @@ impl Game {
     /// on it (its AgeRandom Next(120, 240) drawn as it is made).
     fn state_emit(&mut self, p: usize, (at, kind, frozen, layer): ([f32; 2], usize, bool, u64), gone: bool) {
         let list = self.projectiles[p].spec.state_emits.clone();
-        let (tiers, owner) = (self.projectiles[p].tiers, self.projectiles[p].owner);
+        let (tiers, owner, by) = (self.projectiles[p].tiers, self.projectiles[p].owner, self.projectiles[p].emitted_by);
         let tags = self.defs[kind].tags.clone();
         for se in &list {
             if se.must_pop && !gone {
@@ -10438,7 +10472,7 @@ impl Game {
             let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new()};
             let start = self.projectiles.len();
             self.emit_z = 20.0;
-            self.emit(at, (rot - 90.0) * DEG2RAD, &single, &se.projectile, None, tiers, owner);
+            self.emit_as(by, at, (rot - 90.0) * DEG2RAD, &single, &se.projectile, None, tiers, owner);
             self.emit_z = 0.0;
             // (TryEmit puts the bloon in each one's collidedWith, as LightningRodEmit: recording
             // sky_025 rt 1893, the FrozenRemains passes the Blues of the Ceramic it came from.)
@@ -10521,7 +10555,7 @@ impl Game {
         }
         let Some(rod) = re.rod.as_ref() else { return };
         let bp = self.bloons[j].pos;
-        let (tiers, owner, z) = (self.projectiles[p].tiers, self.projectiles[p].owner, self.projectiles[p].z);
+        let (tiers, owner, z, by) = (self.projectiles[p].tiers, self.projectiles[p].owner, self.projectiles[p].z, self.projectiles[p].emitted_by);
         let close = self.projectiles.iter().any(|q| q.owner == owner && q.spec.rod.is_some() && q.frames_left > 0.0
             && ((q.pos[0] - bp[0]).powi(2) + (q.pos[1] - bp[1]).powi(2)).sqrt() < re.min_dist);
         if close {
@@ -10532,7 +10566,7 @@ impl Game {
         let start = self.projectiles.len();
         self.emit_rot = Some(rot);
         self.emit_z = z;
-        self.emit(bp, (rot - 90.0) * DEG2RAD, &single, rod, None, tiers, owner);
+        self.emit_as(by, bp, (rot - 90.0) * DEG2RAD, &single, rod, None, tiers, owner);
         self.emit_rot = None;
         self.emit_z = 0.0;
         for q in &mut self.projectiles[start..] {
@@ -10678,7 +10712,7 @@ impl Game {
                 let dir = (rot - 90.0) * DEG2RAD;
                 // (From the bloon's Position: its z; recording sky_400 rt 102, arrows at 120 off a MOAB.)
                 let z = self.bloons[j].height;
-                let (tiers, owner) = (pr.tiers, pr.owner);
+                let (tiers, owner, by) = (pr.tiers, pr.owner, pr.emitted_by);
                 let start = self.projectiles.len();
                 // (EmissionRotationOffProjectileDirection on its ArcEmission: centred on that
                 // rotation, angleInBetween apart.)
@@ -10688,7 +10722,7 @@ impl Game {
                 // centre]) at +-45.)
                 self.emit_dir_rot = Some(rot);
                 self.emit_z = z;
-                self.emit(from, dir, em, arrow, None, tiers, owner);
+                self.emit_as(by, from, dir, em, arrow, None, tiers, owner);
                 self.emit_rot = None;
                 self.emit_dir_rot = None;
                 self.emit_z = 0.0;
@@ -10717,7 +10751,7 @@ impl Game {
                     let centre = self.seg_span(pi, k).unwrap().0;
                     let pr = &self.projectiles[p];
                     let rot = pr.grot.unwrap_or_else(|| pr.dir_rot());
-                    let (tiers, owner) = (pr.tiers, pr.owner);
+                    let (tiers, owner, by) = (pr.tiers, pr.owner, pr.emitted_by);
                     let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new()};
                     for n in 0..(cnt.max(1.0) as usize) {
                         let d0 = (centre - n as f32 * spacing).max(0.0);
@@ -10726,7 +10760,7 @@ impl Game {
                         let at = bp;
                         let start = self.projectiles.len();
                         self.emit_rot = Some(rot);
-                        self.emit(at, (rot - 90.0) * DEG2RAD, &single, vp, None, tiers, owner);
+                        self.emit_as(by, at, (rot - 90.0) * DEG2RAD, &single, vp, None, tiers, owner);
                         self.emit_rot = None;
                         for q in &mut self.projectiles[start..] {
                             // (Not on the bloon it came from nor its children: recording sky_520 rt
@@ -11444,6 +11478,7 @@ impl Game {
             upgraded: false,
             spirit_v: None,
             spirit_objs: Vec::new(),
+            spirit_rot: Vec::new(),
             spirit_born: 0,
             preempt_n: 0,
             fstrike: None,
@@ -12915,6 +12950,7 @@ impl Game {
                     let round_clock = self.round_clock;
                     let p0 = self.projectiles.len();
                     self.towers_phase(Some(t), &cd_speed, &mut Default::default(), round_clock, &mut dots, &mut emits, &[], &[], &mut leak_voice);
+                    self.emit_by = None;
                     // (Its shots start ageing next frame: recording spike_052, the four rt-1 storm
                     // spikes last one frame longer than the clone had them, rt 2236 / 2323 / 2382 /
                     // 2505.)
@@ -12956,6 +12992,7 @@ impl Game {
             let (mut dots, mut emits, mut leak_voice) = (Vec::new(), Vec::new(), false);
             let round_clock = self.round_clock;
             self.towers_phase(Some(t), &cd_speed, &mut Default::default(), round_clock, &mut dots, &mut emits, &[], &[], &mut leak_voice);
+            self.emit_by = None;
             self.phase = phase;
         }
     }
@@ -15052,6 +15089,14 @@ impl Game {
     /// IncomeSet threshold above `round` gives the multiplier, else its finalMultiplier
     /// (DefaultIncomeSet: 1 below round index 50, 0.5 below 60, 0.2 below 85...; recordings
     /// boomerang_paragon_r63 / r78, quincy_l12_r60: pops pay 0.2 / 0.5).
+    /// BloonDegradeStepper.GetCashForLayers (VERIFIED-DECOMP @0x180fe5ba0) over bloon kind `k`
+    /// popped whole with its children: the raw cash ($1 + additionalCash) of each layer whose
+    /// layerNumber <= `lowest` (the hit bloon's lowestLayerNumber; regrown layers pay nothing).
+    fn cash_in_paid(&self, k: usize, lowest: u32) -> f64 {
+        let own = if self.defs[k].layer_number <= lowest { 1.0 + self.extra_cash[k] } else { 0.0 };
+        own + self.child_kinds[k].iter().map(|&c| self.cash_in_paid(c, lowest)).sum::<f64>()
+    }
+
     fn income_mult_for(&self, round: u32) -> f32 {
         let Some(set) = &self.income_set else { return 1.0 };
         set.thresholds.iter().find(|t| (round as i32) < t.0).map_or(set.final_mult, |t| t.1)
@@ -16605,6 +16650,7 @@ impl Game {
     fn great_white_hit(&mut self, p: usize, id: u64, gw: Box<crate::data::GreatWhite>) {
         let Some(i) = self.bloons.iter().position(|b| b.id == id) else { return };
         let owner = self.projectiles[p].owner;
+        let by = self.projectiles[p].emitted_by;
         let Some((t, wi)) = self.gw_limiter(owner) else { return };
         let busy = match self.towers[t].weapons.get(wi) {
             Some(st) => st.gw_effect || st.gw_attached.is_some_and(|u| self.projectiles.iter().any(|q| q.uid == u)),
@@ -16629,7 +16675,7 @@ impl Game {
             let at = self.projectiles[p].pos;
             let (tiers, start) = (self.towers[t].tiers, self.projectiles.len());
             self.emit_target = Some(id);
-            self.emit(at, 0.0, &gw.emission, &follow, None, tiers, owner);
+            self.emit_as(by, at, 0.0, &gw.emission, &follow, None, tiers, owner);
             self.emit_target = None;
             if self.projectiles.len() > start {
                 let uid = self.projectiles[start].uid;
@@ -17251,6 +17297,7 @@ impl Game {
         let mut prev: Option<usize> = None;
         let mut inited: Vec<u64> = Vec::new();
         for t in only_temp.map_or_else(|| (0..self.towers.len()).collect::<Vec<_>>(), |t| vec![t]) {
+            self.emit_by = None;
             if only_temp.is_none() {
                 if let Some(pt) = prev.replace(t) {
                     self.track_sets_init(pt);
@@ -19760,6 +19807,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                     None
                                 }
                             };
+                            // (A credit-parent sentry's shots: EmittedBy is the sentry, `emit_by`.)
+                            self.emit_by = match &self.towers[t].sub {
+                                Some(s) if s.spec.credit_parent => Some((s.parent, self.towers[t].id)),
+                                _ => None,
+                            };
                             let tw = &mut self.towers[t];
                             let owner = match &tw.sub {
                                 Some(s) if s.spec.credit_parent => s.parent,
@@ -21006,6 +21058,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             if let Some(t) = self.towers.iter().position(|o| o.id == id) {
                 self.deferred_attack = Some(ai);
                 self.towers_phase(Some(t), cd_speed, early, round_clock, dots, emits, zones, shoves, leak_voice);
+                self.emit_by = None;
                 self.deferred_attack = None;
             }
         }
@@ -22969,11 +23022,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 .map(|b| ((b.pos[0] - at[0]).powi(2) + (b.pos[1] - at[1]).powi(2), b.id, b.pos))
                                 .filter(|x| x.0 <= cs.range * cs.range).collect();
                             c.sort_by(|x, y| x.0.total_cmp(&y.0));
-                            let (tiers, owner) = (self.projectiles[p].tiers, self.projectiles[p].owner);
+                            let (tiers, owner, by) = (self.projectiles[p].tiers, self.projectiles[p].owner, self.projectiles[p].emitted_by);
                             for &(_, tid, tp) in c.iter().take(cs.count) {
                                 let start = self.projectiles.len();
                                 self.emit_target = Some(tid);
-                                self.emit(hpos, 0.0, &cs.emission, &cs.projectile, None, tiers, owner);
+                                self.emit_as(by, hpos, 0.0, &cs.emission, &cs.projectile, None, tiers, owner);
                                 self.emit_target = None;
                                 let d = [tp[0] - hpos[0], -(tp[1] - hpos[1])];
                                 let l = (d[0] * d[0] + d[1] * d[1]).sqrt();
@@ -23534,7 +23587,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         })
     }
 
-    fn retire_projectile(&mut self, pr: &Projectile) -> (Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32), bool)>, Option<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)>) {
+    fn retire_projectile(&mut self, pr: &Projectile) -> (Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], (u64, u64), Option<u64>, (Option<f32>, f32, f32), bool)>, Option<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)>) {
         let (mut out, mut sub) = (Vec::new(), None);
             // AddAcidicMixtureToProjectile.Exhausted (VERIFIED-DISASM @0x180c80ef0): on the potion's
             // end, at a live target tower: one already brewed with this mutator gets
@@ -23564,7 +23617,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // leaves its TargetDamage.)
             let expired = pr.pierce > 0.0 || (pr.spec.keep_spent && pr.frames_left <= 0.0);
             if let (true, Some(te)) = (expired, pr.spec.track_expire.clone()) {
+                let saved = self.emit_by.replace((pr.owner, pr.emitted_by));
                 self.track_expire_emit(pr.pos, &te, pr.tiers, pr.owner);
+                self.emit_by = saved;
             }
             let order = pr.spec.on_exhaust.iter().enumerate().filter(|e| e.1.expire).chain(pr.spec.on_exhaust.iter().enumerate().filter(|e| !e.1.expire));
             for (k, ex) in order {
@@ -23618,7 +23673,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                         tgt = Some(b.id);
                     }
                 }
-                out.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, pr.owner, tgt, (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
+                out.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, (pr.owner, pr.emitted_by), tgt, (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
             }
             // CreateTypedTower.Exhausted: the towerModelToMake chosen when it was fired.
             let n = pr.spec.create_tower.len();
@@ -23642,8 +23697,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
 
     /// CreateProjectileOnExhaustFraction's projectiles.
     #[allow(clippy::type_complexity)]
-    fn spawn_exhausted(&mut self, exhausted: Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32))>) {
-        for (pos, dir, mut ex, tiers, owner, target, (grot, z, dir_rot)) in exhausted {
+    fn spawn_exhausted(&mut self, exhausted: Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], (u64, u64), Option<u64>, (Option<f32>, f32, f32))>) {
+        for (pos, dir, mut ex, tiers, (owner, by), target, (grot, z, dir_rot)) in exhausted {
+            self.emit_by = Some((owner, by));
             // CreateDistanceProjectileOnExhaustFraction.CheckFraction (VERIFIED-DECOMP @0x180c9d8a0):
             // + n x piercePerInterval / radiusPerInterval, n = (int)(|Target.Position - the emitting
             // tower's position| / distanceInterval), the Target where it is now (recording sky_020 rt
@@ -23722,6 +23778,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 }
             }
             self.emit(pos, dir, &ex.emission, &ex.projectile, None, tiers, owner); // P-EXHAUST
+            self.emit_by = None;
             self.emit_target = None;
             self.emit_aim = None;
             self.emit_dir_rot = None;
@@ -23766,6 +23823,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 }
             }
         }
+        self.emit_by = None;
     }
 
     /// LineProjectileEmission.Emit (VERIFIED-DISASM @0x180c43e80) without useLengthSpeed or
@@ -23931,7 +23989,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // (A latched one's CreateProjectileOnInterval comes before its LatchToBloon in the
             // model's behaviours: it fires from where the projectile was before this frame's latch
             // move; recording map_haunted_beast_402_r80 rt 1914, the thrash at the 1913 spot.)
-            let (pos, camo, tiers, owner) = (if pr.latch_on.is_some() { pr.prev } else { pr.pos }, pr.camo, pr.tiers, pr.owner);
+            let (pos, camo, tiers, owner, by) = (if pr.latch_on.is_some() { pr.prev } else { pr.pos }, pr.camo, pr.tiers, pr.owner, pr.emitted_by);
             // CreateProjectileOnInterval.Process (VERIFIED-DECOMP @0x180ca55e0): with
             // onlyIfHasTarget, BloonManager.GetTarget (`interval_target`); none, and it returns
             // before createNextProjAt moves, so it looks again each frame.
@@ -23975,7 +24033,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             if pick.is_none() && (v[0] != 0.0 || v[1] != 0.0) {
                 self.emit_rot = Some(RAD2DEG * crt_atan2(v[0], -v[1]));
             }
-            self.emit(pos, dir, &oi.emission, &oi.projectile, None, tiers, owner);
+            self.emit_as(by, pos, dir, &oi.emission, &oi.projectile, None, tiers, owner);
             self.emit_rot = saved_rot;
             for sp in &mut self.projectiles[start..] {
                 sp.camo = camo;
@@ -24058,6 +24116,15 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         }
         if std::env::var_os("DBGE").is_some() && off.len() > 1 { eprintln!("DBGAIM offtrack rt {} {:?}", self.round_clock, off.iter().map(|&i| (self.bloons[i].id, self.bloons[i].pos[0], self.grid_query_key(pos, i), self.path_rank.get(&self.bloons[i].id).copied(), grid_cell(self.bloons[i].cell_pos))).collect::<Vec<_>>()); }
         off.first().map(|&i| self.bloons[i].id)
+    }
+
+    /// `emit` for a projectile's children: they take its EmittedBy (`by`; CreateProjectileOnContact
+    /// .Collide @0x180ca2a60 emits with get_EmittedBy).
+    #[allow(clippy::too_many_arguments)]
+    fn emit_as(&mut self, by: u64, from: [f32; 2], dir: f32, em: &Emission, spec: &Proj, crit: Option<f32>, tiers: [u8; 3], owner: u64) {
+        let saved = self.emit_by.replace((owner, by));
+        self.emit(from, dir, em, spec, crit, tiers, owner);
+        self.emit_by = saved;
     }
 
     fn emit(&mut self, from: [f32; 2], dir: f32, em: &Emission, spec: &Proj, crit: Option<f32>, tiers: [u8; 3], owner: u64) {
@@ -24300,7 +24367,19 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                         cm.min = v;
                         cm.max = v;
                     }
-                    let base=cash_value(&cm,self.rand());(base*inc as f64,base)
+                    let base=cash_value(&cm,self.rand());
+                    // MonkeyCityIncomeSupport's MutatorTower.Mutate (VERIFIED-DECOMP @0x180d45eb0) adds
+                    // (multiplier - 1) to each CashModel's bonusMultiplier (f32); Cash.RollAmount
+                    // (VERIFIED-DECOMP @0x180c999b0) pays (bonusMultiplier + 1) x maximum in f32 when
+                    // minimum == maximum (recording village_004_std rt 3: a Marketplace beside Monkey
+                    // City pays exactly 24). STAND-IN P-CASHROLL: a range still draws the clone's own
+                    // rand, the multiplier outside.
+                    if cm.min == cm.max && inc != 1.0 {
+                        let bonus = cm.bonus + (inc - 1.0);
+                        (((bonus + 1.0) * cm.max) as f64, base)
+                    } else {
+                        (base*inc as f64,base)
+                    }
                 }
                 None => (0.0,0.0),
             };
@@ -24450,6 +24529,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 refresh_due: false,
                 follow_expire: false,
                 carrier: 0,
+                emitted_by: self.emit_by.filter(|&(o, _)| o == owner).map_or(owner, |(_, e)| e),
                 tiers,
                 owner,
                 target: None,
@@ -24527,8 +24607,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         let sim_now = self.sim_elapsed;
         let mut kids: Vec<u64> = Vec::new();
         let mut subs: Vec<(std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2], u64, Option<f32>, bool)> = Vec::new();
-        let mut contacts: Vec<([f32; 2], f32, crate::data::Contact, [u8; 3], u64, Option<u64>, f32)> = Vec::new();
-        let mut exhausted: Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], u64, Option<u64>, (Option<f32>, f32, f32))> = Vec::new();
+        let mut contacts: Vec<([f32; 2], f32, crate::data::Contact, [u8; 3], (u64, u64), Option<u64>, f32)> = Vec::new();
+        let mut exhausted: Vec<([f32; 2], f32, crate::data::Exhaust, [u8; 3], (u64, u64), Option<u64>, (Option<f32>, f32, f32))> = Vec::new();
         if !self.instant_hits.is_empty() {
             let only = std::mem::take(&mut self.instant_hits);
             // (The grid is the last collision pass's: bloons made or removed since (with it off)
@@ -24892,6 +24972,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         self.compute_danger();
         self.grave_zones();
         self.towers_phase(None, &cd_speed, &mut early, round_clock, &mut dots, &mut emits, &zones, &shoves, &mut leak_voice);
+        self.emit_by = None;
         // RotateAreaAction.Process: map logic after the towers.
         self.logic_spin();
         // ActivateLightningRodZap.Process: the ability's behaviour after its tower's attacks
@@ -25409,14 +25490,16 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 self.towers[t].sub_base = Some(r);
             }
         }
-        for (pos, dir, c, tiers, owner, skip, z) in contacts {
+        for (pos, dir, c, tiers, (owner, by), skip, z) in contacts {
             let start = self.projectiles.len();
+            self.emit_by = Some((owner, by));
             self.emit_z = z;
             let saved = self.emit_rot;
             if c.rot.is_some() {
                 self.emit_rot = c.rot;
             }
             self.emit(pos, dir, &c.emission, &c.projectile, None, tiers, owner);
+            self.emit_by = None;
             self.emit_rot = saved;
             self.emit_z = 0.0;
             if let Some(id) = skip {
@@ -25669,7 +25752,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // PerRoundCashBonusTowerModel: each tower's per-round cash, shown over it.
             for t in 0..self.towers.len() {
                 // (ChimpsModModel: PerRoundCashBonusTowerModel.cashPerRound 0.)
-                let v = if self.chimps() { 0.0 } else { self.tier(t).map_or(0.0, |tr| tr.round_cash) * self.buffs.get(t).map_or(1.0, |b| b.income_mult) as f64 };
+                // (MonkeyCityIncomeSupport's Mutate scales cashPerRound x multiplier in f32,
+                // VERIFIED-DECOMP @0x180d45eb0.)
+                let v = if self.chimps() { 0.0 } else { (self.tier(t).map_or(0.0, |tr| tr.round_cash) as f32 * self.buffs.get(t).map_or(1.0, |b| b.income_mult)) as f64 };
                 if v > 0.0 {
                     if self.coop_wallets.is_some(){
                         let shared=self.tier(t).map_or(0.0,|tr|tr.round_cash_shared)*self.buffs.get(t).map_or(1.0,|b|b.income_mult) as f64;

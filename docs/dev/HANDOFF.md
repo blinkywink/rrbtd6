@@ -172,7 +172,7 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
-### NEXT: cash parity (2026-11-18; every sim matches, the cash differs in 8 of 1141 recordings)
+### DONE: cash parity (2026-11-18; every sim matches and every regression recording is cash-exact)
 Cash was never part of the match. Check: `sh tools/rec/cash_sweep.sh 'pending/<set>/*.rec' ...` (paths or
 quoted globs under research/dumps/recordings; per recording MATCH/DIFF and its first cash difference,
 tools/rec/cashcmp.py, tolerance 1e-5). The harness starts the clone at the recording's own cash (first F line)
@@ -226,21 +226,30 @@ and places scripted towers free, as SimRecorder's CreateTowerAt does. DONE this 
   MutatorTower.Mutate (@0x180d45eb0) multiplies several model floats in f32 (+0x28/+0x2c, +0x30 and an int
   array at +0x38, ...); which branch is the CashModel isn't mapped yet (CashModel.minimum is +0x30). OPEN.
 - Debug: RRBTD6_REC_POPS also logs HIT (each hit's pay), STAGED (the frame's flush), NOPAY (unpaid layers).
-Remaining:
-- engineer_420_close / 420_last / 500 / 502_last / 502_strong (clone +3..11), engineer_005 rt 3482 (+1).
-  FOUND for 502_last rt 1510 (`RRBTD6_REC_POPS=1 RRBTD6_REC_CASH=1 sh tools/rec/compare.sh --one ...` logs
-  each paid pop): in the collision pass the clone pops Green 265 (game id 2406, at 175.47, the track end),
-  while the game's projectile 2380 hits 2414 (H line) and 2406 leaks unpaid in the move. A hit-target
-  difference the comparator can't see (the bloon is gone either way; H lines aren't compared): find
-  which clone projectile hit 265 and why 2380 prefers 2414 in the game.
-Full list (first differing frame):
-  pending/engineer/engineer_005: rt 3482 game 2940.0 clone 2941.0
-  pending/engineer/engineer_420_close: rt 3015 game 811.0 clone 818.0
-  pending/engineer/engineer_420_last: rt 2112 game 555.0 clone 558.0
-  pending/engineer/engineer_500: rt 3315 game 2156.0 clone 2167.0
-  pending/engineer/engineer_502_last: rt 1510 game 399.0 clone 402.0
-  pending/engineer/engineer_502_strong: rt 2118 game 1327.0 clone 1330.0
-  pending/village_std/village_004_std / 005_std: rt 525 game 264.0 clone 264.0000104904175 (rt 3 banana, above)
+- POP CASH GOES ON Projectile.EmittedBy (VERIFIED-DECOMP, 2026-11-18): Damage.Collide (@0x180cb6b50) passes
+  get_EmittedBy (Projectile vtable slot 104) to Bloon.Damage, which DistributeCash.PostDegrade stages the cash
+  on; a CreditPopsToParentTower sentry is its own EmittedBy (the pop credit still goes to the Engineer), and
+  CreateProjectileOnContact.Collide (@0x180ca2a60) emits children with the parent's EmittedBy. Clone:
+  `Projectile.emitted_by` (set from `emit_by`: (owner, emitter) while a credit-parent sentry fires,
+  `emit_as` / the contacts and exhausted tuples' (owner, emitted_by) for children). So a sentry's hit in
+  the frame the sentry expires is staged on it and lost; a hit after it is gone pays at once
+  (engineer_502_last rt 1510: projectile 2380's pop of 2406 pays $0, its next pays $3). Fixed
+  engineer_420_close / 420_last / 500 / 502_last / 502_strong. (The earlier "hit-target difference" note
+  was wrong: H lines are written before their frame's F line, so the game's hits were the clone's.)
+- EatBloon pays through GetCashForLayers against the eaten bloon's lowestLayerNumber (`cash_in_paid`):
+  engineer_005 rt 3482, a regrown Green eaten pays its Blue and Red only. Fixed engineer_005.
+- Monkey City (VERIFIED-DECOMP): MonkeyCityIncomeSupport's MutatorTower.Mutate (@0x180d45eb0) adds
+  (multiplier - 1) to each CashModel's bonusMultiplier (+0x38, f32; fVar3 is 1.0) and scales
+  PerRoundCashBonusTowerModel cashPerRound / cashRoundBonusMultiplier x multiplier (f32); Cash.RollAmount
+  (@0x180c999b0) pays (bonusMultiplier + 1) x maximum in f32 when minimum == maximum, else
+  NextDouble x ((b+1) max - (b+1) min) + (b+1) min in double. village_004_std / 005_std rt 3 now pay exactly 24
+  (1.2f x 20 is a tie that rounds to 24.0). STAND-IN P-CASHROLL: a min != max CashModel still draws the
+  clone's own unsynced rand (`cash_value`), not the synced BufferedRandom; no recording reaches one yet.
+Remaining (cash sweep over the whole regression, 2026-11-18): none.
+  Not in the regression: dart_paragon_fx / fxp / rot3d (rt 208, -1) and dart_paragon_hand_lvl2 (rt 6) also
+  differ in the sim; left alone.
+OPEN from the same rule, not reached by a recording: the held-bloon path (beast) still pays each unmade
+  child's whole cash_in when its lowest != 0, not GetCashForLayers against the hit's lowest.
 
 NOTE for the owner (not changed): website/public/hero/*.webp (7 images, commit 18e44a2 of 2026-11-09) are
 tracked and have been in the public repo since then, though the rules say hero/ stays uncommitted. Removing

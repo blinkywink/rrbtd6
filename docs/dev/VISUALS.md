@@ -198,8 +198,20 @@ effect names, model behaviours the data builder never reads).
   Unity's curl noise. Re-exported: the 117 effects that had it (or a stale SubModule) and the Corvus /
   Geraldo / Psi / Tack tier effects, and the 21 maps' ambient effects with it.
 - DONE: Size / Rotation / Color by Speed (`size_speed`, `rot_speed`, `color_speed`: the curve at the speed
-  placed in `range`); their 34 effects and 4 maps re-exported. LEFT: TrailModule (83 effects),
-  ExternalForces (20), CustomData (9, shader streams).
+  placed in `range`); their 34 effects and 4 maps re-exported.
+- DONE: TrailModule (particle mode): each trailed particle (ratio) keeps its points (minVertexDistance apart,
+  lifetime x its lifetime), drawn as a camera-facing strip with the renderer's trail material
+  (m_Materials[1]: renderer `trail`), widthOverTrail x the particle's size, colorOverTrail x colorOverLifetime
+  (x the particle's colour, inheritParticleColor); render mode None systems draw only their trails. 44
+  effects, 4 towers' tiers and 10 maps re-exported. STAND-IN: ribbons modes and dieWithParticles false
+  (trails fade with the particle) aren't followed. Unverified on screen in detail (small at map scale).
+- FIXED: Shader Graph materials keep stale _SrcBlend / _DstBlend (Standard's One / Zero): the blend now
+  comes from the shader's own pass (`shader_blend`, parsed form rtBlend0): ParticleGlow is SrcAlpha / One,
+  additive. 120 ParticleGlow systems (Geared, Castle Revenge... ambient sparks, tier and projectile
+  effects) drew as dark opaque streaks; 96 effects, 6 towers' tiers and 8 maps re-exported.
+- Spike Paragon carpet rotation: each piece takes its position's segment heading (Tower `spirit_rot`,
+  display only; INFERRED: PathSegment.rotation as atan2 of the game y-up difference to the next point).
+- LEFT: ExternalForces (20 effects), CustomData (9, shader streams).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

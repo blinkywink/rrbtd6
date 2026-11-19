@@ -2836,6 +2836,7 @@ def main():
                                              for k in ("objectsToPlaceClose", "objectsToPlaceMiddle", "objectsToPlaceFar")],
                                  "rot": [b["f"].get("rotationMin", 0.0), b["f"].get("rotationMax", 0.0)],
                                  "obj_scale": [b["f"].get("scaleMin", 1.0), b["f"].get("scaleMax", 1.0)],
+                                 "pos_rot": b["type"] == "SpikeParagonDamageZoneModel",
                                  # (Each zone's mutator id: DamageOverTimeZone.InitialiseZone (@0x180d1aca0)
                                  # takes mutatorId, or the model's name when that is "": 0-x-2's
                                  # "DamageOverTimeZoneModel_Medium", not kept on a MOAB pop.)

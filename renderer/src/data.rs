@@ -2586,6 +2586,9 @@ pub struct Spirit {
     pub rot: [f32; 2],
     #[serde(default)]
     pub obj_scale: [f32; 2],
+    /// The objects take their position's segment rotation (SpikeParagonDamageZone), display only.
+    #[serde(default)]
+    pub pos_rot: bool,
 }
 
 /// DamageOverTimeCustomModel: `damage` every `interval` s (x mult + add on `tags`).

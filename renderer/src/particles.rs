@@ -326,6 +326,44 @@ struct System {
     rot_speed: Option<BySpeed>,
     #[serde(default)]
     color_speed: Option<ColorBySpeed>,
+    /// TrailModule (particle mode).
+    #[serde(default)]
+    trail: Option<TrailJson>,
+}
+
+/// TrailModule: a ribbon behind `ratio` of the particles; its points last lifetime x the
+/// particle's lifetime and are minVertexDistance apart.
+#[derive(Deserialize, Clone)]
+struct TrailJson {
+    #[serde(default)]
+    mode: u8,
+    #[serde(default = "one")]
+    ratio: f32,
+    #[serde(default)]
+    lifetime: Option<Curve>,
+    #[serde(default)]
+    min_dist: f32,
+    #[serde(default = "yes")]
+    size_width: bool,
+    #[serde(default = "yes")]
+    inherit_color: bool,
+    #[serde(default)]
+    color_life: Option<ColorSpec>,
+    #[serde(default)]
+    width: Option<Curve>,
+    #[serde(default)]
+    color_trail: Option<ColorSpec>,
+}
+
+/// The renderer's trail material.
+#[derive(Deserialize, Clone, Default)]
+struct TrailMat {
+    #[serde(default)]
+    texture: Option<String>,
+    #[serde(default)]
+    blend: String,
+    #[serde(default)]
+    tint: Option<[f32; 4]>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -409,6 +447,9 @@ fn one_u8() -> u8 {
 
 #[derive(Deserialize, Clone, Default)]
 struct Renderer {
+    /// Its trail material (TrailModule's ribbons).
+    #[serde(default)]
+    trail: Option<TrailMat>,
     mode: u8,
     #[serde(default = "two")]
     length: f32,
@@ -671,6 +712,8 @@ struct SysDef {
     fx: Option<Rc<crate::fx::Fx>>,
     /// The particle mesh (local x y z, uv; triangle indices) when it isn't a quad.
     pmesh: Option<Rc<(Vec<(Vec3, Vec2)>, Vec<u16>)>>,
+    /// The trail material's texture, blend and tint (TrailModule).
+    trail: Option<(Texture2D, Blend, [f32; 4])>,
 }
 
 pub struct EffectDef {
@@ -851,12 +894,14 @@ impl EffectDef {
             };
             world.push((p, r, s, active));
             let (Some(sys), Some(ren)) = (&n.system, &n.renderer) else { continue };
-            if !active || !ren.enabled || ren.mode == 5 || (sys.emission.is_none()) {
+            // (Render mode None draws no particles; with a trail it still draws its ribbons.)
+            let trail_only = ren.mode == 5 && sys.trail.is_some() && ren.trail.is_some();
+            if !active || !ren.enabled || (ren.mode == 5 && !trail_only) || (sys.emission.is_none()) {
                 continue;
             }
             // No material (it lives in a file the export couldn't follow): nothing faithful to
             // draw, e.g. the GodRay-shaded light shards on Tinkerton.
-            if ren.material.is_none() {
+            if ren.material.is_none() && !trail_only {
                 continue;
             }
             let tex = ren
@@ -912,7 +957,21 @@ impl EffectDef {
             } else {
                 None
             };
-            systems.push(SysDef { node, pmesh, sys: sys.clone(), ren: ren.clone(), rot: r, pos: p, scale, size_scale, tex, blend, tint, add_color, fx });
+            let trail = sys.trail.as_ref().and(ren.trail.as_ref()).map(|tm| {
+                let t = tm.texture.as_ref().and_then(|name| {
+                    let b = std::fs::read(dir.join(name)).ok()?;
+                    let t = Texture2D::from_file_with_format(&b, None);
+                    t.set_filter(FilterMode::Linear);
+                    Some(t)
+                }).unwrap_or_else(soft_dot);
+                let b = match tm.blend.as_str() {
+                    "add" => Blend::Add,
+                    "premul" => Blend::Premul,
+                    _ => Blend::Alpha,
+                };
+                (t, b, tm.tint.unwrap_or([1.0; 4]))
+            });
+            systems.push(SysDef { node, pmesh, sys: sys.clone(), ren: ren.clone(), rot: r, pos: p, scale, size_scale, tex, blend, tint, add_color, fx, trail });
         }
                 let baked: Vec<Mat4> = world.iter().map(|&(p, r, sc, _)| Mat4::from_scale_rotation_translation(sc, r, p)).collect();
         // Nodes an animator or Animator track moves, and everything below them.
@@ -1045,6 +1104,9 @@ struct Particle {
     /// Birth sub-emitters (up to two): their emission accumulators and bursts fired.
     sub_acc: [f32; 2],
     sub_fired: [u16; 2],
+    /// TrailModule: its trail's points (position, the particle's age then), oldest first; None
+    /// for a particle without one (ratio).
+    trail: Option<Vec<(Vec3, f32)>>,
 }
 
 struct SysState {
@@ -1523,6 +1585,24 @@ impl Instance {
                 if dt > 0.0 {
                     p.tvel = disp / dt;
                 }
+                // TrailModule: a point once the particle is minVertexDistance from the last; points
+                // older than lifetime x the particle's lifetime go. (Which particles have a trail:
+                // ratio against the particle's own random.)
+                if let Some(tr) = &sys.trail {
+                    if tr.mode == 0 && p.r[7] <= tr.ratio {
+                        let life = tr.lifetime.as_ref().map_or(1.0, |c| c.at(0.0, p.r[6])) * p.life;
+                        let pts = p.trail.get_or_insert_with(Vec::new);
+                        if pts.last().is_none_or(|(q, _)| q.distance(p.pos) >= tr.min_dist.max(1e-3)) {
+                            pts.push((p.pos, p.age));
+                        }
+                        let age = p.age;
+                        pts.retain(|(_, a)| age - *a <= life);
+                        if pts.len() > 48 {
+                            let cut = pts.len() - 48;
+                            pts.drain(..cut);
+                        }
+                    }
+                }
                 if let Some(rs) = &sys.rot_speed {
                     let k = speed_t(p.tvel, rs.range);
                     p.rot += rs.z.at(k, p.r[4]) * dt;
@@ -1588,6 +1668,7 @@ impl Instance {
                         r,
                         sub_acc: [0.0; 2],
                         sub_fired: [0; 2],
+                        trail: None,
                         tvel: Vec3::ZERO,
                         rot3: if sys.init.rotation3d { vec2(sys.init.rotation_x.at(nt, r[6]), sys.init.rotation_y.at(nt, r[7])) } else { Vec2::ZERO },
                     });
@@ -1638,6 +1719,7 @@ impl Instance {
                     r,
                     sub_acc: [0.0; 2],
                     sub_fired: [0; 2],
+                    trail: None,
                     tvel: Vec3::ZERO,
                     rot3: if sys.init.rotation3d { vec2(sys.init.rotation_x.at(0.0, r[6]), sys.init.rotation_y.at(0.0, r[7])) } else { Vec2::ZERO },
                 });
@@ -2051,6 +2133,10 @@ impl Particles {
                 self.idx.clear();
                 let sys = &sd.sys;
                 for p in &st.parts {
+                    // (Render mode None: only its trail draws.)
+                    if sd.ren.mode == 5 {
+                        continue;
+                    }
                     let u = p.age / p.life;
                     let mut size = p.size * inst.scale;
                     if let Some(sm) = &sys.size {
@@ -2207,6 +2293,55 @@ impl Particles {
                     }
                 }
                 Self::flush(&mut self.mats, sd, &mut self.verts, &mut self.idx);
+                // TrailModule ribbons: each trail point (and the particle's head) placed as the
+                // particle is, a camera-facing strip widthOverTrail x the particle's size wide,
+                // colourOverTrail x colourOverLifetime (x the particle's colour, inheritParticleColor),
+                // the texture stretched along it.
+                if let (Some(tr), Some((ttex, tblend, ttint))) = (&sys.trail, &sd.trail) {
+                    let view = right.cross(up).normalize_or_zero();
+                    for p in &st.parts {
+                        let Some(pts) = &p.trail else { continue };
+                        if pts.is_empty() {
+                            continue;
+                        }
+                        let u = p.age / p.life;
+                        let place = |q: Vec3| -> Vec3 {
+                            let lp = cl.map_or(q, |(c, _)| c.transform_point3(q));
+                            let w = if sd.sys.space == 1 { p.origin } else { inst.at } + lp * inst.scale;
+                            gl(w.x, w.y, w.z)
+                        };
+                        let mut chain: Vec<Vec3> = pts.iter().map(|(q, _)| place(*q)).collect();
+                        chain.push(place(p.pos));
+                        if chain.len() < 2 {
+                            continue;
+                        }
+                        let base_w = if tr.size_width { p.size.x * inst.scale } else { inst.scale };
+                        let life_c = tr.color_life.as_ref().map_or([1.0; 4], |c| c.at(u, p.r[4]));
+                        let pc = if tr.inherit_color { p.color } else { [1.0; 4] };
+                        let n = chain.len();
+                        let base = self.verts.len() as u16;
+                        for (i, &q) in chain.iter().enumerate() {
+                            // 0 at the tail (oldest), 1 at the head.
+                            let a = i as f32 / (n - 1) as f32;
+                            let along = 1.0 - a;
+                            let dir = if i + 1 < n { chain[i + 1] - q } else { q - chain[i - 1] };
+                            let side = dir.cross(view).normalize_or_zero();
+                            let w = base_w * tr.width.as_ref().map_or(1.0, |c| c.at(along, p.r[5])) * 0.5;
+                            let ct = tr.color_trail.as_ref().map_or([1.0; 4], |c| c.at(along, p.r[4]));
+                            let col = [0, 1, 2, 3].map(|k| ((pc[k] * life_c[k] * ct[k] * ttint[k]).clamp(0.0, 1.0) * 255.0) as u8);
+                            self.verts.push(Vertex { position: q + side * w, uv: vec2(a, 0.0), color: col, normal: Vec4::ZERO });
+                            self.verts.push(Vertex { position: q - side * w, uv: vec2(a, 1.0), color: col, normal: Vec4::ZERO });
+                            if i + 1 < n {
+                                let b = base + (i as u16) * 2;
+                                self.idx.extend_from_slice(&[b, b + 1, b + 3, b, b + 3, b + 2]);
+                            }
+                        }
+                        if self.idx.len() >= 4800 || self.verts.len() >= 60000 {
+                            Self::flush_trail(&mut self.mats, *tblend, ttex, &mut self.verts, &mut self.idx);
+                        }
+                    }
+                    Self::flush_trail(&mut self.mats, *tblend, ttex, &mut self.verts, &mut self.idx);
+                }
                 if let (Some(d), Some((lo, hi, n))) = (&mut self.dump, mesh_bounds) {
                     use std::io::Write;
                     let _ = writeln!(d, "m {} {} {} {} {} {} {} {}", n, n / 2, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
@@ -2218,6 +2353,23 @@ impl Particles {
                 }
             }
         }
+    }
+
+    /// Draws the batched trail ribbons with the trail material's texture and blend.
+    fn flush_trail(mats: &mut HashMap<(Blend, bool), Material>, blend: Blend, tex: &Texture2D, verts: &mut Vec<Vertex>, idx: &mut Vec<u16>) {
+        if idx.is_empty() {
+            verts.clear();
+            return;
+        }
+        let m = mats.entry((blend, false)).or_insert_with(|| material(blend, false));
+        gl_use_material(m);
+        let mesh = Mesh { vertices: std::mem::take(verts), indices: std::mem::take(idx), texture: Some(tex.clone()) };
+        draw_mesh(&mesh);
+        gl_use_default_material();
+        *verts = mesh.vertices;
+        *idx = mesh.indices;
+        verts.clear();
+        idx.clear();
     }
 
     fn flush(mats: &mut HashMap<(Blend, bool), Material>, sd: &SysDef, verts: &mut Vec<Vertex>, idx: &mut Vec<u16>) {
