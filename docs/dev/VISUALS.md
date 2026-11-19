@@ -169,7 +169,8 @@ effect names, model behaviours the data builder never reads).
   submerge pulses.
 - DONE: Legend of the Night's immunity effect (Immunity.SpawnEffects / RemoveImmunity @0x180e36a20 /
   @0x180e36740: effectModel at each Map.GetTrackEndPoints point while leaks are forgiven; ability
-  `immunity_fx`). Unverified on screen: Tutorial's track ends off the visible map.
+  `immunity_fx`). Checked: spawns at both of Enchanted Glade's track ends (under the tree canopy there) and renders
+  (purple ring and streams) spawned mid-map.
 - DONE: CritRoll / CritRollWithDistance's display (Desperado's CritText, Projectile.ChosenCritDisplay):
   "Crit!" where a rolled crit lands (weapon `crit_roll_text`, display only). STAND-IN: once, at the hit
   that rolls it.
@@ -229,6 +230,11 @@ effect names, model behaviours the data builder never reads).
   Projectile `tracer_hits`, display only). FIXED: every instant shot drew a muzzle-to-target streak the
   game doesn't have (its shots show only the muzzle flash); gone. Plain lines without a LineEffectModel keep
   the stand-in streak.
+- Gallery sweep (2026-11-19): all 26 monkeys at 000 / 300 / 500 / 030 / 050 / 003 / 005 / 520 / 052 / 205
+  (Buccaneer and Sub on Lotus Island) and every hero at level 1 (Brickell on water): every model renders
+  (no fallback cubes / spheres), right per tier. Every hero at each level its model changes (one run
+  per level): all right. Gallery fixes: hero level keys ("1000" = level 10, was read as 1-0-0) and the
+  placed tower, not the pet it makes (Corvus's Spirit took the tiers).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

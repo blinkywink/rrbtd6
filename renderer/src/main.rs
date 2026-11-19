@@ -1323,9 +1323,15 @@ const VINE_END_FRAMES: i32 = 23;
                             [c[0] + r * a.cos(), c[1] + r * a.sin()]
                         }).find(|&p| game.place(def, p));
                         if spot.is_some() {
-                            let t = game.towers.len() - 1;
+                            // (The placed tower itself, not a pet it made: Corvus's Spirit.)
+                            let t = (0..game.towers.len()).rev().find(|&i| game.towers[i].def == def && game.towers[i].sub.is_none()).unwrap_or(game.towers.len() - 1);
                             let b = tiers[k].as_bytes();
-                            game.towers[t].tiers = [b[0] - b'0', b[1] - b'0', b[2] - b'0'];
+                            // (A hero's level key, "1000" = level 10: tiers [level, 0, 0].)
+                            game.towers[t].tiers = if b.len() > 3 {
+                                [(tiers[k].parse::<u32>().unwrap_or(100) / 100).min(255) as u8, 0, 0]
+                            } else {
+                                [b[0] - b'0', b[1] - b'0', b[2] - b'0']
+                            };
                             game.towers[t].angle = -std::f32::consts::FRAC_PI_2;
                             k += 1;
                         }
