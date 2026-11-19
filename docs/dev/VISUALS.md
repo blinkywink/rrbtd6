@@ -160,11 +160,18 @@ effect names, model behaviours the data builder never reads).
   point, tier `preempt_fx`); Desperado's Vigilante buff display while the buff runs (buffDisplay,
   `Game::vigilante_active`, tier `vigilante_fx`).
 - Re-exported with Animator states: the 58 plain / projectile effects with an Animator (BeastMergeFx, Sun
-  Temple / True Sun God transformations, Magus Perfectus' phoenix...). The 116 tier_* effects aren't yet.
+  Temple / True Sun God transformations, Magus Perfectus' phoenix...) and the tier_* effects of the 12
+  towers that have animated ones (Ice Monkey, Mermonkey, Geraldo, Tack, Bomb, Desperado, Sub, Silas, Wizard,
+  Ace, Corvus, Druid).
+- DONE: ability support zones' displayModel on each tower they buff while they run (support `display`,
+  `Game::zone_displays`): Thunder's Decree (ThundersDecreeAbilityOnTowers), Naval Tactics
+  (NavalTacticsBuff), Pat Fusty's Rallying Roar (RallyRoarBuffFX, exported).
 - Audit entries already drawn: Paragon investment orbs, Acidic Mixture / Berserker Brew bubbles, Sub
   submerge pulses.
-- LEFT, rest: Thunder's Decree, Super Monkey ImmunityModel (Legend of the Night track radial),
-  Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
+- DONE: Legend of the Night's immunity effect (Immunity.SpawnEffects / RemoveImmunity @0x180e36a20 /
+  @0x180e36740: effectModel at each Map.GetTrackEndPoints point while leaks are forgiven; ability
+  `immunity_fx`). Unverified on screen: Tutorial's track ends off the visible map.
+- LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy
   reports a failed decompression as a parse error and loads nothing, so the MemoryError fallback never ran);

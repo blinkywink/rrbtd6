@@ -813,6 +813,10 @@ async fn game_main() {
     let mut ice_seen: HashMap<u64, String> = HashMap::new();
     // Towers showing their Vigilante buff display (tower id).
     let mut vig_seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    // Ability zone displays on the towers they buff: (tower id, display) -> its effect tag.
+    let mut zone_seen: HashMap<(u64, String), u64> = HashMap::new();
+    // Legend of the Night's immunity effects at the track ends are up.
+    let mut immune_fx_on = false;
     // Towers whose ammo crate had arrived last frame (SniperAmmoSwap).
     let mut ammo_seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut after_fx_seen: HashMap<(u64, usize), f32> = HashMap::new();
@@ -1022,6 +1026,10 @@ const VINE_FX_TAG: u64 = 1 << 58;
 const ICE_FX_TAG: u64 = 1 << 56;
 /// Vigilante buff displays (tower id).
 const VIG_FX_TAG: u64 = 1 << 55;
+/// Ability zone displays on towers.
+const ZONE_FX_TAG: u64 = 1 << 54;
+/// Legend of the Night's track-end immunity effects.
+const IMMUNE_FX_TAG: u64 = (1 << 53) | 1;
 /// The vines' End clips (JungleVineWrapEnd 0.25 s, JungleVineGrowEnd 0.367 s): frames they
 /// stay after the grab ends.
 const VINE_END_FRAMES: i32 = 23;
@@ -3297,6 +3305,54 @@ const VINE_END_FRAMES: i32 = 23;
                     }
                     _ => {}
                 }
+            }
+            // An ability support zone's displayModel on each tower it buffs (Thunder's Decree), kept
+            // while the zone reaches it.
+            {
+                let mut live: Vec<(u64, String)> = Vec::new();
+                for t in 0..game.towers.len() {
+                    if game.towers[t].sub.is_some() {
+                        continue;
+                    }
+                    let id = game.towers[t].id;
+                    let p = game.towers[t].pos;
+                    for fx in game.zone_displays(t) {
+                        let key = (id, fx.clone());
+                        if !zone_seen.contains_key(&key) {
+                            fx_tag += 1;
+                            let tag = ZONE_FX_TAG | (fx_tag & 0xFFFF_FFFF);
+                            particles.spawn_display(&fx, [p[0], 0.0, p[1]], 1.0, 0.0, false, Some(tag));
+                            zone_seen.insert(key.clone(), tag);
+                        }
+                        live.push(key);
+                    }
+                }
+                zone_seen.retain(|k, tag| {
+                    let keep = live.contains(k);
+                    if !keep {
+                        particles.kill(*tag);
+                    }
+                    keep
+                });
+            }
+            // Immunity.SpawnEffects / RemoveImmunity (VERIFIED-DECOMP @0x180e36a20 / @0x180e36740):
+            // the ability's effect at every track end point (Map.GetTrackEndPoints) while leaks are
+            // forgiven.
+            {
+                let on = game.leak_immune > 0.0;
+                if on && !immune_fx_on {
+                    let fx = (0..game.towers.len()).find_map(|t| game.tier(t).and_then(|tr| tr.abilities.iter().find_map(|a| a.immunity_fx.clone())));
+                    if let Some((fx, k)) = fx {
+                        for tr in &game.tracks {
+                            if let Some(e) = tr.segments().last() {
+                                particles.spawn_display(&fx, [e[0], 0.0, e[1]], k, 0.0, false, Some(IMMUNE_FX_TAG));
+                            }
+                        }
+                    }
+                } else if !on && immune_fx_on {
+                    particles.kill(IMMUNE_FX_TAG);
+                }
+                immune_fx_on = on;
             }
             vig_seen.retain(|id| {
                 let live = game.towers.iter().any(|t| t.id == *id);

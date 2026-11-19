@@ -13381,6 +13381,16 @@ impl Game {
         self.tier_of(&self.towers[t])
     }
 
+    /// The displays of the support zones on tower `t` now (an ability zone's displayModel;
+    /// display helper).
+    pub fn zone_displays(&self, t: usize) -> Vec<String> {
+        let Some(tw) = self.towers.get(t) else { return Vec::new() };
+        let mut out: Vec<String> = self.supports_at(tw.def, tw.pos, Some(t)).into_iter().filter_map(|(sp, _)| sp.display).collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// Tower `t`'s Vigilante buff is running (its VigilanteMutator; display helper).
     pub fn vigilante_active(&self, t: usize) -> bool {
         matches!((self.towers.get(t).and_then(|tw| tw.vigilante_at), self.tier(t).and_then(|tr| tr.vigilante)),

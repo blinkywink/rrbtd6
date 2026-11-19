@@ -2090,6 +2090,9 @@ def main():
                 # ImmunityModel (Legend of the Night): leaks cost no lives for `lifespan` seconds.
                 if x["type"] == "ImmunityModel":
                     out["immunity"] = xf.get("lifespan", 0.0)
+                    # Immunity.SpawnEffects (VERIFIED-DECOMP @0x180e36a20): effectModel at each
+                    # Map.GetTrackEndPoints point while it lasts (visual).
+                    out["immunity_fx"] = blazing_one(xf.get("effectModel"))
                 # RedeployModel (Heli Pilot): the pad moves to any picked spot.
                 if x["type"] == "RedeployModel":
                     # (Redeploy.GetCustomInputData @0x180e522c0: RedeployCIData.helperMsg is the
@@ -2258,7 +2261,11 @@ def main():
                     # (distance, maxBounces, delay, targetType, expireIfNoTargetFound) added at the end.
                     ric = {"distance": xf.get("distance", 0.0), "max_bounces": int(xf.get("maxBounces", 0) or 0), "delay": xf.get("delay", 0.0),
                            "expire_if_none": bool(xf.get("expireIfNoTargetFound")), "after_travel": True} if kind == "ricochet" else None
-                    out["supports"].append({"kind": kind, "mult": mult, "add": add, "retarget": ric,
+                    # Its displayModel: on each tower it buffs while it runs (Thunder's Decree's
+                    # ThundersDecreeAbilityOnTowers; visual).
+                    zdm = deref(xf.get("displayModel"))
+                    zone_fx = prefab_name(zdm["f"].get("display")) if zdm else None
+                    out["supports"].append({"kind": kind, "mult": mult, "add": add, "retarget": ric, "display": zone_fx,
                                             "id": xf.get("mutatorId") or x["type"], "global": glob,
                                             "radius": None if glob or use_tower else rng,
                                             "self": x["type"] != "CallToArmsModel" and bool(xf.get("canEffectThisTower", xf.get("canAffectThisTower", True))),

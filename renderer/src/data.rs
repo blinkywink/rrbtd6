@@ -873,6 +873,9 @@ pub struct Tier {
 #[derive(Deserialize, Clone)]
 pub struct Support {
     pub kind: String,
+    /// An ability zone's displayModel (prefab): on each tower it buffs while it runs (display only).
+    #[serde(default)]
+    pub display: Option<String>,
     /// The ricochet zone's RetargetOnContactModel (kind "ricochet").
     #[serde(default)]
     pub retarget: Option<Retarget>,
@@ -2491,6 +2494,9 @@ pub struct Ability {
     /// ImmunityModel.lifespan (seconds): leaks cost no lives.
     #[serde(default)]
     pub immunity: f32,
+    /// ImmunityModel.effectModel (prefab, scale): at each track's end while it lasts (display only).
+    #[serde(default)]
+    pub immunity_fx: Option<(String, f32)>,
     /// DarkshiftModel: teleport to a picked spot.
     #[serde(default)]
     pub darkshift: Option<Darkshift>,
