@@ -316,6 +316,55 @@ struct System {
     /// SubModule: sub-emitters.
     #[serde(default)]
     sub: Vec<SubJson>,
+    /// NoiseModule (export_particles `noise`).
+    #[serde(default)]
+    noise: Option<NoiseJson>,
+}
+
+/// NoiseModule: strength per axis (one when not separateAxes), frequency, damping, octaves,
+/// scrollSpeed and positionAmount.
+#[derive(Deserialize, Clone)]
+struct NoiseJson {
+    strength: Vec<Curve>,
+    #[serde(default)]
+    separate: bool,
+    frequency: f32,
+    #[serde(default)]
+    damping: bool,
+    #[serde(default = "one_u32")]
+    octaves: u32,
+    #[serde(default)]
+    oct_mult: f32,
+    #[serde(default)]
+    oct_scale: f32,
+    #[serde(default)]
+    scroll: Option<Curve>,
+    #[serde(default)]
+    amount: Option<Curve>,
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
+/// Smoothed 3D value noise in [-1, 1] (the NoiseModule's STAND-IN for Unity's curl noise).
+fn value_noise(p: Vec3) -> f32 {
+    let h = |x: i32, y: i32, z: i32| -> f32 {
+        let mut n = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ (z as u32).wrapping_mul(0xcb1a_b31f);
+        n = (n ^ (n >> 13)).wrapping_mul(0x5bd1_e995);
+        n ^= n >> 15;
+        (n & 0xffff) as f32 / 32767.5 - 1.0
+    };
+    let (fx, fy, fz) = (p.x.floor(), p.y.floor(), p.z.floor());
+    let (ix, iy, iz) = (fx as i32, fy as i32, fz as i32);
+    let s = |t: f32| t * t * (3.0 - 2.0 * t);
+    let (u, v, w) = (s(p.x - fx), s(p.y - fy), s(p.z - fz));
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let x00 = lerp(h(ix, iy, iz), h(ix + 1, iy, iz), u);
+    let x10 = lerp(h(ix, iy + 1, iz), h(ix + 1, iy + 1, iz), u);
+    let x01 = lerp(h(ix, iy, iz + 1), h(ix + 1, iy, iz + 1), u);
+    let x11 = lerp(h(ix, iy + 1, iz + 1), h(ix + 1, iy + 1, iz + 1), u);
+    lerp(lerp(x00, x10, v), lerp(x01, x11, v), w)
 }
 
 fn one() -> f32 {
@@ -1390,10 +1439,31 @@ impl Instance {
                         p.vel *= (s - (s - max) * l.dampen) / s;
                     }
                 }
-                let extra = sys.velocity.as_ref().map_or(Vec3::ZERO, |v| {
+                let mut extra = sys.velocity.as_ref().map_or(Vec3::ZERO, |v| {
                     let w = vec3(v.x.at(u, p.r[0]), v.y.at(u, p.r[1]), v.z.at(u, p.r[2]));
                     if v.world { w } else { rr * sd.rot * w }
                 });
+                // NoiseModule: each axis's noise at the particle's position x frequency, scrolled
+                // over time, its octaves summed; x strength (/ frequency with damping) x
+                // positionAmount, as velocity.
+                if let Some(nz) = &sys.noise {
+                    let f = nz.frequency.max(1e-4);
+                    let t = nz.scroll.as_ref().map_or(0.0, |c| c.at(u, p.r[4]) * p.age);
+                    let mut n = [0.0f32; 3];
+                    for (k, off) in [0.0f32, 31.7, 67.3].into_iter().enumerate() {
+                        let (mut amp, mut freq, mut sum) = (1.0f32, f, 0.0f32);
+                        for _ in 0..nz.octaves.clamp(1, 4) {
+                            sum += value_noise(p.pos * freq + Vec3::splat(off + t)) * amp;
+                            amp *= nz.oct_mult;
+                            freq *= nz.oct_scale.max(1.0);
+                        }
+                        n[k] = sum;
+                    }
+                    let st = |k: usize| nz.strength.get(if nz.separate { k } else { 0 }).map_or(0.0, |c| c.at(u, p.r[5]));
+                    let damp = if nz.damping { 1.0 / f } else { 1.0 };
+                    let amt = nz.amount.as_ref().map_or(1.0, |c| c.at(u, p.r[3]));
+                    extra += vec3(n[0] * st(0), n[1] * st(1), n[2] * st(2)) * damp * amt;
+                }
                 let mut disp = (p.vel + extra) * dt;
                 if let Some(v) = &sys.velocity {
                     if let Some(sm) = &v.speed_mod {

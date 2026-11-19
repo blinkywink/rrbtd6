@@ -43,7 +43,7 @@ _CAB_PATH = os.path.join(ROOT, "..", "..", "local_extracted", "cab_index.json")
 CABS = json.load(open(_CAB_PATH)) if os.path.exists(_CAB_PATH) else {}
 
 SIMULATED = {"InitialModule", "CustomDataModule", "EmissionModule", "ShapeModule", "SizeModule", "ColorModule", "RotationModule",
-             "VelocityModule", "ForceModule", "ClampVelocityModule", "UVModule", "SubModule"}
+             "VelocityModule", "ForceModule", "ClampVelocityModule", "UVModule", "SubModule", "NoiseModule"}
 
 
 def keys(c):
@@ -140,6 +140,18 @@ def system(ps, out_tex, env):
     cv = t["ClampVelocityModule"]
     if cv["enabled"]:
         s["limit"] = {"speed": curve(cv["magnitude"]), "dampen": cv.get("dampen", 1.0), "drag": curve(cv["drag"]) if "drag" in cv else None}
+    # NoiseModule: turbulence on the particles' positions (strength per axis, frequency, damping
+    # (strength / frequency), octaves, scrollSpeed, positionAmount). particles.rs samples smoothed
+    # value noise for it (STAND-IN for Unity's curl noise of the same parameters).
+    nm = t.get("NoiseModule", {})
+    if nm.get("enabled"):
+        st = nm.get("strength", nm.get("strengthX"))
+        s["noise"] = {"strength": [curve(st), curve(nm.get("strengthY", st)), curve(nm.get("strengthZ", st))],
+                      "separate": bool(nm.get("separateAxes")), "frequency": nm.get("frequency", 0.5),
+                      "damping": bool(nm.get("damping", True)), "octaves": int(nm.get("octaves", 1) or 1),
+                      "oct_mult": nm.get("octaveMultiplier", 0.5), "oct_scale": nm.get("octaveScale", 2.0),
+                      "scroll": curve(nm["scrollSpeed"]) if "scrollSpeed" in nm else None,
+                      "amount": curve(nm["positionAmount"]) if "positionAmount" in nm else None}
     uv = t["UVModule"]
     if uv["enabled"]:
         s["sheet"] = {"x": uv["tilesX"], "y": uv["tilesY"], "frame": curve(uv["frameOverTime"]),

@@ -193,6 +193,11 @@ effect names, model behaviours the data builder never reads).
 - FIXED: the Sun Temple played SunTempleTransformationFx for every tier; each MonkeyTempleModel's own
   effectModel / towerEffectModel now (temple `fx` / `tower_fx`: True Sun God 5xx, 420, 401, 402's
   transformations).
+- DONE: particle NoiseModule (export_particles `noise`, particles.rs): per-axis strength (/ frequency with
+  damping), octaves, scrollSpeed, positionAmount, as extra velocity. STAND-IN: smoothed value noise, not
+  Unity's curl noise. Re-exported: the 117 effects that had it (or a stale SubModule) and the Corvus /
+  Geraldo / Psi / Tack tier effects. LEFT: the 111 map ambient effects (scene exports), TrailModule (83
+  effects), RotationBySpeed (28), ExternalForces (20), SizeBySpeed (12), ColorBySpeed (2).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy
