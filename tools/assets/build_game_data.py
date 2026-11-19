@@ -721,6 +721,10 @@ def main():
             cf = pb["CashModel"][0]["f"]
             cash = {"min": cf["minimum"], "max": cf["maximum"], "bonus": cf.get("bonusMultiplier", 0.0),
                     "pickup": (pb.get("PickupModel") or [{"f": {}}])[0]["f"].get("collectRadius"),
+                    # PickupModel.delayFrames (a float: (float)(int)(delay x 60), ctor @0x1811e9fa0)
+                    # and isCamoPickup, which CollectCashZone.Process checks.
+                    "pickup_delay": float(int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", (pb.get("PickupModel") or [{"f": {}}])[0]["f"].get("delay", 0.0)))[0] * 60.0))[0])),
+                    "pickup_camo": bool((pb.get("PickupModel") or [{"f": {}}])[0]["f"].get("isCamoPickup", False)),
                     "bonus_shared": cf.get("distributeBonusIncome", False)}
         push = None
         if pb.get("PushBackModel"):
@@ -2885,9 +2889,13 @@ def main():
                                 # AddObjectAtPosition, @0x180d8e2e0 / @0x180d8f700 / @0x180d8dd10), one
                                 # zone whose range is currentGeneratedRadius (GetRange @0x180cb58b0).
                                 for b in items(tobj["f"]["behaviors"]) if b and b["type"] in ("SpiritOfTheForestModel", "SpikeParagonDamageZoneModel")), None),
-                # CollectCashZoneModel (Banana Farm x-x-5): bananas landed within its range (or
-                # attractRange) are collected for you.
-                "collect_zone": next(((0.0 if b["f"].get("useTowerRange") else b["f"].get("attractRange", 0.0))
+                # CollectCashZoneModel (Banana Farm x-x-5, Banana Farmer): CollectCashZone.Process
+                # (@0x180d09440) pulls cash in (lerp) within the attract radius (the tower's range
+                # when useTowerRange) and collects it within collectRange.
+                "collect_zone": next(({"attract": b["f"].get("attractRange", 0.0), "collect": b["f"].get("collectRange", 0.0),
+                                       "lerp": b["f"].get("lerpMultiplier", 0.0), "use_range": bool(b["f"].get("useTowerRange")),
+                                       "camo": bool(b["f"].get("onlyAttractsCamo")), "wait": int(b["f"].get("minEmitWaitTimeFrames", 0)),
+                                       "filter": b["f"].get("towerFilter") or ""}
                                       for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "CollectCashZoneModel"), None),
                 # ActivateAbilityAfterIntervalModel (Carpet of Spikes): the tower's ability goes
                 # off by itself every `interval` seconds.

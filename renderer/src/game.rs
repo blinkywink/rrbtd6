@@ -2955,6 +2955,11 @@ pub struct Projectile {
     bolt_from: Option<[f32; 2]>,
     /// Arrive-and-stay projectiles (caltrops): frames until they reach their spot and stop.
     moving: f32,
+    /// Pickup.farmerPickup: a CollectCashZone pulled it in this frame (no other zone does until
+    /// its own Process clears it); `made_at`: the sim frame it was made in (Pickup.delayFrames and
+    /// CollectCashZoneModel.minEmitWaitTimeFrames count from it).
+    farmer_pickup: bool,
+    made_at: u64,
     /// ArriveAtTarget: (startFrame, origPos, targetPos).
     arrive_at: Option<(u64, [f32; 2], [f32; 2])>,
     /// CreateProjectilesOnTrackOnExhaustFraction.targetPathSegments, shuffled.
@@ -4196,6 +4201,10 @@ macro_rules! collide_pass {
             continue;
         }
         $s.projectiles[$p].prev = $s.projectiles[$p].pos;
+        // Pickup.Process (VERIFIED-DECOMP @0x180ccf400): farmerPickup = false each Process.
+        if $only.is_none() {
+            $s.projectiles[$p].farmer_pickup = false;
+        }
         // (Its z as the last Process left it: ProjectileBlockerCollisionRebound.lastPosition.z.)
         let z_last = $s.projectiles[$p].z;
         if std::mem::take(&mut $s.projectiles[$p].clear_hits_next) {
@@ -4871,7 +4880,7 @@ macro_rules! collide_pass {
                     // 100, its cash overwritten. INFERRED: eating pays no pop cash here, so its value
                     // carries the whole RBE x rbeCashMultiplier; the game pops the bloons (their pop
                     // cash) and pays (multiplier - 1) x the eaten layers.)
-                    pr.spec.cash = Some(eat.full_cash.clone().map(|c| crate::data::Cash { min: 0.0, max: 0.0, ..c }).unwrap_or(crate::data::Cash { min: 0.0, max: 0.0, bonus: 0.0, pickup: Some(60.0), bonus_shared: false }));
+                    pr.spec.cash = Some(eat.full_cash.clone().map(|c| crate::data::Cash { min: 0.0, max: 0.0, ..c }).unwrap_or(crate::data::Cash { min: 0.0, max: 0.0, bonus: 0.0, pickup: Some(60.0), pickup_delay: 0.0, pickup_camo: false, bonus_shared: false }));
                     pr.spec.no_hit = true;
                     // (EmitCash makes the Full trap in its place, gone after its AgeModel
                     // lifespan: recording map_geared_engineer_204_r40, full at rt 2169, gone at 2470.)
@@ -13603,29 +13612,68 @@ impl Game {
         }
     }
 
-    /// CollectCashZoneModel: towers that collect landed cash in reach. HYPOTHESIS P-COLLECT:
-    /// collected the moment it has landed (the attract lerp isn't shown).
-    fn collect_zones(&mut self) {
-        let zones: Vec<([f32; 2], f32)> = (0..self.towers.len())
-            .filter_map(|t| {
-                let r = self.tier(t)?.collect_zone?;
-                Some((self.towers[t].pos, if r > 0.0 { r } else { self.range(t) }))
-            })
-            .collect();
-        if zones.is_empty() {
-            return;
-        }
+    /// CollectCashZone.Process (VERIFIED-DECOMP @0x180d09440), in its tower's turn (Banana Farm
+    /// x-x-5, Banana Farmer). collectPoint = the tower's Position; over the Pickup factory, each
+    /// cash projectile whose PickupModel.isCamoPickup equals onlyAttractsCamo, made at least
+    /// minEmitWaitTimeFrames ago (when that is >= 1), of the tower's owner, not foundPoint (the
+    /// cursor's) nor farmerPickup, (float)(frame - made) not under the Pickup's delayFrames, and
+    /// not emitted by a tower whose baseId is towerFilter (always "" in the models): with
+    /// offset = collectPoint - Position in 2D, |offset| < collectRange collects it
+    /// (Projectile.Pickup: Cash.Pickup pays, and returns the rolled amount, which goes on this
+    /// tower's cashEarned too; BananaPeelLimitProjectile counts: no zone tower has one), else
+    /// within the attract radius (TowerModel.range with useTowerRange, else attractRange):
+    /// StartFarmerPickup, its FollowPath / ArriveAtTarget / ScaleProjectile are finished and
+    /// paused, and Position = Vector3.Lerp(Position, collectPoint, lerpMultiplier). Bananas in
+    /// flight are pulled in too.
+    fn collect_zone_step(&mut self, t: usize) {
+        let Some(z) = self.tier(t).and_then(|tr| tr.collect_zone.clone()) else { return };
+        let (cp, id) = (self.towers[t].pos, self.towers[t].id);
+        let cz = self.stand_z(cp);
+        let radius = if z.use_range { self.range(t) } else { z.attract };
+        let now = self.sim_elapsed;
+        let slot = self.cash_owner(id);
         let mut i = 0;
         while i < self.projectiles.len() {
             let pr = &self.projectiles[i];
-            let landed = pr.spec.cash.as_ref().is_some_and(|c| c.pickup.is_some()) && pr.moving <= 0.0;
-            if landed && zones.iter().any(|(c, r)| (pr.pos[0] - c[0]).powi(2) + (pr.pos[1] - c[1]).powi(2) <= r * r) {
+            let Some(c) = pr.spec.cash.as_ref().filter(|c| c.pickup.is_some()) else {
+                i += 1;
+                continue;
+            };
+            let age = now.saturating_sub(pr.made_at);
+            let filtered = !z.filter.is_empty()
+                && self.towers.iter().find(|tw| tw.id == pr.owner).is_some_and(|tw| self.tower_defs.get(tw.def).is_some_and(|(n, _)| *n == z.filter));
+            if c.pickup_camo != z.camo
+                || (z.wait >= 1 && (age as i64) < z.wait)
+                || self.cash_owner(pr.owner) != slot
+                || pr.farmer_pickup
+                || (age as f32) < c.pickup_delay
+                || filtered
+            {
+                i += 1;
+                continue;
+            }
+            let off = [cp[0] - pr.pos[0], cp[1] - pr.pos[1]];
+            let d = (off[0] * off[0] + off[1] * off[1]).sqrt();
+            if d < z.collect {
                 let pr = self.projectiles.remove(i);
                 self.collect_projectile_cash(&pr);
-                    self.sound(&pr.spec.pickup_sounds, None);
+                self.towers[t].cash_earned += pr.value as f32 as f64;
+                self.sound(&pr.spec.pickup_sounds, None);
                 self.cash_pops.push((pr.pos, pr.value));
                 continue;
             }
+            if d >= radius {
+                i += 1;
+                continue;
+            }
+            let pr = &mut self.projectiles[i];
+            pr.farmer_pickup = true;
+            pr.moving = 0.0;
+            pr.vel = [0.0, 0.0];
+            pr.arrive_at = None;
+            let k = z.lerp;
+            pr.pos = [pr.pos[0] + (cp[0] - pr.pos[0]) * k, pr.pos[1] + (cp[1] - pr.pos[1]) * k];
+            pr.z += (cz - pr.z) * k;
             i += 1;
         }
     }
@@ -14448,9 +14496,11 @@ impl Game {
     }
 
     /// `base` with the temple groups' mutators: their attacks and supports added, then every
-    /// attack's damage / pierce / projectile speed and size / range changed. HYPOTHESIS
-    /// P-TEMPLESTAT: ReloadTimeTowerMutator scales the interval by (1 - multiplier), each
-    /// group's on top of the others (all mutation ids differ, so all stack).
+    /// attack's damage / pierce / projectile speed and size / range changed (P-TEMPLESTAT,
+    /// VERIFIED-DECOMP: each group's mutators are applied one after another in the sorted order
+    /// below; ReloadTimeTowerMutator's Mutate @0x180c225f0 sets every WeaponModel descendant's
+    /// rate to rate - rate x multiplier, and the 4xx / 5xx models have no ability or sub-tower,
+    /// so those are the attacks' weapons).
     fn temple_tier(base: &Tier, groups: &[crate::data::TempleGroup]) -> Tier {
         use crate::data::TempleMut;
         // MonkeyTemple (SetTempleSacrificeValuesFromModel @0x180d42d60, ActOnSacrifice
@@ -17685,6 +17735,9 @@ impl Game {
             // at rt 61, nor a Caltrops point list remade as the 0-5-0's Shinobi Tactics comes off.)
             if self.towers[t].sub.is_none() && self.sacrificed.contains(&self.towers[t].id) {
                 continue;
+            }
+            if only_temp.is_none() {
+                self.collect_zone_step(t);
             }
             if only_temp.is_none() && self.towers[t].sub.is_none() {
                 let gone = self.monkeyopolis_absorb(t);
@@ -24965,6 +25018,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 effect_back: None,
                 bolt_from: None,
                 moving: 0.0,
+                farmer_pickup: false,
+                made_at: self.sim_elapsed,
                 arrive_at: None,
                 track_segs_shuffled: Vec::new(),
                 arrive_z0: 0.0,
@@ -25154,7 +25209,6 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         }
         self.comanche_decide();
         self.forget_untouched();
-        self.collect_zones();
         self.auto_abilities();
 
         // AbilityReduceCooldownOnLivesLostModel: last frame's leak takes reductionSeconds off
@@ -28032,6 +28086,55 @@ mod beast_tests {
         place_near(&mut g, dart, 300.0);
         assert_eq!(g.free_tower_count(dart), 0);
         assert!(g.place_cost(dart, p) > 0.0);
+    }
+
+    #[test]
+    fn wall_street_pulls_bananas_in_and_collects_them() {
+        // CollectCashZone.Process: a banana within the 0-0-5's range is moved a quarter of the way
+        // to the tower each frame (in flight too: its ArriveAtTarget stops), and collected once
+        // under collectRange (10) away; the farm keeps its cashEarned, the zone adds the roll too.
+        let mut g = game();
+        g.cash = 1e7;
+        let farm = g.tower_defs.iter().position(|(n, _)| n == "BananaFarm").unwrap();
+        let w = place_near(&mut g, farm, 300.0);
+        for _ in 0..5 {
+            assert!(g.upgrade(w, 2));
+        }
+        let zone = g.tier(w).unwrap().collect_zone.clone().expect("0-0-5 has a CollectCashZone");
+        assert!(zone.use_range && zone.collect == 10.0 && zone.lerp == 0.25);
+        let f = place_near(&mut g, farm, 300.0);
+        let (wp, fid) = (g.towers[w].pos, g.towers[f].id);
+        assert!(((g.towers[f].pos[0] - wp[0]).hypot(g.towers[f].pos[1] - wp[1])) < g.range(w));
+        g.start_round();
+        let mut last: Option<(u64, f32)> = None;
+        let mut pulled = 0;
+        for _ in 0..1200 {
+            let cash = g.cash;
+            g.step();
+            let banana = g.projectiles.iter().find(|p| p.owner == fid && p.spec.cash.is_some());
+            match (banana, last) {
+                (Some(b), Some((uid, d0))) if b.uid == uid => {
+                    let d = (b.pos[0] - wp[0]).hypot(b.pos[1] - wp[1]);
+                    assert!((d - d0 * 0.75).abs() < 1e-3, "lerped 0.25 toward the tower: {d0} -> {d}");
+                    assert!(b.arrive_at.is_none() && b.moving <= 0.0);
+                    pulled += 1;
+                    last = Some((uid, d));
+                }
+                (None, Some((_, d0))) => {
+                    assert!(d0 * 0.75 < 10.0 || d0 < 10.0, "collected only under collectRange");
+                    assert!(g.cash > cash, "collecting pays");
+                    assert!(g.towers[w].cash_earned > 0.0 && g.towers[f].cash_earned > 0.0);
+                    assert!(pulled >= 2);
+                    return;
+                }
+                (Some(b), _) => {
+                    let d = (b.pos[0] - wp[0]).hypot(b.pos[1] - wp[1]);
+                    last = (b.farmer_pickup || b.arrive_at.is_none()).then_some((b.uid, d)).or(last.filter(|l| l.0 == b.uid));
+                }
+                _ => {}
+            }
+        }
+        panic!("no banana collected");
     }
 
     #[test]

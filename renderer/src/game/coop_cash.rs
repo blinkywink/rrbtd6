@@ -19,7 +19,7 @@ impl Game{
         if let Some(w)=&mut self.coop_wallets{w.actor=Some(slot);}self.coop_restore_cash();
     }
     pub(crate) fn coop_end_actor(&mut self){self.coop_save_actor();if let Some(w)=&mut self.coop_wallets{w.actor=None;}self.coop_restore_cash();}
-    fn cash_owner(&self,id:u64)->Option<u8>{
+    pub(super) fn cash_owner(&self,id:u64)->Option<u8>{
         let w=self.coop_wallets.as_ref()?;
         if let Some(s)=w.owners.get(&id){return Some(*s);}
         let mut parent=id;

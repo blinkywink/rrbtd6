@@ -172,6 +172,44 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### DONE (2026-11-19): CollectCashZone exact (Banana Farm x-x-5, Banana Farmer; was HYPOTHESIS P-COLLECT)
+VERIFIED-DECOMP. The clone collected a landed banana within the zone's radius at the start of the frame.
+CollectCashZone.Process (@0x180d09440) runs in its tower's turn (towers_phase, `collect_zone_step`):
+- collectPoint = the tower's Position; over the Pickup factory (CheckDestroyedEnumerable): skip unless
+  PickupModel.isCamoPickup == onlyAttractsCamo; with minEmitWaitTimeFrames >= 1, skip while made under that
+  many frames ago; skip another owner's (co-op), foundPoint (cursor) or farmerPickup ones; skip while
+  (float)(frame - made) < PickupModel.delayFrames (a float, (float)(int)(delay x 60), ctor @0x1811e9fa0:
+  crates 60 / 30); skip one emitted by a tower whose baseId equals towerFilter (always "").
+- offset = collectPoint - Position (2D): |offset| < collectRange (10) -> PlayAnimation, Projectile.Pickup
+  (@0x180c8dd20, the sum of its behaviours' Pickup; Cash.Pickup @0x180c99510 pays and returns RollAmount)
+  added to the ZONE tower's cashEarned too (the farm's own share as before); BananaPeelLimitProjectile
+  counts (no zone tower has one). Else within the attract radius (TowerModel.range with useTowerRange: all
+  16 models; attractRange otherwise): Pickup.StartFarmerPickup (farmerPickup = 1, @0x180ccf830), its
+  FollowPath / ArriveAtTarget (arrivedAtTarget) / ScaleProjectile completed and paused, Position =
+  Vector3.Lerp(Position, collectPoint, lerpMultiplier). In-flight bananas are pulled in too.
+- Pickup.Process (@0x180ccf400) clears farmerPickup in the projectile's own Process (a banana pulled on
+  the frame it was made skips the next frame's zones: its first Process comes after them).
+- Exporter: tier `collect_zone` is now {attract, collect, lerp, use_range, camo, wait, filter}; cash
+  `pickup_delay`, `pickup_camo`. Projectile `farmer_pickup`, `made_at`. Test
+  wall_street_pulls_bananas_in_and_collects_them. No recording has a zone tower (CHIMPS has no bananas);
+  a Standard-mode farm_std recording with a 0-0-5 beside a farm would confirm the frame timing.
+- P-TEMPLESTAT closed (comment only): ReloadTimeTowerMutator's Mutate (@0x180c225f0) walks every WeaponModel
+  descendant (GetDescendants) with rate - rate x multiplier; Sun Temple 4xx / 5xx models have no ability or
+  sub-tower, so that is the clone's attack-weapon loop.
+- Still STAND-IN: ScaleProjectileModel's pop-in scale (visual, not modelled), and the cursor pickup
+  (`collect_cash`: instant within a quarter of collectRadius). NEXT (read, not ported: needs main.rs,
+  which the visuals session was editing): Pickup.Process (@0x180ccf400), in the projectile's Process, only
+  with an InputManager: when InputManager.cursorActive (+0x78; main.rs sets `Game.cursor` exactly then),
+  UpdateInputCursorLocation(cursorLocation +0x70) (@0x180ccf840): not for isCamoPickup; not while
+  (float)(frame - CreatedAt) < delayFrames; if |cursor - Position| (2D) < collectRadius: collectPoint =
+  cursor (z 0), foundPoint = true (sticky). Then farmerPickup = false; if foundPoint: ++currentCollectFrames;
+  |collectPoint - Position| < innerCollectRadius (10.0, ctor @0x180ccfa90) or currentCollectFrames >=
+  maxCollectFrames (120) -> ICommonBehaviorProxy.Pickup(null) (Cash.Pickup pays, destroys); else Position
+  = Vector3.Lerp(Position, collectPoint, 0.25) (literal 0x183e4fd18). So the banana flies to the cursor
+  spot over a few frames. Port: run it in the projectile pass from `Game.cursor`, drop main.rs's direct
+  `collect_cash(mouse_world)`; co-op's Action::Collect and the RRBTD6_COLLECT autotest still need a path.
+- Note: compact_json.py over local_extracted compacted 6984 other files too (values unchanged).
+
 ### DONE (2026-11-19): Total Transformation, Fan Club and Biohack tower selection from the disasm (was HYPOTHESIS P-MORPH, STAND-IN P-BIOHACK)
 VERIFIED-DISASM. The clone took Total Transformation's towers within the Alchemist's range, and Fan Club's
 from every tower on the map with an unstable List.Sort. Both call TowerManager.GetClosestTowers/4
@@ -223,8 +261,8 @@ VERIFIED-DECOMP. The clone gave one free Dart a round (unused ones lost) at cost
   CritMultiplier.GetProjectile (@0x180c71010) sets every ShowTextOnHitModel.text to "Crit" on a crit only.
   The text sits at the projectile's Position (useTowerPosition false everywhere): the clone used the bloon's.
 - NEXT candidates (remaining HYPOTHESIS / STAND-IN tags): `grep -n "HYPOTHESIS\|STAND-IN" renderer/src/game.rs`
-  (169 at this point); e.g. P-TEMPLESTAT, P-BIOHACK, P-LEAP, P-THRIVEORDER, P-COLLECT.
-- P-COLLECT first read (NOT ported; game.rs collect_zones collects a landed banana at once): CollectCashZone.Process
+  (169 at this point); e.g. P-BIOHACK, P-LEAP, P-THRIVEORDER (P-COLLECT and P-TEMPLESTAT done, above).
+- P-COLLECT first read (since PORTED, see the DONE entry above; game.rs collect_zones collects a landed banana at once): CollectCashZone.Process
   (@0x180d09440, ~370 lines): skipped while the tower IsSuspended; collectPoint = the tower's position; per cash
   projectile of the same owner (onlyAttractsCamo +0x44 must equal the projectile model's +0x3c; minEmitWaitTimeFrames
   +0x4c against the projectile's creation frame +0xb4; towerFilter +0x38 against its emitting tower's baseId):

@@ -825,9 +825,9 @@ pub struct Tier {
     /// SpiritOfTheForestModel (Druid): thorn damage along the track.
     #[serde(default)]
     pub spirit: Option<Spirit>,
-    /// CollectCashZoneModel: collects landed cash within this radius (0: the tower's range).
+    /// CollectCashZoneModel (Banana Farm x-x-5, Banana Farmer).
     #[serde(default)]
-    pub collect_zone: Option<f32>,
+    pub collect_zone: Option<CollectZone>,
     /// ActivateAbilityAfterIntervalModel.interval: seconds between automatic uses.
     #[serde(default)]
     pub auto_ability: Option<f32>,
@@ -3176,6 +3176,23 @@ pub struct Arrive {
     pub above_moab: bool,
 }
 
+/// CollectCashZoneModel: attractRange, collectRange, lerpMultiplier, useTowerRange,
+/// onlyAttractsCamo, minEmitWaitTimeFrames, towerFilter.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct CollectZone {
+    pub attract: f32,
+    pub collect: f32,
+    pub lerp: f32,
+    #[serde(default)]
+    pub use_range: bool,
+    #[serde(default)]
+    pub camo: bool,
+    #[serde(default)]
+    pub wait: i64,
+    #[serde(default)]
+    pub filter: String,
+}
+
 /// CashModel (+ PickupModel.collectRadius when it has to be collected by hand).
 #[derive(Deserialize, Clone)]
 pub struct Cash {
@@ -3184,6 +3201,11 @@ pub struct Cash {
     #[serde(default)]
     pub bonus: f32,
     pub pickup: Option<f32>,
+    /// PickupModel.delayFrames and isCamoPickup.
+    #[serde(default)]
+    pub pickup_delay: f32,
+    #[serde(default)]
+    pub pickup_camo: bool,
     #[serde(default)]
     pub bonus_shared: bool,
 }
