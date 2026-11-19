@@ -1229,6 +1229,9 @@ pub struct Weapon {
     /// CritRollModel / CritRollWithDistanceModel: [damageAdditive, damageMultiplier, chance, bonusPerDistance].
     #[serde(default)]
     pub crit_roll: Option<[f32; 4]>,
+    /// The crit roll model has a display (CritText): shown where a rolled crit hits (display only).
+    #[serde(default)]
+    pub crit_roll_text: bool,
     /// StandoffModel: [maxRateIncrease, rateDecreasePerBloon].
     #[serde(default)]
     pub standoff: Option<[f32; 2]>,
@@ -2575,6 +2578,14 @@ pub struct Spirit {
     #[serde(default)]
     pub per_frame: f32,
     pub zones: Vec<SpiritZone>,
+    /// AddObjectAtPosition's effect prefabs [close, middle, far] and its rotation / scale ranges
+    /// (display only).
+    #[serde(default)]
+    pub objects: Vec<Vec<Option<String>>>,
+    #[serde(default)]
+    pub rot: [f32; 2],
+    #[serde(default)]
+    pub obj_scale: [f32; 2],
 }
 
 /// DamageOverTimeCustomModel: `damage` every `interval` s (x mult + add on `tags`).

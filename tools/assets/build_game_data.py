@@ -1682,6 +1682,10 @@ def main():
                                                       for x in items(w["f"].get("behaviors")) if x and x["type"] == "VagrantWeaponBehaviorModel"
                                                       and x["f"].get("buffLocsName")), None),
                                 "crit_roll": next(([x["f"].get("damageAdditive", 0.0), x["f"].get("damageMultiplier", 1.0), x["f"].get("chance", 0.0), x["f"].get("bonusPerDistance", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] in ("CritRollModel", "CritRollWithDistanceModel")), None),
+                                # CritRoll's display (Projectile.ChosenCritDisplay: CritText) for a crit
+                                # roll (visual).
+                                "crit_roll_text": any(x and x["type"] in ("CritRollModel", "CritRollWithDistanceModel") and x["f"].get("display")
+                                                      for x in items(w["f"].get("behaviors"))),
                                 "standoff": next(([x["f"].get("maxRateIncrease", 0.0), x["f"].get("rateDecreasePerBloon", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "StandoffModel"), None),
                                 # TheBlazingSunModel: [maxStacks, stacksToBurn, attackSpeedPerStack, debuffExpiresAfterFrames].
                                 "blazing_sun": next(([x["f"].get("maxStacks", 0), x["f"].get("stacksToBurn", 0), x["f"].get("attackSpeedPerStack", 0.0), x["f"].get("debuffExpiresAfterFrames", 0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "TheBlazingSunModel"), None),
@@ -2815,6 +2819,12 @@ def main():
                 "spirit": next(({"close": b["f"].get("closeRange", 0.0), "middle": b["f"].get("middleRange", 0.0),
                                  "offset": b["f"].get("offsetMax", 0.0), "circle": b["f"].get("circleRadius", 0.0),
                                  "step": b["f"].get("generateRadius", 0.0), "per_frame": b["f"].get("amountPerFrame", 0.0),
+                                 # AddObjectAtPosition (VERIFIED-DECOMP @0x180d92f10): the effect prefabs by
+                                 # band, and the rotation / scale ranges (visual).
+                                 "objects": [[prefab_name(g) for g in (deref(b["f"].get(k)) or []) if isinstance(g, str)]
+                                             for k in ("objectsToPlaceClose", "objectsToPlaceMiddle", "objectsToPlaceFar")],
+                                 "rot": [b["f"].get("rotationMin", 0.0), b["f"].get("rotationMax", 0.0)],
+                                 "obj_scale": [b["f"].get("scaleMin", 1.0), b["f"].get("scaleMax", 1.0)],
                                  # (Each zone's mutator id: DamageOverTimeZone.InitialiseZone (@0x180d1aca0)
                                  # takes mutatorId, or the model's name when that is "": 0-x-2's
                                  # "DamageOverTimeZoneModel_Medium", not kept on a MOAB pop.)

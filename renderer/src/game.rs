@@ -1996,6 +1996,9 @@ pub struct Tower {
     /// SpiritOfTheForest: (currentRadius, currentGeneratedRadius, vineSeedOrigin, positions,
     /// lastRoundElapsed).
     pub spirit_v: Option<(f32, f32, [f32; 2], Vec<[f32; 2]>, i64)>,
+    /// SpiritOfTheForest.AddObjectAtPosition's effects (display only): where, the prefab,
+    /// rotation (degrees), scale.
+    pub spirit_objs: Vec<([f32; 2], String, f32, f32)>,
     /// Its DamageOverTimeZone's place in the process list (as Bloon.born): 0 when made with the
     /// tower (before every bloon), else when a Paragon purchase made it.
     pub spirit_born: u64,
@@ -2790,6 +2793,8 @@ pub struct Projectile {
     pub crit: Option<f32>,
     /// CritRoll (Projectile.AddCritRoll): [chance, damageMultiplier, damageAdditive, rolled, crit].
     pub crit_roll: Option<[f32; 5]>,
+    /// Its crit roll has a display (CritText; display only).
+    pub crit_roll_text: bool,
     /// A brew potion: the tower it was thrown at, and the brew it gives on arrival.
     pub brew_to: Option<(u64, Box<crate::data::Brew>)>,
     /// AcidPool.alwaysMakePool.
@@ -4998,6 +5003,11 @@ macro_rules! collide_pass {
                     cr[3] = 1.0;
                     if $s.synced_double() <= cr[0] as f64 {
                         cr[4] = 1.0;
+                        // (Display only: its crit display, CritText, where the crit lands.
+                        // STAND-IN: once, at the rolled hit.)
+                        if $s.projectiles[$p].crit_roll_text {
+                            $s.hit_texts.push(hit_pos);
+                        }
                     }
                     $s.projectiles[$p].crit_roll = Some(cr);
                 }
@@ -8378,7 +8388,8 @@ impl Game {
             if sp.circle <= cur && cur != sp.circle {
                 cur = sp.circle;
             }
-            let mut draws = 0;
+            // (Each object's three draws in ring order: the same sequence as counting them first.)
+            let mut placed: Vec<[f32; 2]> = Vec::new();
             let mut gap = cur - gnr;
             while sp.step < gap {
                 let (inner, outer) = (gnr, sp.step + gnr);
@@ -8386,14 +8397,28 @@ impl Game {
                     let (dx, dy) = (p[0] - origin[0], p[1] - origin[1]);
                     let d2 = dx * dx + dy * dy;
                     if d2 > inner * inner && d2 < outer * outer {
-                        draws += 3;
+                        placed.push(*p);
                     }
                 }
                 gnr = sp.step + gnr;
                 gap = cur - gnr;
             }
-            for _ in 0..draws {
-                self.synced_double();
+            let tp = self.towers[t].pos;
+            for p in placed {
+                let (d_obj, d_rot, d_scale) = (self.synced_double(), self.synced_double(), self.synced_double());
+                // AddObjectAtPosition (VERIFIED-DECOMP @0x180d92f10, display only): the list by
+                // distance from the tower (closeRange, middleRange, else far), entry
+                // (int)(count x NextDouble), rotation min + NextDouble x (max - min), scale likewise.
+                let d2 = (p[0] - tp[0]).powi(2) + (p[1] - tp[1]).powi(2);
+                let band = if d2 < sp.close * sp.close { 0 } else if d2 < sp.middle * sp.middle { 1 } else { 2 };
+                if let Some(list) = sp.objects.get(band).filter(|l| !l.is_empty()) {
+                    let k = ((list.len() as f64 * d_obj) as usize).min(list.len() - 1);
+                    if let Some(name) = list[k].clone() {
+                        let rot = d_rot as f32 * (sp.rot[1] - sp.rot[0]) + sp.rot[0];
+                        let scale = d_scale as f32 * (sp.obj_scale[1] - sp.obj_scale[0]) + sp.obj_scale[0];
+                        self.towers[t].spirit_objs.push((p, name, rot, scale));
+                    }
+                }
             }
             self.towers[t].spirit_v = Some((cur, gnr, origin, pos, now));
         }
@@ -8825,6 +8850,7 @@ impl Game {
             spawn_objs: Vec::new(),
             upgraded: false,
             spirit_v: None,
+            spirit_objs: Vec::new(),
             spirit_born: 0,
             preempt_n: 0,
             fstrike: None,
@@ -11417,6 +11443,7 @@ impl Game {
             spawn_objs: Vec::new(),
             upgraded: false,
             spirit_v: None,
+            spirit_objs: Vec::new(),
             spirit_born: 0,
             preempt_n: 0,
             fstrike: None,
@@ -20337,6 +20364,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 let d = ((target[0] - pos[0]).hypot(target[1] - pos[1])).round_ties_even();
                                 for pr in &mut self.projectiles[start..] {
                                     pr.crit_roll = Some([chance + d * per, mult, add, 0.0, 0.0]);
+                                    pr.crit_roll_text = weapon.crit_roll_text;
                                 }
                             }
                             // MarkedToPopProjectileBehavior.SetTarget (VERIFIED-DISASM @0x180ccc970): the
@@ -24412,6 +24440,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 },
                 crit,
                 crit_roll: None,
+                crit_roll_text: false,
                 brew_to: None,
                 always_pool: false,
                 mirror: self.towers.iter().find(|t| t.id == owner).is_some_and(|t| t.flip),

@@ -171,6 +171,14 @@ effect names, model behaviours the data builder never reads).
 - DONE: Legend of the Night's immunity effect (Immunity.SpawnEffects / RemoveImmunity @0x180e36a20 /
   @0x180e36740: effectModel at each Map.GetTrackEndPoints point while leaks are forgiven; ability
   `immunity_fx`). Unverified on screen: Tutorial's track ends off the visible map.
+- DONE: CritRoll / CritRollWithDistance's display (Desperado's CritText, Projectile.ChosenCritDisplay):
+  "Crit!" where a rolled crit lands (weapon `crit_roll_text`, display only). STAND-IN: once, at the hit
+  that rolls it.
+- DONE: Spirit of the Forest's vines (SpiritOfTheForest.AddObjectAtPosition @0x180d92f10): spirit_grow makes
+  each object's three draws in ring order (as before, only taken: the same sequence) and keeps the object
+  (list by band from the tower: closeRange / middleRange / far; entry (int)(count x d), rotation and scale
+  min + d x (max - min)) in `Tower::spirit_objs`; main.rs shows each as its effect (the nine
+  SpiritOfTheForestVines* prefabs, exported).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

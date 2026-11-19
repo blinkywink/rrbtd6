@@ -817,6 +817,8 @@ async fn game_main() {
     let mut zone_seen: HashMap<(u64, String), u64> = HashMap::new();
     // Legend of the Night's immunity effects at the track ends are up.
     let mut immune_fx_on = false;
+    // Spirit of the Forest's vines shown so far, per tower id.
+    let mut spirit_shown: HashMap<u64, usize> = HashMap::new();
     // Towers whose ammo crate had arrived last frame (SniperAmmoSwap).
     let mut ammo_seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut after_fx_seen: HashMap<(u64, usize), f32> = HashMap::new();
@@ -1030,6 +1032,8 @@ const VIG_FX_TAG: u64 = 1 << 55;
 const ZONE_FX_TAG: u64 = 1 << 54;
 /// Legend of the Night's track-end immunity effects.
 const IMMUNE_FX_TAG: u64 = (1 << 53) | 1;
+/// Spirit of the Forest's vines (tower id).
+const SPIRIT_FX_TAG: u64 = 1 << 52;
 /// The vines' End clips (JungleVineWrapEnd 0.25 s, JungleVineGrowEnd 0.367 s): frames they
 /// stay after the grab ends.
 const VINE_END_FRAMES: i32 = 23;
@@ -3335,6 +3339,28 @@ const VINE_END_FRAMES: i32 = 23;
                     keep
                 });
             }
+            // SpiritOfTheForest.AddObjectAtPosition (VERIFIED-DECOMP @0x180d92f10): each vine the
+            // spreading ring reaches, its effect at its rotation and scale, kept with the tower.
+            for t in 0..game.towers.len() {
+                let id = game.towers[t].id;
+                let objs = &game.towers[t].spirit_objs;
+                let done = spirit_shown.entry(id).or_insert(0);
+                if *done > objs.len() {
+                    *done = 0;
+                    particles.kill(SPIRIT_FX_TAG | id);
+                }
+                for (p, name, rot, scale) in &objs[*done..] {
+                    particles.spawn_display(name, [p[0], 0.0, p[1]], *scale, *rot, false, Some(SPIRIT_FX_TAG | id));
+                }
+                *done = objs.len();
+            }
+            spirit_shown.retain(|id, _| {
+                let live = game.towers.iter().any(|t| t.id == *id);
+                if !live {
+                    particles.kill(SPIRIT_FX_TAG | *id);
+                }
+                live
+            });
             // Immunity.SpawnEffects / RemoveImmunity (VERIFIED-DECOMP @0x180e36a20 / @0x180e36740):
             // the ability's effect at every track end point (Map.GetTrackEndPoints) while leaks are
             // forgiven.
