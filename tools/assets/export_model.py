@@ -364,6 +364,15 @@ def add_renderer(r_obj, root_tr=None):
         m = world_matrix(af, tr_pid, root_tr)
         world = (vh @ m.T)[:, :3]
     tris = h.get_triangles()
+    # Static batching (a "Combined Mesh (root: scene)"): the shared mesh's vertices are already in
+    # world space and this renderer draws its m_StaticBatchInfo submeshes [firstSubMesh,
+    # firstSubMesh + subMeshCount), one per material (Town Centre's and Another Brick's ground:
+    # pairing submeshes from 0 and transforming again lost them).
+    sbi = r.get("m_StaticBatchInfo") or {}
+    if not skinned and sbi.get("subMeshCount", 0) > 0:
+        first, count = sbi.get("firstSubMesh", 0), sbi["subMeshCount"]
+        tris = tris[first:first + count]
+        world = v
     for sub, mref in zip(tris, r["m_Materials"]):
         mat_obj = resolve(af, mref)
         if mat_obj is None or mat_obj.type.name != "Material":

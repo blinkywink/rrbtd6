@@ -248,6 +248,17 @@ effect names, model behaviours the data builder never reads).
   attack: idle falls back to a "...Hover" clip, the attack to "...Snatch", and
   tools/assets/export_display_states.py writes their states.json from their own Animators (entry Hover;
   parameter 1 Fly, 3 Snatch, 4 Placement). Screenshot check: Pouakai / Condor wings move between frames.
+- Paragon sweep (2026-11-19): all 14 Paragons at degree 1 and 100 fighting a Ceramic stream (Sub /
+  Buccaneer on Lotus Island): models, degree swaps (Glaive Dominus, Bomb Paragon add-ons), carpets, orbits
+  and shots all draw; nothing broken found.
+- FIXED (map sweep, 2026-11-19): Town Centre and Another Brick drew with no ground (black). Their
+  terrain is static-batched ("Combined Mesh (root: scene)"): export_model now takes a renderer's
+  m_StaticBatchInfo submeshes [firstSubMesh, +subMeshCount) and leaves the shared mesh's vertices
+  (already world space) untransformed; it paired submeshes from 0 and transformed them again. Both
+  maps' scene models re-exported; screenshot check: ground, coast and track draw.
+  A scan of every map scene for static batching found four more (Bazaar 21 renderers, Karts n Darts 4,
+  Three Mines Around 6, Tree Stump 3), re-exported: their crates, barrels and logs were missing or
+  misplaced (Tree Stump drew one log in the wrong place and stray patches).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

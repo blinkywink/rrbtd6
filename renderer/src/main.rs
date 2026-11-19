@@ -2490,7 +2490,9 @@ const VINE_END_FRAMES: i32 = 23;
             // ParagonTower.SetTowerActive (Steam build @0xd53930): a Paragon not yet active (its
             // purchase playing) has its display scaled to zero, shadow and attack displays with it
             // (recording dart_paragon_fx: scale 0 from the purchase until Finish).
-            let hidden = |t: &game::Tower| t.paragon.is_some() && game.sim_elapsed < t.paragon_active_at;
+            // LeapingSword.HideTower (@0x180e38a00): the tower's DisplayBehaviors scaled to zero
+            // from the jump until Finish (Sauda's Leaping Sword).
+            let hidden = |t: &game::Tower| (t.paragon.is_some() && game.sim_elapsed < t.paragon_active_at) || t.leap_paused;
             // Tower ground shadows, under the range circles.
             for t in &game.towers {
                 if hidden(t) {

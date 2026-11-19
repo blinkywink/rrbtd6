@@ -1987,6 +1987,10 @@ pub struct Tower {
     /// The graveyard's RateSupportMutator is on (UpdateGraveyardFillThreshold).
     pub magus_rate: bool,
     pub paused_attacks: Vec<String>,
+    /// LeapingSword (Sauda's Leaping Sword) in progress: see `leap_start`.
+    pub leap: Option<LeapState>,
+    /// LeapingSword.HideTower: every Attack's pauseCount + 1 until Finish.
+    pub leap_paused: bool,
     /// The first frame it is a Paragon: its attacks still act that frame (the pause starts after).
     pub paragon_first: u64,
     /// The attack model names it had before it became a Paragon (those Attacks carry on).
@@ -2232,6 +2236,19 @@ pub struct GyrState {
     /// When it was made: Simulation.Simulate runs the process list in creation order, so a bloon
     /// made since hasn't moved yet when it looks (recording beast_001: its second Black).
     pub stamp: u64,
+}
+
+/// LeapingSword (Sauda's Leaping Sword, fields per field_offsets): pendingPosition while
+/// isPendingStart, landAt / finishAt (Simulation.time frames, -1 off), jumpingAtBloon (its id)
+/// and jumpingAtPosition.
+#[derive(Clone)]
+pub struct LeapState {
+    pub spec: crate::data::Leap,
+    pub pending: Option<[f32; 2]>,
+    pub land_at: i64,
+    pub finish_at: i64,
+    pub bloon: Option<u64>,
+    pub at: [f32; 2],
 }
 
 /// EmissionOverTime (VERIFIED-DECOMP Emit @0x180c3a5b0, Process @0x180c3a920): what a throw
@@ -8989,6 +9006,8 @@ impl Game {
             magus_pool: 0.0,
             magus_rate: false,
             paused_attacks: Vec::new(),
+            leap: None,
+            leap_paused: false,
             paragon_first: 0,
             paragon_kept: Vec::new(),
             attack_born: HashMap::new(),
@@ -11586,6 +11605,8 @@ impl Game {
             magus_pool: 0.0,
             magus_rate: false,
             paused_attacks: Vec::new(),
+            leap: None,
+            leap_paused: false,
             paragon_first: 0,
             paragon_kept: Vec::new(),
             attack_born: HashMap::new(),
@@ -12764,8 +12785,16 @@ impl Game {
     fn ability_ready(&self, t: usize, a: &crate::data::Ability) -> bool {
         (a.between_rounds || self.rounds_active())
             && !a.toggled_off
+            && self.leap_can_use(t, a)
             && !(a.per_round > 0 && self.towers[t].ability_round.get(&a.name).copied().unwrap_or(0) as i32 >= a.per_round)
             && !self.ability_active(t, a)
+    }
+
+    /// LeapingSword.CanUseAbility (VERIFIED-DECOMP @0x180e37c60): not pending, finishAt -1, a
+    /// GetTarget, and no Ability of the tower whose name holds "SwordCharge" active (the clone's
+    /// Sword Charge has no active state: OPEN P-SWORDCHARGE).
+    fn leap_can_use(&self, t: usize, a: &crate::data::Ability) -> bool {
+        a.leap.is_none() || (self.towers[t].leap.is_none() && self.leap_target(t).is_some())
     }
 
     /// The selectionObjectPath marker of tower-targeted ability `name` (OverclockInput's
@@ -12923,7 +12952,7 @@ impl Game {
             // toggled-off ToggleableAbilityBehavior's fails (recording sniper_040: the scenario's
             // Activate(true) on both abilities drops only Supply Drop's crate). HYPOTHESIS
             // P-TOGGLE: the toggle stays as it started (switching it isn't modelled).
-            if a.toggled_off {
+            if a.toggled_off || !self.leap_can_use(t, &a) {
                 continue;
             }
             // IsReady: at most maxActivationsPerRound a round; Activate counts it.
@@ -13025,6 +13054,10 @@ impl Game {
     /// for an ActivateAttack, its attacks' lifespan hasn't run out.
     fn ability_active(&self, t: usize, a: &crate::data::Ability) -> bool {
         if a.darkshift.is_some() && self.towers[t].shift.is_some() {
+            return true;
+        }
+        // LeapingSword.IsActive (VERIFIED-DECOMP @0x180e39210): isPendingStart or finishAt != -1.
+        if a.leap.is_some() && self.towers[t].leap.is_some() {
             return true;
         }
         let Some(tr) = self.tier(t) else { return false };
@@ -13282,21 +13315,15 @@ impl Game {
                 }
             }
         }
-        // STAND-IN P-LEAP: Leaping Sword lands on the bloon furthest along the track (on
-        // the map) after landDelay.
+        // LeapingSword.Activate (VERIFIED-DECOMP @0x180e37bb0): GetTarget; none, nothing. The
+        // tower's rotation set to 0, then StartJumpTo(the bloon's position, the bloon).
         if let Some(lp) = &a.leap {
-            let target = self.bloons.iter().filter(|b| on_map(b.pos, 0.0)).max_by(|x, y| x.progress().total_cmp(&y.progress())).map(|b| b.pos);
-            if let Some(p) = target {
-                let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-                let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new()};
-                let start = self.projectiles.len();
-                self.emit(p, 0.0, &single, &lp.projectile, None, tiers, owner);
-                for pr in &mut self.projectiles[start..] {
-                    pr.pos = p;
-                    pr.vel = [0.0; 2];
-                    pr.wait = lp.delay * FPS;
-                    pr.frames_left += lp.delay * FPS;
-                }
+            if let Some(i) = self.leap_target(t) {
+                let (id, p) = (self.bloons[i].id, self.bloons[i].pos);
+                let tw = &mut self.towers[t];
+                tw.game_rot = Some(0.0);
+                tw.angle = -90.0 * DEG2RAD;
+                self.leap_start(t, lp, p, Some(id));
             }
         }
         // ActivateLightningRodZap.Activate (VERIFIED-DECOMP @0x180e05320): with a
@@ -17504,6 +17531,102 @@ impl Game {
         }
     }
 
+    /// LeapingSword.GetTarget (VERIFIED-DECOMP @0x180e38600): BloonFilter <GetTarget>b__14_0
+    /// (@0x180deb930: the bloon's position within worldXMin..worldXMax, Y min..max). For any
+    /// target type but Strong, BloonManager.GetTarget(the tower's targetType, 99999, from the
+    /// tower). For Strong, BloonManager.GetTargets(First, 99999, 999999999) then
+    /// LinqExtensions.MaxOrDefaultBy(bloonModel.danger) (@0x1818ba140: replaced only on a strictly
+    /// greater key, so the first of the highest danger in First order). INFERRED: First order as
+    /// `typed_target_from` ranks (further along first, ties by path rank), carried bloons last.
+    fn leap_target(&self, t: usize) -> Option<usize> {
+        let tp = self.towers[t].pos;
+        let valid = |_: &Self, b: &Bloon| b.hp > 0 && on_map(b.pos, 0.0);
+        let idx = |id: u64| self.bloons.iter().position(|b| b.id == id);
+        match self.towers[t].target {
+            TargetMode::Close => self.closest_target(tp, 99999.0, |b| valid(self, b), |b| b.pos),
+            TargetMode::Strong => {
+                let rank = |b: &Bloon| self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);
+                let mut order: Vec<usize> = (0..self.bloons.len()).filter(|&i| valid(self, &self.bloons[i])).collect();
+                order.sort_by(|&x, &y| {
+                    let (a, b) = (&self.bloons[x], &self.bloons[y]);
+                    a.off_track().cmp(&b.off_track()).then(self.perc_through_map(b).total_cmp(&self.perc_through_map(a))).then(rank(a).cmp(&rank(b)))
+                });
+                let mut best: Option<usize> = None;
+                for i in order {
+                    if best.is_none_or(|j| self.defs[self.bloons[i].kind].danger > self.defs[self.bloons[j].kind].danger) {
+                        best = Some(i);
+                    }
+                }
+                best
+            }
+            m => {
+                let m = if matches!(m, TargetMode::Last) { m } else { TargetMode::First };
+                self.typed_target_from(tp, 99999.0, m, &valid).and_then(idx)
+            }
+        }
+    }
+
+    /// LeapingSword.StartJumpTo (VERIFIED-DECOMP @0x180e39ff0): while rounds aren't active it is
+    /// put off (isPendingStart, pendingPosition). Else landAt = now + landDelayFrames, finishAt =
+    /// now + timeUntilFinishFrames, jumpingAtBloon / jumpingAtPosition (the bloon's while it
+    /// lives), HideTower (@0x180e38a00: every Attack's pauseCount + 1; the displays hidden) and
+    /// the landing effect (display only).
+    fn leap_start(&mut self, t: usize, lp: &crate::data::Leap, p: [f32; 2], bloon: Option<u64>) {
+        if !self.rounds_active() {
+            let st = self.towers[t].leap.get_or_insert_with(|| LeapState { spec: lp.clone(), pending: None, land_at: -1, finish_at: -1, bloon: None, at: p });
+            st.pending = Some(p);
+            return;
+        }
+        let now = self.sim_elapsed as i64;
+        let at = bloon.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map_or(p, |b| b.pos);
+        self.towers[t].leap = Some(LeapState { spec: lp.clone(), pending: None, land_at: now + lp.land, finish_at: now + lp.finish, bloon, at });
+        self.towers[t].leap_paused = true;
+    }
+
+    /// LeapingSword.Process (VERIFIED-DECOMP @0x180e39a10), the ability's behaviour after the
+    /// towers: a pending start goes once rounds are active (no bloon); while landing, the spot
+    /// follows the bloon while it lives; at landAt, Land (@0x180e39230): impactProjectileModel
+    /// then dotProjectileModel through the singleEmissionModel's emission at the spot, each
+    /// projectile's rotation set to 0, landAt = -1; at finishAt, Finish (@0x180e38070): the
+    /// attacks' pauseCount - 1, the displays shown again (createFinishingEffectAt: display only).
+    fn leap_step(&mut self) {
+        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new()};
+        for t in 0..self.towers.len() {
+            let Some(st) = self.towers[t].leap.clone() else { continue };
+            if let Some(p) = st.pending {
+                if self.rounds_active() {
+                    self.leap_start(t, &st.spec, p, None);
+                }
+            }
+            let Some(mut st) = self.towers[t].leap.clone() else { continue };
+            let now = self.sim_elapsed as i64;
+            if st.land_at >= 0 {
+                if let Some(b) = st.bloon.and_then(|id| self.bloons.iter().find(|b| b.id == id)) {
+                    st.at = b.pos;
+                }
+                if st.land_at <= now {
+                    let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
+                    for proj in std::iter::once(&st.spec.projectile).chain(st.spec.dot.iter()) {
+                        let start = self.projectiles.len();
+                        self.emit(st.at, 0.0, &single, proj, None, tiers, owner);
+                        for pr in &mut self.projectiles[start..] {
+                            pr.pos = st.at;
+                            pr.vel = [0.0; 2];
+                            pr.grot = Some(0.0);
+                        }
+                    }
+                    st.land_at = -1;
+                }
+            }
+            if st.finish_at >= 0 && st.finish_at <= now {
+                self.towers[t].leap = None;
+                self.towers[t].leap_paused = false;
+                continue;
+            }
+            self.towers[t].leap = Some(st);
+        }
+    }
+
     /// CreateProjectilesOnTrackOnExpire.Expired (VERIFIED-DECOMP @0x180caa930): the targetable
     /// path segments whose point is within `range` of the shot (PathManager.GetPathSegmentsInRange:
     /// paths in order, segments ascending), then `count` times syncedRandom.Next(0, n - 1) (never
@@ -17979,7 +18102,7 @@ impl Game {
             let extra_slots: Vec<usize> = self.towers[t].temp.iter().map(|x| x.slot).collect();
             // (FinalStrike.StartCountdown pauses the tower's Attacks till EndCountdown: recording
             // map_lotusisland_sub_paragon_040_r40, the Navarch throws nothing from rt 700.)
-            let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some()
+            let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some() || self.towers[t].leap_paused
                 // ParagonTower's pause starts after its first frame: an attack with a target in range
                 // then throws once (recordings boomerang_paragon_r63 / r90: at the purchase, then
                 // 120 frames later).
@@ -18326,7 +18449,7 @@ impl Game {
                 let fresh_attack = self.towers[t].paragon.is_some() && self.sim_elapsed < self.towers[t].paragon_active_at
                     && !self.towers[t].paragon_kept.contains(&attack.model_name);
                 let paused = paused && (self.towers[t].paragon.is_none() || self.towers[t].paragon_kept.contains(&attack.model_name)
-                    || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some());
+                    || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some() || self.towers[t].leap_paused);
                 // At zero Sandbox health, bloons keep moving but neither base nor temporary
                 // ability attacks may start or release shots. Timers above still advance.
                 // PauseOtherAttacks.Process, in its own attack's turn: durationFrames + lastFiredAt
@@ -25436,6 +25559,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         // act and move from the next frame: recording heli_004, made at 878, first shot 879.)
         self.comanche_defence();
         self.final_strike_step();
+        self.leap_step();
         self.move_helis();
         self.moab_shove_step();
         self.fly_patterns();
@@ -29335,10 +29459,24 @@ mod beast_tests {
         }
         assert!(g.towers[t].pops > 0, "the charge popped bloons");
         g.towers[t].ability_cd.clear();
-        let lead = g.bloons.iter().max_by(|a, b| a.dist.total_cmp(&b.dist)).map(|b| b.pos);
-        if lead.is_some() {
-            assert!(g.activate_ability("Leaping Sword Attack"));
+        g.debug_spawn("Red", 10, 300.0);
+        let n0 = g.projectiles.len();
+        assert!(g.activate_ability("Leaping Sword Attack"));
+        let st = g.towers[t].leap.clone().expect("jumping");
+        assert!(g.towers[t].leap_paused, "HideTower pauses the attacks");
+        assert!(!g.activate_ability("Leaping Sword Attack"), "IsActive until Finish");
+        let (land, finish) = (st.land_at as u64, st.finish_at as u64);
+        while g.sim_elapsed < land - 1 {
+            g.step();
         }
+        assert!(g.towers[t].leap.as_ref().unwrap().land_at >= 0, "not landed before landAt");
+        let _ = n0;
+        g.step();
+        assert_eq!(g.towers[t].leap.as_ref().unwrap().land_at, -1, "landed at landAt");
+        while g.sim_elapsed < finish {
+            g.step();
+        }
+        assert!(g.towers[t].leap.is_none() && !g.towers[t].leap_paused, "Finish at finishAt");
     }
 
     /// Splitter routing on Balance: round bloons spawn on the two start paths (not the boss

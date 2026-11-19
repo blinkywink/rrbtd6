@@ -2103,12 +2103,18 @@ def main():
                 # `lifespan` (STAND-IN: every attack, not only the mines; projectile speed not applied).
                 if x["type"] == "BrickellFreezeMinesAbilityBuffModel":
                     out["turbo"] = {"lifespan": xf.get("lifespan", 0.0), "mult": xf.get("multiplier", 1.0), "extra_damage": 0}
-                # SwordChargeModel (Sauda): its projectile runs along the track; LeapingSwordModel:
-                # the impact lands after landDelay (P-LEAP).
+                # SwordChargeModel (Sauda): its projectile runs along the track. LeapingSwordModel
+                # (LeapingSword.StartJumpTo @0x180e39ff0 / Land @0x180e39230): landDelayFrames,
+                # timeUntilFinishFrames, the impact and then the DoT projectile at the landing spot.
                 if x["type"] == "SwordChargeModel" and deref(xf.get("projectileModel")):
                     out["track_charge"] = projectile(deref(xf["projectileModel"]))
                 if x["type"] == "LeapingSwordModel" and deref(xf.get("impactProjectileModel")):
-                    out["leap"] = {"projectile": projectile(deref(xf["impactProjectileModel"])), "delay": xf.get("landDelay", 0.0)}
+                    dot = deref(xf.get("dotProjectileModel"))
+                    out["leap"] = {"projectile": projectile(deref(xf["impactProjectileModel"])),
+                                   "dot": projectile(dot) if dot else None,
+                                   # LeapingSwordModel.ctor (@0x181287670): xFrames = (int)(x * 60f), in f32.
+                                   "land": int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", xf.get("landDelay", 0.0)))[0] * 60.0))[0]),
+                                   "finish": int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", xf.get("timeUntilFinish", 0.0)))[0] * 60.0))[0])}
                 # ActivateLightningRodZapModel (Skywarden x-5-x Thunder Charge; Activate @0x180e05320,
                 # Process @0x180e059e0, Emit @0x180e053c0): the lightningRod projectile through its
                 # lineEmission from rod to rod.

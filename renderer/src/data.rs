@@ -1566,6 +1566,17 @@ pub struct PlaceAt {
     pub delay: f32,
 }
 
+/// LeapingSwordModel (Sauda's Leaping Sword): the impact and DoT projectiles made where she lands,
+/// landDelayFrames after the jump, and timeUntilFinishFrames until her attacks resume.
+#[derive(Deserialize, Clone)]
+pub struct Leap {
+    pub projectile: Proj,
+    #[serde(default)]
+    pub dot: Option<Proj>,
+    pub land: i64,
+    pub finish: i64,
+}
+
 #[derive(Deserialize, Clone)]
 pub struct Biohack {
     pub count: u32,
@@ -2447,7 +2458,7 @@ pub struct Ability {
     pub track_charge: Option<Proj>,
     /// LeapingSwordModel: an impact projectile that lands after `delay`.
     #[serde(default)]
-    pub leap: Option<PlaceAt>,
+    pub leap: Option<Leap>,
     /// PlaceProjectileAtModel (Mega Mine): placed at a picked point.
     #[serde(default)]
     pub place_at: Option<PlaceAt>,

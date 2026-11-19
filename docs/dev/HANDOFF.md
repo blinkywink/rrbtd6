@@ -172,6 +172,32 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### DONE (2026-11-19): Sauda's Leaping Sword from the decomp (was STAND-IN P-LEAP)
+VERIFIED-DECOMP (LeapingSword: Activate @0x180e37bb0, CanUseAbility @0x180e37c60, GetTarget @0x180e38600,
+StartJumpTo @0x180e39ff0, HideTower @0x180e38a00, Process @0x180e39a10, Land @0x180e39230, Finish @0x180e38070,
+IsActive @0x180e39210). The clone dropped one impact on the furthest bloon after landDelay. Now:
+- GetTarget: BloonFilter <GetTarget>b__14_0 (position inside worldX/Y min..max). TargetType other than Strong:
+  BloonManager.GetTarget(the tower's targetType, range 99999 (literal 0x47c34f80), from the tower). Strong
+  (TargetType static +0x78): GetTargets(First, 99999, 999999999) then MaxOrDefaultBy(bloonModel.danger)
+  (@0x1818ba140: replaced only on a strictly greater key). INFERRED: the First order as typed_target_from
+  ranks it (carried bloons last). CanUseAbility: not pending, finishAt -1, a target, and no ability whose
+  name holds "SwordCharge" active (the clone's Sword Charge has no active state: see P-SWORDCHARGE below).
+- Activate: tower rotation 0 (CommonBehaviorProxy.set_Rotation), StartJumpTo(bloon position, bloon): put off
+  while rounds aren't active (isPendingStart); else landAt = now + landDelayFrames (30), finishAt = now +
+  timeUntilFinishFrames (90), HideTower (every Attack's pauseCount + 1, displays scaled to 0: `leap_paused`,
+  main.rs hides the tower).
+- Process (`leap_step`, after the towers with the other ability behaviours): the spot follows the bloon while
+  it lives; at landAt Land emits impactProjectileModel then dotProjectileModel through the
+  singleEmissionModel's emission at the spot, rotation 0; at finishAt Finish (pauseCount - 1, displays back).
+- Exporter `leap` = {projectile, dot, land, finish} (frames as LeapingSwordModel's ctor: (int)(x * 60f)).
+  Test sauda_abilities checks landAt / finishAt and the pause. Display only, not drawn yet: the landing
+  effect (effectAtTarget / impactEffectModel) and finishingEffectModel at createFinishingEffectAt.
+- No Sauda recording yet: a hero recording set (Sauda 10 / 20 with the ability at a fixed frame) would
+  confirm the landing frame against the game's projectiles.
+- NEXT P-SWORDCHARGE: SwordCharge (Activate @0x180e5a0c0, Process @0x180e5bcc0, StartCharge @0x180e5c2c0,
+  CreateBaseProjectiles @0x180e5a300, HideTower @0x180e5b130, Finish @0x180e5ab90) also hides the tower and
+  has an active state; the clone only sends the track projectile.
+
 ### DONE (2026-11-19): CollectCashZone exact (Banana Farm x-x-5, Banana Farmer; was HYPOTHESIS P-COLLECT)
 VERIFIED-DECOMP. The clone collected a landed banana within the zone's radius at the start of the frame.
 CollectCashZone.Process (@0x180d09440) runs in its tower's turn (towers_phase, `collect_zone_step`):
@@ -261,7 +287,7 @@ VERIFIED-DECOMP. The clone gave one free Dart a round (unused ones lost) at cost
   CritMultiplier.GetProjectile (@0x180c71010) sets every ShowTextOnHitModel.text to "Crit" on a crit only.
   The text sits at the projectile's Position (useTowerPosition false everywhere): the clone used the bloon's.
 - NEXT candidates (remaining HYPOTHESIS / STAND-IN tags): `grep -n "HYPOTHESIS\|STAND-IN" renderer/src/game.rs`
-  (169 at this point); e.g. P-BIOHACK, P-LEAP, P-THRIVEORDER (P-COLLECT and P-TEMPLESTAT done, above).
+  (169 at this point); e.g. P-SWORDCHARGE, P-THRIVEORDER (P-COLLECT, P-TEMPLESTAT, P-LEAP done, above).
 - P-COLLECT first read (since PORTED, see the DONE entry above; game.rs collect_zones collects a landed banana at once): CollectCashZone.Process
   (@0x180d09440, ~370 lines): skipped while the tower IsSuspended; collectPoint = the tower's position; per cash
   projectile of the same owner (onlyAttractsCamo +0x44 must equal the projectile model's +0x3c; minEmitWaitTimeFrames
