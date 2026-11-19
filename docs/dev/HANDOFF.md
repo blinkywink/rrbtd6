@@ -172,6 +172,150 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### DONE (2026-11-19): Total Transformation, Fan Club and Biohack tower selection from the disasm (was HYPOTHESIS P-MORPH, STAND-IN P-BIOHACK)
+VERIFIED-DISASM. The clone took Total Transformation's towers within the Alchemist's range, and Fan Club's
+from every tower on the map with an unstable List.Sort. Both call TowerManager.GetClosestTowers/4
+(@0x180c28d60; Total Transformation through the 3-argument overload @0x180c29140) with range 99999.0
+(literal 0x183e4fe00), which it squares only when below 99999: so DistanceSquared (f32) < 99999, about 316
+units, inserted after every equal or smaller distance (stable, tower order).
+- MorphTower.FinishActivation (@0x180e3f240, mutateAll): skips the Alchemist itself, destroyed towers, a Hero,
+  TowerModel.tier > maxTier (paragons are tier 6), worth > maxCost (9999999 everywhere; exported as
+  `max_cost`, serde default), IsSuspended, ignoreTowerForSelection, IsMutatedBy an ignoreWithMutators id
+  (<FinishActivation>b__0 @0x180e43ee0 -> Mutable.IsMutatedBy; "MonkeyFanClub" / "MonkeyFanClubPlasma",
+  MonkeyFanClub.Initialise @0x180e3dd50 names a fan's mutator Plasma iff immuneBloonProperties & 8), then
+  takes it iff affectList.Contains(baseId) (String.Contains on the whole comma list) until maxTowers.
+  No sub-tower / hero / power TowerModel has a baseId inside any affectList (checked over every model).
+- HYPOTHESIS P-MORPHAGAIN (narrow): a still-transformed tower (TransformedBaseMonkey: baseId Alchemist, tier 0)
+  would be picked again; the clone skips it. Unreachable in normal play (cooldown 40 s > lifespan 20 s, one
+  x-5-x Alchemist); the double TimedMutator that AddMutator would leave isn't traced.
+- MonkeyFanClub.Activate (@0x180e3d400; same code as the old build's @0xe5bf10): the GetClosestTowers list,
+  then Enumerable.OrderBy (stable) on <Activate>b__11_0 (@0x180e3e5e0): a Plasma club keys 2 for a tower
+  with "MonkeyFanClubPlasma", else 1 with "MonkeyFanClub", else 0; the plain club 1 with "MonkeyFanClub",
+  else 0 (towers not yet fans first). ignoreWithMutators is "morph_mutator" (a transformed tower's baseId is
+  Alchemist, so the baseId test already drops it).
+- Biohack.Activate (@0x180e16da0): GetClosestTowers(position, affectedCount, FilterTower) (same reach, the
+  filter before the distance, list cut to affectedCount). Biohack.FilterTower (@0x180e17400): not the hero
+  itself, not isSubTower / isParagon / a power tower, not IsMutatedBy its DamageMutator or BehaviorMutator
+  (`Tower::biohacked`, the longer of lifespan and lifespan + GetShutOffFrames), and no baseId on filterTowers
+  (BananaFarm, MonkeyAcademy, MonkeyVillage, NaturesWardTotem, BananaFarmer, Pontoon, PortableLake, Benjamin,
+  TechBot, EnergisingTotem) except "MonkeyVillage" with a top path of 5. Other heroes are NOT refused (the
+  clone refused every hero). Both mutators go through AddMutatorIncludeSubTowers (child towers too). Exporter
+  biohack `filter`, `shutoff` (GetShutOffFrames @0x1812721d0: the first DelayedShutoffModel's
+  shutoffTimeFrames, 120; None without behaviors). STAND-IN P-BIOHACK left (narrowed): the shut-off itself,
+  DelayedShutoff.Process (@0x180d1c1d0: after delayFrames from Attatched's startedAt, AddMutatorIncludeSubTowers
+  of ShutoffMutator for shutoffTimeFrames; Mutate -> BehaviorMutator.StunTower @0x180f30510, which rewrites the
+  tower model) isn't modelled: needs the tower stun ported (no clone support yet; candidate next item).
+- Local game.json regenerated with build_game_data.py and re-compacted (only the new fields differ).
+- Tests: total_transformation_morphs_nearby_towers (Alchemist in a corner: a Dart 290..315 away is taken, one over 318 isn't); hero_barrage_and_biohack (a Banana Farm is filtered out).
+
+### DONE (2026-11-19): Monkey City free Dart Monkeys exact (was HYPOTHESIS P-FREEDART) + crit text spot (P-CRITTEXT)
+VERIFIED-DECOMP. The clone gave one free Dart a round (unused ones lost) at cost x MonkeyCityModel.multiplier.
+- MonkeyCity.OnRoundPassed (@0x180d3dc70, OnEarlyRoundEnd delegate): ++roundCount (+0x70); from
+  roundsTillMultiplier (1) on, unless IsSuspended: TowerInventory.AddFreeTowers(towerId, 1, "") (@0x180fa8fc0:
+  freeTowers list, an entry with the same towerId / upgrades / flag gets += count, else appended; game mode 13
+  goes to the Rogue insta inventory instead). OnDestroy resets roundCount; the free towers stay.
+- TowerManager.GetTowerCost (@0x180c2a420): IsFreeTowerAvailable (GetFreeTowerCount @0x180fa9ce0: sum of
+  matching counts) -> UseFreeTowerCharge (@0x180fac840: first matching entry with count >= 1, -1) and cost 0.
+  TowerInventory.GetTowerCost (@0x180faa0a0, the shown price) returns 0 too. multiplier is read by nothing.
+- Clone: Game::free_towers, Tower::city_rounds, monkey_city_round_end (after Bank.PayInterest), place_cost 0
+  while free_tower_count > 0, place spends one. Exporter free_tower `rounds`. Test monkey_city_free_darts_accumulate.
+- P-CRITTEXT VERIFIED: ShowTextOnHit.Collide (@0x180cdb530) shows nothing while text is "" (all 50 models);
+  CritMultiplier.GetProjectile (@0x180c71010) sets every ShowTextOnHitModel.text to "Crit" on a crit only.
+  The text sits at the projectile's Position (useTowerPosition false everywhere): the clone used the bloon's.
+- NEXT candidates (remaining HYPOTHESIS / STAND-IN tags): `grep -n "HYPOTHESIS\|STAND-IN" renderer/src/game.rs`
+  (169 at this point); e.g. P-TEMPLESTAT, P-BIOHACK, P-LEAP, P-THRIVEORDER, P-COLLECT.
+- P-COLLECT first read (NOT ported; game.rs collect_zones collects a landed banana at once): CollectCashZone.Process
+  (@0x180d09440, ~370 lines): skipped while the tower IsSuspended; collectPoint = the tower's position; per cash
+  projectile of the same owner (onlyAttractsCamo +0x44 must equal the projectile model's +0x3c; minEmitWaitTimeFrames
+  +0x4c against the projectile's creation frame +0xb4; towerFilter +0x38 against its emitting tower's baseId):
+  offset = collectPoint - position (2D); attract radius = useTowerRange (+0x40) ? TowerModel.range : attractRange
+  (+0x28); within collectRange (+0x2c, 10): PlayAnimation, the projectile's collect vfunc (0x848) -> tower
+  cashEarned (+0x170) += and a count; else within attract radius: FollowPath / ScaleProjectile completed and the
+  position = Vector3.Lerp(position, collectPoint, lerpMultiplier +0x30) each frame. Models: 20 (attractRange
+  60..9999999, lerp 0.25..0.4, camo ones 0.03 with minEmitWaitTime 0.6). A Standard-mode farm recording with a
+  Marketplace / Banana Central would check the timing (farm_std is the set).
+
+### DONE (2026-11-19): Sun Temple sacrifice selection exact (was HYPOTHESIS P-TEMPLE / P-TEMPLEWIND)
+VERIFIED-DECOMP. The clone skipped every other Super Monkey, every sub-tower and every deck tower, counted
+the edge of the range in, and applied every set whose worth reached a cost. The game:
+- MonkeyTemple.StartSacrifice (@0x180d43510): TowerManager.GetTowersInRange(position, TowerModel.range;
+  a TowerRadius behaviour's range would replace it, none on a temple) = `<GetTowersInRange>d__31` (dist^2 <
+  range^2, strict, tower order). Skipped: the temple itself; a Hero (only lifted by heroOverlapYAdjustment,
+  display); isSubTower with _name containing "Phoenix" or an AirUnit in its dependants; isPowerTower
+  (powerName != null), isParagon, ignoreTowerForSelection, isGeraldoItem (geraldoItemName != null); a Beast
+  Handler pet; Tower.isBeingRedeployed (+0x197) / IsSuspended (+0xbc, CommonBehaviorProxy order after
+  PlayerOwnerId +0xb8); a tower whose createdAreas hold the temple's areaPlacedOn (the Flagship it stands on);
+  baseId "TranceTotem" (literal 0x184f884c0). Everything else goes, other Super Monkeys and sub-towers
+  (Sentries, Marines, mini Sun Avatars, totems) included.
+- worth[GameModel.GetTowerFromId(baseId).towerSet (else the model's)] += Tower.worth (f32 Dictionary,
+  first-seen order); selectedTowers = OrderByDescending(value) (stable), the first
+  MonkeyTempleModel.towerGroupCount (+0x28: Sun Temple 3, True Sun God 4). Destroyed (SortTowersForSacrifice,
+  TowerSacrificed, Simulation.DestroyTower), then ActOnSacrifice (@0x180d3e140): a group applies iff its set is
+  in selectedTowers and GetTowerSetWorth >= (float)cost; CheckTempleUnderLevel.Evaluate (@0x180c1ce10):
+  templeType == the temple's templeId (true for all 215 in the data), ContainsTowerSet, worth < (float)cost.
+  checkForThereCanOnlyBeOne (+0x70, the Vengeful / SacrificeBatmanAndRoboCop branch) is false in all 10 models.
+- WindChanceTowerMutator.Mutator.Mutate (@0x180c223c0, token 0x600212d; nested-type tokens follow the outer
+  type's): GetDescendants<WindModel> chance += windChance, unclamped (the clone clamped at 1; the roll is
+  `<= chance`, so the same result).
+- Exporter: tier `no_sacrifice` (the model flags), temple `group_count`; local game.json regenerated (content
+  identical apart from the two new fields; re-compacted). Test sun_temple_keeps_three_richest_sets.
+- P-TEMPLESTAT left as is (mutatorsToApply shows no id dedupe; super recordings cover the stacking).
+- Not changed (still as before, unverified): a sacrificed tower's sub-towers out of range are removed with it
+  (DestroyTower -> Tower.OnExpire; per-behaviour expiry not traced). Not reached by any recording (CHIMPS
+  super set unchanged 34/34): a Sun Temple recording with 4 sets in range would show the top-3 cut.
+
+### DONE (2026-11-19): Trade Empire exact (was HYPOTHESIS / STAND-IN P-TRADEEMPIRE)
+VERIFIED-DECOMP / DISASM. The clone paid one lump at round end (per other merchant ship x 10 + Favored Trades x
+20, one Trade Empire only) and gave every merchant ship the damage buffs. The game (Game::trade_empire_mutators):
+- TradeEmpireBuff.Process (@0x180da8e70) redoes UpdateMutators when the counts of non-suspended Trade Empires,
+  Merchantmen (MerchantShip, TowerModel.tiers[2] == 3) or Favored Trades (== 4) change. The lambdas are
+  `<>c` methods named by token (current build: b__8_0..2 @0x180dc01a0.., b__9_0..3 @0x180dc0310..; the
+  methods-*.jsonl VAs are from an older build: list nested types by token next to the outer type's).
+  type_usage.py names the generic MethodRefs: FactoryFactory.GetUncast<MerchantShip>, Where,
+  OrderByDescending (key tiers[2]), Take, Count.
+- UpdateMutators (@0x180da9760): remove its mutatorId from every MerchantShip and TradeEmpireBuff tower;
+  n = GetMatchingTradeEmpireCount (same mutatorId, not suspended); taken = MerchantShips not suspended,
+  OrderByDescending(tiers[2]).Take(maxMerchantmanCapBonus x n); cashBonus = (taken with tier 3) x
+  cashPerRoundPerMechantship + (tier 4) x cashPerRoundPerFavouredTrades (f32); each taken ship gets
+  TradeEmpireBuffMutator(cashBonus, damage, ceramic, moab, indicator, stacks = taken count; priority 1,
+  unique). Mutate (@0x180dbacf0): PerRoundCashBonusTowerModel.cashPerRound += cashBonus (EVERY taken ship
+  gets the whole bonus), DamageModel.damage += damageBuff, each ProjectileModel gets DamageModifierForTag
+  Ceramic / Moabs (x1 + buff). The Trade Empire itself isn't a MerchantShip (its own 800 only).
+  mutatorId "TradeEmpire" vs the Paragon's "TradeEmpireParagon": separate groups that stack.
+- PerRoundCashBonusTower.OnRoundComplete (@0x180d5a0a0): (round + 1) x cashRoundBonusMultiplier (0 in every
+  model) + cashPerRound, f32. CHIMPS (@0x1811189b0) zeroes cashPerRound and cashRoundBonusMultiplier and
+  TradeEmpire's per-Merchantman cash ONLY: a CHIMPS Favored Trades taken by a Trade Empire pays 20 x
+  (Favored Trades taken) a round. MonkeyCityIncomeSupport's incomeModifier is 0 in CHIMPS (`income_n`).
+- HYPOTHESIS P-TECITY: on a ship that also has Monkey City's mutator (both priority 1), the clone applies
+  Trade Empire's first ((cashPerRound + bonus) x multiplier). Mutable.ApplyMutation runs the list from index
+  0; the real order is the ship's SortedInsert history (not modelled for towers). INFERRED: Factory order is
+  tower order (only matters for equal tiers past the cap). Not reached by any recording (CHIMPS Favored
+  Trades + Trade Empire would show it: a candidate for a bucc recording). Test buccaneer_trade (230 / 530 /
+  800, icon stacks 2). Exporter: trade_empire id, icon, buff_name, buff_max (local game.json patched).
+
+### DONE (2026-11-19): GiveCashOnPop exact (Lead to Gold, Rubber to Gold; was HYPOTHESIS P-LEADGOLD)
+VERIFIED-DECOMP. The clone paid Lead to Gold's flat 50 when a projectile carrying it popped a Lead, and
+Rubber to Gold as a x2 pop-cash multiplier on a "mark" effect (which also shadowed a Desperado mark's
+damage multiplier when both were on a bloon). The game:
+- AddBehaviorToBloonModel (collisionPass -1, before the damage) puts GiveCashOnPopModel on the bloon:
+  Lead to Gold through `filters` (FilterWithTag Lead), lifespan -1 (stays), layers 1, isUnique; Rubber to
+  Gold no filter, 14 s, layers 9999999. Exported as bloon effect kind "gold" (mult = flatCashAmount,
+  damage = cashMultiplier, fx = text effect + lifespan, tags); clone EffectKind::Gold.
+- Bloon.Degrade (@0x180fb1ad0; RecieveDamage calls it only when the damage reaches the health) runs every
+  behaviour's PreDegrade (IBloonBehavior slot 5) before OnBloonDegrade / SpawnChildren, then PostDegrade
+  (DistributeCash). GiveCashOnPop.PreDegrade (@0x180ff00e0): return when DamageResult.cash (+0x34) and
+  flatCashAmount are both 0; GetTower (@0x1811511d0: the factory's tower with the tracked id, else return:
+  a sold tower pays nothing); Simulation.AddCash((float)nonRegrowLayers (+0x30) x
+  GetIncomeMultiplierForRound(spawnRound) x cashMultiplier + flat) at once (not staged); a "${0}" text
+  effect of AddCash's result (@0x180b43190: 0 when the amount isn't > 0) when assetId is set.
+- nonRegrowLayers (GetNonRegrowLayersForLayers @0x180fc7ab0): 1 + layerCountOffset per popped layer with
+  layerNumber <= lowestLayerNumber or alwaysRecordsDamage (only boss minions). Clone `hit_layers`
+  (held bloons' unmade children counted by the same lowest != 0 rule as their cash, `tree_layers`).
+- Clone: Game::damage (top hit) collects the bloon's Gold effects before the hit and calls
+  give_cash_on_pop before pay_hit; `earn` returns what it added. Test give_cash_on_pop_pays_in_pre_degrade.
+- INFERRED: the tracked tower id is the projectile's owner. CHIMPS zeroes both amounts (adds 0, shows
+  "$0"): every regression recording unchanged, alch cash-exact. No non-CHIMPS recording reaches it.
+
 ### DONE (2026-11-19): sale value exact (was STAND-IN P-CASHBACK)
 Every regression set is full and maps_open / maptowers_open are empty, so this run took stand-ins the
 recordings can't reach (CHIMPS has DisableSellTowerModModel and no Monkey Knowledge). PORTED, VERIFIED-DISASM:
@@ -282,7 +426,7 @@ and places scripted towers free, as SimRecorder's CreateTowerAt does. DONE this 
   WallOfTrees, Syphon, BonusCashZone, Vigilante, MonkeyCityIncomeSupport (incomeModifier 0).
   DONE: GiveCashOnPop (Lead to Gold) flatCashAmount and cashMultiplier 0 (8 bytes at +0x30): pays $0 in
   CHIMPS (alch_003). Its PreDegrade (@0x180ff00e0) pays n x income x cashMultiplier + flat (n = DamageResult
-  +0x30, unnamed); the clone still pays the flat amount only outside CHIMPS (P-LEADGOLD).
+  +0x30, nonRegrowLayers). DONE (2026-11-19): ported exactly, see Now (was P-LEADGOLD).
 - Held bloons (blockSpawnChildrenCount): the children a hit doesn't make still pay their whole worth
   (cash_in x the income multiplier) in that hit (beast_001..205, merge, maptowers beast now cash-exact; left:
   beast_030 rt 2477 (+4 in the clone), map_haunted_beast_402_r60 rt 2678 (+0.2 in the clone)).
@@ -703,7 +847,8 @@ the game code / recordings), or it hides problems later.
   UpdateBuffs (@0x180c186b0) order, READ 2026-11-16: (1) the tower's TimedMutators with a
   buffIndicator (done); (2) every Support in the game whose CanShowInactiveBuffIcon (slot 140) is true
   for this tower: an INACTIVE icon (canEventuallyBuff 1, canCurrentlyBuff 0); the base returns false,
-  only MonkeySubParagonSupport overrides it (OPEN, sub paragon only); (3) AddDiscountZoneBuffs
+  only MonkeySubParagonSupport overrides it (DONE: Game::buff_icons_shown step (2), test at
+  "MonkeySubParagonSupport.CanShowInactiveBuffIcon"); (3) AddDiscountZoneBuffs
   (iterator MoveNext @0x180c2f200, READ): Tower +0x288 (a set of DiscountZone) cleared; for path
   0..2 with the tower's TowerModel.tiers[path], if get_owner (PlayerOwnerId +0xb8) == -1 (as
   decompiled; single player's owner IS -1: every recording's IN lines end in -1), not isParagon, not
@@ -1596,6 +1741,13 @@ P-OFFTRACKORDER: newest factory object first). (The wind_seg filing above now on
 seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
+
+- 2026-11-19: Trade Empire from the decomp (every taken ship's round cash + the whole bonus, OrderByDescending
+  tier Take(cap x empires), damage buffs only on taken ships, per-mutatorId groups, CHIMPS keeps the Favored
+  Trades part, buff icon with stacks). Regression full.
+
+- 2026-11-19: GiveCashOnPop from the decomp (Lead / Rubber to Gold as bloon behaviours paying in
+  PreDegrade: nonRegrowLayers x income x cashMultiplier + flat, at once, tower-tracked). Regression full.
 
 - 2026-11-19: Sale value from the disasm (Math.Ceiling of the f32 value, Banana Farm sellbackModifierAdd,
   Favored Trades counts its own ship, cashback groups / baseIds / Clicks / paragon rules); bank deposits

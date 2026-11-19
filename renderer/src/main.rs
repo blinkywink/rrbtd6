@@ -2759,7 +2759,16 @@ const VINE_END_FRAMES: i32 = 23;
                         // A RotateToPointer attack (Dartling) turns smoothly at its rate: its gun
                         // follows the tower's turning angle, not the aim of its last shot.
                         let turns = game.tier_of(t).and_then(|tr| tr.attacks.get(*ai)).is_some_and(|a| a.turn_rate.is_some_and(|r| r < 1e5));
-                        let aim_yaw = std::f32::consts::FRAC_PI_2 - if turns { t.angle } else { t.aims.get(*ai).map_or(t.aim, |a| a.0) };
+                        // RotateToTargetAttackOffset.RotateToStartingPoint (VERIFIED-DECOMP @0x180ddb3f0):
+                        // before its attack aims, a display rests along up turned by startRotation
+                        // (Mermonkey 3xx+'s eight tentacles fanned around it, 22.5 + 45 x n);
+                        // game y up, the clone's down: (-sin r, -cos r).
+                        let rest = game.tier_of(t).and_then(|tr| tr.attacks.get(*ai)).and_then(|a| a.offset_rot).map(|[_, _, _, r]| {
+                            let r = r.to_radians();
+                            (-r.cos()).atan2(-r.sin())
+                        });
+                        let aimed = t.aims.get(*ai).filter(|a| a.1.is_some()).map(|a| a.0);
+                        let aim_yaw = std::f32::consts::FRAC_PI_2 - if turns { t.angle } else { aimed.or(rest).unwrap_or_else(|| t.aims.get(*ai).map_or(t.aim, |a| a.0)) };
                         if let Some(m) = tier_anims.get_mut(&(t.def, dir.clone())).and_then(|m| m.as_mut()) {
                             let (s, c) = aim_yaw.sin_cos();
                             let p = [pos[0] + off[0] * c + off[2] * s, pos[1] + off[1], pos[2] - off[0] * s + off[2] * c];
@@ -3182,26 +3191,6 @@ const VINE_END_FRAMES: i32 = 23;
                     None => {
                         let v = vec2(p.vel[0], p.vel[1]).normalize_or_zero() * 5.0;
                         draw_line_3d(render3d::gl(p.pos[0] - v.x, 10.0, p.pos[1] - v.y), render3d::gl(p.pos[0] + v.x, 10.0, p.pos[1] + v.y), BLACK);
-                    }
-                }
-            }
-            // Glaive Lord's orbiting glaives where the simulation's Orbit put them (its eased speed,
-            // Vector2.Rotate on the circle), each turned by its RotateModel: rotationFrames = angle x
-            // 0.016666668 a frame (RotateModel.ctor @0x1811faeb0), so -12 degrees; the clone's y is
-            // flipped, so it turns the other way here. HYPOTHESIS P-GLAIVEROT0: rotation 0 when made.
-            for t in 0..game.towers.len() {
-                let Some(orbit) = game.tier(t).and_then(|tier| tier.orbit.clone()) else { continue };
-                let Some(disp) = orbit.display.as_ref().and_then(|g| proj_index.get(g)).and_then(|n| proj_displays.get(n)) else {
-                    continue;
-                };
-                let Some(st) = game.towers[t].orbit.as_ref() else { continue };
-                let spin = -(orbit.spin * (1.0 / 60.0) * st.age as f32).to_radians();
-                for g in &st.glaives {
-                    let (x, z) = (g[0], g[1] - 10.0 * tilt);
-                    match disp {
-                        ProjDisplay::Sprite { tex, w, h, pivot } => render3d::flat_sprite(tex, x, 10.0, z, *w, *h, *pivot, [spin.cos(), spin.sin()]),
-                        ProjDisplay::Mesh(m) => m.draw_at([x, 10.0, z], std::f32::consts::FRAC_PI_2 - spin, &mut scratch),
-                        ProjDisplay::Layers(ls) => draw_layers(ls, x, 10.0, z, spin, st.age as f32 / FPS),
                     }
                 }
             }
@@ -4035,6 +4024,29 @@ const VINE_END_FRAMES: i32 = 23;
                 let a = render3d::PITCH_DEG.to_radians();
                 let px_per_unit = vh / cam.fovy.max(1.0);
                 particles.draw(vec3(1.0, 0.0, 0.0), render3d::gl(0.0, a.cos(), a.sin()), px_per_unit, vh);
+            }
+            {
+            // (Drawn after the particles: the glaives sit over their own Glow trail.)
+            // Glaive Lord's orbiting glaives where the simulation's Orbit put them (its eased speed,
+            // Vector2.Rotate on the circle), each turned by its RotateModel: rotationFrames = angle x
+            // 0.016666668 a frame (RotateModel.ctor @0x1811faeb0), so -12 degrees; the clone's y is
+            // flipped, so it turns the other way here. HYPOTHESIS P-GLAIVEROT0: rotation 0 when made.
+            for t in 0..game.towers.len() {
+                let Some(orbit) = game.tier(t).and_then(|tier| tier.orbit.clone()) else { continue };
+                let Some(disp) = orbit.display.as_ref().and_then(|g| proj_index.get(g)).and_then(|n| proj_displays.get(n)) else {
+                    continue;
+                };
+                let Some(st) = game.towers[t].orbit.as_ref() else { continue };
+                let spin = -(orbit.spin * (1.0 / 60.0) * st.age as f32).to_radians();
+                for g in &st.glaives {
+                    let (x, z) = (g[0], g[1] - 10.0 / 60f32.to_radians().tan());
+                    match disp {
+                        ProjDisplay::Sprite { tex, w, h, pivot } => render3d::flat_sprite(tex, x, 10.0, z, *w, *h, *pivot, [spin.cos(), spin.sin()]),
+                        ProjDisplay::Mesh(m) => m.draw_at([x, 10.0, z], std::f32::consts::FRAC_PI_2 - spin, &mut scratch),
+                        ProjDisplay::Layers(ls) => draw_layers(ls, x, 10.0, z, spin, st.age as f32 / FPS),
+                    }
+                }
+            }
             }
             set_default_camera();
             if let (true, Some((rt, _, _))) = (scaled, view_rt.as_ref()) {

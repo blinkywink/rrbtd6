@@ -597,15 +597,35 @@ def main():
             if sf.get("chance", 0.0) > 0.0:
                 for e in effects[n0:]:
                     e["chance"] = sf["chance"]
-            # A mutator with no behaviour this exports (Rubber to Gold's GiveCashOnPop x1): still on
-            # the bloon for its lifespan, which FilterMutatedTarget looks for.
+            # GiveCashOnPopModel (Lead to Gold, Rubber to Gold): on the bloon; its PreDegrade pays
+            # (float)nonRegrowLayers x income x cashMultiplier + flatCashAmount when a hit pops it
+            # (GiveCashOnPop.PreDegrade @0x180ff00e0), with a "${0}" text effect (assetId,
+            # lifespan). The AddBehaviorToBloonModel's `filters` (FilterWithTag Lead for Lead to
+            # Gold) pick the bloons it goes on.
+            golds = [x for x in items(sf.get("behaviors")) if x and x["type"] == "GiveCashOnPopModel"]
+            if golds:
+                flts = [x for x in items(sf.get("filters")) if x] + ([flt] if flt else [])
+                tags = []
+                for x in flts:
+                    if x["type"] == "FilterWithTagModel" and (x["f"].get("moabTag") or x["f"].get("tag")):
+                        tags.append(("!" if x["f"].get("inclusive") else "") + ("Moabs" if x["f"].get("moabTag") else x["f"]["tag"]))
+                    else:
+                        raise SystemExit(f"GiveCashOnPop: unhandled filter {x['type']} on {sf.get('mutationId')}")
+                if len(tags) > 1:
+                    raise SystemExit(f"GiveCashOnPop: several tag filters on {sf.get('mutationId')}")
+                for g in golds:
+                    gf = g["f"]
+                    effects.append({"kind": "gold", "id": sf.get("mutationId") or "", "lifespan": sf.get("lifespan", 0.0),
+                                    "overlay": sf.get("overlayType") or "", "layers": sf.get("layers", 1),
+                                    "mult": gf.get("flatCashAmount", 0.0), "damage": gf.get("cashMultiplier", 0.0),
+                                    "fx": [prefab_name(gf.get("assetId")) or "", gf.get("lifespan", 0.0)],
+                                    "tags": tags, "refresh": not sf.get("isUnique", False),
+                                    "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
+            # A mutator with no behaviour this exports: still on the bloon for its lifespan,
+            # which FilterMutatedTarget looks for.
             if len(effects) == n0 and sf.get("mutationId"):
-                # GiveCashOnPop.PreDegrade with no flat amount: pops x income x cashMultiplier more
-                # (Rubber to Gold's x1: the pop cash again).
-                extra = sum(x["f"].get("cashMultiplier", 0.0) for x in items(sf.get("behaviors")) if x and x["type"] == "GiveCashOnPopModel"
-                            and not x["f"].get("flatCashAmount"))
                 effects.append({"kind": "mark", "id": sf["mutationId"], "lifespan": sf.get("lifespan", 0.0), "overlay": sf.get("overlayType") or "",
-                                "layers": sf.get("layers", 1), "mult": 1.0, "damage": 1.0 + extra,
+                                "layers": sf.get("layers", 1), "mult": 1.0, "damage": 1.0,
                                 "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
         # RemoveDamageTypeModifierModel (Embrittlement, Relentless Glue): the hit bloon (and
         # `layers` of its children) loses these bloonProperties (Lead 1, Frozen 16) for
@@ -1079,16 +1099,6 @@ def main():
             out["lifespan"] = ap["lifespan"]
             if ap.get("lifespanIfMisses", 0.0) > 0:
                 out["acid_pool"] = {"lifespan": ap["lifespanIfMisses"], "radius": ap["radiusIfMisses"], "pierce": ap["pierce"]}
-        for s in pb.get("AddBehaviorToBloonModel", []):
-            sf = s["f"]
-            subs = [x for x in items(sf.get("behaviors")) + items(sf.get("filters")) if x]
-            gold = next((x["f"] for x in subs if x["type"] == "GiveCashOnPopModel" and x["f"].get("flatCashAmount", 0) > 0), None)
-            tag = next((x["f"]["tag"] for x in subs if x["type"] == "FilterWithTagModel"), None)
-            if gold and tag:
-                # GiveCashOnPop.PreDegrade: Simulation.CreateTextEffect(assetId, lifespan, "${0}"
-                # of the cash added) over the bloon (LeadToGoldPopEffect "$50").
-                out["cash_on_pop"] = {"amount": gold["flatCashAmount"], "tag": tag,
-                                      "effect": prefab_name(gold.get("assetId")) or "", "lifespan": gold.get("lifespan", 0.0)}
         # JungleVineEffect.Collide (VERIFIED-DECOMP @0x180cc23b0): the emitting weapon's
         # JungleVineLimitProjectile.AddLimiter(ageingDestroyModel.timeFrames + grab frames);
         # AgeingDestroyModel.set_Time: timeFrames = (int)(time * 60).
@@ -2057,10 +2067,16 @@ def main():
                         "frames": xf.get("lifespanFrames", 0), "damage": xf.get("damageIncrease", 0),
                         "tag_mods": [tag_mod(pbm)] if pbm and pbm["type"] == "DamageModifierForTagModel" else []})
                 # BiohackModel (Benjamin): the affectedCount nearest towers deal +damageIncrease
-                # for `lifespan` (the shutdown after it isn't modelled).
+                # for `lifespan` (the shutdown after it isn't modelled). filterTowers: baseIds
+                # FilterTower refuses; shutoff: GetShutOffFrames (@0x1812721d0: the first
+                # DelayedShutoffModel's shutoffTimeFrames, else 2) when `behaviors` isn't empty.
                 if x["type"] == "BiohackModel":
+                    bhv = [b for b in items(xf.get("behaviors")) if b]
+                    dso = next((b for b in bhv if b["type"] == "DelayedShutoffModel"), None)
                     out["biohack"] = {"count": xf.get("affectedCount", 0), "damage": xf.get("damageIncrease", 0.0),
-                                      "lifespan": xf.get("lifespan", 0.0)}
+                                      "lifespan": xf.get("lifespan", 0.0),
+                                      "filter": [s for s in (deref(xf.get("filterTowers")) or []) if isinstance(s, str)],
+                                      "shutoff": (int(dso["f"].get("shutoffTime", 0.0) * 60) if dso else 2) if bhv else None}
                 # LongArmOfLightModel (Adora): range x multiplier, projectile radius x
                 # projectileRadiusMultiplier, these immune properties, +damageIncrease.
                 if x["type"] == "LongArmOfLightModel":
@@ -2205,6 +2221,7 @@ def main():
                     out["morph"] = {"max": xf.get("maxTowers", 1), "max_tier": xf.get("maxTier", 5),
                                     "affect": [s.strip() for s in (xf.get("affectList") or "").split(",") if s.strip()],
                                     "ignore": [s.strip() for s in (xf.get("ignoreWithMutators") or "").split(",") if s.strip()],
+                                    "max_cost": xf.get("maxCost", 9999999.0),
                                     "lifespan": xf.get("lifespan", 0.0), "tier": tier(st),
                                     "display": prefab_name(st["f"].get("display"))}
                 if x["type"] == "AbilityDamageAllModel":
@@ -2697,7 +2714,10 @@ def main():
         temple = None
         for b in items(tobj["f"]["behaviors"]):
             if b and b["type"] == "MonkeyTempleModel":
+                # towerGroupCount: StartSacrifice keeps only this many tower sets, by worth
+                # descending (Sun Temple 3, True Sun God 4).
                 temple = {"groups": [], "delay": b["f"].get("weaponDelay", 0.0),
+                          "group_count": b["f"].get("towerGroupCount", 0),
                           "fx": prefab_name((deref(b["f"].get("effectModel")) or {}).get("f", {}).get("assetId")),
                           # towerEffectModel: on each tower it consumes (visual).
                           "tower_fx": prefab_name((deref(b["f"].get("towerEffectModel")) or {}).get("f", {}).get("assetId"))}
@@ -2895,14 +2915,19 @@ def main():
                 "round_cash_shared": sum(b["f"].get("cashPerRound", 0.0) for b in items(tobj["f"]["behaviors"])
                                           if b and b["type"] == "PerRoundCashBonusTowerModel" and b["f"].get("distributeCash", False)),
                 # Buccaneer economy: MerchantShipModel marks a merchant ship, TradeEmpireBuffModel
-                # pays per merchant ship and buffs damage, CashbackZoneModel raises sell value in
+                # raises the taken ships' round cash and damage (Game::trade_empire_mutators), CashbackZoneModel raises sell value in
                 # range, FlagshipAttackSpeedIncreaseModel speeds up attacks.
                 "merchant": any(b and b["type"] == "MerchantShipModel" for b in items(tobj["f"]["behaviors"])),
                 "trade_empire": next(({"per_ship": b["f"].get("cashPerRoundPerMechantship", 0.0),
                                        "per_favoured": b["f"].get("cashPerRoundPerFavouredTrades", 0.0),
                                        "cap": b["f"].get("maxMerchantmanCapBonus", 0),
                                        "damage": b["f"].get("damageBuff", 0), "ceramic": b["f"].get("ceramicDamageBuff", 0),
-                                       "moab": b["f"].get("moabDamageBuff", 0)}
+                                       "moab": b["f"].get("moabDamageBuff", 0),
+                                       "id": b["f"].get("mutatorId") or "",
+                                       "icon": (b["f"].get("buffIconName") or None)
+                                               if (b["f"].get("buffIconName") or b["f"].get("buffLocsName")) else None,
+                                       "buff_name": b["f"].get("buffLocsName") or "",
+                                       "buff_max": b["f"].get("maxStackSize") or 0}
                                       for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "TradeEmpireBuffModel"), None),
                 # BuffIconPerTowerInRangeModel (Druid Jungle's Bounty): one icon counting the towers
                 # (baseId in towerIdFilter) in its Zoned<Tower>, range rangeOverride if > 0.
@@ -2925,6 +2950,16 @@ def main():
                 # @0x180c1b520).
                 "sellback": tobj["f"].get("sellbackModifierAdd", 0.0) or 0.0,
                 "ignore_max_sell": bool(tobj["f"].get("ignoreMaxSellPercent")),
+                # MonkeyTemple.StartSacrifice (VERIFIED-DECOMP @0x180d43510) never sacrifices a
+                # tower whose model is a power (powerName), a paragon, ignoreTowerForSelection, a
+                # Geraldo item (geraldoItemName), a sub-tower named *Phoenix* or with an AirUnit, or
+                # baseId "TranceTotem". (Heroes, pets, the redeploying / suspended: the clone's own.)
+                "no_sacrifice": bool(tobj["f"].get("powerName") or tobj["f"].get("geraldoItemName")
+                                     or tobj["f"].get("isParagon") or tobj["f"].get("ignoreTowerForSelection")
+                                     or tobj["f"].get("baseId") == "TranceTotem"
+                                     or (tobj["f"].get("isSubTower")
+                                         and ("Phoenix" in (tobj["f"].get("_name") or "")
+                                              or any(b and b["type"] == "AirUnitModel" for b in items(tobj["f"]["behaviors"]))))),
                 "cashback": next(({"mult": b["f"].get("cashbackZoneMultiplier", 0.0), "max": b["f"].get("cashbackMaxPercent", 0.95),
                                    "stacks": b["f"].get("maxStacks", 1),
                                    # groupName (TransformSellAmount sums per group) and baseIdsArray
@@ -2976,9 +3011,10 @@ def main():
                 # +damageIncrease damage and travels distanceMultiplier as far.
                 "zombie_buff": next(([b["f"].get("damageIncrease", 0.0), b["f"].get("distanceMultiplier", 1.0)]
                                      for b in items(f["behaviors"]) if b and b["type"] == "PrinceOfDarknessZombieBuffModel"), None),
-                # MonkeyCityModel (Village x-x-4+): placing a Dart Monkey costs x multiplier once
-                # every roundsTillMultiplier rounds (a free Dart Monkey a round).
-                "free_tower": next(({"tower": b["f"].get("towerId"), "mult": b["f"].get("multiplier", 1.0)}
+                # MonkeyCityModel (Village x-x-4+): MonkeyCity.OnRoundPassed adds one free towerId
+                # to the TowerInventory each round end from roundsTillMultiplier round ends on.
+                "free_tower": next(({"tower": b["f"].get("towerId"), "mult": b["f"].get("multiplier", 1.0),
+                                     "rounds": b["f"].get("roundsTillMultiplier", 0)}
                                     for b in items(f["behaviors"]) if b and b["type"] == "MonkeyCityModel"), None),
                 # ComancheDefenceModel (Heli x-x-4 / x-x-5): mini Comanches (towerModel) called in.
                 "comanche": next(({"cooldown": b["f"].get("cooldownFrames", 0), "duration": b["f"].get("durationFrames", 0),

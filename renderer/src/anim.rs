@@ -852,7 +852,8 @@ impl AnimModel {
     /// A Beast Handler pet's strike: "AttackRake", "Launch", "Snatch" (their animators have no
     /// plain "Attack" state).
     pub fn pet_attack_clip(&self) -> Option<usize> {
-        self.clips.iter().position(|c| (c.name.starts_with("Attack") && !c.name.contains("Idle")) || c.name == "Launch" || c.name == "Snatch")
+        // (The Beast Handler birds: "Snatch", "HornedOwl_Snatch", "Puoakai_Snatch"...)
+        self.clips.iter().position(|c| (c.name.starts_with("Attack") && !c.name.contains("Idle")) || c.name == "Launch" || c.name.ends_with("Snatch"))
     }
 
     /// The idle loop: "DartIdle", "CrossbowIdle", "Spike-o-pultIdle", ... ("AttackIdle" only as a fallback).
@@ -873,6 +874,10 @@ impl AnimModel {
             .iter()
             .position(|c| c.name.ends_with("Idle") && !c.name.ends_with("AttackIdle"))
             .or_else(|| self.clips.iter().position(|c| c.name.ends_with("Idle")))
+            // (A plain-Animator display without states.json: Mermonkey 3xx+'s TentacleIdle1.)
+            .or_else(|| self.clips.iter().position(|c| c.name.contains("Idle")))
+            // (The Beast Handler birds' entry state: "Hover", "HornedOwl_Hover"...)
+            .or_else(|| self.clips.iter().position(|c| c.name.ends_with("Hover")))
             .unwrap_or(0)
     }
 

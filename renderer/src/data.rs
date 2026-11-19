@@ -767,6 +767,10 @@ pub struct Tier {
     /// TowerModel.ignoreMaxSellPercent: the sale value isn't capped at 95% / the worth.
     #[serde(default)]
     pub ignore_max_sell: bool,
+    /// MonkeyTemple.StartSacrifice spares it: a power, paragon, ignoreTowerForSelection, Geraldo
+    /// item, Phoenix / AirUnit sub-tower or the TranceTotem.
+    #[serde(default)]
+    pub no_sacrifice: bool,
     #[serde(default)]
     pub discount_zones: Vec<DiscountZone>,
     #[serde(default)]
@@ -977,7 +981,11 @@ pub struct Orbit {
 #[derive(Deserialize, Clone)]
 pub struct FreeTower {
     pub tower: String,
+    /// MonkeyCityModel.multiplier: read by nothing in the game's code.
     pub mult: f64,
+    /// MonkeyCityModel.roundsTillMultiplier: round ends before the first free tower.
+    #[serde(default)]
+    pub rounds: i32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1426,6 +1434,16 @@ pub struct TradeEmpire {
     pub damage: f32,
     pub ceramic: f32,
     pub moab: f32,
+    /// mutatorId ("TradeEmpire", the Paragon's "TradeEmpireParagon"): Trade Empires group by it.
+    #[serde(default)]
+    pub id: String,
+    /// Its BuffIndicatorModel (TowerBehaviorBuffModel.GetBuffIndicatorModel @0x18124c210).
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub buff_name: String,
+    #[serde(default)]
+    pub buff_max: i32,
 }
 
 /// DiscountZoneModel (Monkey Business / Commerce, Sun Temple, ...): the fields
@@ -1553,6 +1571,13 @@ pub struct Biohack {
     pub count: u32,
     pub damage: f32,
     pub lifespan: f32,
+    /// filterTowers: baseIds Biohack.FilterTower refuses (MonkeyVillage only below a top-path 5).
+    #[serde(default)]
+    pub filter: Vec<String>,
+    /// Frames the BehaviorMutator (the DelayedShutoff) stays past the lifespan:
+    /// BiohackModel.GetShutOffFrames, None when `behaviors` is empty (no BehaviorMutator).
+    #[serde(default)]
+    pub shutoff: Option<f32>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1815,18 +1840,6 @@ pub struct AcidPool {
     pub lifespan: f32,
     pub radius: f32,
     pub pierce: f32,
-}
-
-/// GiveCashOnPopModel given to bloons with `tag` (Lead to Gold).
-#[derive(Deserialize, Clone)]
-pub struct CashOnPop {
-    pub amount: f32,
-    pub tag: String,
-    /// GiveCashOnPopModel.assetId: the text effect showing "${0}" of the cash (display only).
-    #[serde(default)]
-    pub effect: String,
-    #[serde(default)]
-    pub lifespan: f32,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -2327,8 +2340,6 @@ pub struct Proj {
     pub on_interval: Option<Box<OnInterval>>,
     #[serde(default)]
     pub acid_pool: Option<AcidPool>,
-    #[serde(default)]
-    pub cash_on_pop: Option<CashOnPop>,
     /// CreateSoundOnProjectileCollisionModel / ...ExpireModel / ...ExhaustModel clips.
     #[serde(default)]
     pub hit_sounds: Vec<String>,
@@ -2626,6 +2637,10 @@ pub struct SpiritZone {
     pub tag_mods: Vec<TagMod>,
 }
 
+fn morph_max_cost() -> f32 {
+    9999999.0
+}
+
 /// MorphTowerModel (mutateAll): `max` towers on `affect` (none with an `ignore` mutator, no
 /// path above `max_tier`) become `tier` with model `display` for `lifespan` seconds.
 #[derive(Deserialize, Clone)]
@@ -2635,6 +2650,9 @@ pub struct Morph {
     pub affect: Vec<String>,
     #[serde(default)]
     pub ignore: Vec<String>,
+    /// maxCost: a tower worth more is skipped (9999999 in every model).
+    #[serde(default = "morph_max_cost")]
+    pub max_cost: f32,
     pub lifespan: f32,
     pub tier: std::sync::Arc<Tier>,
     #[serde(default)]
@@ -3062,6 +3080,9 @@ impl Vengeance {
 #[derive(Deserialize, Clone)]
 pub struct Temple {
     pub groups: Vec<TempleGroup>,
+    /// MonkeyTempleModel.towerGroupCount: the tower sets kept, highest worth first.
+    #[serde(default)]
+    pub group_count: u32,
     /// MonkeyTempleModel.weaponDelay: seconds it holds fire while transforming.
     #[serde(default)]
     pub delay: f32,

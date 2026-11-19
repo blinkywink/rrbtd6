@@ -1,7 +1,9 @@
 """A models/extra display's Animator state machine (plain Animator, no MonkeyAnimationController):
 its entry clip and the clip each int-parameter value jumps to (AnyState Equals), written to
 local_extracted/models/extra/<name>/anim_states.json. Used for the Great White / Orca / Megalodon
-grab (GreatWhiteEffect: bitingAnimationState 4 = Thrash, exitAnimationState 5 = Fall).
+grab (GreatWhiteEffect: bitingAnimationState 4 = Thrash, exitAnimationState 5 = Fall), and the Beast
+Handler birds (entry Hover, 1 Fly, 3 Snatch, 4 Placement): also a states.json for each exported folder of
+the display that has none.
 
     tools/.venv/Scripts/python.exe -I tools/assets/export_display_states.py <prefab name> [...]
 
@@ -56,4 +58,13 @@ for name in sys.argv[1:]:
     exits = {names[i]: (s["data"]["m_TransitionConstantArray"][0]["data"]["m_DestinationState"] if s["data"]["m_TransitionConstantArray"] else None) for i, s in enumerate(sm["m_StateConstantArray"])}
     out = {"entry": names[entry], "param": {str(k): v for k, v in param.items()}, "states": names}
     print(name, json.dumps(out))
-    json.dump(out, open(f"local_extracted/models/extra/{name}/anim_states.json", "w"), indent=1)
+    # Every exported folder of this display (models/extra, models/air...): anim_states.json, and a
+    # states.json the renderer's AnimModel reads (state 0 the entry clip, state n the clip the
+    # parameter value n jumps to; a gap repeats the entry).
+    top = max([0] + list(param))
+    states = [out["entry"]] + [param.get(k) or out["entry"] for k in range(1, top + 1)]
+    for d in glob.glob(f"local_extracted/models/*/{name}") + glob.glob(f"local_extracted/models/*/tiers/{name}"):
+        if os.path.exists(os.path.join(d, "meta.json")):
+            json.dump(out, open(os.path.join(d, "anim_states.json"), "w"), indent=1)
+            if not os.path.exists(os.path.join(d, "states.json")):
+                json.dump(states, open(os.path.join(d, "states.json"), "w"))

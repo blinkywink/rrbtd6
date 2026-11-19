@@ -235,6 +235,19 @@ effect names, model behaviours the data builder never reads).
   (no fallback cubes / spheres), right per tier. Every hero at each level its model changes (one run
   per level): all right. Gallery fixes: hero level keys ("1000" = level 10, was read as 1-0-0) and the
   placed tower, not the pet it makes (Corvus's Spirit took the tiers).
+- Firing sweep (2026-11-19): all 26 monkeys maxed down each path (5-0-0 / 0-5-0 / 0-0-5) firing at a
+  Ceramic stream for 150 frames, Sub / Buccaneer on Lotus Island: projectiles, hits, explosions, auras and
+  ground effects all draw, nothing broken found. (The brown hand in screenshots is the mouse cursor.)
+- FIXED (user report, 2026-11-19): Mermonkey 3xx-5xx's eight tentacles (attack displays TentacleBase*)
+  stacked unseen: each rests along up turned by its RotateToTargetAttackOffsetModel.startRotation until its
+  attack aims (RotateToStartingPoint @0x180ddb3f0: 22.5 + 45 x n, fanned around the tower), and with no
+  states.json their idle fell to clip 0 (TentacleRespawn1, underground); idle now also takes a clip
+  containing "Idle" (TentacleIdle1). Screenshot check: the ring shows at 3xx / 4xx / 5xx.
+- FIXED (user report): Beast Handler birds (Gyrfalcon, Horned Owl, Golden Eagle, Giant Condor, Pouakai)
+  idled on their Snatch clip (clip 0, no "Idle" clip) and only a clip named exactly "Snatch" played as the
+  attack: idle falls back to a "...Hover" clip, the attack to "...Snatch", and
+  tools/assets/export_display_states.py writes their states.json from their own Animators (entry Hover;
+  parameter 1 Fly, 3 Snatch, 4 Placement). Screenshot check: Pouakai / Condor wings move between frames.
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

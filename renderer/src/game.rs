@@ -74,7 +74,7 @@
 //!   (Ball Lightning sub-shots at a random bloon in range), P-REMOVEMUT (tornado strips effects
 //!   by mutator id), P-ATTARGET (Jungle Vines land on their target).
 //! - Alchemist: P-ACIDPOOL (missed splashes become pools), P-BREW / P-BREWTARGET (brews on the
-//!   closest attacking tower, by shots and seconds), P-LEADGOLD (cash for popping Lead).
+//!   closest attacking tower, by shots and seconds).
 //! - Desperado: P-BURST (repeated instant shots), P-LINE (line shots swept along the range).
 //! - Mortar / Dartling: P-POINTER (point-aiming attacks fire while any reachable bloon exists,
 //!   turning at RotateToPointerModel.rate), P-TARGETSPREAD (uniform disc around the aim point),
@@ -94,7 +94,7 @@
 //!   facing - offsetRotation, a FireWhenAlternateWeaponIsReady gun fires with its paired gun if
 //!   a bloon is in its FilterTargetAngleFilter arc), P-SUBMERGE (Sub "Submerge" mode swaps in
 //!   submergeAttackModel; cooldown / hero XP scales to towers in range, not stacking), P-SHARED
-//!   (Advanced Intel shares every other tower's range), P-TRADEEMPIRE, P-FLAGSHIP
+//!   (Advanced Intel shares every other tower's range), P-FLAGSHIP, P-TECITY (Trade Empire's mutator before Monkey City's)
 //!   (rate to every tower on water), P-WATERRANGE (Mermonkey range on water), P-SCALEDMG
 //!   (damage x min(max, base + perSecond x age) / base), P-TRANCE (entranced bloons circle the
 //!   tower at orbitRadius for `duration`, then go back to their track spot), P-FIGHTER (carrier
@@ -102,8 +102,8 @@
 //!   cash x multiplier), P-PREEMPT (a strike at each MOAB-class bloon a round sends),
 //!   P-SUBCOMMANDER (x damageScale then +damageIncrease), P-DECK (Flagship deck areas in the
 //!   ship's local x right / y forward frame; no size filter). Hero abilities: P-BARRAGE (MOAB
-//!   Barrage as a damage-over-time on the strongest MOAB-class bloons), P-BIOHACK (nearest
-//!   towers +damage; no shutdown), P-SYPHON (round bloons one rank lower; no extra cash).
+//!   Barrage as a damage-over-time on the strongest MOAB-class bloons), P-BIOHACK (selection
+//!   exact; the shut-off stun not modelled), P-SYPHON (round bloons one rank lower; no extra cash).
 //! - Maps: P-MULTIPATH (spawn paths in export order; the spawn index emissionIndex % count is
 //!   the game's Splitter.SpawnRout, exits round-robin per splitter as Splitter.Rout; children
 //!   stay on their parent's path), P-BOSSPATH (the boss path, by name, isn't a spawn path). Paragons: degree and degree stats from the game's
@@ -938,6 +938,9 @@ pub enum EffectKind {
     DestroyEmit { proj: Box<Proj>, emission: Box<Emission>, dont_copy: bool },
     /// DesperadoMarkModel: x `damage_mult` damage from Desperados, x `cash_mult` pop cash.
     Mark { damage_mult: f32, cash_mult: f32 },
+    /// GiveCashOnPop (Lead to Gold, Rubber to Gold): its model's flatCashAmount, cashMultiplier,
+    /// and the text effect (assetId, lifespan) PreDegrade shows the cash with.
+    Gold { flat: f32, mult: f32, fx: std::sync::Arc<str>, fx_life: f32 },
     /// StripChildrenModel: pops without releasing children.
     Strip,
     /// RemoveDamageTypeModifierModel: these bloonProperties don't count while it lasts.
@@ -1950,6 +1953,8 @@ pub struct Tower {
     /// Monkeyopolis.activated, and its EmissionMutator's cash per crate (totalCashPerCrate).
     pub mopolis_done: bool,
     pub mopolis_cash: Option<f32>,
+    /// MonkeyCity.roundCount: round ends seen while it had a MonkeyCityModel (OnDestroy resets).
+    pub city_rounds: i32,
     /// IncreaseRangeModel: (multiplier, added range, frames left).
     pub range_up: Option<(f32, f32, f32)>,
     /// Ultraboost stacks: (count, interval multiplier and Village range multiplier per stack).
@@ -2036,6 +2041,9 @@ pub struct Tower {
     pub orbit: Option<OrbitState>,
     /// Running ability boosts to its projectiles, with frames left.
     pub boosts: Vec<(crate::data::ProjBoost, f32)>,
+    /// Frames left on Biohack's mutators (the longer of DamageMutator's lifespan and the
+    /// BehaviorMutator's lifespan + shut-off): Biohack.FilterTower skips it meanwhile.
+    pub biohacked: f32,
     /// Standing on a ship's deck (AddMakeshiftAreaModel): the ship's id and the deck height.
     pub deck: Option<(u64, f32)>,
     /// Geraldo items on it: (item index, rounds left).
@@ -3201,6 +3209,8 @@ pub struct Buff {
     pub cash_add: f32,
     /// MonkeyCityIncomeSupportModel: the tower's cash generation x this.
     pub income_mult: f32,
+    /// How many MonkeyCityIncomeSupport mutators it has (CHIMPS: each multiplies by 0).
+    pub income_n: u32,
     /// AbilityCooldownScaleSupportModel: its ability cooldowns run this much faster.
     pub ability_cd_mult: f32,
     /// SupportRemoveFilterOutTagModel: its tag filters (FilterOutTag) are off.
@@ -3214,6 +3224,11 @@ pub struct Buff {
     /// some) its immuneBloonProperties when set; rate, pierce and damage go through the fields
     /// above.
     pub fan: Option<crate::data::FanClub>,
+    /// TradeEmpireBuffMutator.cashBonus (Mutate @0x180dbacf0: added to every
+    /// PerRoundCashBonusTowerModel.cashPerRound of the ship), summed over the mutator ids on it.
+    pub te_cash: f32,
+    /// Its TradeEmpireBuffMutators' indicators: (icon, buff name, maxStackSize, stacks).
+    pub te_icons: Vec<(String, String, i32, u32)>,
 }
 
 impl Default for Buff {
@@ -3241,12 +3256,15 @@ impl Default for Buff {
             acid: false,
             cash_mult: 1.0,
             income_mult: 1.0,
+            income_n: 0,
             cash_add: 0.0,
             ability_cd_mult: 1.0,
             unfilter: false,
             damage_add: 0.0,
             tag_mods: Vec::new(),
             fan: None,
+            te_cash: 0.0,
+            te_icons: Vec::new(),
         }
     }
 }
@@ -3806,6 +3824,8 @@ pub struct Game {
     /// The cash of the hit being dealt (one Bloon.Damage: its DamageResult, `pay_hit`): the paid
     /// layers' raw cash (x a Mark) summed in f32, Worth's additions, and the income multiplier.
     hit_acc: (f32, f32, f32),
+    /// The hit's DamageResult.nonRegrowLayers (GiveCashOnPop).
+    hit_layers: u64,
     /// The lowestLayerNumber of the bloon the hit being dealt is on: its whole cascade's layers
     /// pay against it (`damage_inner`).
     hit_lowest: u32,
@@ -4001,8 +4021,8 @@ pub struct Game {
     pub text_fx: Vec<([f32; 2], String, String, f32, f32)>,
     /// The next `Effect::seq`.
     pub effect_seq: u64,
-    /// The round Monkey City's free Dart Monkey was taken.
-    free_tower_round: Option<usize>,
+    /// TowerInventory.freeTowers: (towerId, count) in the order they were first added.
+    pub free_towers: Vec<(String, i32)>,
     /// MOAB classes a hero has already warned about this round
     /// (CreateSoundOnBloonEnterTrack.ResetPlayedBooleans on round start).
     voice_warned: Vec<String>,
@@ -4890,8 +4910,11 @@ macro_rules! collide_pass {
             // here) is at its parent's 20 (RING_DZ).
             let ring_out = pr.spec.ring_inner > 0.0 && { let dz = if b.height > 0.0 { b.height } else { RING_DZ } - pr.z; let (dx, dy) = (b.pos[0] - pr.pos[0], b.pos[1] - pr.pos[1]); (dx * dx + dy * dy + dz * dz).sqrt() } < pr.spec.radius * pr.spec.ring_inner;
             let immune = !ring_out && pr.spec.immune & b.properties(d) != 0;
-            // HYPOTHESIS P-CRITTEXT: ShowTextOnHit's "Crit!" shows on crit shots only.
-            let crit_text = (pr.crit.is_some() && pr.spec.hit_text).then_some(b.pos);
+            // ShowTextOnHit.Collide (VERIFIED-DECOMP @0x180cdb530) shows nothing while its model's
+            // text is "" (all 50 in the data); CritMultiplier.GetProjectile (@0x180c71010) sets every
+            // ShowTextOnHitModel.text to "Crit" on a crit shot only. The text goes at the
+            // projectile's Position (useTowerPosition is false in every model), not the bloon's.
+            let crit_text = (pr.crit.is_some() && pr.spec.hit_text).then_some(pr.pos);
             let hit_z = b.height;
             let mut popped_now = 0u64;
             let mut dmg = pr.crit.unwrap_or(pr.spec.damage);
@@ -5237,9 +5260,6 @@ macro_rules! collide_pass {
                     $s.rod_emit_hit(id, $p, dmg, &re);
                 }
                 $s.pre_damage_effects(i, $p, dmg);
-                // HYPOTHESIS P-LEADGOLD: Lead to Gold pays its flat amount when a hit pops a
-                // bloon with the tag (the game attaches it to the bloon for its next pop).
-                let gold = $s.projectiles[$p].spec.cash_on_pop.as_ref().filter(|c| $s.defs[$s.bloons[i].kind].tags.contains(&c.tag)).map(|c| (c.amount as f64, c.effect.clone(), c.lifespan));
                 let tally0 = $s.damage_tally;
                 // (Was it a MOAB-class bloon before this hit?)
                 let hit_moab = $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Moabs");
@@ -5479,18 +5499,6 @@ macro_rules! collide_pass {
                         }
                     }
                     $s.state_emit($p, pre_state, gone);
-                }
-                if let (Some((v, fx, life)), true) = (gold, n > 0) {
-                    // ChimpsModModel.Mutate (VERIFIED-DECOMP @0x1811189b0) zeroes every
-                    // GiveCashOnPopModel's flatCashAmount and cashMultiplier, so PreDegrade
-                    // (@0x180ff00e0: AddCash(n x income x cashMultiplier + flatCashAmount)) adds 0
-                    // (recording alch_003: Lead to Gold pays nothing in CHIMPS).
-                    let v = if $s.chimps() { 0.0 } else { v };
-                    $s.earn(v);
-                    // GiveCashOnPop.PreDegrade: its text effect, "${0}" of the cash.
-                    if !fx.is_empty() {
-                        $s.text_fx.push((bp, fx, format!("${v}"), life, 0.0));
-                    }
                 }
                 let owner = $s.projectiles[$p].owner;
                 if let Some(ti) = $s.towers.iter().position(|t| t.id == owner) {
@@ -6336,6 +6344,7 @@ impl Game {
             hit_cash: (1.0, 0.0),
             hit_tower: None,
             hit_acc: (0.0, 0.0, 1.0),
+            hit_layers: 0,
             hit_lowest: 0,
             emit_by: None,
             no_pop_cash: false,
@@ -6371,7 +6380,7 @@ impl Game {
             vine_fx: Vec::new(),
             effect_seq: 0,
             voice_warned: Vec::new(),
-            free_tower_round: None,
+            free_towers: Vec::new(),
             pop_emits: Vec::new(),
             hooks: Vec::new(),
             gw_effects: Vec::new(),
@@ -8657,21 +8666,37 @@ impl Game {
     /// Price of tower `def` placed at `p`, after discounts (TowerManager.GetTowerCost
     /// @0x180c2a420: rounded half-to-even to a multiple of 5).
     pub fn place_cost(&self, def: usize, p: [f32; 2]) -> f64 {
-        let cost = game_cost(self.tower_defs[def].1.cost, self.cost_mult, self.discount(def, p, None, None, 0, ""));
-        match self.free_tower(def) {
-            Some(m) => cost * m,
-            None => cost,
+        // (TowerManager.GetTowerCost: 0 while a free tower of its baseId is in the inventory.)
+        if self.free_tower_count(def) > 0 {
+            return 0.0;
         }
+        game_cost(self.tower_defs[def].1.cost, self.cost_mult, self.discount(def, p, None, None, 0, ""))
     }
 
-    /// MonkeyCityModel: this round's free tower of kind `def` isn't used yet; its cost multiplier.
-    /// HYPOTHESIS P-FREEDART: one a round, placed anywhere.
-    fn free_tower(&self, def: usize) -> Option<f64> {
-        if self.free_tower_round == Some(self.round) {
-            return None;
-        }
+    /// TowerInventory.GetFreeTowerCount (VERIFIED-DECOMP @0x180fa9ce0): the counts of every
+    /// free-tower entry whose towerId is `def`'s baseId, summed.
+    pub fn free_tower_count(&self, def: usize) -> i32 {
         let name = &self.tower_defs[def].0;
-        self.towers.iter().find_map(|t| self.tier_of(t)?.free_tower.as_ref().filter(|f| f.tower == *name).map(|f| f.mult))
+        self.free_towers.iter().filter(|(n, _)| n == name).map(|(_, c)| *c).sum()
+    }
+
+    /// MonkeyCity.OnRoundPassed (VERIFIED-DECOMP @0x180d3dc70, an OnEarlyRoundEnd delegate):
+    /// ++roundCount; from roundsTillMultiplier (1) on, unless the tower IsSuspended (never here),
+    /// TowerInventory.AddFreeTowers(towerId, 1, "") (@0x180fa8fc0: an entry with the same towerId,
+    /// upgrades string and flag gets the count, else a new entry): one free Dart Monkey per city
+    /// tower per round end, kept until used. (MonkeyCityModel.multiplier is read by nothing.)
+    fn monkey_city_round_end(&mut self) {
+        for t in 0..self.towers.len() {
+            let Some(ft) = self.tier(t).and_then(|tr| tr.free_tower.clone()) else { continue };
+            self.towers[t].city_rounds += 1;
+            if self.towers[t].city_rounds < ft.rounds {
+                continue;
+            }
+            match self.free_towers.iter_mut().find(|(n, _)| *n == ft.tower) {
+                Some(e) => e.1 += 1,
+                None => self.free_towers.push((ft.tower.clone(), 1)),
+            }
+        }
     }
 
     /// The hero definition if tower type `def` is a hero.
@@ -8825,8 +8850,14 @@ impl Game {
         if self.cash < cost || (checked && !self.can_place(def, p)) {
             return false;
         }
-        if self.free_tower(def).is_some() {
-            self.free_tower_round = Some(self.round);
+        // TowerManager.GetTowerCost (VERIFIED-DECOMP @0x180c2a420): IsFreeTowerAvailable ->
+        // UseFreeTowerCharge (@0x180fac840: the first entry of the baseId with count >= 1 loses
+        // one) and the price is 0.
+        if self.free_tower_count(def) > 0 {
+            let name = self.tower_defs[def].0.clone();
+            if let Some(e) = self.free_towers.iter_mut().find(|(n, c)| *n == name && *c >= 1) {
+                e.1 -= 1;
+            }
         }
         self.cash -= cost;
         self.stats.towers_placed += 1;
@@ -8926,6 +8957,7 @@ impl Game {
             ultra_icon: None,
             mopolis_done: false,
             mopolis_cash: None,
+            city_rounds: 0,
             range_up: None,
             ultra: (0, 1.0, 1.0),
             mute: 0.0,
@@ -8940,6 +8972,7 @@ impl Game {
             items: Vec::new(),
             tier_cap: 5,
             boosts: Vec::new(),
+            biohacked: 0.0,
             paragon: None,
             paragon_active_at: 0,
             paragon_tower_made: false,
@@ -11521,6 +11554,7 @@ impl Game {
             ultra_icon: None,
             mopolis_done: false,
             mopolis_cash: None,
+            city_rounds: 0,
             range_up: None,
             ultra: (0, 1.0, 1.0),
             mute: 0.0,
@@ -11535,6 +11569,7 @@ impl Game {
             items: Vec::new(),
             tier_cap: 5,
             boosts: Vec::new(),
+            biohacked: 0.0,
             paragon: None,
             paragon_active_at: 0,
             paragon_tower_made: false,
@@ -13144,18 +13179,53 @@ impl Game {
         if let Some(td) = &a.takedown {
             self.takedown(t, td);
         }
-        // STAND-IN P-BIOHACK: the `count` towers nearest the hero (not sub-towers, not
-        // heroes) get +damage for the lifespan; the shutdown after it isn't modelled.
+        // Biohack.Activate (VERIFIED-DISASM @0x180e16da0): TowerManager.GetClosestTowers(position,
+        // affectedCount, FilterTower) (@0x180c29140 -> /4 @0x180c28d60 with range 99999.0, not
+        // squared): towers passing the filter with DistanceSquared (f32) < 99999 (about 316),
+        // inserted after every equal or smaller distance (stable, tower order), cut to
+        // affectedCount. Biohack.FilterTower (@0x180e17400) refuses the hero itself, isSubTower,
+        // isParagon, a power tower, a tower IsMutatedBy its DamageMutator or BehaviorMutator
+        // (`biohacked`), and a baseId on filterTowers unless it is "MonkeyVillage" with a top path
+        // of 5. Each gets the DamageMutator for lifespanFrames (AddMutatorIncludeSubTowers) and,
+        // when `behaviors` isn't empty, the BehaviorMutator for lifespanFrames +
+        // GetShutOffFrames (a DelayedShutoff). STAND-IN P-BIOHACK (narrowed): the DelayedShutoff's
+        // tower stun after the lifespan (ShutoffMutator.Mutate -> BehaviorMutator.StunTower
+        // @0x180f30510, which rewrites the tower model's behaviours) isn't modelled.
         if let Some(bh) = &a.biohack {
             let p = self.towers[t].pos;
-            let mut near: Vec<(f32, usize)> = (0..self.towers.len())
-                .filter(|&o| o != t && self.towers[o].sub.is_none() && self.hero_def(self.towers[o].def).is_none())
-                .map(|o| ((self.towers[o].pos[0] - p[0]).hypot(self.towers[o].pos[1] - p[1]), o))
-                .collect();
-            near.sort_by(|a, b| a.0.total_cmp(&b.0));
-            for &(_, o) in near.iter().take(bh.count as usize) {
-                let boost = crate::data::ProjBoost { frames: bh.lifespan * FPS, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0 };
-                self.towers[o].boosts.push((boost, bh.lifespan * FPS));
+            let mut near: Vec<(f32, usize)> = Vec::new();
+            for o in 0..self.towers.len() {
+                let x = &self.towers[o];
+                let name = self.tower_defs[x.def].0.as_str();
+                if o == t || x.sub.is_some() || x.paragon.is_some() || x.biohacked > 0.0 || self.power_tower_defs.values().any(|&d| d == x.def) {
+                    continue;
+                }
+                if bh.filter.iter().any(|f| f == name) && !(name == "MonkeyVillage" && x.tiers[0] >= 5) {
+                    continue;
+                }
+                let (dx, dy) = (x.pos[0] - p[0], x.pos[1] - p[1]);
+                let d2 = dx * dx + dy * dy;
+                if !(d2 < 99999.0) {
+                    continue;
+                }
+                let at = near.iter().position(|e| e.0 > d2).unwrap_or(near.len());
+                near.insert(at, (d2, o));
+            }
+            near.truncate(bh.count as usize);
+            let life = bh.lifespan * FPS;
+            let hacked = life + bh.shutoff.unwrap_or(0.0);
+            for &(_, o) in &near {
+                // Tower.AddMutatorIncludeSubTowers (@0x180c0a1c0): its child towers without
+                // dontAddMutatorsFromParent too, for the same lifespans.
+                let pid = self.towers[o].id;
+                for k in 0..self.towers.len() {
+                    let child = self.towers[k].sub.as_ref().is_some_and(|s| s.parent == pid && !s.spec.no_parent_mutators);
+                    if k == o || child {
+                        let boost = crate::data::ProjBoost { frames: life, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0 };
+                        self.towers[k].boosts.push((boost, life));
+                        self.towers[k].biohacked = self.towers[k].biohacked.max(hacked);
+                    }
+                }
             }
         }
         // HYPOTHESIS P-BARRAGE: MOAB Barrage puts a damage-over-time on the `targets`
@@ -13248,21 +13318,44 @@ impl Game {
             self.activate_ability(other);
         }
         if let Some(fc) = &a.fan_club {
-            // MonkeyFanClub.Activate (VERIFIED-DISASM @0xe5bf10): the activating tower, then every
-            // tower nearest first (TowerManager.GetClosestTowers within 99999, List.Sort) of the
-            // same base tower, top and bottom paths at most maxTier and middle at most 4 (recording
-            // dart_040_club: a 0-3-0 joins), until `count` in all. A tower already a fan is
-            // re-fanned; a Plasma fan (immuneBloonProperties has Purple) isn't taken by the plain
-            // Fan Club.
+            // MonkeyFanClub.Activate (VERIFIED-DISASM @0x180e3d400; old build @0xe5bf10): the
+            // activating tower, then TowerManager.GetClosestTowers/4 (@0x180c28d60) with range
+            // 99999.0, which it squares only below 99999: towers with DistanceSquared (f32) < 99999
+            // (about 316 units), inserted after every equal or smaller distance (stable, tower
+            // order); then Enumerable.OrderBy (stable) on <Activate>b__11_0 (@0x180e3e5e0): a
+            // Plasma club 2 for a tower with "MonkeyFanClubPlasma", else 1 with "MonkeyFanClub",
+            // else 0; the plain club 1 with "MonkeyFanClub", else 0 (non-fans first). Taken: the
+            // same baseId, not suspended, no ignoreWithMutators ("morph_mutator": a transformed
+            // tower's baseId is Alchemist anyway), top and bottom paths at most maxTier and middle
+            // at most 4 (recording dart_040_club: a 0-3-0 joins), until `count` in all. A tower
+            // already a fan is re-fanned; a Plasma fan (immuneBloonProperties has Purple) isn't
+            // taken by the plain Fan Club.
             let plasma = |f: &crate::data::FanClub| f.immune & 8 != 0;
             let (def, p) = (self.towers[t].def, self.towers[t].pos);
-            let mut near: Vec<(f32, usize)> = (0..self.towers.len())
-                .map(|o| {
-                    let q = self.towers[o].pos;
-                    ((q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]), o)
-                })
-                .collect();
-            dotnet_sort(&mut near, &|a: &(f32, usize), b: &(f32, usize)| if a.0 < b.0 { -1 } else { (b.0 < a.0) as i32 });
+            let mut near: Vec<(f32, usize)> = Vec::new();
+            for o in 0..self.towers.len() {
+                let q = self.towers[o].pos;
+                let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
+                let d2 = dx * dx + dy * dy;
+                if !(d2 < 99999.0) {
+                    continue;
+                }
+                let at = near.iter().position(|e| e.0 > d2).unwrap_or(near.len());
+                near.insert(at, (d2, o));
+            }
+            // (The keys are read before any tower is fanned; the activating tower, fanned
+            // already, is skipped below.)
+            let key = |o: usize| -> u8 {
+                match &self.towers[o].fan {
+                    Some((f, _)) if plasma(fc) => if plasma(f) { 2 } else { 1 },
+                    Some((f, _)) => !plasma(f) as u8,
+                    None => 0,
+                }
+            };
+            let keyed: Vec<u8> = near.iter().map(|&(_, o)| key(o)).collect();
+            let mut order: Vec<usize> = (0..near.len()).collect();
+            order.sort_by_key(|&i| keyed[i]);
+            let near: Vec<(f32, usize)> = order.into_iter().map(|i| near[i]).collect();
             let mut fans = vec![t];
             for (_, o) in near {
                 if o == t || fans.len() >= fc.count.max(1) as usize {
@@ -13290,22 +13383,58 @@ impl Game {
             }
         }
         if let Some(m) = &a.morph {
-            // HYPOTHESIS P-MORPH: the nearest eligible towers within the Alchemist's range.
-            let (p, r) = (self.towers[t].pos, self.range(t));
-            let mut near: Vec<(f32, usize)> = (0..self.towers.len())
-                .filter(|&o| o != t)
-                .filter(|&o| {
-                    let x = &self.towers[o];
-                    let name = &self.tower_defs[x.def].0;
-                    x.sub.is_none() && x.paragon.is_none() && x.morph.is_none() && x.fan.is_none()
-                        && x.tiers.iter().all(|&n| n <= m.max_tier)
-                        && m.affect.iter().any(|a| name == a || name.starts_with(a.as_str()))
-                })
-                .map(|o| { let q = self.towers[o].pos; ((q[0] - p[0]).hypot(q[1] - p[1]), o) })
-                .filter(|(d, _)| *d <= r)
-                .collect();
-            near.sort_by(|a, b| a.0.total_cmp(&b.0));
-            for (_, o) in near.into_iter().take(m.max as usize) {
+            // MorphTower.FinishActivation, mutateAll (VERIFIED-DISASM @0x180e3f240):
+            // TowerManager.GetClosestTowers(position, -1, null) (@0x180c29140) =
+            // GetClosestTowers/4 (@0x180c28d60) with range 99999.0 (0x183e4fe00), squared only when
+            // below 99999, so NOT squared: towers with DistanceSquared (f32) < 99999 (about 316
+            // units; not the Alchemist's range), inserted after every equal or smaller distance
+            // (stable, tower order). In that order, skipped: the Alchemist itself; a destroyed
+            // tower; a Hero; TowerModel.tier > maxTier (a paragon is tier 6); Tower.worth > maxCost
+            // (9999999 in every model); IsSuspended (never in the clone); ignoreTowerForSelection;
+            // IsMutatedBy any ignoreWithMutators id (<FinishActivation>b__0 @0x180e43ee0 ->
+            // Mutable.IsMutatedBy: "MonkeyFanClub" / "MonkeyFanClubPlasma", MonkeyFanClub.Initialise
+            // @0x180e3dd50 names a fan's mutator "MonkeyFanClubPlasma" iff immuneBloonProperties
+            // has 8); taken iff affectList.Contains(baseId) (String.Contains on the whole comma
+            // list) until maxTowers. No sub-tower, hero or power model has a baseId in any
+            // affectList (checked over every TowerModel), so `sub` stands in for the baseId test.
+            // HYPOTHESIS P-MORPHAGAIN: a tower still transformed (TransformedBaseMonkey: baseId
+            // Alchemist, tier 0) would be taken again in the game; not modelled (skipped): the
+            // cooldown (40 s) outlasts the lifespan (20 s) and only one x-5-x Alchemist exists.
+            let p = self.towers[t].pos;
+            let list = m.affect.join(",");
+            let mut near: Vec<(f32, usize)> = Vec::new();
+            for o in 0..self.towers.len() {
+                let q = self.towers[o].pos;
+                let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
+                let d2 = dx * dx + dy * dy;
+                if !(d2 < 99999.0) {
+                    continue;
+                }
+                let at = near.iter().position(|e| e.0 > d2).unwrap_or(near.len());
+                near.insert(at, (d2, o));
+            }
+            let fan_id = |f: &crate::data::FanClub| if f.immune & 8 != 0 { "MonkeyFanClubPlasma" } else { "MonkeyFanClub" };
+            let mut took = Vec::new();
+            for (_, o) in near {
+                if took.len() >= m.max as usize {
+                    break;
+                }
+                let x = &self.towers[o];
+                if o == t || self.hero_def(x.def).is_some() || x.paragon.is_some() || x.sub.is_some() || x.morph.is_some() {
+                    continue;
+                }
+                if x.tiers.iter().any(|&n| n > m.max_tier) || x.invested as f32 > m.max_cost {
+                    continue;
+                }
+                if x.fan.as_ref().is_some_and(|(f, _)| m.ignore.iter().any(|i| i == fan_id(f))) {
+                    continue;
+                }
+                if !list.contains(self.tower_defs[x.def].0.as_str()) {
+                    continue;
+                }
+                took.push(o);
+            }
+            for o in took {
                 // (Counted down from the next frame: recording alch_052, a Dart Monkey transformed at
                 // 120 is itself again at 1320.)
                 self.towers[o].morph = Some((m.tier.clone(), m.display.clone(), m.lifespan * FPS + 1.0));
@@ -13325,13 +13454,15 @@ impl Game {
 
     /// Income (pops, pickups, banks, round bonus): ImfLoanModel.incomeRecoveryRate of it repays
     /// any loan first.
-    fn earn(&mut self, v: f64) {
-        if self.coop_wallets.is_some(){self.coop_credit(None,v);return;}
+    /// Returns what was added (Simulation.AddCash's result, which GiveCashOnPop shows).
+    fn earn(&mut self, v: f64) -> f64 {
+        if self.coop_wallets.is_some(){self.coop_credit(None,v);return v.max(0.0);}
         // ModifyAllCashModModel (Half Cash, Deflation).
         let v = v * self.cash_mult;
         let pay = (v * self.debt_rate).min(self.debt).max(0.0);
         self.debt -= pay;
         self.cash += v - pay;
+        (v - pay).max(0.0)
     }
 
     /// The end of a hit (the outermost `damage`): DistributeCash.PostDegrade (VERIFIED-DECOMP
@@ -13354,6 +13485,43 @@ impl Game {
             eprintln!("DBGAIM HIT rt {} tower {:?} raw {} inc {} v {}", self.round_clock, self.hit_tower, raw, inc, v);
         }
         self.pay_pop(self.hit_tower, v as f64);
+    }
+
+    /// GetNonRegrowLayersForLayers over a whole bloon of `kind` (every layer counts 1 +
+    /// layerCountOffset).
+    fn tree_layers(&self, kind: usize) -> u64 {
+        1 + self.layer_offset[kind] + self.child_kinds[kind].iter().map(|&c| self.tree_layers(c)).sum::<u64>()
+    }
+
+    /// GiveCashOnPop.PreDegrade (VERIFIED-DECOMP @0x180ff00e0): nothing when the DamageResult's
+    /// cash (GetCashForLayers' raw sum, `cash`) and flatCashAmount are both 0; nothing when the
+    /// tower that put it on is gone (BloonBehaviorModelWithTowerTracking.GetTower
+    /// @0x1811511d0: the factory's tower with its id, else null). Else Simulation.AddCash
+    /// (@0x180b43190) of (float)nonRegrowLayers x GetIncomeMultiplierForRound(spawnRound) x
+    /// cashMultiplier + flatCashAmount in f32, at once (not staged), and a text effect of
+    /// "${0}" of what AddCash added (0 when the amount isn't above 0) at the bloon when the
+    /// assetId is set. DamageResult.nonRegrowLayers (+0x30, GetNonRegrowLayersForLayers
+    /// @0x180fc7ab0): 1 + layerCountOffset for each popped layer whose layerNumber <=
+    /// lowestLayerNumber (`hit_layers`; its alwaysRecordsDamage case is only on boss minions).
+    /// ChimpsModModel.Mutate (VERIFIED-DECOMP @0x1811189b0) zeroes both amounts, so CHIMPS
+    /// adds 0 (recording alch_003: Lead to Gold pays nothing) and shows "$0".
+    /// INFERRED: the tracked tower is the projectile's owner. allowDoubleCash only matters
+    /// with Double Cash, which the clone doesn't have.
+    #[allow(clippy::too_many_arguments)]
+    fn give_cash_on_pop(&mut self, flat: f32, mult: f32, fx: &str, life: f32, owner: u64, cash: f32, round: u32, pos: [f32; 2]) {
+        let (flat, mult) = if self.chimps() { (0.0, 0.0) } else { (flat, mult) };
+        if cash == 0.0 && flat == 0.0 {
+            return;
+        }
+        if !self.towers.iter().any(|t| t.id == owner) {
+            return;
+        }
+        let inc = self.income_mult_for(round);
+        let v = self.hit_layers as f32 * inc * mult + flat;
+        let added = if v > 0.0 { self.earn(v as f64) } else { 0.0 };
+        if !fx.is_empty() {
+            self.text_fx.push((pos, fx.to_string(), format!("${added}"), life, 0.0));
+        }
     }
 
     /// DistributeCash.PostDegrade's payout (VERIFIED-DISASM @0x180fea2e3): a pop by a tower that
@@ -14149,14 +14317,22 @@ impl Game {
         (was != Some(two)).then_some(two)
     }
 
-    /// MonkeyTemple.StartSacrifice / ActOnSacrifice (VERIFIED-DISASM @0xd62xxx / @0xd5cd30): on
-    /// becoming a new temple (Sun Temple, then True Sun God) the towers in its range are
-    /// destroyed without refund, their worth (Tower.worth: all spent on them) summed per tower
-    /// set, and each of the new tier's groups whose set reached its cost applies. Heroes, sub
-    /// towers, pets and Paragons are skipped. HYPOTHESIS P-TEMPLE: other Super Monkeys are
-    /// skipped too (the special Vengeful / Tech Bot / Anti-Bloon sacrifices aren't modelled) and
-    /// "in range" is the tower's centre within the temple's range. Earned groups stay through
-    /// later upgrades (the game's tower mutators never expire).
+    /// MonkeyTemple.StartSacrifice (VERIFIED-DECOMP @0x180d43510) on becoming a new temple (Sun
+    /// Temple, then True Sun God): TowerManager.GetTowersInRange(position, TowerModel.range)
+    /// (squared centre distance < range^2, tower order; a TowerRadius behaviour's range would
+    /// replace it: none on a temple), every tower but the temple itself unless it is a hero (Hero
+    /// behaviour: only lifted, display), a sub-tower named *Phoenix* or with an AirUnit, a power,
+    /// a paragon, ignoreTowerForSelection, a Geraldo item, a Beast Handler pet, isBeingRedeployed /
+    /// IsSuspended (never here), a tower whose createdAreas hold the temple's areaPlacedOn (the
+    /// Flagship it stands on) or baseId "TranceTotem" (`Tier::no_sacrifice` for the model flags).
+    /// Other Super Monkeys and ordinary sub-towers (Sentries, mini Sun Avatars, Marines) ARE
+    /// sacrificed. worth[GetTowerFromId(baseId).towerSet] += Tower.worth (f32, first-seen order);
+    /// selectedTowers = OrderByDescending(worth) (stable) cut to MonkeyTempleModel.towerGroupCount
+    /// (Sun Temple 3, True Sun God 4). The towers are destroyed without refund (their sub-towers
+    /// with them, as before), then ActOnSacrifice (VERIFIED-DECOMP @0x180d3e140) applies each of
+    /// the new tier's groups whose set is selected and worth >= (float)cost. (checkForThereCanOnly
+    /// BeOne, the Vengeful / Batman-and-RoboCop branch, is false in every temple model.) Earned
+    /// groups stay through later upgrades (the game's tower mutators never expire).
     fn temple_upgraded(&mut self, t: usize, was: Option<bool>) {
         let (id, def, key) = (self.towers[t].id, self.towers[t].def, self.towers[t].tier_key());
         let Some(base) = self.tower_tiers[def].as_ref().and_then(|tt| tt.tiers.get(&key)).cloned() else { return };
@@ -14165,24 +14341,37 @@ impl Game {
             let two = tp.groups.iter().any(|g| g.two);
             if was != Some(two) {
                 let (c, r) = (self.towers[t].pos, base.range);
-                let mut worth: HashMap<u32, f64> = HashMap::new();
+                let on_deck = self.towers[t].deck.map(|(s, _)| s);
+                // (set, worth) in first-seen order: the Dictionary's enumeration order.
+                let mut sums: Vec<(u32, f32)> = Vec::new();
                 let mut gone = Vec::new();
-                for tw in &self.towers {
-                    if tw.id == id || tw.sub.is_some() || tw.paragon.is_some() || tw.deck.is_some() || self.hero_def(tw.def).is_some() {
+                for (o, tw) in self.towers.iter().enumerate() {
+                    if tw.id == id || tw.paragon.is_some() || self.hero_def(tw.def).is_some() || Some(tw.id) == on_deck {
                         continue;
                     }
-                    if self.tower_defs[tw.def].0 == self.tower_defs[def].0 {
+                    if tw.sub.as_ref().is_some_and(|s| s.pet) || self.tier(o).is_some_and(|x| x.no_sacrifice) {
                         continue;
                     }
-                    if (tw.pos[0] - c[0]).powi(2) + (tw.pos[1] - c[1]).powi(2) > r * r {
+                    if !((tw.pos[0] - c[0]).powi(2) + (tw.pos[1] - c[1]).powi(2) < r * r) {
                         continue;
                     }
-                    let set = self.tower_tiers[tw.def].as_ref().and_then(|tt| tt.tiers.get("000")).map_or(0, |x| x.set);
-                    *worth.entry(set).or_default() += tw.invested;
+                    // GameModel.GetTowerFromId(baseId).towerSet, else the model's own.
+                    let set = match &tw.sub {
+                        Some(s) => s.spec.tier.set,
+                        None => self.tower_tiers[tw.def].as_ref().and_then(|tt| tt.tiers.get("000")).map_or(0, |x| x.set),
+                    };
+                    match sums.iter_mut().find(|(s, _)| *s == set) {
+                        Some((_, w)) => *w += tw.invested as f32,
+                        None => sums.push((set, tw.invested as f32)),
+                    }
                     gone.push((tw.id, tw.pos));
                 }
+                // OrderByDescending (a stable sort) and the first towerGroupCount sets.
+                sums.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                sums.truncate(tp.group_count.max(1) as usize);
+                let worth: HashMap<u32, f32> = sums.into_iter().collect();
                 // MonkeyTempleModel.towerEffectModel on each tower consumed, effectModel on the temple.
-                // (Each tier's own: True Sun God 5xx / 420 / 401 / 402 have their transformations.)
+                        // (Each tier's own: True Sun God 5xx / 420 / 401 / 402 have their transformations.)
                 for &(_, p) in &gone {
                     self.place_fx.push((p, tp.tower_fx.clone().unwrap_or_else(|| "ConsumeMonkeyEffect".into()), 1.0));
                 }
@@ -14201,12 +14390,15 @@ impl Game {
                 // speed / size step) whose own CheckTempleUnderLevel fails (that set's worth >= cost, or the set not sacrificed)
                 // isn't added. A temple made at its tier (SetTempleSacrificeValuesFromModel) never
                 // evaluates them: see temple_created.
+                // (CheckTempleUnderLevel.Evaluate @0x180c1ce10: templeType == the temple's
+                // templeId, which holds for every conditional in the data, the set selected
+                // (ContainsTowerSet) and its worth < (float)cost.)
                 for g in &tp.groups {
-                    if worth.get(&g.set).copied().unwrap_or(0.0) >= g.cost as f64 {
+                    if worth.get(&g.set).is_some_and(|&w| w >= (g.cost as i32) as f32) {
                         let mut live = g.clone();
                         // A failed mutator never reaches mutatorsToApply (nor its insert order).
                         live.muts.retain(|m| match m.u {
-                            Some((set, cost)) => worth.get(&set).is_some_and(|&w| (w as f32) < (cost as i32) as f32),
+                            Some((set, cost)) => worth.get(&set).is_some_and(|&w| w < (cost as i32) as f32),
                             None => true,
                         });
                         groups.push(live);
@@ -14339,11 +14531,13 @@ impl Game {
                 "ProjectileSpeed" => each(&mut t, &|p| p.speed += p.speed * v),
                 // ProjectileSizeTowerMutator (VERIFIED-DECOMP @0x180c21e70): radius x m + radius.
                 "ProjectileSize" => each(&mut t, &|p| p.radius += p.radius * v),
-                // HYPOTHESIS P-TEMPLEWIND: WindChanceTowerMutator raises the chance of the
-                // WindModels already on its projectiles (the temple's main blast carries one at 0).
+                // WindChanceTowerMutator.Mutator.Mutate (VERIFIED-DECOMP @0x180c223c0, token
+                // 0x600212d): every WindModel among the model's descendants (GetDescendants) gets
+                // chance (+0x40) += windChance (+0x38), unclamped. Only the base blast carries one
+                // by then (the Magic groups' attacks with winds are added later, priority 5 < 20).
                 "WindChance" => each(&mut t, &|p| {
                     if let Some(w) = p.wind.as_mut() {
-                        w.chance = (w.chance + v).min(1.0);
+                        w.chance += v;
                     }
                 }),
                 // RangeTowerMutator (VERIFIED-DECOMP @0x180c22a70): the tower's and its attacks'
@@ -14667,6 +14861,13 @@ impl Game {
         if let (n @ 1.., Some((icon, name, max))) = (self.towers[t].ultra.0, &self.towers[t].ultra_icon) {
             queries.push((icon.clone(), name.clone(), *max, 1, n, true));
         }
+        // Trade Empire's mutator on a selected ship: its indicator (TowerBehaviorBuffModel.
+        // GetBuffIndicatorModel), availableBuffCount = its stacks (StackCount, the ships taken).
+        if let Some(b) = self.buffs.get(t) {
+            for (icon, name, max, n) in &b.te_icons {
+                queries.push((icon.clone(), name.clone(), *max, 1, *n, true));
+            }
+        }
         // (2) Every Support whose CanShowInactiveBuffIcon holds: an inactive query (canEventuallyBuff,
         // not canCurrentlyBuff). Only MonkeySubParagonSupport overrides it (VERIFIED-DECOMP
         // @0x180d3ddc0): false while its tower's TargetType id (+0xc8, Tower.SetTargetType) is
@@ -14842,8 +15043,59 @@ impl Game {
         v
     }
 
+    /// The TradeEmpireBuffMutators on each tower: (model, cashBonus, stacks) per mutator id.
+    /// TradeEmpireBuff.Process (VERIFIED-DECOMP @0x180da8e70) redoes UpdateMutators whenever
+    /// the counts of Trade Empires / Merchantmen / Favored Trades change; computing them on
+    /// every buff pass gives the same mutators. UpdateMutators (VERIFIED-DECOMP @0x180da9760,
+    /// lambdas <>c b__9_0..3 @0x180dc0310.. VERIFIED-DISASM): first every MerchantShip and
+    /// every TradeEmpireBuff tower loses the mutators with its mutatorId; n =
+    /// GetMatchingTradeEmpireCount (@0x180da8960: TradeEmpireBuffs with the same mutatorId whose
+    /// tower isn't suspended); the ships are Factory<MerchantShip> (towers not suspended)
+    /// OrderByDescending(TowerModel.tiers[2]) Take(maxMerchantmanCapBonus x n); cashBonus =
+    /// (their count with tiers[2] == 3) x cashPerRoundPerMechantship + (== 4) x
+    /// cashPerRoundPerFavouredTrades (f32), stacks = how many were taken, and each taken ship
+    /// gets the mutator (BehaviorMutator id mutatorId, unique, priority 1). Every ship gets the
+    /// whole bonus: 20 Merchantmen under one Trade Empire make 200 + 200 each.
+    /// (ChimpsModModel zeroes cashPerRoundPerMechantship only, VERIFIED-DECOMP @0x1811189b0:
+    /// the Favored Trades part still pays in CHIMPS, on a cashPerRound zeroed before.)
+    /// INFERRED: the factory's order is the towers' order (it only splits equal tiers past the
+    /// cap). Groups by mutatorId: Trade Empire "TradeEmpire", the Paragon "TradeEmpireParagon";
+    /// the last tower of a group in process order (tower order) adds the group's mutators.
+    /// (Suspension isn't modelled anywhere in the clone: no tower is suspended.)
+    fn trade_empire_mutators(&self) -> Vec<Vec<(crate::data::TradeEmpire, f32, u32)>> {
+        let mut out: Vec<Vec<(crate::data::TradeEmpire, f32, u32)>> = vec![Vec::new(); self.towers.len()];
+        let mut groups: Vec<(crate::data::TradeEmpire, usize)> = Vec::new();
+        for t in 0..self.towers.len() {
+            let Some(te) = self.tier(t).and_then(|tr| tr.trade_empire.clone()) else { continue };
+            match groups.iter_mut().find(|g| g.0.id == te.id) {
+                Some(g) => {
+                    g.0 = te;
+                    g.1 += 1;
+                }
+                None => groups.push((te, 1)),
+            }
+        }
+        if groups.is_empty() {
+            return out;
+        }
+        let mut ships: Vec<usize> = (0..self.towers.len()).filter(|&o| self.tier(o).is_some_and(|tr| tr.merchant)).collect();
+        // (OrderByDescending is a stable sort.)
+        ships.sort_by(|&a, &b| self.towers[b].tiers[2].cmp(&self.towers[a].tiers[2]));
+        let per_ship = if self.chimps() { 0.0 } else { 1.0 };
+        for (te, n) in groups {
+            let take: Vec<usize> = ships.iter().copied().take(te.cap as usize * n).collect();
+            let merchantmen = take.iter().filter(|&&o| self.towers[o].tiers[2] == 3).count() as i32;
+            let favoured = take.iter().filter(|&&o| self.towers[o].tiers[2] == 4).count() as i32;
+            let cash = merchantmen as f32 * (te.per_ship as f32 * per_ship) + favoured as f32 * te.per_favoured as f32;
+            for &o in &take {
+                out[o].push((te.clone(), cash, take.len() as u32));
+            }
+        }
+        out
+    }
+
     fn compute_buffs_raw(&self) -> Vec<Buff> {
-        let trade_empire = (0..self.towers.len()).find_map(|t| self.tier(t).and_then(|tr| tr.trade_empire.clone()));
+        let trade_empire = self.trade_empire_mutators();
         let flagship = (0..self.towers.len()).filter_map(|t| self.tier(t).and_then(|tr| tr.flagship)).reduce(f32::min);
         (0..self.towers.len())
             .map(|t| {
@@ -14916,7 +15168,10 @@ impl Game {
                             b.cash_mult *= sp.mult.powi(n as i32);
                             b.cash_add += sp.add * k;
                         }
-                        "income" => b.income_mult *= sp.mult.powi(n as i32),
+                        "income" => {
+                            b.income_mult *= sp.mult.powi(n as i32);
+                            b.income_n += n as u32;
+                        }
                         "ability_cd" => b.ability_cd_mult *= sp.mult.powi(n as i32),
                         "unfilter" => b.unfilter = true,
                         "damage" => b.damage_add += sp.add * k,
@@ -14998,13 +15253,18 @@ impl Game {
                         b.range_mult += vr.powi(n as i32) - 1.0;
                     }
                 }
-                // STAND-IN P-TRADEEMPIRE: Trade Empire's damage buffs go to every merchant ship;
+                // TradeEmpireBuffMutator.Mutate (VERIFIED-DECOMP @0x180dbacf0) on each selected ship:
+                // every PerRoundCashBonusTowerModel.cashPerRound += cashBonus, every DamageModel
+                // damage += damageBuff, every ProjectileModel gets DamageModifierForTagModels
+                // Ceramic (x1 + ceramicDamageBuff) and Moabs (x1 + moabDamageBuff).
                 // STAND-IN P-FLAGSHIP: the Flagship's attack speed to every tower on water.
-                if self.tier(t).is_some_and(|tr| tr.merchant) {
-                    if let Some(te) = trade_empire.as_ref() {
-                        b.damage_add += te.damage;
-                        b.tag_mods.push(crate::data::TagMod { tag: "Ceramic".into(), mult: 1.0, add: te.ceramic, all: false });
-                        b.tag_mods.push(crate::data::TagMod { tag: "Moabs".into(), mult: 1.0, add: te.moab, all: false });
+                for (te, cash, stacks) in &trade_empire[t] {
+                    b.damage_add += te.damage;
+                    b.tag_mods.push(crate::data::TagMod { tag: "Ceramic".into(), mult: 1.0, add: te.ceramic, all: false });
+                    b.tag_mods.push(crate::data::TagMod { tag: "Moabs".into(), mult: 1.0, add: te.moab, all: false });
+                    b.te_cash += *cash;
+                    if let Some(icon) = &te.icon {
+                        b.te_icons.push((icon.clone(), te.buff_name.clone(), te.buff_max, *stacks));
                     }
                 }
                 // (Not on a Paragon or its sub-towers, which refuse its mutator (Tower.AddMutator):
@@ -15232,11 +15492,29 @@ impl Game {
         // dropping its mutators; a degrade's first child keeps it.)
         let wl_pre = (self.pop_depth == 0).then(|| self.bloons[i].wl.as_ref().filter(|w| w.obj != usize::MAX).map(|w| (self.bloons[i].id, w.obj, w.interval))).flatten();
         let top = self.pop_depth == 0;
+        // GiveCashOnPop behaviours on the bloon now (put on by this hit's pass -1 too: Lead to
+        // Gold's AddBehaviorToBloonModel has collisionPass -1), with the applying tower.
+        let gold: Vec<(f32, f32, std::sync::Arc<str>, f32, u64)> = if top {
+            self.bloons[i].effects.iter().filter_map(|e| match &e.kind { EffectKind::Gold { flat, mult, fx, fx_life } => Some((*flat, *mult, fx.clone(), *fx_life, e.owner)), _ => None }).collect()
+        } else {
+            Vec::new()
+        };
+        let (gold_pos, gold_round) = (self.bloons[i].pos, self.bloons[i].spawn_round);
         if top {
             self.hit_acc = (0.0, 0.0, 1.0);
+            self.hit_layers = 0;
         }
         let n = self.damage_wl(i, dmg, out_children);
         if top {
+            // Bloon.Degrade (VERIFIED-DECOMP @0x180fb1ad0; RecieveDamage calls it only when the
+            // damage reaches the health) runs every bloon behaviour's PreDegrade before the
+            // children are made, then DistributeCash.PostDegrade (`pay_hit`).
+            if n > 0 {
+                let cash = self.hit_acc.0;
+                for (flat, mult, fx, life, owner) in gold {
+                    self.give_cash_on_pop(flat, mult, &fx, life, owner, cash, gold_round, gold_pos);
+                }
+            }
             self.pay_hit();
         }
         if let Some((id, obj, iv)) = wl_pre {
@@ -15283,6 +15561,11 @@ impl Game {
                     if !self.no_pop_cash && self.bloons[j].lowest != 0 {
                         self.hit_acc.0 += self.cash_in[k2] as f32;
                         self.hit_acc.2 = self.income_mult_for(r);
+                    }
+                    // (And its layers in the result's nonRegrowLayers, by the same rule: the
+                    // held path's OPEN lowest test, see HANDOFF.)
+                    if self.bloons[j].lowest != 0 {
+                        self.hit_layers += self.tree_layers(k2);
                     }
                     self.unmake_bloon(j);
                 }
@@ -15631,6 +15914,9 @@ impl Game {
             }
         }
         // GetNonRegrowLayersForLayers: a layer counts 1 + its layerCountOffset.
+        if self.defs[kind].layer_number <= pay_lowest {
+            self.hit_layers += 1 + self.layer_offset[kind];
+        }
         popped += self.layer_offset[kind];
         self.popped += 1 + self.layer_offset[kind];
         let pp = self.tracks[path as usize].pos(dist);
@@ -17572,6 +17858,7 @@ impl Game {
                     b.1 -= 1.0;
                 }
                 tw.boosts.retain(|b| b.1 > 0.0);
+                tw.biohacked = (tw.biohacked - 1.0).max(0.0);
                 if let Some((_, _, _, f)) = &mut tw.overclock {
                     *f -= 1.0;
                     if *f <= 0.0 {
@@ -23327,6 +23614,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     None => continue,
                 },
                 "mark" => EffectKind::Mark { damage_mult: e.mult, cash_mult: e.damage },
+                "gold" => EffectKind::Gold { flat: e.mult, mult: e.damage, fx: e.fx.as_ref().map_or("", |f| f.0.as_str()).into(), fx_life: e.fx.as_ref().map_or(0.0, |f| f.1) },
                 "strip" => EffectKind::Strip,
                 "unarmor" => EffectKind::Unarmor { bits: e.immune },
                 "worth" => EffectKind::Worth { per_tier: e.damage },
@@ -25801,6 +26089,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     }
                 }
             }
+            self.monkey_city_round_end();
             self.items_round_end();
             self.necro_decay();
             // CreateSoundOnEndOfRound (Rare Quincy action figure).
@@ -25856,10 +26145,20 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             }
             // PerRoundCashBonusTowerModel: each tower's per-round cash, shown over it.
             for t in 0..self.towers.len() {
-                // (ChimpsModModel: PerRoundCashBonusTowerModel.cashPerRound 0.)
-                // (MonkeyCityIncomeSupport's Mutate scales cashPerRound x multiplier in f32,
-                // VERIFIED-DECOMP @0x180d45eb0.)
-                let v = if self.chimps() { 0.0 } else { (self.tier(t).map_or(0.0, |tr| tr.round_cash) as f32 * self.buffs.get(t).map_or(1.0, |b| b.income_mult)) as f64 };
+                // PerRoundCashBonusTower.OnRoundComplete (VERIFIED-DECOMP @0x180d5a0a0): (round + 1)
+                // x cashRoundBonusMultiplier (0 in every model) + cashPerRound, f32, paid when > 0.
+                // cashPerRound is the mutated model's: ChimpsModModel zeroes it (VERIFIED-DECOMP
+                // @0x1811189b0), Trade Empire's mutator adds cashBonus (`te_cash`), MonkeyCity-
+                // IncomeSupport's Mutate scales it x multiplier (VERIFIED-DECOMP @0x180d45eb0;
+                // CHIMPS sets incomeModifier 0). HYPOTHESIS P-TECITY: Trade Empire's mutator comes
+                // first in the ship's mutator list (Mutable.ApplyMutation runs the list from index
+                // 0; both are priority 1 and the order is the SortedInsert history, not modelled).
+                let (base, te_cash, city) = {
+                    let b = self.buffs.get(t);
+                    let city = b.map_or(1.0, |b| if self.chimps() && b.income_n > 0 { 0.0 } else { b.income_mult });
+                    (if self.chimps() { 0.0 } else { self.tier(t).map_or(0.0, |tr| tr.round_cash) as f32 }, b.map_or(0.0, |b| b.te_cash), city)
+                };
+                let v = ((base + te_cash) * city) as f64;
                 if v > 0.0 {
                     if self.coop_wallets.is_some(){
                         let shared=self.tier(t).map_or(0.0,|tr|tr.round_cash_shared)*self.buffs.get(t).map_or(1.0,|b|b.income_mult) as f64;
@@ -25867,21 +26166,6 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     }else{self.earn(v);}
                     self.towers[t].cash_earned += v;
                     self.cash_pops.push((self.towers[t].pos, v));
-                }
-            }
-            // HYPOTHESIS P-TRADEEMPIRE: Trade Empire pays cashPerRoundPerMechantship per other
-            // merchant ship (up to maxMerchantmanCapBonus) and cashPerRoundPerFavouredTrades per
-            // Favored Trades ship, once per round however many Trade Empires there are.
-            let te = (0..self.towers.len()).find_map(|t| self.tier(t).and_then(|tr| tr.trade_empire.clone()).map(|x| (t, x)));
-            if let Some((te_t, te)) = te {
-                let ships = (0..self.towers.len()).filter(|&o| o != te_t && self.tier(o).is_some_and(|tr| tr.merchant)).count().min(te.cap as usize);
-                let favoured = (0..self.towers.len()).filter(|&o| o != te_t && self.tier(o).is_some_and(|tr| tr.cashback.is_some())).count();
-                // (ChimpsModModel: TradeEmpireBuffModel.cashPerRoundPerMechantship 0.)
-                let per_ship = if self.chimps() { 0.0 } else { te.per_ship };
-                let v = ships as f64 * per_ship + favoured as f64 * te.per_favoured;
-                if v > 0.0 {
-                    self.earn_for(self.towers[te_t].id,v);
-                    self.cash_pops.push((self.towers[te_t].pos, v));
                 }
             }
             for t in 0..self.towers.len() {
@@ -26289,6 +26573,43 @@ mod tests {
         assert!(g.tier(t).unwrap().attacks.len() > base_attacks);
     }
 
+    /// MonkeyTemple.StartSacrifice: another Super Monkey in range is sacrificed (Magic), and the
+    /// Sun Temple keeps only its towerGroupCount (3) richest sets: four sets each past every cost,
+    /// the cheapest (Support) earns nothing.
+    #[test]
+    fn sun_temple_keeps_three_richest_sets() {
+        let mut g = game();
+        let sm = g.tower_defs.iter().position(|(n, _)| n == "SuperMonkey").unwrap();
+        let t = place_near(&mut g, sm, 300.0);
+        let c = g.towers[t].pos;
+        let mut ids = Vec::new();
+        for (name, worth) in [("DartMonkey", 60000.0), ("SniperMonkey", 58000.0), ("SuperMonkey", 56000.0), ("BananaFarm", 54000.0)] {
+            let d = g.tower_defs.iter().position(|(n, _)| n == name).unwrap();
+            let i = (0..96)
+                .find_map(|k| {
+                    let r = 20.0 + (k / 24) as f32 * 8.0;
+                    let a = k as f32 / 24.0 * std::f32::consts::TAU;
+                    g.place(d, [c[0] + r * a.cos(), c[1] + r * a.sin()]).then(|| g.towers.len() - 1)
+                })
+                .expect("spot");
+            g.towers[i].invested = worth;
+            ids.push(g.towers[i].id);
+        }
+        let t = g.towers.iter().position(|x| x.def == sm).unwrap();
+        for _ in 0..4 {
+            assert!(g.upgrade(t, 0));
+        }
+        for id in &ids {
+            assert!(g.towers.iter().all(|x| x.id != *id), "every tower in range sacrificed, the Super Monkey too");
+        }
+        let t = g.towers.iter().position(|x| x.def == sm).unwrap();
+        let (groups, _) = g.towers[t].temple.as_ref().expect("temple groups");
+        for set in [1, 2, 4] {
+            assert!(groups.iter().any(|gr| gr.set == set), "set {set} earned");
+        }
+        assert!(groups.iter().all(|gr| gr.set != 8), "the fourth set isn't selected");
+    }
+
     /// Every class sacrificed to both temples, then a round played (planes, avatar, blasts).
     #[test]
     fn true_sun_god_runs() {
@@ -26477,7 +26798,11 @@ mod tests {
         let mut g = game();
         let alch = g.tower_defs.iter().position(|(n, _)| n == "Alchemist").unwrap();
         let dart = g.tower_defs.iter().position(|(n, _)| n == "DartMonkey").unwrap();
-        let a = place_near(&mut g, alch, 300.0);
+        // In a corner: the map is within about 190 of its centre, so the reach only shows
+        // corner to corner.
+        let a = (0..30 * 24)
+            .find_map(|k| g.place(alch, [-145.0 + (k % 30) as f32 * 5.0, -111.0 + (k / 30) as f32 * 5.0]).then(|| g.towers.len() - 1))
+            .expect("alchemist spot");
         let c = g.towers[a].pos;
         let d = (0..48)
             .find_map(|k| {
@@ -26486,6 +26811,15 @@ mod tests {
             })
             .expect("dart spot");
         let dart_id = g.towers[d].id;
+        // GetClosestTowers' reach: distance squared < 99999 (about 316), not the Alchemist's range.
+        let mut band = |lo: f32, hi: f32| {
+            (0..61 * 47).find_map(|k| {
+                let q = [-150.0 + (k % 61) as f32 * 5.0, -116.0 + (k / 61) as f32 * 5.0];
+                let d = (q[0] - c[0]).hypot(q[1] - c[1]);
+                (d > lo && d < hi && g.place(dart, q)).then(|| g.towers[g.towers.len() - 1].id)
+            })
+        };
+        let (far, too_far) = (band(290.0, 315.0), band(318.0, 500.0));
         let a = g.towers.iter().position(|x| x.def == alch).unwrap();
         for _ in 0..5 {
             assert!(g.upgrade(a, 1));
@@ -26497,6 +26831,14 @@ mod tests {
         assert!(g.activate_ability(&name));
         let d = g.towers.iter().position(|x| x.id == dart_id).unwrap();
         assert!(g.towers[d].morph.is_some(), "dart transformed");
+        let morphed = |g: &Game, id: Option<u64>| id.and_then(|id| g.towers.iter().find(|x| x.id == id)).map(|x| x.morph.is_some());
+        if far.is_some() {
+            assert_eq!(morphed(&g, far), Some(true), "290..315 away is within the 99999 squared reach");
+        }
+        if too_far.is_some() {
+            assert_eq!(morphed(&g, too_far), Some(false), "over 318 away is out of reach");
+        }
+        assert!(far.is_some() && too_far.is_some(), "spots found: {far:?} {too_far:?} from {c:?}");
         for _ in 0..(21 * 60) {
             g.step();
         }
@@ -27665,6 +28007,34 @@ mod beast_tests {
     /// MonkeyopolisUpgradeCost / Monkeyopolis: 0-0-5 needs a Banana Farm in range, costs
     /// costPerFarm per farm, and absorbs them for crate cash.
     #[test]
+    fn monkey_city_free_darts_accumulate() {
+        // MonkeyCity.OnRoundPassed / TowerInventory.AddFreeTowers: one free Dart Monkey per
+        // round end, kept until used; TowerManager.GetTowerCost spends one and charges 0.
+        let mut g = game();
+        g.cash = 1e7;
+        let v = g.tower_defs.iter().position(|(n, _)| n == "MonkeyVillage").unwrap();
+        let dart = g.tower_defs.iter().position(|(n, _)| n == "DartMonkey").unwrap();
+        let t = place_near(&mut g, v, 300.0);
+        for _ in 0..4 {
+            assert!(g.upgrade(t, 2));
+        }
+        assert_eq!(g.free_tower_count(dart), 0);
+        g.monkey_city_round_end();
+        g.monkey_city_round_end();
+        assert_eq!(g.free_tower_count(dart), 2, "unused free towers stay");
+        let p = g.towers[t].pos;
+        assert_eq!(g.place_cost(dart, p), 0.0);
+        let cash = g.cash;
+        let d = place_near(&mut g, dart, 300.0);
+        assert!(g.towers[d].def == dart);
+        assert_eq!(g.cash, cash, "placed free");
+        assert_eq!(g.free_tower_count(dart), 1);
+        place_near(&mut g, dart, 300.0);
+        assert_eq!(g.free_tower_count(dart), 0);
+        assert!(g.place_cost(dart, p) > 0.0);
+    }
+
+    #[test]
     fn monkeyopolis_needs_and_absorbs_farms() {
         let mut g = game();
         g.cash = 1e7;
@@ -28193,8 +28563,51 @@ mod beast_tests {
         assert_eq!(g.cash - cash, 800.0);
     }
 
-    /// P-TRADEEMPIRE / P-CASHBACK: Trade Empire pays per merchant ship, Favored Trades raises
-    /// the sell value of towers in range.
+    /// GiveCashOnPop.PreDegrade: Lead to Gold's flat 50 on the bloon's pop, Rubber to Gold's
+    /// nonRegrowLayers x income x 1, nothing once the tower that put it on is gone.
+    #[test]
+    fn give_cash_on_pop_pays_in_pre_degrade() {
+        let mut g = tests_support::game();
+        g.cash = 1e9;
+        let dart = g.tower_defs.iter().position(|(x, _)| x == "DartMonkey").unwrap();
+        let mut ok = false;
+        'outer: for y in (-200..200).step_by(30) {
+            for x in (-300..300).step_by(30) {
+                if g.place(dart, [x as f32, y as f32]) {
+                    ok = true;
+                    break 'outer;
+                }
+            }
+        }
+        assert!(ok);
+        let owner = g.towers.last().unwrap().id;
+        g.cash = 0.0;
+        let gold = |flat: f32, mult: f32| Effect { kind: EffectKind::Gold { flat, mult, fx: "".into(), fx_life: 0.0 }, id: "G".into(), frames_left: f32::INFINITY, total: f32::INFINITY, added: 0, layers: 1, owner, distribute: (false, false), keep: false, overlay: "".into(), seq: 0 };
+        for (name, flat, mult, want) in [("Lead", 50.0, 0.0, 50.0), ("Pink", 0.0, 1.0, 5.0)] {
+            g.spawn(g.by_name[name], 100.0);
+            let i = g.bloons.len() - 1;
+            g.bloons[i].effects.push(gold(flat, mult));
+            let before = g.cash;
+            let mut kids = Vec::new();
+            g.hit_tower = None;
+            g.damage(i, 1000, &mut kids);
+            // (The pop's own cash, no tower: paid at once; the gold on top.)
+            let pop = g.cash_in[g.by_name[name]];
+            assert_eq!(g.cash - before - pop, want, "{name}");
+            g.bloons.clear();
+        }
+        g.towers.clear();
+        g.spawn(g.by_name["Lead"], 100.0);
+        g.bloons[0].effects.push(gold(50.0, 0.0));
+        let before = g.cash;
+        let mut kids = Vec::new();
+        g.damage(0, 1000, &mut kids);
+        assert_eq!(g.cash - before, g.cash_in[g.by_name["Lead"]]);
+    }
+
+    /// Trade Empire (TradeEmpireBuff.UpdateMutators): every taken ship's round cash rises by
+    /// 1 Merchantman x 10 + 1 Favored Trades x 20; Favored Trades raises the sell value of
+    /// towers in range.
     #[test]
     fn buccaneer_trade() {
         let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../local_extracted/game/game.json");
@@ -28231,8 +28644,16 @@ mod beast_tests {
                 break;
             }
         }
-        let te = g.towers[placed[0]].pos;
-        assert!(g.cash_pops.iter().any(|&(q, v)| q == te && (v - 40.0).abs() < 1e-6), "Trade Empire pays 2 ships x 10 + 1 Favored Trades x 20");
+        // Trade Empire isn't a MerchantShip: it pays its own 800 only. The two ships it takes
+        // each pay their cashPerRound + 30.
+        let at = |i: usize| g.towers[placed[i]].pos;
+        let paid = |i: usize, want: f64| g.cash_pops.iter().any(|&(q, v)| q == at(i) && (v - want).abs() < 1e-6);
+        assert!(paid(0, 800.0), "{:?}", g.cash_pops);
+        assert!(paid(1, 230.0), "{:?}", g.cash_pops);
+        assert!(paid(2, 530.0), "{:?}", g.cash_pops);
+        assert_eq!(g.buffs[placed[1]].te_icons.len(), 1);
+        assert_eq!(g.buffs[placed[1]].te_icons[0].3, 2);
+        assert!(g.buffs[placed[0]].te_icons.is_empty());
     }
 
     /// Tower.UpdateBuffs' CashbackZone loop: every Favored Trades ship in range, the ship
@@ -28659,11 +29080,16 @@ mod beast_tests {
         let b = place_near(&mut g, bj, 300.0);
         g.towers[b].tiers = [3, 0, 0];
         let d = place_near(&mut g, dart, 320.0);
+        let farm = g.tower_defs.iter().position(|(x, _)| x == "BananaFarm").unwrap();
+        let f = place_near(&mut g, farm, 300.0);
         g.sync_abilities(b);
         g.towers[b].ability_cd.clear();
         assert!(g.activate_ability("Biohack"));
         g.buffs = g.compute_buffs();
         assert_eq!(g.buffs[d].damage_add, 1.0);
+        // Biohack.FilterTower: filterTowers (BananaFarm, ...) are refused; the hero isn't taken.
+        assert!(g.towers[f].boosts.is_empty() && g.towers[f].biohacked == 0.0, "farm filtered out");
+        assert!(g.towers[d].biohacked > 0.0 && g.towers[b].biohacked == 0.0);
     }
 
     /// Mega Mine: placed ahead of a ZOMG, it blows up when the ZOMG reaches it (4000 damage).

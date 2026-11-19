@@ -87,6 +87,7 @@ impl Game{
                     EffectKind::Knock{m}=>{feed!(h,12u8,m[0].to_bits());feed!(h,m[1].to_bits());feed!(h,m[2].to_bits());},
                     EffectKind::Carry{uids,..}=>{feed!(h,14u8,uids);},
                     EffectKind::PopFx{..}=>15u8.feed(h),
+                    EffectKind::Gold{flat,mult,..}=>{feed!(h,16u8,flat,mult);},
                 }
             }
         }
