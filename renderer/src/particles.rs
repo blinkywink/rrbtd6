@@ -319,6 +319,38 @@ struct System {
     /// NoiseModule (export_particles `noise`).
     #[serde(default)]
     noise: Option<NoiseJson>,
+    /// Size / Rotation / Color by Speed: the curve at the particle's speed placed in `range`.
+    #[serde(default)]
+    size_speed: Option<BySpeed>,
+    #[serde(default)]
+    rot_speed: Option<BySpeed>,
+    #[serde(default)]
+    color_speed: Option<ColorBySpeed>,
+}
+
+#[derive(Deserialize, Clone)]
+struct BySpeed {
+    x: Curve,
+    y: Option<Curve>,
+    z: Curve,
+    #[serde(default)]
+    separate: bool,
+    range: [f32; 2],
+}
+
+#[derive(Deserialize, Clone)]
+struct ColorBySpeed {
+    color: ColorSpec,
+    range: [f32; 2],
+}
+
+/// A particle's speed placed in a by-speed module's range, 0..1.
+fn speed_t(v: Vec3, range: [f32; 2]) -> f32 {
+    let d = range[1] - range[0];
+    if d.abs() < 1e-6 {
+        return 0.0;
+    }
+    ((v.length() - range[0]) / d).clamp(0.0, 1.0)
 }
 
 /// NoiseModule: strength per axis (one when not separateAxes), frequency, damping, octaves,
@@ -1491,6 +1523,13 @@ impl Instance {
                 if dt > 0.0 {
                     p.tvel = disp / dt;
                 }
+                if let Some(rs) = &sys.rot_speed {
+                    let k = speed_t(p.tvel, rs.range);
+                    p.rot += rs.z.at(k, p.r[4]) * dt;
+                    if rs.separate {
+                        p.rot3 += vec2(rs.x.at(k, p.r[6]), rs.y.as_ref().map_or(0.0, |c| c.at(k, p.r[7]))) * dt;
+                    }
+                }
                 if let Some(rm) = &sys.rotation {
                     p.rot += rm.z.at(u, p.r[4]) * dt;
                     if rm.separate {
@@ -2019,6 +2058,12 @@ impl Particles {
                         let sy = if sm.separate { sm.y.as_ref().map_or(sx, |c| c.at(u, p.r[1])) } else { sx };
                         size *= vec2(sx, sy);
                     }
+                    if let Some(ss) = &sys.size_speed {
+                        let k = speed_t(p.tvel, ss.range);
+                        let sx = ss.x.at(k, p.r[1]);
+                        let sy = if ss.separate { ss.y.as_ref().map_or(sx, |c| c.at(k, p.r[1])) } else { sx };
+                        size *= vec2(sx, sy);
+                    }
                     // maxParticleSize: billboards no larger than this fraction of the view height.
                     if matches!(sd.ren.mode, 0 | 2 | 3) {
                         let max = sd.ren.max_size * view_h / px_per_unit.max(1e-3);
@@ -2027,6 +2072,10 @@ impl Particles {
                     let mut c = p.color;
                     if let Some(cm) = &sys.color {
                         let k = cm.at(u, p.r[4]);
+                        c = [0, 1, 2, 3].map(|i| c[i] * k[i]);
+                    }
+                    if let Some(cs) = &sys.color_speed {
+                        let k = cs.color.at(speed_t(p.tvel, cs.range), p.r[4]);
                         c = [0, 1, 2, 3].map(|i| c[i] * k[i]);
                     }
                     // Additive colour mode applies the tint in the shader instead.

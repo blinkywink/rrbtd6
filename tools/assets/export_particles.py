@@ -43,7 +43,8 @@ _CAB_PATH = os.path.join(ROOT, "..", "..", "local_extracted", "cab_index.json")
 CABS = json.load(open(_CAB_PATH)) if os.path.exists(_CAB_PATH) else {}
 
 SIMULATED = {"InitialModule", "CustomDataModule", "EmissionModule", "ShapeModule", "SizeModule", "ColorModule", "RotationModule",
-             "VelocityModule", "ForceModule", "ClampVelocityModule", "UVModule", "SubModule", "NoiseModule"}
+             "VelocityModule", "ForceModule", "ClampVelocityModule", "UVModule", "SubModule", "NoiseModule",
+             "SizeBySpeedModule", "RotationBySpeedModule", "ColorBySpeedModule"}
 
 
 def keys(c):
@@ -140,6 +141,19 @@ def system(ps, out_tex, env):
     cv = t["ClampVelocityModule"]
     if cv["enabled"]:
         s["limit"] = {"speed": curve(cv["magnitude"]), "dampen": cv.get("dampen", 1.0), "drag": curve(cv["drag"]) if "drag" in cv else None}
+    # Size / Rotation / Color by Speed: the curve (gradient) at the particle's speed placed in
+    # `range` (min, max), clamped.
+    for name, key in (("SizeBySpeedModule", "size_speed"), ("RotationBySpeedModule", "rot_speed")):
+        m = t.get(name, {})
+        if m.get("enabled"):
+            rg = m.get("range", {"x": 0.0, "y": 1.0})
+            s[key] = {"x": curve(m.get("x", m.get("curve"))), "y": curve(m["y"]) if "y" in m else None,
+                      "z": curve(m["z"] if "z" in m else m.get("curve", m.get("x"))), "separate": bool(m.get("separateAxes")),
+                      "range": [rg.get("x", 0.0), rg.get("y", 1.0)]}
+    cs = t.get("ColorBySpeedModule", {})
+    if cs.get("enabled"):
+        rg = cs.get("range", {"x": 0.0, "y": 1.0})
+        s["color_speed"] = {"color": color(cs["gradient"]), "range": [rg.get("x", 0.0), rg.get("y", 1.0)]}
     # NoiseModule: turbulence on the particles' positions (strength per axis, frequency, damping
     # (strength / frequency), octaves, scrollSpeed, positionAmount). particles.rs samples smoothed
     # value noise for it (STAND-IN for Unity's curl noise of the same parameters).
