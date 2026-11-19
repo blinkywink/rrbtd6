@@ -817,6 +817,8 @@ async fn game_main() {
     let mut zone_seen: HashMap<(u64, String), u64> = HashMap::new();
     // Legend of the Night's immunity effects at the track ends are up.
     let mut immune_fx_on = false;
+    // Each Great White effect's (pet, createdAt) -> the sim frame it exited (its Fall clip's start).
+    let mut gw_exit: HashMap<(u64, i64), u64> = HashMap::new();
     // Spirit of the Forest's vines shown so far, per tower id.
     let mut spirit_shown: HashMap<u64, usize> = HashMap::new();
     // Towers whose ammo crate had arrived last frame (SniperAmmoSwap).
@@ -3024,18 +3026,30 @@ const VINE_END_FRAMES: i32 = 23;
             // is pitched -90 about x to stand up (screenshot check: the shark breaches beside its
             // bloon). STAND-IN: its animation states (biting, ready, exit, no-grab) aren't followed;
             // merged pets keep the base display.
+            // GreatWhiteEffect.Initialise (VERIFIED-DECOMP @0x18102c170) sets bitingAnimationState (4:
+            // the display's Thrash clip, its Animator's AnyState jump) at once; exitAnimationState (5:
+            // Fall) when it lets go (anim_states.json, read from the display's controller).
+            gw_exit.retain(|k, _| game.gw_effects.iter().any(|g| (g.tower, g.created) == *k));
             for gw in &game.gw_effects {
-                if gw.exited {
-                    continue;
-                }
+                let exit_at = if gw.exited { Some(*gw_exit.entry((gw.tower, gw.created)).or_insert(game.sim_elapsed)) } else { None };
                 let Some(name) = gw.spec.display.clone() else { continue };
                 if !extra_models.contains_key(&name) {
                     extra_models.insert(name.clone(), prefetch.load(&root.join("models").join("extra").join(&name)));
                 }
                 let Some(m) = extra_models.get_mut(&name).and_then(|m| m.as_mut()) else { continue };
-                let clip = m.clip_containing("Thrash").unwrap_or_else(|| m.idle_clip());
-                // (Its time from when it grabbed: createdAt is roundTime, the sim clock here.)
-                let t = (game.sim_elapsed as f32) / 60.0;
+                let (clip, t) = match exit_at {
+                    // (Fall plays once; past its end the shark is gone.)
+                    Some(at) => {
+                        let Some(c) = m.clip_containing("Fall") else { continue };
+                        let t = (game.sim_elapsed - at) as f32 / 60.0;
+                        if t > m.clip_duration(c) {
+                            continue;
+                        }
+                        (c, t)
+                    }
+                    // (Thrash loops; its phase from the sim clock.)
+                    None => (m.clip_containing("Thrash").unwrap_or_else(|| m.idle_clip()), game.sim_elapsed as f32 / 60.0),
+                };
                 let heading = (gw.to[1] - gw.from[1]).atan2(gw.to[0] - gw.from[0]);
                 m.tilt = Some(((-90f32).to_radians(), 0.0, 1.0));
                 m.draw(&shaders, clip, t, [gw.pos[0], 0.0, gw.pos[1]], std::f32::consts::FRAC_PI_2 - heading, outline_scale, false, None);

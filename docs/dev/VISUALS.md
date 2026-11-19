@@ -188,7 +188,9 @@ effect names, model behaviours the data builder never reads).
   as a bloon, beside the vines' stand-ins; the shark itself (CreateGreatWhiteEffectModel.display, exported
   animated to models/extra by export_pending_models) playing its thrash clip, pitched -90 about x (INFERRED:
   the prefab lies along +y like the projectile prefabs; drawn upright it sat ~200 px off the bloon).
-  STAND-IN: its animation states and the clip's start time (the sim clock, not createdAt) aren't the game's.
+  Its states (GreatWhiteEffect.Initialise @0x18102c170: bitingAnimationState 4 at once; exit 5 when it lets
+  go) from the display's own Animator (tools/assets/export_display_states.py: 4 Thrash, 5 Fall): Thrash
+  while holding, Fall once from the exit. STAND-IN: Thrash's phase is the sim clock, not createdAt.
 - FIXED: the Sun Temple played SunTempleTransformationFx for every tier; each MonkeyTempleModel's own
   effectModel / towerEffectModel now (temple `fx` / `tower_fx`: True Sun God 5xx, 420, 401, 402's
   transformations).
