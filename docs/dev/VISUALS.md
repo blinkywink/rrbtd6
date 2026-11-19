@@ -183,7 +183,8 @@ effect names, model behaviours the data builder never reads).
   likewise. STAND-IN: the Spike carpet's rotation is its position's own (none in the clone's positions: 0).
 - DONE: merged Beast Handler pets' looks (ContributionMutator.Mutate @0x181208b50: the display step with the
   highest percent <= (power - basePower) / (maxPower - basePower) once above 0; pet power `steps`, models
-  from models/extra). Unverified on screen (needs a merge). LEFT: the steps' projectileDisplay swap.
+  from models/extra); a merged pet's Great White grab uses the step's projectileDisplay (Tier2 / Tier3
+  sharks). Unverified on screen (needs a merge). LEFT: the step projectileDisplay on the pets' other shots.
 - DONE: the Great White / Orca / Megalodon's held bloon (GwEffect `kind` at its `pos` while not exited) drawn
   as a bloon, beside the vines' stand-ins; the shark itself (CreateGreatWhiteEffectModel.display, exported
   animated to models/extra by export_pending_models) playing its thrash clip, pitched -90 about x (INFERRED:

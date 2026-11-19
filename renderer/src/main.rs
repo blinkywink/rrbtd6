@@ -2596,7 +2596,7 @@ const VINE_END_FRAMES: i32 = 23;
                         if frac <= 0.0 {
                             return None;
                         }
-                        pp.steps.iter().filter(|(d, p)| d.is_some() && *p <= frac).max_by(|a, b| a.1.total_cmp(&b.1)).and_then(|(d, _)| d.clone())
+                        pp.steps.iter().filter(|(d, p, _)| d.is_some() && *p <= frac).max_by(|a, b| a.1.total_cmp(&b.1)).and_then(|(d, _, _)| d.clone())
                     }).flatten();
                     if let Some(name) = &step_look {
                         if !extra_models.contains_key(name) {
@@ -3032,7 +3032,21 @@ const VINE_END_FRAMES: i32 = 23;
             gw_exit.retain(|k, _| game.gw_effects.iter().any(|g| (g.tower, g.created) == *k));
             for gw in &game.gw_effects {
                 let exit_at = if gw.exited { Some(*gw_exit.entry((gw.tower, gw.created)).or_insert(game.sim_elapsed)) } else { None };
-                let Some(name) = gw.spec.display.clone() else { continue };
+                // (A merged pet's shark: its display step's projectileDisplay, ContributionMutator.)
+                let step_disp = game.towers.iter().find(|o| o.id == gw.tower).and_then(|pet| {
+                    let s = pet.sub.as_ref().filter(|s| s.pet)?;
+                    let parent = game.towers.iter().position(|o| o.id == s.parent)?;
+                    let pp = game.tier(parent)?.leash_power.get(&s.spec.id)?;
+                    if pp.max == pp.base {
+                        return None;
+                    }
+                    let frac = (s.power - pp.base) as f32 / (pp.max - pp.base) as f32;
+                    if frac <= 0.0 {
+                        return None;
+                    }
+                    pp.steps.iter().filter(|(_, p, pd)| pd.is_some() && *p <= frac).max_by(|a, b| a.1.total_cmp(&b.1)).and_then(|(_, _, pd)| pd.clone())
+                });
+                let Some(name) = step_disp.or_else(|| gw.spec.display.clone()) else { continue };
                 if !extra_models.contains_key(&name) {
                     extra_models.insert(name.clone(), prefetch.load(&root.join("models").join("extra").join(&name)));
                 }

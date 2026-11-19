@@ -76,7 +76,7 @@ def main():
                 "speed": pf.get("speedRangeGyrfalcon", 0.0),
                 # displayStepModels: the pet's look by power (Mutate: the valid display with the
                 # highest percent <= (power - base) / (max - base); visual). Models under models/extra.
-                "steps": [[prefab_name(st["f"].get("display")), st["f"].get("percent", 0.0)]
+                "steps": [[prefab_name(st["f"].get("display")), st["f"].get("percent", 0.0), prefab_name(st["f"].get("projectileDisplay"))]
                           for st in items(pf.get("displayStepModels")) if st and st.get("f")]}
 
     def deref(v):
