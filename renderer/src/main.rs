@@ -959,6 +959,8 @@ async fn game_main() {
     let mut pops: Vec<([f32; 2], f32)> = Vec::new();
     let mut bursts: Vec<(game::Burst, f32)> = Vec::new();
     let mut tracers: Vec<(([f32; 2], [f32; 2]), f32)> = Vec::new();
+    // The bounce tracer's sprite (effects/BouncingBulletTracer), loaded on first use.
+    let mut bounce_tracer_tex: Option<Option<Texture2D>> = None;
     let mut beams: Vec<(([f32; 2], [f32; 2], data::LineFx), f32)> = Vec::new();
     let mut bolts: Vec<(([f32; 2], [f32; 2], data::Bolts, u64), f32)> = Vec::new();
     // Beam quads (LineEffectModel displays exported as a one-sided mesh): their texture, tint
@@ -3240,10 +3242,32 @@ const VINE_END_FRAMES: i32 = 23;
             // bounces, a CreateEffectFromCollisionToCollision streak; drawn as a fading tracer.
             tracers.extend(game.tracers.drain(..).map(|s| (s, now)));
             tracers.retain(|(_, t0)| (now - t0) * (speed as f32) < TRACER_LIFE);
+            // CreateEffectFromCollisionToCollision's BouncingBulletTracer: its Tracer sprite (1.11 x
+            // effectLength, pivot centre, lying flat) stretched from one collision to the next, its
+            // colour animator fading it out over 0.3 s. (Plain lines without a LineEffectModel keep the
+            // stand-in streak.)
+            if bounce_tracer_tex.is_none() {
+                let p = root.join("effects").join("BouncingBulletTracer").join("tex").join("sprite_Tracer.png");
+                bounce_tracer_tex = Some(std::fs::read(&p).ok().map(|b| {
+                    let t = Texture2D::from_file_with_format(&b, None);
+                    t.set_filter(FilterMode::Linear);
+                    t
+                }));
+            }
             for ((a, b), t0) in &tracers {
                 let k = 1.0 - (now - t0) * speed as f32 / TRACER_LIFE;
                 let (a, b) = ([a[0], a[1] - 10.0 * tilt], [b[0], b[1] - 10.0 * tilt]);
-                render3d::flat_segment(a, b, 10.0, 1.2, Color::new(1.0, 0.9, 0.5, 0.15 * k), Color::new(1.0, 1.0, 0.85, 0.9 * k));
+                match bounce_tracer_tex.as_ref().and_then(|t| t.as_ref()) {
+                    Some(tex) => {
+                        let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
+                        let len = (dx * dx + dz * dz).sqrt();
+                        if len > 1e-3 {
+                            let a8 = (k.clamp(0.0, 1.0) * 255.0) as u8;
+                            render3d::flat_sprite_tinted(tex, (a[0] + b[0]) * 0.5, 10.0, (a[1] + b[1]) * 0.5, 1.111, len, [0.5, 0.5], [dx / len, dz / len], [255, 255, 255, a8]);
+                        }
+                    }
+                    None => render3d::flat_segment(a, b, 10.0, 1.2, Color::new(1.0, 0.9, 0.5, 0.15 * k), Color::new(1.0, 1.0, 0.85, 0.9 * k)),
+                }
             }
             // LineEffectModel beams (Ray of Doom, Plasma Accelerator): the beam display tiled every
             // lineDisplayLength from the eject point, out to the line's end when endless (else

@@ -426,7 +426,7 @@ impl Runtime{
         let id=g.towers[0].id;let own=g.coop_wallets.as_ref().unwrap().balances[0];assert!(own<325.0);
         assert_eq!(g.coop_wallets.as_ref().unwrap().balances[1],325.0);
         assert_eq!(r.apply(&mut g,&Frame{number:2,actions:vec![input(0,2,Action::Place{kind:"DartMonkey".into(),at:p[1]}),input(1,1,Action::Sell{tower:id})]}).unwrap(),vec![false,false]);
-        let refund=(g.towers[0].invested*g.sell_fraction(0)).floor();
+        let refund=g.sale_value(0);
         assert_eq!(r.apply(&mut g,&Frame{number:3,actions:vec![input(0,3,Action::Sell{tower:id})]}).unwrap(),vec![true]);
         assert_eq!(g.coop_wallets.as_ref().unwrap().balances,[own+refund,325.0,0.0,0.0]);
     }

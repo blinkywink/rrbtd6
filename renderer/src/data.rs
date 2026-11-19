@@ -761,6 +761,12 @@ pub struct Tier {
     pub trade_empire: Option<TradeEmpire>,
     #[serde(default)]
     pub cashback: Option<Cashback>,
+    /// TowerModel.sellbackModifierAdd (Banana Farm x-x-2+: 0.1), added to the sell share.
+    #[serde(default)]
+    pub sellback: f32,
+    /// TowerModel.ignoreMaxSellPercent: the sale value isn't capped at 95% / the worth.
+    #[serde(default)]
+    pub ignore_max_sell: bool,
     #[serde(default)]
     pub discount_zones: Vec<DiscountZone>,
     #[serde(default)]
@@ -1464,9 +1470,15 @@ pub struct TowerCountIcon {
 /// CashbackZoneModel (Favored Trades): towers in range sell for more.
 #[derive(Deserialize, Clone)]
 pub struct Cashback {
-    pub mult: f64,
-    pub max: f64,
-    pub stacks: u32,
+    pub mult: f32,
+    pub max: f32,
+    pub stacks: i32,
+    /// CashbackZoneModel.groupName: zones add up per group.
+    #[serde(default)]
+    pub group: String,
+    /// CashbackZoneModel.baseIdsArray: the towers it reaches (empty: all).
+    #[serde(default)]
+    pub bases: Vec<String>,
     /// Its BuffIndicatorModel (TowerBehaviorBuffModel.GetBuffIndicatorModel @0x18124c210:
     /// iconName buffIconName, buffName buffLocsName, maxStackSize).
     #[serde(default)]
@@ -2285,6 +2297,9 @@ pub struct Proj {
     /// AgeModel.rounds: round ends it survives (Long Life Spikes); otherwise cleared at round end.
     #[serde(default)]
     pub rounds: u32,
+    /// CreateEffectFromCollisionToCollisionModel: (effect prefab, effectLength), display only.
+    #[serde(default)]
+    pub bounce_tracer: Option<(String, f32)>,
     /// JungleVineEffectModel.ageingDestroyModel.timeFrames: added to the grab's limiter frames.
     #[serde(default)]
     pub vine_frames: Option<i64>,

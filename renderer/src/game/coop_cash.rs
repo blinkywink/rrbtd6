@@ -85,7 +85,7 @@ impl Game{
         let mut pr=g.projectiles.swap_remove(index);pr.moving=0.0;let at=pr.pos;let value=pr.value;assert!(value>0.0);
         g.towers[t].bank=123.9;
         let before=g.coop_wallets.as_ref().unwrap().balances;g.coop_actor(1);g.collect_bank(t);g.coop_end_actor();
-        let after=g.coop_wallets.as_ref().unwrap().balances;assert_eq!(after[0],before[0]);assert_eq!(after[1],before[1]+123.0);
+        let after=g.coop_wallets.as_ref().unwrap().balances;assert_eq!(after[0],before[0]);assert_eq!(after[1],before[1]+123.9f32 as f64);
         // The source can disappear before its last banana is collected.
         g.towers.clear();g.projectiles.clear();g.projectiles.push(pr);
         let before=g.coop_wallets.as_ref().unwrap().balances;g.coop_actor(0);g.collect_cash(at);g.coop_end_actor();

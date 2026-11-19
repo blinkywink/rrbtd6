@@ -847,6 +847,12 @@ def main():
             "pickup_sounds": behavior_sounds(items(f["behaviors"]), "CreateSoundOnPickupModel", SOUND_KEYS),
             # ShowTextOnHitModel (Crossbow Master's "Crit!"), ExpireProjectileAtScreenEdgeModel.
             "hit_text": bool(pb.get("ShowTextOnHitModel")),
+            # CreateEffectFromCollisionToCollisionModel (Sniper 0-3-x+ bounces, @0x180c9ea30): its
+            # effect from the last collision to this one, stretched by the distance / effectLength
+            # (visual).
+            "bounce_tracer": next(([prefab_name((deref(c["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")), c["f"].get("effectLength", 1.0)]
+                                   for c in pb.get("CreateEffectFromCollisionToCollisionModel", [])
+                                   if prefab_name((deref(c["f"].get("effectModel")) or {"f": {}})["f"].get("assetId"))), None),
             "expire_at_edge": bool(pb.get("ExpireProjectileAtScreenEdgeModel")),
         }
         for k in ("TrackTargetModel", "TrackTargetWithinTimeModel"):
@@ -2914,8 +2920,17 @@ def main():
                                             if (b["f"].get("buffIconName") or b["f"].get("buffLocsName")) else None,
                                     "buff_name": b["f"].get("buffLocsName") or "", "buff_max": b["f"].get("maxStackSize") or 0}
                                    for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "DiscountZoneModel"],
+                # TowerModel.sellbackModifierAdd (Banana Farm x-x-2+ 0.1) and ignoreMaxSellPercent,
+                # read by TowerManager.TransformSellAmount / Tower.get_SaleValue (@0x180c2d860 /
+                # @0x180c1b520).
+                "sellback": tobj["f"].get("sellbackModifierAdd", 0.0) or 0.0,
+                "ignore_max_sell": bool(tobj["f"].get("ignoreMaxSellPercent")),
                 "cashback": next(({"mult": b["f"].get("cashbackZoneMultiplier", 0.0), "max": b["f"].get("cashbackMaxPercent", 0.95),
                                    "stacks": b["f"].get("maxStacks", 1),
+                                   # groupName (TransformSellAmount sums per group) and baseIdsArray
+                                   # (empty: every tower).
+                                   "group": b["f"].get("groupName") or "",
+                                   "bases": [x for x in (deref(b["f"].get("baseIdsArray")) or []) if isinstance(x, str) and x],
                                    # its BuffIndicatorModel (TowerBehaviorBuffModel.GetBuffIndicatorModel:
                                    # none when both names are empty)
                                    "icon": (b["f"].get("buffIconName") or None)

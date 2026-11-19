@@ -1126,8 +1126,8 @@ impl Hud {
                 self.tsm.set_active(&g, bank);
                 self.tsm.set_active(&format!("{g}/BankDeposit"), false);
                 if bank {
-                    let all: f64 = game.towers.iter().map(|o| o.bank).sum();
-                    self.tsm.set_text(&format!("{g}/BankCollect/Cost/Text"), &money(tw.bank.floor()));
+                    let all: f64 = game.towers.iter().map(|o| o.bank as f64).sum();
+                    self.tsm.set_text(&format!("{g}/BankCollect/Cost/Text"), &money((tw.bank as f64).floor()));
                     self.tsm.set_text(&format!("{g}/BankCollectAll/Cost/Text"), &money(all.floor()));
                     if self.tsm.clicked(&format!("{g}/BankCollect/BankCollectBtn")) {
                         out.push(Action::BankCollect(false));
@@ -1510,7 +1510,7 @@ impl Hud {
                     out.push(Action::Upgrade(path));
                 }
             }
-            let sell = (tw.invested * game.sell_fraction(t)).floor();
+            let sell = game.sale_value(t);
             self.tsm.set_text("Ratio/Scaler/TowerElements/SelectedTowerWorth/SellTxt", &money(sell));
             if self.tsm.clicked("Ratio/Scaler/TowerElements/SelectedTowerWorth/Sell") {
                 out.push(Action::Sell);
@@ -1551,7 +1551,7 @@ impl Hud {
                 }
                 // STAND-IN icons for Round Placed and the cash rows (the game sets them in code
                 // not yet read).
-                let sell = (tw.invested * game.sell_fraction(t)).floor();
+                let sell = game.sale_value(t);
                 let rows: [(&str, &str, String); ADV_STATS] = [
                     ("DamageIcon", "Damage", tw.damage.to_string()),
                     ("PopIcon", "Pops", tw.pops.to_string()),

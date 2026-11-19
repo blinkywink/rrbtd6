@@ -223,6 +223,12 @@ effect names, model behaviours the data builder never reads).
 - FIXED: RiptideAura (the 0-3-x+ aura's main effect, sprites + wake mesh) was never exported (only its
   split); exported, and the aura now shows travelling and growing (screenshot check). Audit: every effect
   name game.json references exists under effects/ or models/extra (scratch fx_audit).
+- DONE: Sniper 0-3-x+ bounce tracer (CreateEffectFromCollisionToCollision @0x180c9ea30): the
+  BouncingBulletTracer's Tracer sprite (1.11 x effectLength, pivot centre) stretched from the last
+  collision to this one, faded by its colour animator over 0.3 s (projectile `bounce_tracer`,
+  Projectile `tracer_hits`, display only). FIXED: every instant shot drew a muzzle-to-target streak the
+  game doesn't have (its shots show only the muzzle flash); gone. Plain lines without a LineEffectModel keep
+  the stand-in streak.
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

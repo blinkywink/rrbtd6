@@ -118,7 +118,7 @@ Ground rules follow.
 
 Current (2026-11-18): every set full (merge 17). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
 sniper tack sub beast engineer desperado dartling mortar bucc druid super ace heli spike farm mermonkey village
-paragon sky quincy moab logs maps maptowers merge village_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, sky 39, quincy 14, moab 5,
+paragon sky quincy moab logs maps maptowers merge village_std farm_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, farm_std 1, sky 39, quincy 14, moab 5,
 logs 3, dart 70, boomerang 99, paragon 12).
 
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
@@ -172,7 +172,63 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
-### NEXT: Monkey Bank exact (HYPOTHESIS P-BANK; researched 2026-11-18, not yet coded)
+### DONE (2026-11-19): sale value exact (was STAND-IN P-CASHBACK)
+Every regression set is full and maps_open / maptowers_open are empty, so this run took stand-ins the
+recordings can't reach (CHIMPS has DisableSellTowerModModel and no Monkey Knowledge). PORTED, VERIFIED-DISASM:
+- Tower.get_SaleValue (@0x180c1b520): f = TransformSellAmount + GetTotalSaleTransforms (vtable slot 119; only
+  TowerSell behaviours, from the FlatPackBuildings / BetterSellDeals TowerSellModModels = Knowledge, 0 here);
+  unless TowerModel.ignoreMaxSellPercent (+0x12d): min(min(f, 0.95f) x worth, worth), else worth x f; +
+  GetAdditionalSaleAmounts (slot 120, no override: 0); x GameModel.sellValueMultiplier (+0xdc); min 1e7; then
+  `(float)(int)Math.Ceiling((double)v)` (0x18048b9d0 -> roundsd mode 0x0A). The clone FLOORED an f64:
+  a $215 Dart now sells for 151 (0.7f x 215 = 150.5f), not 150.
+- TowerManager.TransformSellAmount (@0x180c2d860, Ghidra drops the loops; read from the disasm): SellIncreaseZone
+  groups (max per group, summed) and a sell-reduction sum come first (no tower in the data has either);
+  CashbackZones unless the tower isParagon (+0x12c) or GameModel.gameMode is "Clicks": EVERY zone in the
+  Simulation's list (no identity test: Favored Trades counts its own ship, the clone excluded it) whose
+  baseIdsArray (+0x60) is empty or holds the tower's baseId and whose tower's TowerModel.range (+0x5c) reaches
+  (DistanceSquared <= range^2): per groupName (sum, count) += cashbackZoneMultiplier while maxStacks <= 0 or
+  count < maxStacks (the zone's own maxStacks), groupMax = least cashbackMaxPercent. Share = sum of group sums +
+  GameModel.sellMultiplier (+0x3c) + TowerModel.sellbackModifierAdd (+0x140: Banana Farm x-x-2+ 0.1, never
+  exported before), capped at the greatest groupMax when any group exists; a share of 0 returns sellMultiplier.
+  The IncreaseTowerWorthOverRounds branch (Rare Quincy Action Figure, Geraldo stock item count) isn't ported
+  (no such tower in the clone).
+- Exporter: tier `sellback`, `ignore_max_sell`; cashback `group`, `bases`. Clone: Game::sell_fraction (f32),
+  Game::sale_value; hud.rs sell button / stats and coop test use sale_value. Test sale_value_ceiling_and_sellback.
+- INFERRED (no recording): the zone list order is the order towers gained their CashbackZone; the clone walks
+  towers in list order, the same wherever it matters (only the Buccaneer Paragon's 0.12 x 1-stack zone differs
+  from the 0.04 x 3 ones, and buying it sacrifices every other Buccaneer).
+- Bank deposits are Monkey Knowledge, not a tower feature: KnowledgeModel "BankDeposits" -> ModModel ->
+  BankDepositsModModel (depositPercent 0.5, towerSelectionMenuThemeId "BananaFarmDeposit"), whose Mutate
+  (@0x18129eb20) sets the bank tower's TSM theme and adds BankDepositsModel. OnTsmThemeAction (@0x180cfa510):
+  amount = GetDepositAmount (@0x180cfa2e0: room = capacity - cash; (float)(int)(room x depositPercent) unless
+  that int is 0; min with the player's cash; 0 below 1.0), Simulation.RemoveCash(amount, type 6),
+  Bank.DepositCash, a "$n" text effect (displayPath, displayLifetime). Port with Knowledge effects
+  (NOT_BUILT.md); the "IMF loan" ApplyModModel (mod BankDeposits) is referenced by nothing in the dump.
+- Not testable by recording: CHIMPS can't sell, and Standard recordings carry the owner's Knowledge (Better
+  Sell Deals adds a TowerSell 0.05). A recording that sells would need Knowledge applied first.
+
+### DONE (VERIFIED 2026-11-18, set `farm_std`): Monkey Bank exact (was HYPOTHESIS P-BANK; 2026-11-18)
+VERIFIED: farm_bank_std recorded into pending/farm_std: sim MATCH and cash-exact on every frame (the sold bank's
+collect, interest, the 0-3-2 bank that never fills). coop_cash::* pass. Cash sweep 2026-11-18 of alch_003,
+desperado_300, every engineer, merge, beast_030, map_haunted_beast_402_r60, spike_paragon_r40, quincy_l17_r70:
+all 57 cash-exact (the "Remaining" list in the cash section below is stale). record.sh now resolves a bare
+scenario name to tools/mod/scenarios/<name>.json and refuses an unknown one before launching (a bare name used
+to launch the game with no scenario.json: record_one runs under `||`, where set -e is off).
+CODED from the research below: Tower.bank is Bank.cash in f32 plus `bank_from` (calculateInterestFrom);
+SendToBank pays (bonus + (Monkey City mult - 1) + 1) x maximum in f32 with set_Cash's cap; round end runs
+PayInterest (from x interest + cash, cap, from = cash) and auto-collects only a FULL bank; collect_bank is
+Bank.Collect (unfloored, cashEarned +=, through earn_for); a sold bank collects after the sell refund
+(SellTower: AddCash then DestroyTower -> OnDestroy -> Collect). Bananas' Cash.RollAmount: the fixed case in
+f32 with no draw (the clone's unsynced rand() call there is gone); the ranged case stays STAND-IN
+P-CASHROLL (unreachable: belongs at Pickup on syncedRandom). Regression full (every set), cash sweep of
+farm / village / village_std unchanged. NOT VERIFIED by a recording yet: scenario
+tools/mod/scenarios/farm_bank_std.json (Standard Hard round 30, a 0-3-0 bank sold at frame 3000 after the
+round-30 end at ~2550, a 0-3-2 auto-collect bank that never fills, a Dart) is written but not recorded
+(another session was building). Record it into pending/farm_std, then `sh tools/rec/cash_sweep.sh
+'pending/farm_std/*.rec'`. Unit tests coop_cash::* panicked loading game.json while the other session
+was regenerating it: re-run `cargo test -p btd6-game --release coop_cash`. Deposits (BankDeposits /
+MonkeyBanker) still NOT DONE.
+Research:
 Every recording set is full and maps_open / maptowers_open are empty; the scheduled prompt's Super Monkey
 items are long done. The bank is the clearest remaining non-exact sim rule (no CHIMPS recording can show it:
 ChimpsModModel zeroes the CashModel, so deposits are 0). The 2026-11-18 scheduled run stopped before coding
@@ -1540,6 +1596,15 @@ P-OFFTRACKORDER: newest factory object first). (The wind_seg filing above now on
 seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
+
+- 2026-11-19: Sale value from the disasm (Math.Ceiling of the f32 value, Banana Farm sellbackModifierAdd,
+  Favored Trades counts its own ship, cashback groups / baseIds / Clicks / paragon rules); bank deposits
+  traced to Monkey Knowledge. Also committed the visuals session's Sniper bounce tracer (display only).
+  Regression full.
+
+- 2026-11-18: Monkey Bank from the decomp (f32 balance, interest on calculateInterestFrom, autoCollect
+  only when full, unfloored Collect, sold banks collect); bananas' RollAmount fixed case exact. Regression
+  full; farm_bank_std recorded later that day (pending/farm_std): MATCH, cash-exact.
 
 - 2026-11-18: staged pop cash (DistributeCash.PostDegrade once per hit into Tower.appliedCash, paid by
   UpdateStagedCash at the frame's end; destroyed towers' lost) and the hit's cascade paying against the hit

@@ -58,8 +58,13 @@
 //!   for its first `duration` seconds of a round.
 //! - HYPOTHESIS P-RANDPOS: RandomPositionBasicModel aims at a uniform direction and distance
 //!   in [minRadius, maxRadius], clamped inside the map.
-//! - HYPOTHESIS P-BANK: SendToBankModel income goes into the bank (capped); interest is added
-//!   at round end.
+//! - Monkey Bank: Bank / SendToBank VERIFIED-DECOMP (f32 balance, interest on
+//!   calculateInterestFrom, autoCollect only when full, Collect unfloored, sold banks collect).
+//!   Deposits are Monkey Knowledge (BankDepositsModModel "BankDeposits": towerSelectionMenuThemeId
+//!   BananaFarmDeposit + BankDepositsModel on bank towers; MonkeyBanker is a hero's), unbuilt
+//!   with the rest of Knowledge (the TSM button is hidden).
+//! - Selling: Tower.get_SaleValue / TowerManager.TransformSellAmount VERIFIED-DISASM (f32,
+//!   Math.Ceiling, sellbackModifierAdd, CashbackZone groups including the zone's own tower).
 //! - HYPOTHESIS P-SUPPORT: support buffs reach towers whose footprint touches the radius;
 //!   one instance per mutator id unless it stacks; range x(1 + m) + a, rate x m, pierce + a.
 //! - Discounts: DiscountZone selection is TowerManager.GetZoneDiscount (VERIFIED-DECOMP, see
@@ -89,7 +94,7 @@
 //!   facing - offsetRotation, a FireWhenAlternateWeaponIsReady gun fires with its paired gun if
 //!   a bloon is in its FilterTargetAngleFilter arc), P-SUBMERGE (Sub "Submerge" mode swaps in
 //!   submergeAttackModel; cooldown / hero XP scales to towers in range, not stacking), P-SHARED
-//!   (Advanced Intel shares every other tower's range), P-TRADEEMPIRE, P-CASHBACK, P-FLAGSHIP
+//!   (Advanced Intel shares every other tower's range), P-TRADEEMPIRE, P-FLAGSHIP
 //!   (rate to every tower on water), P-WATERRANGE (Mermonkey range on water), P-SCALEDMG
 //!   (damage x min(max, base + perSecond x age) / base), P-TRANCE (entranced bloons circle the
 //!   tower at orbitRadius for `duration`, then go back to their track spot), P-FIGHTER (carrier
@@ -1881,8 +1886,11 @@ pub struct Tower {
     pub attack_t: f32,
     /// Seconds spent idle (display only; drives the idle loop).
     pub idle_t: f32,
-    /// Monkey Bank balance.
-    pub bank: f64,
+    /// Bank.cash (+0x80, f32): the Monkey Bank's balance.
+    pub bank: f32,
+    /// Bank.calculateInterestFrom (+0x88, f32): what PayInterest takes interest on (the balance at
+    /// the last round end plus what SendToBank put in since).
+    pub bank_from: f32,
     /// Tower.appliedCash: the pop cash its hits earned this frame, in f32 (Tower.AddPoppedCash),
     /// paid out by Simulation.UpdateStagedCash at the frame's end (`pay_staged_cash`).
     pub staged_cash: f32,
@@ -2798,6 +2806,8 @@ pub struct Projectile {
     pub crit_roll: Option<[f32; 5]>,
     /// Its crit roll has a display (CritText; display only).
     pub crit_roll_text: bool,
+    /// Collisions so far (display only: CreateEffectFromCollisionToCollision draws from the last).
+    pub tracer_hits: u32,
     /// A brew potion: the tower it was thrown at, and the brew it gives on arrival.
     pub brew_to: Option<(u64, Box<crate::data::Brew>)>,
     /// AcidPool.alwaysMakePool.
@@ -3550,11 +3560,6 @@ pub fn round_cost(scaled: f32, d: f64) -> f64 {
         (q - 0.5).ceil()
     };
     (5.0 * r) as i32 as f64
-}
-
-/// CashModel payout for a uniform roll `r`: min..max, times (1 + bonusMultiplier).
-fn cash_value(c: &crate::data::Cash, r: f32) -> f64 {
-    ((c.min + (c.max - c.min) * r) * (1.0 + c.bonus)) as f64
 }
 
 /// A stationary area hit to draw: bomb explosion, a Ring of Fire when `fire`, an Ice Monkey
@@ -5716,7 +5721,13 @@ macro_rules! collide_pass {
                 pr.pierce = 0.0;
             }
             let heading = if pr.spec.instant && pr.target.is_some() {
-                $s.tracers.push((pr.origin, bp));
+                // CreateEffectFromCollisionToCollision.Collide (VERIFIED-DECOMP @0x180c9ea30, display
+                // only): the tracer from the last collision to this one, none on the first hit (the
+                // shot itself shows only its muzzle flash).
+                if pr.spec.bounce_tracer.is_some() && pr.tracer_hits > 0 {
+                    $s.tracers.push((pr.origin, bp));
+                }
+                pr.tracer_hits += 1;
                 let h = (bp[1] - pr.origin[1]).atan2(bp[0] - pr.origin[0]);
                 pr.origin = bp;
                 h
@@ -8872,6 +8883,7 @@ impl Game {
             attack_t: f32::MAX,
             idle_t: 0.0,
             bank: 0.0,
+            bank_from: 0.0,
             staged_cash: 0.0,
             brews: Vec::new(),
             acid_pts: None,
@@ -11466,6 +11478,7 @@ impl Game {
             attack_t: f32::MAX,
             idle_t: 0.0,
             bank: 0.0,
+            bank_from: 0.0,
             staged_cash: 0.0,
             brews: Vec::new(),
             acid_pts: None,
@@ -13384,13 +13397,22 @@ impl Game {
         }
     }
 
-    /// Empties tower `t`'s bank into the player's cash.
+    /// Bank.Collect (VERIFIED-DECOMP @0x180ced5a0): nothing while the balance is 0; else
+    /// Tower.cashEarned += it, Simulation.AddCash(depositedCash, 6) and AddCash(cash -
+    /// depositedCash, 1) (the clone has no deposits: one AddCash of the whole f32 balance, not
+    /// floored), a "$n" text effect, and cash = depositedCash = calculateInterestFrom = 0.
     pub fn collect_bank(&mut self, t: usize) {
-        let b = std::mem::take(&mut self.towers[t].bank).floor();
-        if b > 0.0 {
-            self.earn_for(self.towers[t].id,b);
-            self.cash_pops.push((self.towers[t].pos, b));
+        let tw = &mut self.towers[t];
+        let b = tw.bank;
+        if b == 0.0 {
+            return;
         }
+        tw.cash_earned += b as f64;
+        tw.bank = 0.0;
+        tw.bank_from = 0.0;
+        let (id, pos) = (tw.id, tw.pos);
+        self.earn_for(id, b as f64);
+        self.cash_pops.push((pos, b as f64));
     }
 
     /// Collects hand-picked cash (bananas) that has landed within reach of `p`. STAND-IN reach:
@@ -14340,25 +14362,82 @@ impl Game {
         t
     }
 
-    /// Share of the money put into tower `t` that selling it returns. STAND-IN P-CASHBACK:
-    /// each other Favored Trades Buccaneer in range (up to maxStacks) adds
-    /// cashbackZoneMultiplier, capped at cashbackMaxPercent.
-    pub fn sell_fraction(&self, t: usize) -> f64 {
-        let p = self.towers[t].pos;
-        let mut zones: Vec<&crate::data::Cashback> = Vec::new();
-        for (o, tw) in self.towers.iter().enumerate() {
-            if o == t {
-                continue;
-            }
-            let Some(cb) = self.tier_of(tw).and_then(|tr| tr.cashback.as_ref()) else { continue };
-            let r = self.range(o);
-            if (tw.pos[0] - p[0]).powi(2) + (tw.pos[1] - p[1]).powi(2) <= r * r {
-                zones.push(cb);
+    /// TowerManager.TransformSellAmount (VERIFIED-DECOMP/DISASM @0x180c2d860), in f32: the share
+    /// of tower `t`'s worth selling returns before get_SaleValue's caps. SellIncreaseZone /
+    /// sell-reduction behaviours (its first two loops) and IncreaseTowerWorthOverRounds (Rare
+    /// Quincy Action Figure) exist on no tower the clone has, so they add 0. Cashback: unless the
+    /// tower is a paragon (TowerModel +0x12c) or the mode is "Clicks" (CHIMPS), every
+    /// CashbackZone in the game, the tower's own included (no identity test), whose baseIdsArray
+    /// is empty or holds the tower's baseId and whose tower's TowerModel.range reaches it
+    /// (DistanceSquared <= range^2) goes into its groupName's (sum, count): sum +=
+    /// cashbackZoneMultiplier while maxStacks <= 0 or count < maxStacks (that zone's), and the
+    /// group's max is the least cashbackMaxPercent of its zones. Then share = the groups' sums +
+    /// GameModel.sellMultiplier + TowerModel.sellbackModifierAdd, capped (only when some group
+    /// exists) at the greatest group max; a share of exactly 0 gives sellMultiplier. The zones
+    /// are taken in the Simulation's CashbackZone list order; the clone's tower order is the
+    /// same wherever it matters (only the Buccaneer Paragon's zone differs, 0.12 x 1 stack, and
+    /// buying it sacrifices every other Buccaneer, so any other zone is newer than it).
+    pub fn sell_fraction(&self, t: usize) -> f32 {
+        let tw = &self.towers[t];
+        let p = tw.pos;
+        let base = self.tower_defs[tw.def].0.as_str();
+        let mut groups: Vec<(&str, f32, i32, f32)> = Vec::new();
+        if tw.paragon.is_none() && !self.chimps() {
+            for (o, zt) in self.towers.iter().enumerate() {
+                let Some(cb) = self.tier_of(zt).and_then(|tr| tr.cashback.as_ref()) else { continue };
+                if !cb.bases.is_empty() && !cb.bases.iter().any(|b| b == base) {
+                    continue;
+                }
+                let r = self.range(o);
+                let (dx, dz) = (zt.pos[0] - p[0], zt.pos[1] - p[1]);
+                if !(dx * dx + dz * dz <= r * r) {
+                    continue;
+                }
+                let g = match groups.iter().position(|g| g.0 == cb.group) {
+                    Some(g) => g,
+                    None => {
+                        groups.push((cb.group.as_str(), 0.0, 0, cb.max));
+                        groups.len() - 1
+                    }
+                };
+                let e = &mut groups[g];
+                if cb.stacks <= 0 || e.2 < cb.stacks {
+                    e.1 += cb.mult;
+                    e.2 += 1;
+                }
+                if e.3 > cb.max {
+                    e.3 = cb.max;
+                }
             }
         }
-        let Some(first) = zones.first() else { return self.sell_mult };
-        let n = zones.len().min(first.stacks.max(1) as usize) as f64;
-        (self.sell_mult + first.mult * n).min(first.max)
+        let sell = self.sell_mult as f32;
+        let mut share = 0.0f32;
+        let mut cap = 0.0f32;
+        for g in &groups {
+            share += g.1;
+            if g.3 > cap {
+                cap = g.3;
+            }
+        }
+        share += 0.0 + sell + self.tier(t).map_or(0.0, |x| x.sellback);
+        if !groups.is_empty() && share > cap {
+            share = cap;
+        }
+        share -= 0.0;
+        if share == 0.0 { sell } else { share }
+    }
+
+    /// Tower.get_SaleValue (VERIFIED-DISASM @0x180c1b520), what selling tower `t` pays: f =
+    /// TransformSellAmount + GetTotalSaleTransforms (TowerSell behaviours: Monkey Knowledge
+    /// only, 0 here); unless ignoreMaxSellPercent, min(min(f, 0.95) x worth, worth), else worth x
+    /// f; + GetAdditionalSaleAmounts (no behaviour overrides it: 0), x GameModel.sellValueMultiplier
+    /// (1), at most 1e7; then (int)Math.Ceiling (roundsd mode 0x0A) of it as a double.
+    pub fn sale_value(&self, t: usize) -> f64 {
+        let f = self.sell_fraction(t) + 0.0;
+        let worth = self.towers[t].invested as f32;
+        let v = if self.tier(t).is_some_and(|x| x.ignore_max_sell) { worth * f } else { worth.min(f.min(0.95) * worth) };
+        let v = ((0.0 + v) * 1.0f32).min(10_000_000.0);
+        (v as f64).ceil() as i32 as f64
     }
 
     /// Nothing done yet this game (map, hero and difficulty can still change).
@@ -14394,11 +14473,18 @@ impl Game {
             self.sell_native(o);
         }
         let Some(t) = self.towers.iter().position(|x| x.id == id) else { return };
-        let frac = self.sell_fraction(t);
+        let sale = self.sale_value(t);
         self.fire_on_destroy(t, true);
         // (Off the process list by an ordered RemoveAt, as an expired one: RootObject.Destroy.)
         let tw = self.towers.remove(t);
-        self.cash += (tw.invested * frac).floor() + tw.bank.floor();
+        self.cash += sale;
+        // TowerManager.SellTower (VERIFIED-DECOMP @0x180c2d0f0): AddCash(the sell value), then
+        // DestroyTower, whose Bank.OnDestroy (@0x180ceddb0) runs Bank.Collect: the balance goes
+        // through AddCash like a collect (unfloored).
+        if tw.bank != 0.0 {
+            self.earn_for(tw.id, tw.bank as f64);
+            self.cash_pops.push((tw.pos, tw.bank as f64));
+        }
         self.towers.retain(|o| !o.sub.as_ref().is_some_and(|s| (s.pet || s.spec.with_parent) && s.parent == tw.id));
         if self.merges.iter().any(|m| m.0 == tw.id || m.2 == tw.id) {
             self.unmerge_handler(tw.id);
@@ -19495,14 +19581,21 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 self.necro_fire(t, &nc, &proj, seg, tiers, weapon.prince);
                                 break 'shot;
                             }
-                            // SendToBankModel: the shot's cash goes straight into the bank (up to capacity).
+                            // SendToBank.Emit (VERIFIED-DECOMP @0x180c4bd30): the shot's CashModel pays
+                            // (bonusMultiplier + 1) x maximum in f32, no roll (Monkey City's MutatorTower
+                            // adds (multiplier - 1) to bonusMultiplier); Bank.set_Cash (@0x180cee130)
+                            // takes cash + it, the capacity when that reaches it; calculateInterestFrom
+                            // += it, uncapped. (Nothing while the tower is suspended: never here.)
                             if weapon.to_bank {
                                 if let (Some(c), Some(bank)) = (&weapon.projectile.cash, &tier.bank) {
-                                    let v = cash_value(c, self.rand());
-                                    // (ChimpsModModel: the CashModel pays 0; recording farm_032.)
-                                    let v = if self.chimps() { 0.0 } else { v };
+                                    let inc = self.buffs.get(t).map_or(1.0, |b| b.income_mult);
+                                    // (ChimpsModModel: the CashModel's maximum 0; recording farm_032.)
+                                    let max = if self.chimps() { 0.0 } else { c.max };
+                                    let v = (c.bonus + (inc - 1.0) + 1.0) * max;
                                     let tw = &mut self.towers[t];
-                                    tw.bank = (tw.bank + v).min(bank.capacity as f64);
+                                    let nc = tw.bank + v;
+                                    tw.bank = if nc < bank.capacity { nc } else { bank.capacity };
+                                    tw.bank_from += v;
                                 }
                                 break 'shot;
                             }
@@ -24367,18 +24460,22 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                         cm.min = v;
                         cm.max = v;
                     }
-                    let base=cash_value(&cm,self.rand());
                     // MonkeyCityIncomeSupport's MutatorTower.Mutate (VERIFIED-DECOMP @0x180d45eb0) adds
                     // (multiplier - 1) to each CashModel's bonusMultiplier (f32); Cash.RollAmount
-                    // (VERIFIED-DECOMP @0x180c999b0) pays (bonusMultiplier + 1) x maximum in f32 when
-                    // minimum == maximum (recording village_004_std rt 3: a Marketplace beside Monkey
-                    // City pays exactly 24). STAND-IN P-CASHROLL: a range still draws the clone's own
-                    // rand, the multiplier outside.
-                    if cm.min == cm.max && inc != 1.0 {
-                        let bonus = cm.bonus + (inc - 1.0);
-                        (((bonus + 1.0) * cm.max) as f64, base)
+                    // (VERIFIED-DECOMP @0x180c999b0, called by Cash.Pickup) pays (bonusMultiplier + 1)
+                    // x maximum in f32 when that equals (bonusMultiplier + 1) x minimum, no draw
+                    // (recording village_004_std rt 3: a Marketplace beside Monkey City pays exactly
+                    // 24). Else NextDouble of Simulation +0x2a8 (syncedRandom) x (max' - min') + min'
+                    // at pickup: STAND-IN P-CASHROLL, the clone's own rand here at creation; no
+                    // CashModel in game.json has minimum != maximum, so nothing reaches it.
+                    let bonus = cm.bonus + (inc - 1.0);
+                    let (hi, lo) = ((bonus + 1.0) * cm.max, (bonus + 1.0) * cm.min);
+                    let (bhi, blo) = ((cm.bonus + 1.0) * cm.max, (cm.bonus + 1.0) * cm.min);
+                    if lo == hi {
+                        (hi as f64, bhi as f64)
                     } else {
-                        (base*inc as f64,base)
+                        let r = self.rand() as f64;
+                        ((r * (hi - lo) as f64 + lo as f64) as f32 as f64, (r * (bhi - blo) as f64 + blo as f64) as f32 as f64)
                     }
                 }
                 None => (0.0,0.0),
@@ -24521,6 +24618,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 crit,
                 crit_roll: None,
                 crit_roll_text: false,
+                tracer_hits: 0,
                 brew_to: None,
                 always_pool: false,
                 mirror: self.towers.iter().find(|t| t.id == owner).is_some_and(|t| t.flip),
@@ -25686,12 +25784,19 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             }
             self.proj_flush(true);
             self.wlf_flush(true);
-            // HYPOTHESIS P-BANK: interest is added at round end, capped at the capacity.
+            // Bank.PayInterest (VERIFIED-DECOMP @0x180cede50, an OnEarlyRoundEnd delegate): cash =
+            // calculateInterestFrom x interest + cash (f32), the capacity when it reaches it;
+            // calculateInterestFrom = cash; autoCollect collects only a full bank.
             for t in 0..self.towers.len() {
                 if let Some(bank) = self.tier(t).and_then(|tr| tr.bank.clone()) {
                     let tw = &mut self.towers[t];
-                    tw.bank = (tw.bank * (1.0 + bank.interest as f64)).min(bank.capacity as f64);
-                    if bank.auto {
+                    let mut c = tw.bank_from * bank.interest + tw.bank;
+                    if bank.capacity <= c {
+                        c = bank.capacity;
+                    }
+                    tw.bank = c;
+                    tw.bank_from = c;
+                    if c >= bank.capacity && bank.auto {
                         self.collect_bank(t);
                     }
                 }
@@ -28057,6 +28162,37 @@ mod beast_tests {
         assert!(tranced, "a bloon was entranced");
     }
 
+    /// Tower.get_SaleValue: (int)Math.Ceiling of the f32 sale value (a $215 Dart sells for 151,
+    /// 0.7f x 215 = 150.5f), and TowerModel.sellbackModifierAdd (Banana Farm x-x-2+: +0.1).
+    #[test]
+    fn sale_value_ceiling_and_sellback() {
+        let mut g = tests_support::game();
+        g.cash = 1e9;
+        let dart = g.tower_defs.iter().position(|(x, _)| x == "DartMonkey").unwrap();
+        let farm = g.tower_defs.iter().position(|(x, _)| x == "BananaFarm").unwrap();
+        let mut placed = Vec::new();
+        'outer: for y in (-200..200).step_by(30) {
+            for x in (-300..300).step_by(30) {
+                if g.place(if placed.is_empty() { dart } else { farm }, [x as f32, y as f32]) {
+                    placed.push(g.towers.len() - 1);
+                    if placed.len() == 2 {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        assert_eq!(placed.len(), 2);
+        g.towers[placed[0]].invested = 215.0;
+        assert_eq!(g.sale_value(placed[0]), 151.0);
+        g.towers[placed[1]].invested = 1000.0;
+        assert_eq!(g.sale_value(placed[1]), 700.0);
+        g.towers[placed[1]].tiers = [0, 0, 2];
+        assert_eq!(g.sale_value(placed[1]), 800.0);
+        let cash = g.cash;
+        g.sell(placed[1]);
+        assert_eq!(g.cash - cash, 800.0);
+    }
+
     /// P-TRADEEMPIRE / P-CASHBACK: Trade Empire pays per merchant ship, Favored Trades raises
     /// the sell value of towers in range.
     #[test]
@@ -28086,6 +28222,8 @@ mod beast_tests {
         g.buffs = g.compute_buffs();
         // Two zones in range: the Favored Trades ship and Trade Empire (it keeps the zone).
         assert!((g.sell_fraction(placed[1]) - 0.78).abs() < 1e-6, "{}", g.sell_fraction(placed[1]));
+        // The Favored Trades ship counts its own zone (TransformSellAmount has no identity test).
+        assert!((g.sell_fraction(placed[2]) - 0.78).abs() < 1e-6, "{}", g.sell_fraction(placed[2]));
         g.start_round();
         for _ in 0..20000 {
             g.step();

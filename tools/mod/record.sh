@@ -14,6 +14,22 @@ case "$GAME" in
   *) URI='com.epicgames.launcher://apps/6a8dfa6e441e4f2f9048a98776c6077d%3A49c4bf5c6fd24259b87d0bcc96b6009f%3A7786b355a13b47a6b3915335117cd0b2?action=launch&silent=true' ;;
 esac
 mkdir -p "$UD" "$OUT"
+# Every argument must be a scenario file (a bare name means tools/mod/scenarios/<name>.json), checked
+# before anything launches: record_one runs under `||`, where set -e is off, so a failed cp would
+# otherwise start the game with no scenario.json and leave it idle on the title screen.
+SCN="$(cd "$(dirname "$0")" && pwd)/scenarios"
+set_args=""
+for a in "$@"; do
+  if [ -f "$a" ]; then f="$a"
+  elif [ -f "$SCN/$a" ]; then f="$SCN/$a"
+  elif [ -f "$SCN/$a.json" ]; then f="$SCN/$a.json"
+  else echo "record.sh: no scenario '$a' (not a file, not in $SCN); nothing launched" >&2; exit 2; fi
+  set_args="$set_args
+$f"
+done
+[ -n "$set_args" ] || { echo "record.sh: no scenarios given" >&2; exit 2; }
+OLDIFS=$IFS; IFS='
+'; set -- $set_args; IFS=$OLDIFS
 # One batch at a time: each launch closes whatever game is running and shares scenario.json, so a
 # second batch would kill the first one's game mid-start ("instant crashes") and delete its
 # scenario. A later batch waits for the lock; one left by a batch that died is taken over.
@@ -40,7 +56,7 @@ kill_game() { powershell -NoProfile -Command "Get-Process BloonsTD6 -ErrorAction
 STALL="${STALL:-90}"
 record_one() {
   sc=$1; name=$(basename "$sc" .json)
-  cp "$sc" "$UD/scenario.json"
+  cp "$sc" "$UD/scenario.json" || return 1
   # The previous run's game must be gone before its log can be removed.
   kill_game
   for i in $(seq 1 20); do
