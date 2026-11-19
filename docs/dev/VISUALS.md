@@ -179,6 +179,9 @@ effect names, model behaviours the data builder never reads).
   (list by band from the tower: closeRange / middleRange / far; entry (int)(count x d), rotation and scale
   min + d x (max - min)) in `Tower::spirit_objs`; main.rs shows each as its effect (the nine
   SpiritOfTheForestVines* prefabs, exported).
+  The Druid Paragon's RootOfAllNatureVines* and the Spike Paragon's carpet (MMMCarpetOfSpikes1-4;
+  SpikeParagonDamageZone.AddObjectAtPosition @0x180d8dd10: one list for every band, second draw unused)
+  likewise. STAND-IN: the Spike carpet's rotation is its position's own (none in the clone's positions: 0).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

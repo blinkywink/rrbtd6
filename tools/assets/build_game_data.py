@@ -2821,7 +2821,10 @@ def main():
                                  "step": b["f"].get("generateRadius", 0.0), "per_frame": b["f"].get("amountPerFrame", 0.0),
                                  # AddObjectAtPosition (VERIFIED-DECOMP @0x180d92f10): the effect prefabs by
                                  # band, and the rotation / scale ranges (visual).
-                                 "objects": [[prefab_name(g) for g in (deref(b["f"].get(k)) or []) if isinstance(g, str)]
+                                 # (SpikeParagonDamageZone.AddObjectAtPosition @0x180d8dd10: one objectsToPlace list
+                                 # for every band, the second draw unused, scale from the third; STAND-IN:
+                                 # its rotation is the position's own, the clone's positions have none: 0.)
+                                 "objects": [[prefab_name(g) for g in (deref(b["f"].get(k if b["type"] == "SpiritOfTheForestModel" else "objectsToPlace")) or []) if isinstance(g, str)]
                                              for k in ("objectsToPlaceClose", "objectsToPlaceMiddle", "objectsToPlaceFar")],
                                  "rot": [b["f"].get("rotationMin", 0.0), b["f"].get("rotationMax", 0.0)],
                                  "obj_scale": [b["f"].get("scaleMin", 1.0), b["f"].get("scaleMax", 1.0)],
