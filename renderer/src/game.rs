@@ -14123,10 +14123,11 @@ impl Game {
                     gone.push((tw.id, tw.pos));
                 }
                 // MonkeyTempleModel.towerEffectModel on each tower consumed, effectModel on the temple.
+                // (Each tier's own: True Sun God 5xx / 420 / 401 / 402 have their transformations.)
                 for &(_, p) in &gone {
-                    self.place_fx.push((p, "ConsumeMonkeyEffect".into(), 1.0));
+                    self.place_fx.push((p, tp.tower_fx.clone().unwrap_or_else(|| "ConsumeMonkeyEffect".into()), 1.0));
                 }
-                self.place_fx.push((c, "SunTempleTransformationFx".into(), 1.0));
+                self.place_fx.push((c, tp.fx.clone().unwrap_or_else(|| "SunTempleTransformationFx".into()), 1.0));
                 // CheckTempleCanFireModel / MonkeyTemple.CanFire: no shots for weaponDelay.
                 self.towers[t].mute = self.towers[t].mute.max(tp.delay * FPS);
                 // MonkeyTempleModel.animation: the SunTemple controller's SunTempleUpgrade state

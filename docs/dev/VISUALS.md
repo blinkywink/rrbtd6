@@ -190,6 +190,9 @@ effect names, model behaviours the data builder never reads).
   exported animated to models/extra by export_pending_models): drawn at the effect's position its mesh sits
   ~200 px off the bloon (its geometry spans y -160..50 about the origin), so it needs the display's
   transform chain first.
+- FIXED: the Sun Temple played SunTempleTransformationFx for every tier; each MonkeyTempleModel's own
+  effectModel / towerEffectModel now (temple `fx` / `tower_fx`: True Sun God 5xx, 420, 401, 402's
+  transformations).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

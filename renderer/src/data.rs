@@ -3047,6 +3047,11 @@ pub struct Temple {
     /// MonkeyTempleModel.weaponDelay: seconds it holds fire while transforming.
     #[serde(default)]
     pub delay: f32,
+    /// effectModel (on the temple) and towerEffectModel (on each tower consumed), display only.
+    #[serde(default)]
+    pub fx: Option<String>,
+    #[serde(default)]
+    pub tower_fx: Option<String>,
 }
 
 /// TempleTowerMutatorGroupModel: applies when the towers of `set` sacrificed are worth at

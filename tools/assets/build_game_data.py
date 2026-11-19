@@ -2692,7 +2692,9 @@ def main():
         for b in items(tobj["f"]["behaviors"]):
             if b and b["type"] == "MonkeyTempleModel":
                 temple = {"groups": [], "delay": b["f"].get("weaponDelay", 0.0),
-                          "fx": prefab_name((deref(b["f"].get("effectModel")) or {}).get("f", {}).get("assetId"))}
+                          "fx": prefab_name((deref(b["f"].get("effectModel")) or {}).get("f", {}).get("assetId")),
+                          # towerEffectModel: on each tower it consumes (visual).
+                          "tower_fx": prefab_name((deref(b["f"].get("towerEffectModel")) or {}).get("f", {}).get("assetId"))}
         for b in items(tobj["f"]["behaviors"]):
             if not (temple is not None and b and b["type"].startswith("TempleTowerMutatorGroupTier")):
                 continue
