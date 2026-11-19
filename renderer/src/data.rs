@@ -3239,6 +3239,9 @@ pub struct PetPower {
     pub stun_div: f32,
     pub grapple: i32,
     pub speed: f32,
+    /// displayStepModels: (display prefab under models/extra, percent), display only.
+    #[serde(default)]
+    pub steps: Vec<(Option<String>, f32)>,
 }
 
 /// A bloon effect: "slow" (mult = speed multiplier; glue level), "freeze", "dot" or "brittle"

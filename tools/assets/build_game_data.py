@@ -73,7 +73,11 @@ def main():
                 "knockback": pf.get("thrashKnockbackLifetimeRange", 0.0),
                 "stun_div": pf.get("stunBonusDivideMicroraptor", 0.0),
                 "grapple": pf.get("damageRangeGrappleGyrfalcon", 0),
-                "speed": pf.get("speedRangeGyrfalcon", 0.0)}
+                "speed": pf.get("speedRangeGyrfalcon", 0.0),
+                # displayStepModels: the pet's look by power (Mutate: the valid display with the
+                # highest percent <= (power - base) / (max - base); visual). Models under models/extra.
+                "steps": [[prefab_name(st["f"].get("display")), st["f"].get("percent", 0.0)]
+                          for st in items(pf.get("displayStepModels")) if st and st.get("f")]}
 
     def deref(v):
         if isinstance(v, dict) and "$ref" in v:

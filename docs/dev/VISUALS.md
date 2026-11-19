@@ -182,6 +182,9 @@ effect names, model behaviours the data builder never reads).
   The Druid Paragon's RootOfAllNatureVines* and the Spike Paragon's carpet (MMMCarpetOfSpikes1-4;
   SpikeParagonDamageZone.AddObjectAtPosition @0x180d8dd10: one list for every band, second draw unused)
   likewise. STAND-IN: the Spike carpet's rotation is its position's own (none in the clone's positions: 0).
+- DONE: merged Beast Handler pets' looks (ContributionMutator.Mutate @0x181208b50: the display step with the
+  highest percent <= (power - basePower) / (maxPower - basePower) once above 0; pet power `steps`, models
+  from models/extra). Unverified on screen (needs a merge). LEFT: the steps' projectileDisplay swap.
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

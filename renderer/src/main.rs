@@ -2579,6 +2579,35 @@ const VINE_END_FRAMES: i32 = 23;
                 if let Some(s) = &t.sub {
                     // The stand keeps its placement facing; the turret turns to aim.
                     let aim_yaw = std::f32::consts::FRAC_PI_2 - t.aim;
+                    // ContributionMutator.Mutate (VERIFIED-DECOMP @0x181208b50): a merged pet's
+                    // look, the display step with the highest percent at or under
+                    // (power - basePower) / (maxPower - basePower) once that is above 0.
+                    let step_look = s.pet.then(|| {
+                        let parent = game.towers.iter().position(|o| o.id == s.parent)?;
+                        let pp = game.tier(parent)?.leash_power.get(&s.spec.id)?;
+                        if pp.max == pp.base {
+                            return None;
+                        }
+                        let frac = (s.power - pp.base) as f32 / (pp.max - pp.base) as f32;
+                        if frac <= 0.0 {
+                            return None;
+                        }
+                        pp.steps.iter().filter(|(d, p)| d.is_some() && *p <= frac).max_by(|a, b| a.1.total_cmp(&b.1)).and_then(|(d, _)| d.clone())
+                    }).flatten();
+                    if let Some(name) = &step_look {
+                        if !extra_models.contains_key(name) {
+                            extra_models.insert(name.clone(), prefetch.load(&root.join("models").join("extra").join(name)));
+                        }
+                    }
+                    let step_model = step_look.as_ref().and_then(|n| extra_models.get_mut(n)).and_then(|m| m.as_mut());
+                    if let Some(m) = step_model {
+                        let clip = match m.attack_clip().or_else(|| m.pet_attack_clip()) {
+                            Some(a) if t.attack_t < m.clip_duration(a) => (a, t.attack_t),
+                            _ => (m.idle_clip(), t.idle_t),
+                        };
+                        m.draw(&shaders, clip.0, clip.1, pos, aim_yaw, outline_scale, false, None);
+                        continue;
+                    }
                     for (m, yaw) in [(&s.spec.base, std::f32::consts::PI), (&s.spec.model, aim_yaw)] {
                         if let Some(m) = m.as_ref().and_then(|m| sub_models.get_mut(m)).and_then(|m| m.as_mut()) {
                             let clip = match m.attack_clip().or_else(|| m.pet_attack_clip()) {
