@@ -1024,6 +1024,8 @@ async fn game_main() {
     const SCALE_FX_TAG: u64 = 1 << 59;
 /// Jungle Vines' displays (main.rs `vines`).
 const VINE_FX_TAG: u64 = 1 << 58;
+/// A vine's back display (drawn under the bloons).
+const VINE_BACK: u64 = 1 << 40;
 /// Frozen platforms under towers on frozen water (tower id).
 const ICE_FX_TAG: u64 = 1 << 56;
 /// Vigilante buff displays (tower id).
@@ -2789,6 +2791,12 @@ const VINE_END_FRAMES: i32 = 23;
             }
             // Tower parts with the game's translated effect shaders (Apex Plasma Master's lightning).
             anim::draw_fx(get_time() as f32);
+            // Back-pass effects (a held bloon's vines behind it), under the bloons.
+            {
+                let a = render3d::PITCH_DEG.to_radians();
+                let px_per_unit = vh / cam.fovy.max(1.0);
+                particles.draw_back(vec3(1.0, 0.0, 0.0), render3d::gl(0.0, a.cos(), a.sin()), px_per_unit, vh);
+            }
             let bloon_t0 = get_time();
             // Bloons: far (larger z) first.
             // Positions computed once (not inside the sort comparator), then far-to-near.
@@ -3346,6 +3354,8 @@ const VINE_END_FRAMES: i32 = 23;
                         particles.kill(tag);
                         let p = game.towers[t].pos;
                         particles.spawn_display(&fx, [p[0], 0.0, p[1]], 1.0, 0.0, false, Some(tag));
+                        // (On the water, under the bloons.)
+                        particles.set_back(tag);
                         ice_seen.insert(id, fx);
                     }
                     (None, Some(_)) => {
@@ -3416,6 +3426,10 @@ const VINE_END_FRAMES: i32 = 23;
                 for (p, name, rot, scale) in &objs[*done..] {
                     particles.spawn_display(name, [p[0], 0.0, p[1]], *scale, *rot, false, Some(SPIRIT_FX_TAG | id));
                 }
+                // (Ground cover: under the bloons.)
+                if *done < objs.len() {
+                    particles.set_back(SPIRIT_FX_TAG | id);
+                }
                 *done = objs.len();
             }
             spirit_shown.retain(|id, _| {
@@ -3480,7 +3494,9 @@ const VINE_END_FRAMES: i32 = 23;
                 // (At the bloon's display height, 20, moved back along the camera tilt as the
                 // bloons are drawn.)
                 let at = [p[0], 20.0, p[1] - 20.0 / 60f32.to_radians().tan()];
-                particles.spawn_display(&back, at, 1.0, 0.0, false, Some(tag));
+                // (The back display draws under the bloons, the stand-in among them, the front over.)
+                particles.spawn_display(&back, at, 1.0, 0.0, false, Some(tag | VINE_BACK));
+                particles.set_back(tag | VINE_BACK);
                 particles.spawn_display(&front, at, 1.0, 0.0, false, Some(tag));
                 vines.push((tag, p, idx, camo, regrow, frames, step, step, None));
             }
@@ -3508,6 +3524,7 @@ const VINE_END_FRAMES: i32 = 23;
                     }
                     if v.5 <= 0 {
                         particles.set_anim_state(v.0, 2);
+                        particles.set_anim_state(v.0 | VINE_BACK, 2);
                         v.8 = Some(VINE_END_FRAMES);
                     }
                 }
@@ -3516,6 +3533,7 @@ const VINE_END_FRAMES: i32 = 23;
                 let done = v.8.is_some_and(|e| e <= 0);
                 if done {
                     particles.kill(v.0);
+                    particles.kill(v.0 | VINE_BACK);
                 }
                 !done
             });

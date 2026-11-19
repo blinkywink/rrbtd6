@@ -172,6 +172,43 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### NEXT: Monkey Bank exact (HYPOTHESIS P-BANK; researched 2026-11-18, not yet coded)
+Every recording set is full and maps_open / maptowers_open are empty; the scheduled prompt's Super Monkey
+items are long done. The bank is the clearest remaining non-exact sim rule (no CHIMPS recording can show it:
+ChimpsModModel zeroes the CashModel, so deposits are 0). The 2026-11-18 scheduled run stopped before coding
+because another session was building (tools/build_exe.sh at 22:19) with uncommitted game.rs changes.
+VERIFIED-DECOMP (research/dumps/decomp/Bank/, SendToBank/, Cash/):
+- Bank fields (f32): cash +0x80, depositedCash +0x84, calculateInterestFrom +0x88; Initialise sets all 0.
+  BankModel: capacity +0x28, interest +0x2c, autoCollect +0x44.
+- SendToBank.Emit (@0x180c4bd30): returns if Tower +0xbc (the suspended flag: ChangeSuspendedState
+  @0x180c0bde0 writes it). amount = (CashModel.bonusMultiplier + 1) x CashModel.maximum (+0x34), f32, no
+  draw (Monkey City adds (mult - 1) to bonusMultiplier, as for bananas); Bank.set_Cash(cash + amount)
+  (@0x180cee130: cash = it, but = capacity when it is >= capacity); calculateInterestFrom += amount
+  (unclamped); a "$n" text effect. The clone uses cash_value (min..max x unsynced rand) in f64.
+- PayInterest (@0x180cede50) is an OnEarlyRoundEnd delegate (Attatched @0x180ced510 adds it, OnDestroy
+  removes it): returns if the tower is suspended; cash = calculateInterestFrom x interest + cash (f32);
+  if capacity <= cash: cash = capacity (DisplayFull); calculateInterestFrom = cash; then ONLY when
+  cash >= capacity and autoCollect: Collect. The clone compounds the whole balance in f64 and auto-collects
+  every round (0-3-2 / 0-4-2 / 0-5-2 have autoCollect).
+- Collect (@0x180ced5a0): nothing when cash == 0; Tower.cashEarned (+0x170) += cash - deposited;
+  Simulation.AddCash(deposited, type 6) then AddCash(cash - deposited, type 1) (AddCash @0x180b43190 runs
+  the simulation behaviours, e.g. loan collection, then returns at <= 0); text effect; cash = 0,
+  depositedCash = calculateInterestFrom = 0. NO floor: the clone floors in collect_bank and on sell.
+- OnDestroy (@0x180ceddb0) calls Collect, so selling pays the bank through AddCash (debt repayment applies);
+  the clone adds tw.bank.floor() straight to cash.
+- DepositCash (@0x180ceda40): cash += v (capped, DisplayFull), depositedCash += what actually went in; not
+  calculateInterestFrom. Callers: BankDeposits.OnTsmThemeAction and MonkeyBanker.Deposit / Process. The
+  clone hides the TSM BankDeposit button (hud.rs) and has no deposits: a separate feature to port.
+- Cash.RollAmount (@0x180c999b0, CLOSES P-CASHROLL's question): min != max draws Simulation +0x2a8 =
+  syncedRandom (field_offsets: syncedRandom 680, unsyncedRandom 688). No CashModel in game.json has
+  min != max, so it is unreachable; port it with synced_double anyway when touching cash_value.
+Plan: Tower.bank -> f32 + bank_from (calculateInterestFrom); the to_bank weapon path (game.rs ~19500), the
+round-end block (~25690), collect_bank (~13388), sell_native (~14401: collect before the refund?
+Tower.Sell order unread: TowerManager methods_of hit a MemoryError, RAM was full), hud.rs 1129 sum (as
+f64), coop_cash.rs test (expects the floored 123.0). Then a Standard (not CHIMPS) recording to verify:
+e.g. a 0-3-0 / 0-3-2 Farm through rounds 1-30 with a scenario collect (SimRecorder needs a collect input;
+check tools/mod/scenarios for one) and the F-line cash.
+
 ### DONE: cash parity (2026-11-18; every sim matches and every regression recording is cash-exact)
 Cash was never part of the match. Check: `sh tools/rec/cash_sweep.sh 'pending/<set>/*.rec' ...` (paths or
 quoted globs under research/dumps/recordings; per recording MATCH/DIFF and its first cash difference,

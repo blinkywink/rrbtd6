@@ -1126,6 +1126,8 @@ struct Instance {
     ambient: bool,
     /// Set for effects owned by something (a tower's own flames): kept until `kill`.
     tag: Option<u64>,
+    /// Drawn in the back pass (`draw_back`, before the bloons), not the main one.
+    back: bool,
     /// No more emission (its projectile is gone): ends once its particles have.
     stopped: bool,
     /// Per animator: elapsed (in durations), playing, speedMultiplier, angleOffset.
@@ -1251,7 +1253,7 @@ impl Instance {
             .collect();
         let clip_t = vec![0.0; def.clips.len()];
         let clip_state = def.clips.iter().map(|(_, c)| if c.states.is_empty() { 0 } else { c.entry }).collect();
-        Self { def, at, scale, states, age: 0.0, ambient: false, tag: None, stopped: false, anim_state, disabled: Vec::new(), clip_t, clip_state, text: None, rot: Quat::IDENTITY, overrides: Vec::new() }
+        Self { def, at, scale, states, age: 0.0, ambient: false, tag: None, back: false, stopped: false, anim_state, disabled: Vec::new(), clip_t, clip_state, text: None, rot: Quat::IDENTITY, overrides: Vec::new() }
     }
 
     /// The nodes' local transforms and sprite colours now (prefab space): the export's, with the
@@ -1802,6 +1804,8 @@ pub struct Particles {
     idx: Vec<u16>,
     /// Mesh parts (a LitMonkey silhouette): textured, alpha blended, depth tested and written.
     mesh_mat: Option<Material>,
+    /// Drawing the back pass now (`draw_back`).
+    back_pass: bool,
     /// RRBTD6_FXDUMP=<file>: every drawn frame's particles in SimRecorder's .fx format (U, S, q
     /// quads in Unity axes; m bounds for mesh-mode systems), to compare with a real-game capture.
     dump: Option<std::io::BufWriter<std::fs::File>>,
@@ -1811,7 +1815,7 @@ pub struct Particles {
 
 impl Particles {
     pub fn new(root: &Path) -> Self {
-        Self { root: root.join("effects"), defs: HashMap::new(), live: Vec::new(), mats: HashMap::new(), rng: Rng(0x9E37_79B9), verts: Vec::new(), idx: Vec::new(), mesh_mat: None,
+        Self { root: root.join("effects"), defs: HashMap::new(), live: Vec::new(), mats: HashMap::new(), rng: Rng(0x9E37_79B9), verts: Vec::new(), idx: Vec::new(), mesh_mat: None, back_pass: false,
             dump: std::env::var("RRBTD6_FXDUMP").ok().and_then(|p| std::fs::File::create(p).ok()).map(std::io::BufWriter::new), clock: 0.0 }
     }
 
@@ -1990,15 +1994,33 @@ impl Particles {
 
     /// Draws every live particle; `right` / `up`: the camera's GL-space axes (billboards),
     /// `px_per_unit`: screen pixels per world unit (maxParticleSize), `view_h`: viewport px.
+    /// The effect tagged `tag` draws in the back pass: under the bloons (a held bloon's vines behind it).
+    pub fn set_back(&mut self, tag: u64) {
+        for i in self.live.iter_mut().filter(|i| i.tag == Some(tag)) {
+            i.back = true;
+        }
+    }
+
+    /// Draws only the back-pass effects (`set_back`): before the bloons.
+    pub fn draw_back(&mut self, right: Vec3, up: Vec3, px_per_unit: f32, view_h: f32) {
+        if !self.live.iter().any(|i| i.back) {
+            return;
+        }
+        self.back_pass = true;
+        self.draw(right, up, px_per_unit, view_h);
+        self.back_pass = false;
+    }
+
     pub fn draw(&mut self, right: Vec3, up: Vec3, px_per_unit: f32, view_h: f32) {
-        if let Some(d) = &mut self.dump {
+        if let (Some(d), false) = (&mut self.dump, self.back_pass) {
             use std::io::Write;
             let _ = writeln!(d, "U 0 0 {} 0 0", self.clock);
         }
         if self.live.is_empty() {
             return;
         }
-        for inst in &self.live {
+        let back_pass = self.back_pass;
+        for inst in self.live.iter().filter(|i| i.back == back_pass) {
             // Renderers in sorting order (Renderer.sortingOrder), hierarchy order within one:
             // 0 particle system, 1 sprite, 2 mesh.
             let def = &inst.def;
