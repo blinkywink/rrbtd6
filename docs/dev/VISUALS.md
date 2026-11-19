@@ -214,7 +214,12 @@ effect names, model behaviours the data builder never reads).
   back display (JungleVineGrow*), Spirit of the Forest / Paragon carpets and frozen platforms are there;
   the stand-in bloons draw among the bloons and the vines' front over them (was: every effect over the
   bloons). Other effects still draw after the bloons (no depth test).
-- LEFT: ExternalForces (20 effects), CustomData (9, shader streams).
+- ExternalForces: no ParticleSystemForceField / WindZone in the scenes that use it, so ignoring it is the
+  game's look (now in SIMULATED). CustomData: cleared by the re-exports. No exported effect lists an
+  unsupported module now.
+- FIXED: RiptideAura (the 0-3-x+ aura's main effect, sprites + wake mesh) was never exported (only its
+  split); exported, and the aura now shows travelling and growing (screenshot check). Audit: every effect
+  name game.json references exists under effects/ or models/extra (scratch fx_audit).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy

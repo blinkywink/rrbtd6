@@ -44,7 +44,10 @@ CABS = json.load(open(_CAB_PATH)) if os.path.exists(_CAB_PATH) else {}
 
 SIMULATED = {"InitialModule", "CustomDataModule", "EmissionModule", "ShapeModule", "SizeModule", "ColorModule", "RotationModule",
              "VelocityModule", "ForceModule", "ClampVelocityModule", "UVModule", "SubModule", "NoiseModule",
-             "SizeBySpeedModule", "RotationBySpeedModule", "ColorBySpeedModule", "TrailModule"}
+             "SizeBySpeedModule", "RotationBySpeedModule", "ColorBySpeedModule", "TrailModule",
+             # (ExternalForcesModule: moved only by ParticleSystemForceFields / WindZones, and the
+             # scenes that use it place none: the same as ignoring it.)
+             "ExternalForcesModule"}
 
 
 def keys(c):
