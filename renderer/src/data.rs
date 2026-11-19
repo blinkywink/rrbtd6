@@ -748,6 +748,9 @@ pub struct Tier {
     /// PreEmptiveStrikeLauncherModel (animationState, animationStateSecond) (display only).
     #[serde(default)]
     pub preempt_anim: [i32; 2],
+    /// PreEmptiveStrikeLauncherModel.ejectEffectModel (prefab, scale), display only.
+    #[serde(default)]
+    pub preempt_fx: Option<(String, f32)>,
     /// RotateToDefaultPositionTowerModel: (rotation, onlyOnReachingTier).
     #[serde(default)]
     pub default_rot: Vec<[f32; 2]>,
@@ -801,6 +804,9 @@ pub struct Tier {
     /// loseLifeBuffDurationFrames, loseLifeBuffCooldownFrames.
     #[serde(default)]
     pub vigilante: Option<[f32; 4]>,
+    /// VigilanteTowerBehaviorModel.buffDisplay (effect prefab): on the tower while it runs (display only).
+    #[serde(default)]
+    pub vigilante_fx: Option<String>,
     /// PerRoundCashBonusTowerModel.cashPerRound: paid at each round end.
     #[serde(default)]
     pub round_cash: f64,
@@ -821,6 +827,9 @@ pub struct Tier {
     /// FreezeNearbyWaterModel.radius (0: the tower's range): water there takes land towers.
     #[serde(default)]
     pub freeze_water: Option<f32>,
+    /// FreezeNearbyWaterModel.freezeAsset (effect prefab): under the towers in its zone (display only).
+    #[serde(default)]
+    pub freeze_fx: Option<String>,
     /// BonusLivesPerRoundModel: (livesRestored, maxLivesAboveStartingLives).
     #[serde(default)]
     pub bonus_lives: Option<(f64, f64)>,

@@ -152,13 +152,23 @@ effect names, model behaviours the data builder never reads).
   takes projectileDisplay while the ability runs; turbo `display`, main.rs `proj_look` by uid at creation).
   The six ability rang / glaive displays exported (sprites + particle trails; export_particles
   `proj:<prefab>` adds one projectile's particles to proj_index.json).
-- LEFT, rest: Sniper ammo-swap VFX, Paragon degree orbs (ParagonFXOrb...), Thunder's Decree, Ice Monkey
-  FreezeNearbyWater platforms, Acidic Mixture buff bubbles, Vigilante buff, Super Monkey ImmunityModel
-  (Legend of the Night track radial), Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects,
-  Pre-emptive Strike pod flash. Selection-only markers (target reticles, patrol points, Beast leash lines)
-  are UI.
+- DONE: Ice Monkey frozen platforms (FreezeNearbyWater.FilterTower / ZoneEnter / CreateMutator
+  @0x180d24fd0 / @0x180d258d0 / @0x180d24dd0: a land tower in a water area inside the zone gets a mutator
+  whose DisplayModel is freezeAsset, ShowDisplayForTerrainModel water): `Game::frozen_platform`, tier
+  `freeze_fx` (FrozenPlatform, Herald of Everfrost's, Silas'), main.rs keeps it under the tower.
+- DONE: Pre-emptive Strike's launch effect (PreEmptiveStrikeLauncherModel.ejectEffectModel at the launch
+  point, tier `preempt_fx`); Desperado's Vigilante buff display while the buff runs (buffDisplay,
+  `Game::vigilante_active`, tier `vigilante_fx`).
+- Re-exported with Animator states: the 58 plain / projectile effects with an Animator (BeastMergeFx, Sun
+  Temple / True Sun God transformations, Magus Perfectus' phoenix...). The 116 tier_* effects aren't yet.
+- Audit entries already drawn: Paragon investment orbs, Acidic Mixture / Berserker Brew bubbles, Sub
+  submerge pulses.
+- LEFT, rest: Thunder's Decree, Super Monkey ImmunityModel (Legend of the Night track radial),
+  Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
+  markers (target reticles, patrol points, Beast leash lines) are UI.
 - Exporter fixes: export_particles.load_bundle uses _bundle_cache first, dependencies included (UnityPy
-  reports a failed decompression as a parse error and loads nothing, so the MemoryError fallback never ran).
+  reports a failed decompression as a parse error and loads nothing, so the MemoryError fallback never ran);
+  file keys there can be ints (`str(k).lower()`: particle meshes and nine effects failed on it).
 
 ## Audit entries that aren't gaps
 

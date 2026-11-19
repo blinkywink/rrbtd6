@@ -641,7 +641,9 @@ async fn game_main() {
         .expect("local_extracted/game/game.json missing: run tools/assets/build_game_data.py"));
     let mut hero: Option<String> = read_settings(&root)["hero"].as_str().map(str::to_string);
     let mut maps = map_keys(&root);
-    let mut map_key: String = read_settings(&root)["map"].as_str().filter(|m| maps.iter().any(|k| k == m)).unwrap_or("tutorial").to_string();
+    // (RRBTD6_MAP=<map>: an autotest's map, over the saved one.)
+    let env_map = std::env::var("RRBTD6_MAP").ok().filter(|m| maps.iter().any(|k| k == m));
+    let mut map_key: String = env_map.or_else(|| read_settings(&root)["map"].as_str().filter(|m| maps.iter().any(|k| k == m)).map(String::from)).unwrap_or_else(|| "tutorial".to_string());
     let mut game = Game::new(game_data(&root, &json, hero.as_deref(), &map_key,true));
     modding::apply_new_sandbox(&root,&mut game,true);
     if benchmark_input("RRBTD6_BENCH_SIM_DIR").is_some()&&benchmark_input("RRBTD6_BENCH_SETTINGS").is_some(){
@@ -807,6 +809,10 @@ async fn game_main() {
     let mut vines: Vec<(u64, [f32; 2], usize, bool, bool, i32, i32, i32, Option<i32>)> = Vec::new();
     let mut vine_tag: u64 = 0;
     let mut vine_clock: u64 = 0;
+    // Towers showing a frozen platform (FreezeNearbyWater): tower id -> its effect.
+    let mut ice_seen: HashMap<u64, String> = HashMap::new();
+    // Towers showing their Vigilante buff display (tower id).
+    let mut vig_seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
     // Towers whose ammo crate had arrived last frame (SniperAmmoSwap).
     let mut ammo_seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut after_fx_seen: HashMap<(u64, usize), f32> = HashMap::new();
@@ -1012,6 +1018,10 @@ async fn game_main() {
     const SCALE_FX_TAG: u64 = 1 << 59;
 /// Jungle Vines' displays (main.rs `vines`).
 const VINE_FX_TAG: u64 = 1 << 58;
+/// Frozen platforms under towers on frozen water (tower id).
+const ICE_FX_TAG: u64 = 1 << 56;
+/// Vigilante buff displays (tower id).
+const VIG_FX_TAG: u64 = 1 << 55;
 /// The vines' End clips (JungleVineWrapEnd 0.25 s, JungleVineGrowEnd 0.367 s): frames they
 /// stay after the grab ends.
 const VINE_END_FRAMES: i32 = 23;
@@ -3248,6 +3258,60 @@ const VINE_END_FRAMES: i32 = 23;
             for (p, fx, k) in game.place_fx.drain(..) {
                 particles.spawn(&fx, [p[0], 0.0, p[1]], k);
             }
+            // FreezeNearbyWater (ZoneEnter / ZoneExit): a land tower on water in an Ice Monkey's
+            // zone shows its freezeAsset (FrozenPlatform) under it, kept while it stays in the zone.
+            for t in 0..game.towers.len() {
+                let id = game.towers[t].id;
+                let want = game.frozen_platform(t).and_then(|o| game.tier(o).and_then(|tr| tr.freeze_fx.clone()));
+                let tag = ICE_FX_TAG | id;
+                match (want, ice_seen.get(&id)) {
+                    (Some(fx), Some(cur)) if *cur == fx => particles.set_pos(tag, [game.towers[t].pos[0], 0.0, game.towers[t].pos[1]]),
+                    (Some(fx), _) => {
+                        particles.kill(tag);
+                        let p = game.towers[t].pos;
+                        particles.spawn_display(&fx, [p[0], 0.0, p[1]], 1.0, 0.0, false, Some(tag));
+                        ice_seen.insert(id, fx);
+                    }
+                    (None, Some(_)) => {
+                        particles.kill(tag);
+                        ice_seen.remove(&id);
+                    }
+                    (None, None) => {}
+                }
+            }
+            // VigilanteTowerBehavior: the mutator's buffDisplay (VigilanteBuff) on the tower while
+            // the buff runs.
+            for t in 0..game.towers.len() {
+                let id = game.towers[t].id;
+                let tag = VIG_FX_TAG | id;
+                let fx = game.tier(t).and_then(|tr| tr.vigilante_fx.clone()).filter(|_| game.vigilante_active(t));
+                match (fx, vig_seen.contains(&id)) {
+                    (Some(fx), false) => {
+                        let p = game.towers[t].pos;
+                        particles.spawn_display(&fx, [p[0], 0.0, p[1]], 1.0, 0.0, false, Some(tag));
+                        vig_seen.insert(id);
+                    }
+                    (None, true) => {
+                        particles.kill(tag);
+                        vig_seen.remove(&id);
+                    }
+                    _ => {}
+                }
+            }
+            vig_seen.retain(|id| {
+                let live = game.towers.iter().any(|t| t.id == *id);
+                if !live {
+                    particles.kill(VIG_FX_TAG | *id);
+                }
+                live
+            });
+            ice_seen.retain(|id, _| {
+                let live = game.towers.iter().any(|t| t.id == *id);
+                if !live {
+                    particles.kill(ICE_FX_TAG | *id);
+                }
+                live
+            });
             // JungleVineEffect.Collide (VERIFIED-DECOMP @0x180cc23b0): the back display, a stand-in
             // bloon (bloonEffectDisplay) and the front display at the grabbed bloon. The stand-in
             // is the static list's entry for its baseId (White / Purple as Black, Lead as Zebra),

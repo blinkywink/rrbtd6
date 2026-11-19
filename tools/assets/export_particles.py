@@ -178,7 +178,7 @@ def _pptr(af, pp):
     ext = af.externals[pp["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
     for f in af.environment.files.values():
         for k, sf in getattr(f, "files", {}).items():
-            if k.lower() == ext and hasattr(sf, "objects"):
+            if str(k).lower() == ext and hasattr(sf, "objects"):
                 o = sf.objects.get(pp["m_PathID"])
                 if o is not None:
                     return o
@@ -292,7 +292,7 @@ def renderer(r, out_tex):
                 ext = r.assets_file.externals[meshes[0]["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
                 for f in r.assets_file.environment.files.values():
                     for k, sf in getattr(f, "files", {}).items():
-                        if k.lower() == ext and hasattr(sf, "objects"):
+                        if str(k).lower() == ext and hasattr(sf, "objects"):
                             mo = sf.objects.get(meshes[0]["m_PathID"]) or mo
             if mo is not None:
                 mesh = mo.read()
@@ -377,7 +377,7 @@ def renderer(r, out_tex):
                 ext = mo.assets_file.externals[tex_pp["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
                 for f in mo.assets_file.environment.files.values():
                     for kk, sf in getattr(f, "files", {}).items():
-                        if kk.lower() == ext and hasattr(sf, "objects"):
+                        if str(kk).lower() == ext and hasattr(sf, "objects"):
                             to = sf.objects.get(tex_pp["m_PathID"])
             if to is not None:
                 tx = to.read()

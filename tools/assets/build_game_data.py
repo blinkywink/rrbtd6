@@ -2355,6 +2355,9 @@ def main():
         vigilante = next(([b["f"]["loseLifeAttackSpeedBuff"], b["f"]["loseLifeRangeBuff"],
                            b["f"]["loseLifeBuffDurationFrames"], b["f"]["loseLifeBuffCooldownFrames"]]
                           for b in items(f["behaviors"]) if b and b["type"] == "VigilanteTowerBehaviorModel"), None)
+        # Its buffDisplay: on the tower while the buff runs (VigilanteMutator; visual).
+        vigilante_fx = next((prefab_name(b["f"].get("buffDisplay")) for b in items(f["behaviors"])
+                             if b and b["type"] == "VigilanteTowerBehaviorModel"), None)
         bank = next(({"capacity": b["f"]["capacity"], "interest": b["f"]["interest"], "auto": b["f"].get("autoCollect", False)}
                      for b in items(f["behaviors"]) if b and b["type"] == "BankModel"), None)
         # Buffs this tower gives others in range (Village, Shinobi Tactics).
@@ -2795,7 +2798,7 @@ def main():
                                 for b in items(f["behaviors"]) if b and b["type"] == "LinkDisplayScaleToTowerRangeModel"
                                 and prefab_name(b["f"].get("displayPath")) and b["f"].get("displayRadius")],
                 "attacks": attacks, "pets": pets, "leash_rotate": leash_rotate, "merge_fx": merge_fx, "merged_fx": merged_fx, "power_fx": power_fx, "merge_sound": merge_sound, "leash_power": leash_power, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
-                "round_start_rate": round_start_rate, "vigilante": vigilante, "bank": bank, "supports": supports,
+                "round_start_rate": round_start_rate, "vigilante": vigilante, "vigilante_fx": vigilante_fx, "bank": bank, "supports": supports,
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
                 # SpiritOfTheForestModel (Druid x-x-4+): vines along the track; each zone's
                 # DamageOverTimeCustomModel by distance from the Druid (close / middle / far).
@@ -2844,6 +2847,10 @@ def main():
                 # towers can stand on it (radius 0: the tower's range).
                 "freeze_water": next((b["f"].get("radius", 0.0) for b in items(tobj["f"]["behaviors"])
                                       if b and b["type"] == "FreezeNearbyWaterModel"), None),
+                # FreezeNearbyWater.CreateMutator (VERIFIED-DECOMP @0x180d24dd0): towers in the zone
+                # show freezeAsset (DisplayModel, ShowDisplayForTerrainModel water) under them (visual).
+                "freeze_fx": next((prefab_name(b["f"].get("freezeAsset")) for b in items(tobj["f"]["behaviors"])
+                                   if b and b["type"] == "FreezeNearbyWaterModel"), None),
                 # BonusLivesPerRoundModel: livesRestored each round end while lives are under
                 # maxLivesAboveStartingLives x the starting lives.
                 "bonus_lives": next(([b["f"].get("livesRestored", 0), b["f"].get("maxLivesAboveStartingLives", 1.0)]
@@ -2908,6 +2915,9 @@ def main():
                 # (second on odd launches when it is set; none when the first is 0). Display only.
                 "preempt_anim": next(([b["f"].get("animationState", 0), b["f"].get("animationStateSecond", 0)]
                                       for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "PreEmptiveStrikeLauncherModel"), [0, 0]),
+                # ejectEffectModel: Launch's effect at the launch point (visual).
+                "preempt_fx": next((blazing_one(b["f"].get("ejectEffectModel")) for b in items(tobj["f"]["behaviors"])
+                                    if b and b["type"] == "PreEmptiveStrikeLauncherModel"), None),
                 # RotateToDefaultPositionTowerModel (Buccaneer 4xx / 5xx): on reaching that tier the
                 # tower turns to `rotation` (OnUpgraded @0x180d86c70).
                 "default_rot": [[b["f"].get("rotation", 0.0), float(b["f"].get("onlyOnReachingTier", 0))]

@@ -7313,6 +7313,23 @@ impl Game {
         true
     }
 
+    /// FreezeNearbyWater.FilterTower (VERIFIED-DECOMP @0x180d24fd0) / ZoneEnter (display only):
+    /// tower `t`, a land tower (areaTypes has 2) standing in a water area, is in a freezing tower's
+    /// zone: that tower's index, whose freezeAsset shows under `t`.
+    pub fn frozen_platform(&self, t: usize) -> Option<usize> {
+        let tw = self.towers.get(t)?;
+        if tw.sub.is_some() || !self.tower_defs[tw.def].1.areas.contains(&2) || !self.water_at(tw.pos) {
+            return None;
+        }
+        let p = tw.pos;
+        (0..self.towers.len()).find(|&o| {
+            let Some(r) = self.tier(o).and_then(|tr| tr.freeze_water) else { return false };
+            let r = if r > 0.0 { r } else { self.range(o) };
+            let q = self.towers[o].pos;
+            (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= r * r
+        })
+    }
+
     /// FreezeNearbyWaterModel: `p` is within a water-freezing tower's reach. HYPOTHESIS
     /// P-FROZENWATER: the point inside the reach is enough.
     fn frozen_water_at(&self, p: [f32; 2]) -> bool {
@@ -13364,6 +13381,12 @@ impl Game {
         self.tier_of(&self.towers[t])
     }
 
+    /// Tower `t`'s Vigilante buff is running (its VigilanteMutator; display helper).
+    pub fn vigilante_active(&self, t: usize) -> bool {
+        matches!((self.towers.get(t).and_then(|tw| tw.vigilante_at), self.tier(t).and_then(|tr| tr.vigilante)),
+            (Some(at), Some([_, _, duration, _])) if self.round_clock - at < duration as i64)
+    }
+
     /// A bloon kind by its id ("RedRegrowCamo"), and a kind's id (display helpers).
     pub fn bloon_kind(&self, name: &str) -> Option<usize> {
         self.by_name.get(name).copied()
@@ -16903,6 +16926,10 @@ impl Game {
             let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
             let start = self.projectiles.len();
             self.emit(at, 0.0, &single, &proj, None, tiers, owner);
+            // (Launch's ejectEffect at the launch point: display only.)
+            if let Some((fx, k)) = self.tier(t).and_then(|tr| tr.preempt_fx.clone()) {
+                self.place_fx.push((at, fx, k));
+            }
             let obj = self.bloons.iter().find(|b| b.id == target).map(|b| b.obj);
             for pr in &mut self.projectiles[start..] {
                 pr.target = Some(target);
