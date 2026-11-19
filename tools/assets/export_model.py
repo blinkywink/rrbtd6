@@ -268,7 +268,11 @@ def export_tex_prop(mat_obj, env_entry):
 def export_texture(mat_obj):
     mat = mat_obj.read_typetree()
     envs = dict((e[0], e[1]) for e in mat["m_SavedProperties"]["m_TexEnvs"])
-    for key in ("_MainTex", "_BaseMap", "_MainTexture", "_Albedo", "_Diffuse"):
+    # (Else a custom shader's own colour texture: Midnight Mansion's portals' _Swirl_Texture; not
+    # lightmaps, normal / emission / noise maps.)
+    skip = ("unity_", "_BumpMap", "_Normal", "_Emission", "_Noise", "_Mask", "_Detail", "_Occlusion", "_Metallic", "_Parallax")
+    extra = [k for k, e in envs.items() if e["m_Texture"]["m_PathID"] and not k.startswith(skip)]
+    for key in ("_MainTex", "_BaseMap", "_MainTexture", "_Albedo", "_Diffuse", *extra):
         if key in envs and envs[key]["m_Texture"]["m_PathID"]:
             t = resolve(mat_obj.assets_file, envs[key]["m_Texture"])
             if t is None:

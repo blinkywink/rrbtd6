@@ -185,6 +185,9 @@ pub struct Model {
     /// Stable render queue order, computed once when the model is loaded.
     transparent_order: Vec<usize>,
     gpu_map:Option<crate::static_map::Geometry>,
+    /// Per part: 0 opaque, 1 alpha blended, 2 additive (a map scene's transparent standard
+    /// materials, tools/assets/export_map_blend.py's blend.json), drawn after the opaque parts.
+    pub blend: Vec<u8>,
 }
 
 /// NinjaKiwi/BTD6/Gradient_3Color (DXBC): per pixel, t = mesh UV v; below `_Middle` it blends
@@ -280,6 +283,7 @@ impl Model {
         let mut budget=crate::load_work::Budget::new();
         let f = |o: usize| f32::from_le_bytes(vb[o..o + 4].try_into().unwrap());
         let mut parts = Vec::new();
+        let mut part_mats: Vec<String> = Vec::new();
         let mut names = Vec::new();
         let mut scene_paths = Vec::new();
         let mut grads = Vec::new();
@@ -379,6 +383,7 @@ impl Model {
                 let cv=if selection.is_empty(){verts.clone()}else{selection.iter().map(|&i|verts[i as usize]).collect()};
                 parts.push(Mesh { vertices: cv, indices: ci, texture: tex.clone() });
                 names.push(p["name"].as_str().unwrap_or("").to_string());
+                part_mats.push(p["material"].as_str().unwrap_or("").to_string());
                 scene_paths.push(p["path"].as_str().unwrap_or("").to_string());
                 grads.push(grad);
                 // fx.rs looks two dirs above for shaders/: right for models/map_*, not for
@@ -388,10 +393,13 @@ impl Model {
                 budget.checkpoint().await;
             }
         }
+        // blend.json: the scene's transparent materials by name (alpha / add).
+        let blend_by: std::collections::HashMap<String, String> = std::fs::read_to_string(dir.join("blend.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let blend: Vec<u8> = part_mats.iter().zip(&fxs).map(|(m, fx)| if fx.is_some() { 0 } else { match blend_by.get(m).map(String::as_str) { Some("add") => 2, Some(_) => 1, None => 0 } }).collect();
         let mut transparent_order: Vec<usize> = (0..parts.len()).filter(|&i| fxs[i].as_ref().is_some_and(|f| f.shader.transparent)).collect();
         transparent_order.sort_by_key(|&i| fxs[i].as_ref().map_or(0, |f| f.queue));
         let hidden = vec![false; parts.len()];
-        let mut model=Model { parts, names, paths: scene_paths, hidden, grads, fx: fxs, transparent_order,gpu_map:None };
+        let mut model=Model { parts, names, paths: scene_paths, hidden, grads, fx: fxs, transparent_order,gpu_map:None, blend };
         if dir.file_name().is_some_and(|n|n.to_string_lossy().starts_with("map_")){
             model.gpu_map=crate::static_map::Geometry::build(&model,&mut budget).await;
             if std::env::var_os("RRBTD6_TIMING").is_some(){if let Some(g)=&model.gpu_map{let (runs,bytes)=g.resource_sizes();eprintln!("static-map: {runs} immutable draws, {bytes} buffer bytes");}}
@@ -475,6 +483,7 @@ impl Model {
                 (None,None)=>OPAQUE_MAT.with(|mat|{gl_use_material(mat);draw_mesh(&self.parts[i]);gl_use_default_material();}),
             }
         });
+        self.draw_blended();
         for &i in &self.transparent_order{if !self.hidden[i]{if let Some(fx)=&self.fx[i]{fx.draw(&self.parts[i],vp,time);}}}
         gl_use_default_material();Some(stats)
     }
@@ -488,7 +497,7 @@ impl Model {
         OPAQUE_MAT.with(|mat| {
             let mut opaque=false;
             for (i, ((m, g), fx)) in self.parts.iter().zip(&self.grads).zip(&self.fx).enumerate() {
-                if self.hidden[i] { continue; }
+                if self.hidden[i] || self.blend.get(i).is_some_and(|&b| b > 0) { continue; }
                 if range.is_some_and(|(a, b)| i < a || i >= b) {
                     continue;
                 }
@@ -507,11 +516,33 @@ impl Model {
             }
             if opaque{gl_use_default_material();}
         });
+        self.draw_blended();
         for &i in &self.transparent_order {
             if self.hidden[i] { continue; }
             if let Some(fx) = &self.fx[i] {
                 fx.draw(&self.parts[i], vp, time);
             }
+        }
+    }
+
+    /// The parts with a transparent standard material: alpha blended or additive, depth tested
+    /// and not written (Unity's transparent queue), after the opaque ones.
+    fn draw_blended(&self) {
+        if !self.blend.iter().any(|&b| b > 0) {
+            return;
+        }
+        for (i, m) in self.parts.iter().enumerate() {
+            let b = self.blend.get(i).copied().unwrap_or(0);
+            if b == 0 || self.hidden[i] {
+                continue;
+            }
+            if b == 2 {
+                ADD_MAT.with(|mat| gl_use_material(mat));
+            } else {
+                SPRITE_MAT.with(|mat| gl_use_material(mat));
+            }
+            draw_mesh(m);
+            gl_use_default_material();
         }
     }
 
@@ -623,7 +654,7 @@ pub fn extract_part(m: &Model, name: &str) -> Option<(Model, Vec3)> {
     let tip = v.iter().map(|x| x.position - c).max_by(|a, b| a.length().total_cmp(&b.length()))?;
     let verts = v.iter().map(|x| Vertex { position: x.position - c, ..*x }).collect();
     let part = Mesh { vertices: verts, indices: p.indices.clone(), texture: p.texture.clone() };
-    Some((Model { parts: vec![part], names: vec![name.into()], paths: vec![String::new()], hidden: vec![false], grads: vec![None], fx: vec![None], transparent_order: Vec::new(),gpu_map:None }, tip.normalize_or_zero()))
+    Some((Model { parts: vec![part], names: vec![name.into()], paths: vec![String::new()], hidden: vec![false], grads: vec![None], fx: vec![None], transparent_order: Vec::new(),gpu_map:None, blend: vec![0] }, tip.normalize_or_zero()))
 }
 
 /// Draws `m` (centred) at GL position `at`, rotating its `axis` onto `dir` (both GL space).

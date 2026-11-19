@@ -104,6 +104,8 @@ impl Geometry{
         let programs=Programs::shared()?;let mut entries=Vec::new();let mut pending:Option<Pending>=None;let mut bytes=0;let mut runs=0;
         for (i,mesh) in model.parts.iter().enumerate(){
             if model.fx[i].as_ref().is_some_and(|f|f.shader.transparent){continue;}
+            // (Blended standard materials draw in Model::draw_blended, not here.)
+            if model.blend.get(i).is_some_and(|&b|b>0){continue;}
             let stream=model.fx[i].is_some();
             if stream||pending.as_ref().is_some_and(|p|!p.accepts(mesh,model.grads[i])){
                 if let Some(p)=pending.take(){let (run,size)=p.upload();bytes+=size;runs+=1;entries.push(Entry::Cached(run));budget.checkpoint().await;}
