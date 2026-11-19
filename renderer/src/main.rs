@@ -3010,6 +3010,29 @@ const VINE_END_FRAMES: i32 = 23;
             // MOAB / ZOMG Takedown hooks (CreateRopeEffectModel): chain links every spriteSpacing
             // from spriteOffset along the line from the tower to the hook, and the hook at its end,
             // facing along the line. STAND-IN: the chain leaves the tower's centre, not its eject.
+            // GreatWhiteEffect (CreateGreatWhiteEffect.Collide): the shark holding its bloon, its
+            // display (exported animated to models/extra) playing its thrash clip until it exits.
+            // INFERRED: the prefab lies along +y like the projectile prefabs (a Rotation node), so it
+            // is pitched -90 about x to stand up (screenshot check: the shark breaches beside its
+            // bloon). STAND-IN: its animation states (biting, ready, exit, no-grab) aren't followed;
+            // merged pets keep the base display.
+            for gw in &game.gw_effects {
+                if gw.exited {
+                    continue;
+                }
+                let Some(name) = gw.spec.display.clone() else { continue };
+                if !extra_models.contains_key(&name) {
+                    extra_models.insert(name.clone(), prefetch.load(&root.join("models").join("extra").join(&name)));
+                }
+                let Some(m) = extra_models.get_mut(&name).and_then(|m| m.as_mut()) else { continue };
+                let clip = m.clip_containing("Thrash").unwrap_or_else(|| m.idle_clip());
+                // (Its time from when it grabbed: createdAt is roundTime, the sim clock here.)
+                let t = (game.sim_elapsed as f32) / 60.0;
+                let heading = (gw.to[1] - gw.from[1]).atan2(gw.to[0] - gw.from[0]);
+                m.tilt = Some(((-90f32).to_radians(), 0.0, 1.0));
+                m.draw(&shaders, clip, t, [gw.pos[0], 0.0, gw.pos[1]], std::f32::consts::FRAC_PI_2 - heading, outline_scale, false, None);
+                m.tilt = None;
+            }
             for h in &game.hooks {
                 let Some(t) = game.towers.iter().position(|o| o.id == h.owner) else { continue };
                 let Some((chain, hook, spacing, offset)) = game.tier(t).and_then(|tr| tr.abilities.iter().find_map(|a| a.takedown.as_ref().and_then(|k| k.rope.clone()))) else { continue };

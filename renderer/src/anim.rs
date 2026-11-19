@@ -876,6 +876,11 @@ impl AnimModel {
             .unwrap_or(0)
     }
 
+    /// The first clip whose name contains `part` ("Thrash": GW-Proj-Thrash, Orca-Proj-Thrash...).
+    pub fn clip_containing(&self, part: &str) -> Option<usize> {
+        self.clips.iter().position(|c| c.name.contains(part))
+    }
+
     /// The clip called `name` (a one-off the game triggers: "TrueSunGodUpgrade"...).
     /// `PLACE_CLIP` is the model's placement clip, whatever it's called.
     pub fn clip_named(&self, name: &str) -> Option<usize> {

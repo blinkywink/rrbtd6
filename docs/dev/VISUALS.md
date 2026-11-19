@@ -186,10 +186,10 @@ effect names, model behaviours the data builder never reads).
   highest percent <= (power - basePower) / (maxPower - basePower) once above 0; pet power `steps`, models
   from models/extra). Unverified on screen (needs a merge). LEFT: the steps' projectileDisplay swap.
 - DONE: the Great White / Orca / Megalodon's held bloon (GwEffect `kind` at its `pos` while not exited) drawn
-  as a bloon, beside the vines' stand-ins. LEFT: the shark itself (CreateGreatWhiteEffectModel.display,
-  exported animated to models/extra by export_pending_models): drawn at the effect's position its mesh sits
-  ~200 px off the bloon (its geometry spans y -160..50 about the origin), so it needs the display's
-  transform chain first.
+  as a bloon, beside the vines' stand-ins; the shark itself (CreateGreatWhiteEffectModel.display, exported
+  animated to models/extra by export_pending_models) playing its thrash clip, pitched -90 about x (INFERRED:
+  the prefab lies along +y like the projectile prefabs; drawn upright it sat ~200 px off the bloon).
+  STAND-IN: its animation states and the clip's start time (the sim clock, not createdAt) aren't the game's.
 - FIXED: the Sun Temple played SunTempleTransformationFx for every tier; each MonkeyTempleModel's own
   effectModel / towerEffectModel now (temple `fx` / `tower_fx`: True Sun God 5xx, 420, 401, 402's
   transformations).
