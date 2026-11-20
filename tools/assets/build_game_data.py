@@ -2106,8 +2106,13 @@ def main():
                 # SwordChargeModel (Sauda): its projectile runs along the track. LeapingSwordModel
                 # (LeapingSword.StartJumpTo @0x180e39ff0 / Land @0x180e39230): landDelayFrames,
                 # timeUntilFinishFrames, the impact and then the DoT projectile at the landing spot.
+                # SwordChargeModel: initialDelayFrames / endDelayFrames as LeapingSwordModel's
+                # (int)(x * 60f) (every model: 0.5 s, 30), iterations (1..3).
                 if x["type"] == "SwordChargeModel" and deref(xf.get("projectileModel")):
-                    out["track_charge"] = projectile(deref(xf["projectileModel"]))
+                    f60 = lambda v: int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", v))[0] * 60.0))[0])
+                    out["track_charge"] = {"projectile": projectile(deref(xf["projectileModel"])),
+                                           "initial": f60(xf.get("initialDelay", 0.0)), "end": f60(xf.get("endDelay", 0.0)),
+                                           "iterations": xf.get("iterations", 1)}
                 if x["type"] == "LeapingSwordModel" and deref(xf.get("impactProjectileModel")):
                     dot = deref(xf.get("dotProjectileModel"))
                     out["leap"] = {"projectile": projectile(deref(xf["impactProjectileModel"])),

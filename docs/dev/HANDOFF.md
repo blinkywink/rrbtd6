@@ -172,6 +172,34 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### DONE (2026-11-19): Sauda's Sword Charge from the decomp (was OPEN P-SWORDCHARGE) + TravelAlongPath path chain
+VERIFIED-DECOMP. The clone sent one track projectile per track at once from its end, with no active state.
+- SwordCharge (Initialise @0x180e5b720, Activate = StartCharge @0x180e5a0c0 / @0x180e5c2c0, Process
+  @0x180e5bcc0, CreateBaseProjectiles @0x180e5a300, CreateProjectile @0x180e5a790, HideTower @0x180e5b130,
+  Finish @0x180e5ab90, OnProjectilePathChanged @0x180e5b950, CanUseAbility @0x180e5a0d0, IsActive
+  @0x180e5b930). StartCharge: rounds not active -> isPendingStart; else isActive, HideTower (shares
+  `leap_paused`: the two abilities refuse each other), initialDelayFrames (30) -> initialDelayEndsAt.
+  Process (`charge_step`, after `leap_step`): pending starts once rounds are active; at initialDelayEndsAt
+  CreateBaseProjectiles; with every listed projectile gone ++currentIteration, below `iterations`
+  (1 / 2 at Sauda 14+ / 3 at 20) another round, else abilityEndsAt = now + endDelayFrames (30) -> Finish
+  (attacks back, currentIteration 0). Destroyed projectiles leave the list at the end of Process.
+- CreateBaseProjectiles: every PathManager.GetValidExitPaths path (MoveNext @0x180f78680: isActive and
+  leakDist != -1) gets one projectile at its leakDist (the clone started at the track's end point).
+- OnProjectilePathChanged (the projectile's TravelAlongPath.OnPathChangedCallback): if the OLD path has an
+  entry router, each of that router's paths (Splitter.get_Paths, slot 10) other than old / new gets a
+  projectile at its totalPathLength (`charge_events`, run right after the projectile's Process).
+- TravelAlongPath.Process (@0x180cf57c0), every track projectile (Necromancer undead too): distance
+  +- speedFrames, Path.DistanceToPath (@0x180f6df20: chained through the ORIGINAL path's exit / entry
+  router with Splitter.Rout, slot 8, the bloons' round-robin `routs`; clamped without one), then
+  IsStartOfMap / IsEndOfMap (@0x180f6fb70 / @0x180f6f8d0, inclusive false per the disasm: no router on
+  the new path and the distance EXACTLY 0 / totalPathLength / spawnDist / leakDist) -> destroyed where it
+  is (no last move); else Position = the path point. Still HYPOTHESIS P-TRACKTRAVEL: speedFrames = speed
+  / 60 and the lifespan countdown (frames_left) instead of age < lifespanFrames.
+- Exporter `track_charge` = {projectile, initial, end, iterations}. Test sauda_abilities checks the delay,
+  leakDist start, end delay, Finish and the mutual refusal.
+- No Sauda recording yet: a hero set (Sauda 3 / 14 / 20 with Sword Charge at a fixed frame) would confirm
+  the frame timing; multi-path maps (Haunted, Spillway) would exercise the router branch.
+
 ### DONE (2026-11-19): Sauda's Leaping Sword from the decomp (was STAND-IN P-LEAP)
 VERIFIED-DECOMP (LeapingSword: Activate @0x180e37bb0, CanUseAbility @0x180e37c60, GetTarget @0x180e38600,
 StartJumpTo @0x180e39ff0, HideTower @0x180e38a00, Process @0x180e39a10, Land @0x180e39230, Finish @0x180e38070,
@@ -181,7 +209,7 @@ IsActive @0x180e39210). The clone dropped one impact on the furthest bloon after
   (TargetType static +0x78): GetTargets(First, 99999, 999999999) then MaxOrDefaultBy(bloonModel.danger)
   (@0x1818ba140: replaced only on a strictly greater key). INFERRED: the First order as typed_target_from
   ranks it (carried bloons last). CanUseAbility: not pending, finishAt -1, a target, and no ability whose
-  name holds "SwordCharge" active (the clone's Sword Charge has no active state: see P-SWORDCHARGE below).
+  name holds "SwordCharge" active (SwordCharge.IsActive, since ported).
 - Activate: tower rotation 0 (CommonBehaviorProxy.set_Rotation), StartJumpTo(bloon position, bloon): put off
   while rounds aren't active (isPendingStart); else landAt = now + landDelayFrames (30), finishAt = now +
   timeUntilFinishFrames (90), HideTower (every Attack's pauseCount + 1, displays scaled to 0: `leap_paused`,
@@ -194,9 +222,7 @@ IsActive @0x180e39210). The clone dropped one impact on the furthest bloon after
   effect (effectAtTarget / impactEffectModel) and finishingEffectModel at createFinishingEffectAt.
 - No Sauda recording yet: a hero recording set (Sauda 10 / 20 with the ability at a fixed frame) would
   confirm the landing frame against the game's projectiles.
-- NEXT P-SWORDCHARGE: SwordCharge (Activate @0x180e5a0c0, Process @0x180e5bcc0, StartCharge @0x180e5c2c0,
-  CreateBaseProjectiles @0x180e5a300, HideTower @0x180e5b130, Finish @0x180e5ab90) also hides the tower and
-  has an active state; the clone only sends the track projectile.
+- P-SWORDCHARGE DONE (above).
 
 ### DONE (2026-11-19): CollectCashZone exact (Banana Farm x-x-5, Banana Farmer; was HYPOTHESIS P-COLLECT)
 VERIFIED-DECOMP. The clone collected a landed banana within the zone's radius at the start of the frame.
@@ -287,7 +313,7 @@ VERIFIED-DECOMP. The clone gave one free Dart a round (unused ones lost) at cost
   CritMultiplier.GetProjectile (@0x180c71010) sets every ShowTextOnHitModel.text to "Crit" on a crit only.
   The text sits at the projectile's Position (useTowerPosition false everywhere): the clone used the bloon's.
 - NEXT candidates (remaining HYPOTHESIS / STAND-IN tags): `grep -n "HYPOTHESIS\|STAND-IN" renderer/src/game.rs`
-  (169 at this point); e.g. P-SWORDCHARGE, P-THRIVEORDER (P-COLLECT, P-TEMPLESTAT, P-LEAP done, above).
+  (169 at this point); e.g. P-THRIVEORDER, P-BIOHACK's shut-off (P-SWORDCHARGE, P-COLLECT, P-TEMPLESTAT, P-LEAP done, above).
 - P-COLLECT first read (since PORTED, see the DONE entry above; game.rs collect_zones collects a landed banana at once): CollectCashZone.Process
   (@0x180d09440, ~370 lines): skipped while the tower IsSuspended; collectPoint = the tower's position; per cash
   projectile of the same owner (onlyAttractsCamo +0x44 must equal the projectile model's +0x3c; minEmitWaitTimeFrames

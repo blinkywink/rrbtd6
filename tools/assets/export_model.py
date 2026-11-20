@@ -199,6 +199,8 @@ TRANSLATED = {
     "NinjaKiwi/BTD6/UnlitWithDiffuseTransparent", "NinjaKiwi/BTD6/UnlitWithDiffuseScrolling",
     "Shader Graphs/ScrollingTransparentCutOut", "NinjaKiwi/BTD6/GodRay", "Shader Graphs/Cloud1",
     "Shader Graphs/ParticleGlow", "Shader Graphs/ShoreFoam",
+    # Midnight Mansion's portals.
+    "Shader Graphs/Swirl",
     # Projectile meshes with no texture: the Wizard Lord Phoenix's lava ball, the Plasma Accelerator beam.
     "Shader Graphs/FireballCore", "Shader Graphs/BeamLightMesh",
 }

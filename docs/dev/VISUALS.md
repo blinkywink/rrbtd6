@@ -265,8 +265,8 @@ effect names, model behaviours the data builder never reads).
   transparent keyword or queue >= 2500; add when _DstBlend One), and render3d draws those parts alpha /
   additive after the opaque ones (Model::draw_blended; kept out of the static-map batches).
 - FIXED: export_model.export_texture falls back to a material's other colour textures (custom shaders:
-  Midnight Mansion's portals' _Swirl_Texture; they drew plain white). STAND-IN: the portal shader's
-  colour tint isn't applied (the swirl shows grey).
+  Midnight Mansion's portals' _Swirl_Texture; they drew plain white). FIXED after: "Shader Graphs/Swirl"
+  joined export_model's TRANSLATED set, so the portals run their own shader (cyan rotating swirl).
 - Checked, left as is: Geared's dark blobs are its below-map Cloud1 layer (near-black blue by design).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.

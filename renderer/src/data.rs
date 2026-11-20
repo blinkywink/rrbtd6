@@ -1577,6 +1577,24 @@ pub struct Leap {
     pub finish: i64,
 }
 
+/// SwordChargeModel (Sauda's Sword Charge; SwordCharge.Process @0x180e5bcc0): `projectile` made
+/// at every valid exit path's leakDist, `iterations` rounds of them (the next once all of the last
+/// are gone), after initialDelayFrames (`initial`); endDelayFrames (`end`) after the last, Finish.
+#[derive(Deserialize, Clone)]
+pub struct SwordCharge {
+    pub projectile: Proj,
+    #[serde(default)]
+    pub initial: i64,
+    #[serde(default)]
+    pub end: i64,
+    #[serde(default = "one_u32")]
+    pub iterations: u32,
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
 #[derive(Deserialize, Clone)]
 pub struct Biohack {
     pub count: u32,
@@ -2453,9 +2471,9 @@ pub struct Ability {
     pub biohack: Option<Biohack>,
     #[serde(default)]
     pub barrage: Option<Barrage>,
-    /// SwordChargeModel: a projectile sent along the track.
+    /// SwordChargeModel (Sauda's Sword Charge): see `SwordCharge`.
     #[serde(default)]
-    pub track_charge: Option<Proj>,
+    pub track_charge: Option<SwordCharge>,
     /// LeapingSwordModel: an impact projectile that lands after `delay`.
     #[serde(default)]
     pub leap: Option<Leap>,

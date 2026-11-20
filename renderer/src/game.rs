@@ -1989,8 +1989,11 @@ pub struct Tower {
     pub paused_attacks: Vec<String>,
     /// LeapingSword (Sauda's Leaping Sword) in progress: see `leap_start`.
     pub leap: Option<LeapState>,
-    /// LeapingSword.HideTower: every Attack's pauseCount + 1 until Finish.
+    /// LeapingSword.HideTower (and SwordCharge.HideTower @0x180e5b130, the same: the two abilities
+    /// refuse each other while active): every Attack's pauseCount + 1 until Finish.
     pub leap_paused: bool,
+    /// SwordCharge (Sauda's Sword Charge) in progress: see `charge_start` / `charge_step`.
+    pub charge: Option<ChargeState>,
     /// The first frame it is a Paragon: its attacks still act that frame (the pause starts after).
     pub paragon_first: u64,
     /// The attack model names it had before it became a Paragon (those Attacks carry on).
@@ -2249,6 +2252,20 @@ pub struct LeapState {
     pub finish_at: i64,
     pub bloon: Option<u64>,
     pub at: [f32; 2],
+}
+
+/// SwordCharge (fields per field_offsets): isPendingStart, isActive, currentIteration,
+/// initialDelayEndsAt / abilityEndsAt (Simulation.time frames, -1 off) and `projectiles` (uids, in
+/// the order made). pathsWithProjectiles is local to OnProjectilePathChanged (cleared each call).
+#[derive(Clone)]
+pub struct ChargeState {
+    pub spec: crate::data::SwordCharge,
+    pub pending: bool,
+    pub active: bool,
+    pub iteration: u32,
+    pub initial_at: i64,
+    pub end_at: i64,
+    pub projs: Vec<u64>,
 }
 
 /// EmissionOverTime (VERIFIED-DECOMP Emit @0x180c3a5b0, Process @0x180c3a920): what a throw
@@ -2977,6 +2994,9 @@ pub struct Projectile {
     /// CollectCashZoneModel.minEmitWaitTimeFrames count from it).
     farmer_pickup: bool,
     made_at: u64,
+    /// TravelAlongPath.OnPathChangedCallback: the tower whose SwordCharge made it
+    /// (SwordCharge.OnProjectilePathChanged runs when its path changes).
+    charge_cb: Option<u64>,
     /// ArriveAtTarget: (startFrame, origPos, targetPos).
     arrive_at: Option<(u64, [f32; 2], [f32; 2])>,
     /// CreateProjectilesOnTrackOnExhaustFraction.targetPathSegments, shuffled.
@@ -3835,6 +3855,9 @@ pub struct Game {
     /// The projectile loop's position (those up to it have moved this frame); usize::MAX
     /// outside it.
     proj_cursor: usize,
+    /// TravelAlongPath path changes this pass (projectile uid, old path, new path) of projectiles
+    /// with an OnPathChangedCallback, run as soon as the projectile's Process ends.
+    charge_events: Vec<(u64, usize, usize)>,
     /// The damage being dealt: (distributeToChildren, overrideDistributeBlocker).
     distribute: (bool, bool),
     /// The damaging tower's Monkey Town (CashIncrease): (multiplier, increase) for the pops of
@@ -4569,19 +4592,79 @@ macro_rules! collide_pass {
             }
             // Instant shots stay on their target (InstantModel.dontFollowTarget = false) and
             // expire if it is gone (HYPOTHESIS P-INSTANT).
-            // TravelAlongPathModel: along the track at `speed`, backwards when `reverse`
-            // (HYPOTHESIS P-TRACKTRAVEL: units per second like other speeds); it ends at the
-            // track's ends.
+            // TravelAlongPath.Process (VERIFIED-DECOMP @0x180cf57c0): distanceTraveled +- speedFrames
+            // (HYPOTHESIS P-TRACKTRAVEL: speedFrames = speed / 60), then Path.DistanceToPath
+            // (@0x180f6df20): past totalPathLength, the ORIGINAL path's exit router (none: clamped
+            // to totalPathLength) Splitter.Rout (vtable slot 8, the bloons' round-robin) gives
+            // the next path, less the length; below 0 likewise its entry router (none: 0), plus
+            // the routed path's length, until >= 0. A changed path calls OnPathChangedCallback
+            // (SwordCharge's). Then reverse ? Path.IsStartOfMap : IsEndOfMap (@0x180f6fb70 /
+            // @0x180f6f8d0, inclusive false (disasm: r8d 0)): no entry / exit router on the new
+            // path and the distance exactly 0 / totalPathLength or spawnDist / leakDist ->
+            // destroyed where it is; else Position = the path point there.
             if let (Some((k, d)), Some(tt)) = (pr.on_track, pr.spec.track_travel.as_ref()) {
-                let tr = &$s.tracks[k as usize];
-                let nd = d + if tt.reverse { -tt.speed } else { tt.speed } / FPS;
-                let np = tr.pos(nd.clamp(0.0, tr.length()));
-                let np = [np[0] + pr.track_off[0], np[1] + pr.track_off[1]];
-                pr.vel = [np[0] - pr.pos[0], np[1] - pr.pos[1]];
-                pr.pos = np;
-                pr.on_track = Some((k, nd));
-                if nd < 0.0 || nd > tr.length() {
+                let k0 = k as usize;
+                let mut nd = d + if tt.reverse { -tt.speed } else { tt.speed } / FPS;
+                let mut cur = k0;
+                while nd >= $s.tracks[cur].length() {
+                    let Some((to, sp)) = $s.track_exit.get(k0).filter(|e| !e.0.is_empty()) else {
+                        nd = $s.tracks[cur].length();
+                        break;
+                    };
+                    if to.is_empty() {
+                        nd = $s.tracks[cur].length();
+                        break;
+                    }
+                    nd -= $s.tracks[cur].length();
+                    let r = &mut $s.routs[*sp];
+                    if *r >= to.len() {
+                        *r = 0;
+                    }
+                    cur = to[*r];
+                    *r += 1;
+                }
+                if nd < 0.0 {
+                    loop {
+                        let Some((to, sp)) = $s.track_entry.get(k0).filter(|e| !e.0.is_empty()) else {
+                            nd = 0.0;
+                            break;
+                        };
+                        if to.is_empty() {
+                            nd = 0.0;
+                            break;
+                        }
+                        let r = &mut $s.routs[*sp];
+                        if *r >= to.len() {
+                            *r = 0;
+                        }
+                        cur = to[*r];
+                        *r += 1;
+                        nd += $s.tracks[cur].length();
+                        if nd >= 0.0 {
+                            break;
+                        }
+                    }
+                }
+                if cur != k0 {
+                    if let Some(_) = pr.charge_cb {
+                        $s.charge_events.push((pr.uid, k0, cur));
+                    }
+                }
+                let (spawn, leak) = $s.track_ends.get(cur).copied().unwrap_or((None, None));
+                let ended = if tt.reverse {
+                    $s.track_entry.get(cur).is_none_or(|e| e.0.is_empty()) && (nd == 0.0 || spawn == Some(nd))
+                } else {
+                    $s.track_exit.get(cur).is_none_or(|e| e.0.is_empty()) && (nd == $s.tracks[cur].length() || leak == Some(nd))
+                };
+                pr.on_track = Some((cur as u8, nd));
+                if ended {
+                    pr.vel = [0.0; 2];
                     pr.frames_left = 0.0;
+                } else {
+                    let np = $s.tracks[cur].pos(nd);
+                    let np = [np[0] + pr.track_off[0], np[1] + pr.track_off[1]];
+                    pr.vel = [np[0] - pr.pos[0], np[1] - pr.pos[1]];
+                    pr.pos = np;
                 }
             }
             // Frames before it can hit (burst shots, bounce delays, Mega Mine's arming).
@@ -4625,6 +4708,12 @@ macro_rules! collide_pass {
                     }
                     (None, false) => pr.target = None,
                 }
+            }
+        }
+        // SwordCharge.OnProjectilePathChanged, from its projectile's TravelAlongPath.Process.
+        while let Some((uid, old, new)) = $s.charge_events.pop() {
+            if let Some(owner) = $s.projectiles.iter().find(|q| q.uid == uid).and_then(|q| q.charge_cb) {
+                $s.charge_path_changed(owner, old, new);
             }
         }
         // Cash never hits bloons. Without a PickupModel (Marketplace) it pays out at once.
@@ -6366,6 +6455,7 @@ impl Game {
             pop_after_move: false,
             pop_in_process: false,
             proj_cursor: usize::MAX,
+            charge_events: Vec::new(),
             distribute: (true, false),
             hit_cash: (1.0, 0.0),
             hit_tower: None,
@@ -9008,6 +9098,7 @@ impl Game {
             paused_attacks: Vec::new(),
             leap: None,
             leap_paused: false,
+            charge: None,
             paragon_first: 0,
             paragon_kept: Vec::new(),
             attack_born: HashMap::new(),
@@ -11607,6 +11698,7 @@ impl Game {
             paused_attacks: Vec::new(),
             leap: None,
             leap_paused: false,
+            charge: None,
             paragon_first: 0,
             paragon_kept: Vec::new(),
             attack_born: HashMap::new(),
@@ -12791,10 +12883,16 @@ impl Game {
     }
 
     /// LeapingSword.CanUseAbility (VERIFIED-DECOMP @0x180e37c60): not pending, finishAt -1, a
-    /// GetTarget, and no Ability of the tower whose name holds "SwordCharge" active (the clone's
-    /// Sword Charge has no active state: OPEN P-SWORDCHARGE).
+    /// GetTarget, and no Ability of the tower whose name holds "SwordCharge" active (only Sauda's
+    /// AbilityModel_SwordCharge: its SwordCharge.IsActive, pending or active).
+    /// SwordCharge.CanUseAbility (VERIFIED-DECOMP @0x180e5a0d0): not pending, no Ability whose name
+    /// holds "LeapingSword" active (AbilityModel_LeapingSword: LeapingSword.IsActive), and not
+    /// active itself.
     fn leap_can_use(&self, t: usize, a: &crate::data::Ability) -> bool {
-        a.leap.is_none() || (self.towers[t].leap.is_none() && self.leap_target(t).is_some())
+        let tw = &self.towers[t];
+        let charging = tw.charge.as_ref().is_some_and(|c| c.pending || c.active);
+        (a.leap.is_none() || (tw.leap.is_none() && !charging && self.leap_target(t).is_some()))
+            && (a.track_charge.is_none() || (!charging && tw.leap.is_none()))
     }
 
     /// The selectionObjectPath marker of tower-targeted ability `name` (OverclockInput's
@@ -13060,6 +13158,10 @@ impl Game {
         if a.leap.is_some() && self.towers[t].leap.is_some() {
             return true;
         }
+        // SwordCharge.IsActive (VERIFIED-DECOMP @0x180e5b930): isPendingStart or isActive.
+        if a.track_charge.is_some() && self.towers[t].charge.as_ref().is_some_and(|c| c.pending || c.active) {
+            return true;
+        }
         let Some(tr) = self.tier(t) else { return false };
         let s0: usize = tr.abilities.iter().take_while(|o| o.name != a.name).flat_map(|o| o.activate.iter()).flat_map(|x| x.attacks.iter()).map(|at| at.weapons.len()).sum();
         let n: usize = a.activate.iter().flat_map(|x| x.attacks.iter()).map(|at| at.weapons.len()).sum();
@@ -13294,26 +13396,9 @@ impl Game {
                 });
             }
         }
-        // Sword Charge: the projectile starts at the end of every track (the start if it
-        // doesn't run in reverse).
-        if let Some(proj) = &a.track_charge {
-            let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-            let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new()};
-            for k in 0..self.tracks.len() {
-                let reverse = proj.track_travel.as_ref().is_some_and(|x| x.reverse);
-                let d0 = if reverse { self.tracks[k].length() } else { 0.0 };
-                let p0 = self.tracks[k].pos(d0);
-                let start = self.projectiles.len();
-                self.emit(p0, 0.0, &single, proj, None, tiers, owner);
-                for pr in &mut self.projectiles[start..] {
-                    pr.pos = p0;
-                    pr.vel = [0.0; 2];
-                    pr.on_track = Some((k as u8, d0));
-                    if let Some(tt) = &proj.track_travel {
-                        pr.frames_left = tt.lifespan * FPS;
-                    }
-                }
-            }
+        // SwordCharge.Activate (VERIFIED-DECOMP @0x180e5a0c0) = StartCharge.
+        if let Some(sc) = &a.track_charge {
+            self.charge_start(t, sc);
         }
         // LeapingSword.Activate (VERIFIED-DECOMP @0x180e37bb0): GetTarget; none, nothing. The
         // tower's rotation set to 0, then StartJumpTo(the bloon's position, the bloon).
@@ -17624,6 +17709,156 @@ impl Game {
                 continue;
             }
             self.towers[t].leap = Some(st);
+        }
+    }
+
+    /// SwordCharge.StartCharge (VERIFIED-DECOMP @0x180e5c2c0; Activate is the same): while rounds
+    /// aren't active, isPendingStart (Process starts it once they are). Else isActive, HideTower
+    /// (@0x180e5b130: every Attack's pauseCount + 1, `leap_paused`; the displays hidden), then
+    /// CreateBaseProjectiles at once if initialDelayFrames < 1, else initialDelayEndsAt = now +
+    /// initialDelayFrames. (effectDuringCharge: null in every model; AbilitiesChanged: UI.)
+    fn charge_start(&mut self, t: usize, sc: &crate::data::SwordCharge) {
+        let rounds = self.rounds_active();
+        let st = self.towers[t].charge.get_or_insert_with(|| ChargeState { spec: sc.clone(), pending: false, active: false, iteration: 0, initial_at: -1, end_at: -1, projs: Vec::new() });
+        st.spec = sc.clone();
+        if !rounds {
+            st.pending = true;
+            return;
+        }
+        st.active = true;
+        self.towers[t].leap_paused = true;
+        if sc.initial < 1 {
+            self.charge_base_projectiles(t);
+        } else {
+            let now = self.sim_elapsed as i64;
+            if let Some(st) = self.towers[t].charge.as_mut() {
+                st.initial_at = now + sc.initial;
+            }
+        }
+    }
+
+    /// SwordCharge.Process (VERIFIED-DECOMP @0x180e5bcc0), the ability's behaviour after the towers
+    /// (as LeapingSword's): a pending start goes once rounds are active (and nothing else this
+    /// frame). While active: at initialDelayEndsAt, CreateBaseProjectiles (initialDelayEndsAt -1);
+    /// else at abilityEndsAt, Finish; else with every projectile gone, ++currentIteration: below
+    /// iterations another CreateBaseProjectiles, else abilityEndsAt = now + endDelayFrames
+    /// (effectAtEndModel at the tower, landingSound: display only). Last, destroyed projectiles
+    /// leave the list (so an emptied list is seen the next frame).
+    fn charge_step(&mut self) {
+        for t in 0..self.towers.len() {
+            let Some(st) = self.towers[t].charge.as_ref() else { continue };
+            if st.pending && self.rounds_active() {
+                let spec = st.spec.clone();
+                if let Some(st) = self.towers[t].charge.as_mut() {
+                    st.pending = false;
+                }
+                self.charge_start(t, &spec);
+                continue;
+            }
+            if !st.active {
+                continue;
+            }
+            let now = self.sim_elapsed as i64;
+            let (initial_at, end_at, empty) = (st.initial_at, st.end_at, st.projs.is_empty());
+            if initial_at >= 1 {
+                if initial_at <= now {
+                    self.charge_base_projectiles(t);
+                    if let Some(st) = self.towers[t].charge.as_mut() {
+                        st.initial_at = -1;
+                    }
+                }
+            } else if end_at >= 1 {
+                if end_at <= now {
+                    // SwordCharge.Finish (VERIFIED-DECOMP @0x180e5ab90): isActive off, the paused
+                    // attacks' pauseCount - 1 and the displays back, abilityEndsAt -1,
+                    // currentIteration 0.
+                    self.towers[t].leap_paused = false;
+                    if let Some(st) = self.towers[t].charge.as_mut() {
+                        st.active = false;
+                        st.end_at = -1;
+                        st.iteration = 0;
+                    }
+                }
+            } else if empty {
+                let st = self.towers[t].charge.as_mut().unwrap();
+                st.iteration += 1;
+                if st.iteration < st.spec.iterations {
+                    self.charge_base_projectiles(t);
+                } else {
+                    st.end_at = now + st.spec.end;
+                }
+            }
+            // (Projectile.IsDestroyed: the clone drops a destroyed projectile from the list in the
+            // same pass, so one still listed is alive.)
+            let projectiles = &self.projectiles;
+            if let Some(st) = self.towers[t].charge.as_mut() {
+                st.projs.retain(|u| projectiles.iter().any(|p| p.uid == *u));
+            }
+        }
+    }
+
+    /// SwordCharge.CreateBaseProjectiles (VERIFIED-DECOMP @0x180e5a300): the projectiles still in
+    /// its list are destroyed and the list cleared; then for every PathManager.GetValidExitPaths
+    /// path (MoveNext @0x180f78680: isActive and leakDist != -1, in path order; the clone's
+    /// tracks are the active ones) CreateProjectile(path, path.leakDist). (spawnSound: display.)
+    fn charge_base_projectiles(&mut self, t: usize) {
+        let Some(st) = self.towers[t].charge.as_mut() else { return };
+        let old = std::mem::take(&mut st.projs);
+        self.projectiles.retain(|p| !old.contains(&p.uid));
+        for k in 0..self.tracks.len() {
+            if let Some(leak) = self.track_ends.get(k).and_then(|e| e.1) {
+                self.charge_projectile(t, k, leak);
+            }
+        }
+    }
+
+    /// SwordCharge.CreateProjectile (VERIFIED-DECOMP @0x180e5a790): the singleEmissionModel
+    /// (a plain SingleEmissionModel, no behaviours) emits projectileModel at
+    /// Path.DistanceToPoint(path, distance); each projectile's TravelAlongPath gets path and
+    /// distanceTraveled = distance and OnPathChangedCallback = OnProjectilePathChanged; they join
+    /// the list.
+    fn charge_projectile(&mut self, t: usize, k: usize, d: f32) {
+        let Some(st) = self.towers[t].charge.as_ref() else { return };
+        let proj = st.spec.projectile.clone();
+        let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
+        let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new()};
+        let p0 = self.tracks[k].pos(d);
+        let start = self.projectiles.len();
+        self.emit(p0, 0.0, &single, &proj, None, tiers, owner);
+        let mut made = Vec::new();
+        for pr in &mut self.projectiles[start..] {
+            pr.pos = p0;
+            pr.vel = [0.0; 2];
+            pr.on_track = Some((k as u8, d));
+            pr.charge_cb = Some(owner);
+            if let Some(tt) = &proj.track_travel {
+                pr.frames_left = tt.lifespan * FPS;
+            }
+            made.push(pr.uid);
+        }
+        if let Some(st) = self.towers[t].charge.as_mut() {
+            st.projs.extend(made);
+        }
+    }
+
+    /// SwordCharge.OnProjectilePathChanged (VERIFIED-DECOMP @0x180e5b950), from TravelAlongPath.Process
+    /// when Path.DistanceToPath moved the projectile to another path: nothing unless the OLD path
+    /// has an entry router; else pathsWithProjectiles = {old, new} and every path of that router
+    /// (Splitter.get_Paths, vtable slot 10, in order) not yet in it gets CreateProjectile(path, its
+    /// totalPathLength) and joins it.
+    fn charge_path_changed(&mut self, tower: u64, old: usize, new: usize) {
+        let Some(t) = self.towers.iter().position(|w| w.id == tower && w.charge.is_some()) else { return };
+        let Some((to, _)) = self.track_entry.get(old).cloned() else { return };
+        if to.is_empty() {
+            return;
+        }
+        let mut with = vec![old, new];
+        for k in to {
+            if !with.contains(&k) {
+                let len = self.tracks[k].length();
+                self.charge_projectile(t, k, len);
+                with.push(k);
+            }
         }
     }
 
@@ -25143,6 +25378,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                 moving: 0.0,
                 farmer_pickup: false,
                 made_at: self.sim_elapsed,
+                charge_cb: None,
                 arrive_at: None,
                 track_segs_shuffled: Vec::new(),
                 arrive_z0: 0.0,
@@ -25560,6 +25796,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
         self.comanche_defence();
         self.final_strike_step();
         self.leap_step();
+        self.charge_step();
         self.move_helis();
         self.moab_shove_step();
         self.fly_patterns();
@@ -29443,10 +29680,19 @@ mod beast_tests {
         g.towers[t].ability_cd.clear();
         let before = g.projectiles.len();
         assert!(g.activate_ability("Sword Charge"));
-        let i = g.projectiles.len() - 1;
-        assert!(g.projectiles.len() > before);
+        // SwordCharge.StartCharge: HideTower now, the projectiles after initialDelayFrames (30).
+        assert!(g.towers[t].leap_paused, "HideTower pauses the attacks");
+        assert_eq!(g.projectiles.len(), before, "nothing before initialDelayEndsAt");
+        assert!(!g.activate_ability("Sword Charge"), "IsActive until Finish");
+        let at = g.towers[t].charge.as_ref().unwrap().initial_at as u64;
+        assert_eq!(at, g.sim_elapsed + 30);
+        while g.sim_elapsed < at {
+            g.step();
+        }
+        let i = g.projectiles.iter().rposition(|p| p.charge_cb.is_some()).expect("made at initialDelayEndsAt");
         let d0 = g.projectiles[i].on_track.unwrap().1;
-        // Made between frames (an ability), it is processed on the next one: one step of movement.
+        assert_eq!(Some(d0), g.track_ends[0].1, "starts at the path's leakDist");
+        // Made in the ability's Process (after the towers), it is processed on the next frame.
         g.step();
         let pr = g.projectiles.iter().find(|p| p.on_track.is_some()).expect("still running");
         let speed = pr.spec.track_travel.as_ref().unwrap().speed;
@@ -29454,9 +29700,24 @@ mod beast_tests {
         let p = pr.pos;
         let q = g.track.pos(pr.on_track.unwrap().1);
         assert!((p[0] - q[0]).abs() < 1e-3 && (p[1] - q[1]).abs() < 1e-3, "on the track");
-        for _ in 0..240 {
+        // Its one iteration done (the projectile destroyed at the start of the map), abilityEndsAt
+        // = now + endDelayFrames, then Finish.
+        let mut n = 0;
+        while g.towers[t].charge.as_ref().unwrap().end_at < 0 {
+            g.step();
+            n += 1;
+            assert!(n < 2000, "the charge ends");
+        }
+        assert!(g.projectiles.iter().all(|p| p.charge_cb.is_none()), "every charge projectile gone");
+        let end = g.towers[t].charge.as_ref().unwrap().end_at as u64;
+        assert_eq!(end, g.sim_elapsed + 30);
+        assert!(!g.activate_ability("Leaping Sword Attack"), "Leaping Sword waits for Sword Charge");
+        while g.sim_elapsed < end {
+            assert!(g.towers[t].leap_paused);
             g.step();
         }
+        let st = g.towers[t].charge.as_ref().unwrap();
+        assert!(!st.active && !g.towers[t].leap_paused && st.iteration == 0, "Finish at abilityEndsAt");
         assert!(g.towers[t].pops > 0, "the charge popped bloons");
         g.towers[t].ability_cd.clear();
         g.debug_spawn("Red", 10, 300.0);
