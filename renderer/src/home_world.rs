@@ -68,26 +68,26 @@ struct Rotation {
     parts: Vec<(usize, Vec<Vec3>)>,
 }
 #[derive(serde::Deserialize)]
-struct Channels { attribute: u32, curves: Vec<Vec<[f32;5]>> }
+pub(crate) struct Channels { pub(crate) attribute: u32, pub(crate) curves: Vec<Vec<[f32;5]>> }
 #[derive(serde::Deserialize)]
-struct RigidNodeData {
-    path:String, parent:Option<usize>, position:[f32;3], rotation:[f32;4], scale:[f32;3],
-    rest:[f32;16], channels:Vec<Channels>,
+pub(crate) struct RigidNodeData {
+    pub(crate) path:String, pub(crate) parent:Option<usize>, pub(crate) position:[f32;3], pub(crate) rotation:[f32;4], pub(crate) scale:[f32;3],
+    pub(crate) rest:[f32;16], pub(crate) channels:Vec<Channels>,
 }
 #[derive(serde::Deserialize)]
-struct RigidData {nodes:Vec<RigidNodeData>,parent:[f32;16],start:f32,stop:f32,looped:bool,speed:f32}
+pub(crate) struct RigidData {pub(crate) nodes:Vec<RigidNodeData>,pub(crate) parent:[f32;16],pub(crate) start:f32,pub(crate) stop:f32,pub(crate) looped:bool,pub(crate) speed:f32}
 struct RigidClip {
     data:RigidData, parent:Mat4, worlds:Vec<Mat4>, inverse_rest:Vec<Mat4>,
     parts:Vec<Vec<(usize,Vec<Vec3>)>>,
 }
 #[derive(serde::Deserialize)]
-struct SkinPartData {path:String,vertices:Vec<[f32;3]>,weights:Vec<Vec<f32>>,indices:Vec<Vec<usize>>,bones:Vec<usize>,binds:Vec<[f32;16]>}
+pub(crate) struct SkinPartData {pub(crate) path:String,pub(crate) vertices:Vec<[f32;3]>,pub(crate) weights:Vec<Vec<f32>>,pub(crate) indices:Vec<Vec<usize>>,pub(crate) bones:Vec<usize>,pub(crate) binds:Vec<[f32;16]>}
 #[derive(serde::Deserialize)]
-struct SkinData {rig:RigidData,parts:Vec<SkinPartData>,random_start:bool,speed_range:Option<[f32;2]>}
-struct SkinVertex {position:Vec3,weights:[f32;4],indices:[usize;4]}
+pub(crate) struct SkinData {pub(crate) rig:RigidData,pub(crate) parts:Vec<SkinPartData>,pub(crate) random_start:bool,pub(crate) speed_range:Option<[f32;2]>}
+pub(crate) struct SkinVertex {pub(crate) position:Vec3,pub(crate) weights:[f32;4],pub(crate) indices:[usize;4]}
 struct SkinPart {mesh:usize,vertices:Vec<SkinVertex>,bones:Vec<usize>,binds:Vec<Mat4>,matrices:Vec<Mat4>}
 struct SkinClip {rig:RigidData,parent:Mat4,worlds:Vec<Mat4>,parts:Vec<SkinPart>,speed:f32,phase:f32}
-fn local_pose(node:&RigidNodeData,time:f32)->Mat4 {
+pub(crate) fn local_pose(node:&RigidNodeData,time:f32)->Mat4 {
     let mut position=node.position;let mut scale=node.scale;let mut rotation=node.rotation;
     for channels in &node.channels {
         match channels.attribute {
@@ -104,7 +104,7 @@ fn local_pose(node:&RigidNodeData,time:f32)->Mat4 {
     }
     Mat4::from_scale_rotation_translation(Vec3::from_array(scale),Quat::from_array(rotation).normalize(),Vec3::from_array(position))
 }
-fn skin_position(vertex:&SkinVertex,matrices:&[Mat4])->Vec3 {
+pub(crate) fn skin_position(vertex:&SkinVertex,matrices:&[Mat4])->Vec3 {
     let mut position=Vec3::ZERO;
     for k in 0..4 {
         if vertex.weights[k]!=0.0 {position+=matrices[vertex.indices[k]].transform_point3(vertex.position)*vertex.weights[k];}

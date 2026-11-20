@@ -201,6 +201,8 @@ TRANSLATED = {
     "Shader Graphs/ParticleGlow", "Shader Graphs/ShoreFoam",
     # Midnight Mansion's portals.
     "Shader Graphs/Swirl",
+    # Covered Garden's pond fish wiggle (vertex animation).
+    "unlit/Flag",
     # Projectile meshes with no texture: the Wizard Lord Phoenix's lava ball, the Plasma Accelerator beam.
     "Shader Graphs/FireballCore", "Shader Graphs/BeamLightMesh",
 }

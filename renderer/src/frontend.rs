@@ -15,7 +15,7 @@ pub(crate) mod coop_menu;
 #[path = "loading.rs"]
 mod loading;
 #[path = "home_world.rs"]
-mod home_world;
+pub(crate) mod home_world;
 #[path = "account_preview.rs"]
 pub(crate) mod account_preview;
 #[path = "event_details.rs"]

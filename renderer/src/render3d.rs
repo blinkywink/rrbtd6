@@ -188,6 +188,9 @@ pub struct Model {
     /// Per part: 0 opaque, 1 alpha blended, 2 additive (a map scene's transparent standard
     /// materials, tools/assets/export_map_blend.py's blend.json), drawn after the opaque parts.
     pub blend: Vec<u8>,
+    /// Per part: moved by the map's prop animation (motion_paths.json, map_motion.rs), so drawn
+    /// from its live vertices instead of the static map batches.
+    pub dynamic: Vec<bool>,
 }
 
 /// NinjaKiwi/BTD6/Gradient_3Color (DXBC): per pixel, t = mesh UV v; below `_Middle` it blends
@@ -396,10 +399,12 @@ impl Model {
         // blend.json: the scene's transparent materials by name (alpha / add).
         let blend_by: std::collections::HashMap<String, String> = std::fs::read_to_string(dir.join("blend.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let blend: Vec<u8> = part_mats.iter().zip(&fxs).map(|(m, fx)| if fx.is_some() { 0 } else { match blend_by.get(m).map(String::as_str) { Some("add") => 2, Some(_) => 1, None => 0 } }).collect();
+        let moving: std::collections::HashSet<String> = std::fs::read_to_string(dir.join("motion_paths.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let dynamic: Vec<bool> = scene_paths.iter().map(|p| moving.contains(p)).collect();
         let mut transparent_order: Vec<usize> = (0..parts.len()).filter(|&i| fxs[i].as_ref().is_some_and(|f| f.shader.transparent)).collect();
         transparent_order.sort_by_key(|&i| fxs[i].as_ref().map_or(0, |f| f.queue));
         let hidden = vec![false; parts.len()];
-        let mut model=Model { parts, names, paths: scene_paths, hidden, grads, fx: fxs, transparent_order,gpu_map:None, blend };
+        let mut model=Model { parts, names, paths: scene_paths, hidden, grads, fx: fxs, transparent_order,gpu_map:None, blend, dynamic };
         if dir.file_name().is_some_and(|n|n.to_string_lossy().starts_with("map_")){
             model.gpu_map=crate::static_map::Geometry::build(&model,&mut budget).await;
             if std::env::var_os("RRBTD6_TIMING").is_some(){if let Some(g)=&model.gpu_map{let (runs,bytes)=g.resource_sizes();eprintln!("static-map: {runs} immutable draws, {bytes} buffer bytes");}}
@@ -654,7 +659,7 @@ pub fn extract_part(m: &Model, name: &str) -> Option<(Model, Vec3)> {
     let tip = v.iter().map(|x| x.position - c).max_by(|a, b| a.length().total_cmp(&b.length()))?;
     let verts = v.iter().map(|x| Vertex { position: x.position - c, ..*x }).collect();
     let part = Mesh { vertices: verts, indices: p.indices.clone(), texture: p.texture.clone() };
-    Some((Model { parts: vec![part], names: vec![name.into()], paths: vec![String::new()], hidden: vec![false], grads: vec![None], fx: vec![None], transparent_order: Vec::new(),gpu_map:None, blend: vec![0] }, tip.normalize_or_zero()))
+    Some((Model { parts: vec![part], names: vec![name.into()], paths: vec![String::new()], hidden: vec![false], grads: vec![None], fx: vec![None], transparent_order: Vec::new(),gpu_map:None, blend: vec![0], dynamic: vec![false] }, tip.normalize_or_zero()))
 }
 
 /// Draws `m` (centred) at GL position `at`, rotating its `axis` onto `dir` (both GL space).

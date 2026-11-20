@@ -42,6 +42,7 @@ mod startup;
 mod account_ui;
 mod local_profile;
 mod static_map;
+mod map_motion;
 mod sandbox;
 mod temple_popup;
 mod support_popup;
@@ -736,6 +737,10 @@ async fn game_main() {
     if map_model.is_none() {
         eprintln!("map model for {map_key} failed to load");
     }
+    // Map props' idle animation (map_motion.rs). Its clock is game time since the map loaded, as
+    // the effects': Unity's Animators run on scaled time (fast forward; paused behind a menu).
+    let mut map_motion = map_model.as_ref().and_then(|m| map_motion::MapMotion::load(&mod_maps::model_dir(&root,&map_key), m));
+    let mut map_motion_clock = 0.0f32;
     // Tower base models load when first needed (placed, in hand) or one per frame between
     // rounds in the background, not all at startup (about 0.8 s for every tower).
     let ntowers = game.tower_defs.len();
@@ -1455,6 +1460,8 @@ const VINE_END_FRAMES: i32 = 23;
             if let Some(h) = hud.as_mut() { front.draw_loading(h); }
             next_frame().await;
             map_model = loading_task(render3d::Model::load(&mod_maps::model_dir(&root,&map_key)),&mut front,&mut hud,&mut audio,adv.fps_cap).await;
+            map_motion = map_model.as_ref().and_then(|m| map_motion::MapMotion::load(&mod_maps::model_dir(&root,&map_key), m));
+            map_motion_clock = 0.0;
             particles.spawn_ambient(&map_key);
             if let Some(h) = hud.as_mut() { front.draw_loading(h); }
             next_frame().await;
@@ -2483,6 +2490,9 @@ const VINE_END_FRAMES: i32 = 23;
                     game.logic.hide_parts.iter().for_each(|&p| m.set_part_hidden(p, true));
                 }
                 hidden_parts = game.logic.hide_parts.clone();
+            }
+            if let (Some(m), Some(motion)) = (&mut map_model, &mut map_motion) {
+                motion.update(m, map_motion_clock);
             }
             if let Some(m) = &map_model {
                 m.draw_map(if scaled{None}else{cam.viewport});
@@ -4021,6 +4031,7 @@ const VINE_END_FRAMES: i32 = 23;
             }
             if menu.is_none() {
                 particles.update(get_frame_time().min(0.1) * speed as f32);
+                map_motion_clock += get_frame_time().min(0.1) * speed as f32;
             }
             {
                 let a = render3d::PITCH_DEG.to_radians();

@@ -106,7 +106,8 @@ impl Geometry{
             if model.fx[i].as_ref().is_some_and(|f|f.shader.transparent){continue;}
             // (Blended standard materials draw in Model::draw_blended, not here.)
             if model.blend.get(i).is_some_and(|&b|b>0){continue;}
-            let stream=model.fx[i].is_some();
+            // Animated props (Model::dynamic) stream their live vertices.
+            let stream=model.fx[i].is_some()||model.dynamic.get(i).copied().unwrap_or(false);
             if stream||pending.as_ref().is_some_and(|p|!p.accepts(mesh,model.grads[i])){
                 if let Some(p)=pending.take(){let (run,size)=p.upload();bytes+=size;runs+=1;entries.push(Entry::Cached(run));budget.checkpoint().await;}
             }

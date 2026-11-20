@@ -267,6 +267,19 @@ effect names, model behaviours the data builder never reads).
 - FIXED: export_model.export_texture falls back to a material's other colour textures (custom shaders:
   Midnight Mansion's portals' _Swirl_Texture; they drew plain white). FIXED after: "Shader Graphs/Swirl"
   joined export_model's TRANSLATED set, so the portals run their own shader (cyan rotating swirl).
+- FIXED: map props never moved (map models were static). tools/assets/export_map_motion.py writes each
+  map's motion.json: every enabled scene Animator's layer 0 default-state clip (or a
+  PlayableAnimatorSimple's own clip, its random start and speed range) as the clip's own cubic
+  transform curves on the object's subtree, plus the skinned meshes whose bones are in it (rest
+  pose checked against the exported model, max error 8e-06). renderer/src/map_motion.rs moves the
+  rigid parts with their node and re-skins the skinned ones each frame (home_world's evaluation);
+  those parts (motion_paths.json, Model::dynamic) stream instead of joining the static map
+  batches. Covered Garden: the pond fish swims its 30 s path, lily pads drift, trees and bushes
+  sway. "unlit/Flag" (the fish's wiggle) joined export_model's TRANSLATED set. Needs a map model
+  exported with part paths (meta.json "path"; the older 78 re-exported). The clock is game time
+  since the map's load, as the effects' (scaled time: fast forward, paused behind a menu).
+  STAND-IN: GameObject-toggle and material curves aren't played; triggered states (removeables'
+  R1move...) aren't driven.
 - Checked, left as is: Geared's dark blobs are its below-map Cloud1 layer (near-black blue by design).
 - LEFT, rest: Metamorphosis / Phoenix Rebirth / Primordial Wrath switch effects (mechanics not simulated). Selection-only
   markers (target reticles, patrol points, Beast leash lines) are UI.
