@@ -2254,7 +2254,8 @@ def main():
                     out["range_up"] = {"frames": frames, "mult": xf.get("multiplier", 1.0), "add": 0.0}
                     out.setdefault("boosts", []).append({"frames": frames, "immune": xf.get("immuneBloonProperties", 0),
                                                          "damage": xf.get("damageIncrease", 0),
-                                                         "radius_mult": xf.get("projectileRadiusMultiplier", 1.0)})
+                                                         "radius_mult": xf.get("projectileRadiusMultiplier", 1.0),
+                                                         "adora_mult": xf.get("multiplier", 1.0)})
                 # MoabBarrageModel (Churchill): the `targets` strongest MOAB-class bloons take
                 # damage every interval for the ability's duration.
                 if x["type"] == "MoabBarrageModel":

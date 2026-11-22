@@ -3305,6 +3305,7 @@ pub struct Buff {
     pub pierce_all: f32,
     /// Projectile radius multiplier (Long Arm of Light).
     pub radius_mult: f32,
+    pub adora_mult: f32,
     pub range_mult: f32,
     pub range_add: f32,
     /// VigilanteMutator's loseLifeRangeBuff: added to the tower's range and to its attacks'
@@ -3378,7 +3379,7 @@ impl Buff {
     /// Some support's mutator is on the tower (its model was changed: Tower.UpdatedModel).
     fn touched(&self) -> bool {
         let d = Buff::default();
-        self.damage_mult != d.damage_mult || self.pierce_all != 0.0 || self.radius_mult != 1.0 || self.range_mult != 0.0 || self.range_x != 1.0 || self.range_m != 1.0
+        self.damage_mult != d.damage_mult || self.pierce_all != 0.0 || self.radius_mult != 1.0 || self.adora_mult != 1.0 || self.range_mult != 0.0 || self.range_x != 1.0 || self.range_m != 1.0
             || self.range_life_mult != 0.0 || self.range_life_add != 0.0 || self.range_add != 0.0 || self.vig_range != 0.0 || self.rate_mult != 1.0 || !self.brew_up.is_empty()
             || self.pierce_x != 1.0 || self.sub_paragon.is_some() || self.pierce_add != 0.0 || self.pierce_pct.is_some() || self.speed_mult != 0.0
             || self.speed_add != 0.0 || self.ricochet.is_some() || self.camo || self.immune.is_some() || self.acid || self.cash_mult != 1.0
@@ -3393,6 +3394,7 @@ impl Default for Buff {
             damage_mult: 1.0,
             pierce_all: 0.0,
             radius_mult: 1.0,
+            adora_mult: 1.0,
             range_mult: 0.0,
             range_x: 1.0,
             range_m: 1.0,
@@ -3549,7 +3551,7 @@ impl Buff {
     /// The projectile as fired under these buffs (None if unchanged). Damage-type support reaches
     /// sub-projectiles too (explosions); pierce and speed only the shot itself.
     fn projectile(&self, p: &Proj) -> Option<Proj> {
-        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_x == 1.0 && self.sub_paragon.is_none() && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.speed_add == 0.0 && self.ricochet.is_none() && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
+        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_x == 1.0 && self.sub_paragon.is_none() && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.speed_add == 0.0 && self.ricochet.is_none() && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.adora_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
             return None;
         }
         let mut q = p.clone();
@@ -3622,6 +3624,16 @@ impl Buff {
             }
         }
         q.radius *= self.radius_mult;
+        if self.adora_mult != 1.0 {
+            if let Some(a) = q.adora.as_mut() {
+                let m = self.adora_mult;
+                a.rotation *= m;
+                a.min *= m;
+                a.max *= m;
+                a.accel *= m;
+                a.lifespan *= m;
+            }
+        }
         if let Some(fc) = &self.fan {
             q.radius = fc.projectile_radius;
             fn fan(p: &mut Proj, im: u32) {
@@ -14140,7 +14152,7 @@ impl Game {
                 for k in 0..self.towers.len() {
                     let child = self.towers[k].sub.as_ref().is_some_and(|s| s.parent == pid && !s.spec.no_parent_mutators);
                     if k == o || child {
-                        let boost = crate::data::ProjBoost { frames: life, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0 };
+                        let boost = crate::data::ProjBoost { frames: life, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0, adora_mult: 1.0 };
                         self.towers[k].boosts.push((boost, life));
                         self.towers[k].biohacked = self.towers[k].biohacked.max(hacked);
                     }
@@ -16290,6 +16302,7 @@ impl Game {
                 for (pb, _) in &self.towers[t].boosts {
                     b.damage_add += pb.damage;
                     b.radius_mult *= pb.radius_mult;
+                    b.adora_mult *= pb.adora_mult;
                     b.tag_mods.extend(pb.tag_mods.iter().cloned());
                     if let Some(im) = pb.immune {
                         b.immune = Some(b.immune.unwrap_or(u32::MAX) & im);

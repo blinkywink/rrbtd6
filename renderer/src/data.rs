@@ -1599,6 +1599,10 @@ pub struct ProjBoost {
     /// Projectile radius multiplier (Long Arm of Light).
     #[serde(default = "one")]
     pub radius_mult: f32,
+    /// LongArmOfLightMutator.Mutate (@0x181287d60): every AdoraTrackTargetModel's rotation,
+    /// speeds, acceleration and lifespan x this.
+    #[serde(default = "one")]
+    pub adora_mult: f32,
 }
 
 #[derive(Deserialize, Clone)]

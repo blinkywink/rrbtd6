@@ -3302,3 +3302,6 @@ Open (pending/hero_open):
   it comes before the behaviour's first Process (`adora_reset`); the tracker aims at Target.Position
   with the collision circle offset (`seek_off`); AdoraEmissionModel exported as an Arc of
   (count - 1) x angleBetween (INFERRED, GetDirection @0x180c36770 not read through).
+- (2026-11-22) Adora l10: Long Arm of Light's mutator also scales every AdoraTrackTargetModel
+  (rotation, speeds, acceleration, lifespan x multiplier: `ProjBoost::adora_mult`). adora_l10 now
+  to rt 402 on Ball of Light's sub-tower projectile only (not ported).
