@@ -27,6 +27,7 @@ incremental = true
 # miniquad with independent depth test / depth write (see vendor/miniquad/src/graphics/gl.rs).
 [patch.crates-io]
 miniquad = { path = "vendor/miniquad" }
+macroquad = { path = "vendor/macroquad" }
 
 quad-snd = { path = "vendor/quad-snd" }
 

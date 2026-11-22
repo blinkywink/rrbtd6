@@ -168,6 +168,7 @@ def main():
     parser.add_argument('--trace-loads',action='store_true',help='Log first-use loading work taking at least 2 ms')
     parser.add_argument('--ab-feature',choices=['frame-pacing','text-cache','pose-reuse','sprite-storage','shadow-textures','map-batching','render-storage','static-maps','background-assets','fallback-models','prediction-retirement'],default='text-cache',help='Feature disabled in same-build reference runs')
     parser.add_argument('--same-build-ab',action='store_true',help='Compare feature off/on when running the suite without a previous executable')
+    parser.add_argument('--window',default='1600x900',help='Window size, e.g. 800x450 (GPU fill-rate check)')
     parser.add_argument('--profile',action='store_true',help='Sample each run with tools/sample_prof.py (report: <label>.prof; timings then include the sampler)')
     parser.add_argument('--simulation-snapshot',type=Path,help='Reuse a previously frozen simulation-input directory')
     args=parser.parse_args()
@@ -220,7 +221,7 @@ def main():
             for enabled in ([True] if args.baseline_only else ([False,True] if pair%2==0 else [True,False])):
                 label=f'{pair+1}-'+('cached' if enabled else 'reference')
                 env={k:v for k,v in os.environ.items() if not k.startswith('RRBTD6_')}
-                env.update(RRBTD6_WINDOW='1600x900',RRBTD6_AUTOTEST=str(output/(label+'.png')),
+                env.update(RRBTD6_WINDOW=args.window,RRBTD6_AUTOTEST=str(output/(label+'.png')),
                            RRBTD6_FRAME_BENCH=str(output/(label+'.csv')),
                            RRBTD6_FRAMES=str(args.frames),RRBTD6_BENCH_STEPS='2',
                            RRBTD6_FLOOD=args.flood,RRBTD6_TOWERS='DartMonkey',

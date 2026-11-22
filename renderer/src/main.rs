@@ -4783,6 +4783,9 @@ const VINE_END_FRAMES: i32 = 23;
                     get_fps(), get_frame_time() * 1000.0, hud_time * 10.0, bloon_time * 10.0, cpu_time * 10.0, flip_time * 10.0, sprite_batch.flushes / 100,
                     sim_stats.0 * 1000.0 / sim_stats.1.max(1) as f64, sim_stats.2 * 1000.0, sim_stats.1,
                     game.bloons.len(), game.projectiles.len(), game.towers.len());
+                let (draws, verts, flushes) = macroquad::take_draw_stats();
+                let (gn, gv) = render3d::GEOM_STATS.with(|c| c.replace((0, 0)));
+                eprintln!("autotest: frame {frames} draws/frame {} verts/frame {} flushes/frame {} geometry-calls/frame {} geometry-verts/frame {}", draws / 100, verts / 100, flushes / 100, gn / 100, gv / 100);
                 sim_stats = (0.0, 0, 0.0);
                 hud_time = 0.0;
                 bloon_time = 0.0;

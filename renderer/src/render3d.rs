@@ -155,7 +155,9 @@ pub async fn verify_sprite_submission(){
 }
 
 /// Same submission as macroquad::draw_mesh, borrowing immutable mesh data.
+thread_local!{pub static GEOM_STATS:std::cell::Cell<(usize,usize)>=const{std::cell::Cell::new((0,0))};}
 pub fn draw_geometry(vertices:&[Vertex],indices:&[u16],texture:Option<&Texture2D>){
+    GEOM_STATS.with(|c|{let (n,v)=c.get();c.set((n+1,v+vertices.len()));});
     // DrawMode is private in macroquad. Prime the identical public mesh state
     // without allocating arrays; its empty submission coalesces with the data.
     draw_mesh(&Mesh{vertices:Vec::new(),indices:Vec::new(),texture:texture.cloned()});
