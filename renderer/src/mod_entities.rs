@@ -81,7 +81,7 @@ impl Patch {
                 if let Some(hp)=f.hp{b.hp=hp;}
             },
             Kind::Projectiles=>if let Some(p)=g.projectiles.iter_mut().find(|p|p.uid==self.id){
-                if let Some(damage)=f.damage{p.spec.damage=damage;}
+                if let Some(damage)=f.damage{std::sync::Arc::make_mut(&mut p.spec).damage=damage;}
                 if let Some(pierce)=f.pierce{p.pierce=pierce;}
                 if let Some(velocity)=f.velocity{
                     p.vel=velocity;let length=velocity[0].hypot(velocity[1]);

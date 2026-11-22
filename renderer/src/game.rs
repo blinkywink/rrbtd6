@@ -2991,7 +2991,8 @@ pub struct Projectile {
     pub vel: [f32; 2],
     pub frames_left: f32,
     pub pierce: f32,
-    pub spec: Proj,
+    /// Shared with the shot it was made from (copied on change: Arc::make_mut).
+    pub spec: std::sync::Arc<Proj>,
     pub crit: Option<f32>,
     /// CritRoll (Projectile.AddCritRoll): [chance, damageMultiplier, damageAdditive, rolled, crit].
     pub crit_roll: Option<[f32; 5]>,
@@ -4871,7 +4872,7 @@ macro_rules! collide_pass {
                     sc = max;
                 }
                 if pr.scale_t > 0.0 {
-                    pr.spec.radius = sc * pr.radius0;
+                    std::sync::Arc::make_mut(&mut pr.spec).radius = sc * pr.radius0;
                 }
                 pr.scale_t += 1.0;
                 // (Scale <= 0: it expires.)
@@ -5320,8 +5321,8 @@ macro_rules! collide_pass {
                     // 100, its cash overwritten. INFERRED: eating pays no pop cash here, so its value
                     // carries the whole RBE x rbeCashMultiplier; the game pops the bloons (their pop
                     // cash) and pays (multiplier - 1) x the eaten layers.)
-                    pr.spec.cash = Some(eat.full_cash.clone().map(|c| crate::data::Cash { min: 0.0, max: 0.0, ..c }).unwrap_or(crate::data::Cash { min: 0.0, max: 0.0, bonus: 0.0, pickup: Some(60.0), pickup_delay: 0.0, pickup_camo: false, bonus_shared: false }));
-                    pr.spec.no_hit = true;
+                    std::sync::Arc::make_mut(&mut pr.spec).cash = Some(eat.full_cash.clone().map(|c| crate::data::Cash { min: 0.0, max: 0.0, ..c }).unwrap_or(crate::data::Cash { min: 0.0, max: 0.0, bonus: 0.0, pickup: Some(60.0), pickup_delay: 0.0, pickup_camo: false, bonus_shared: false }));
+                    std::sync::Arc::make_mut(&mut pr.spec).no_hit = true;
                     // (EmitCash makes the Full trap in its place, gone after its AgeModel
                     // lifespan: recording map_geared_engineer_204_r40, full at rt 2169, gone at 2470.)
                     if let Some(l) = eat.full_lifespan {
@@ -5898,7 +5899,7 @@ macro_rules! collide_pass {
                             let sp = &$s.projectiles[$p].spec;
                             let will = !(e.only_if_damaged && sp.damage_model && (sp.immune & props != 0 || dmg < 1.0));
                             if will && (e.single_chance <= 0.0 || $s.synced_double() <= e.single_chance as f64) {
-                                let mut one = $s.projectiles[$p].spec.clone();
+                                let mut one = Proj::clone(&$s.projectiles[$p].spec);
                                 one.effects.retain(|x| x.single_first);
                                 let owner = $s.projectiles[$p].owner;
                                 $s.apply_effects(j, &one, owner, dmg, true);
@@ -5907,7 +5908,7 @@ macro_rules! collide_pass {
                     }
                 }
                 if $s.projectiles[$p].spec.effects.iter().any(|e| e.after_damage && !(single_skip && e.single_first)) {
-                    let (mut spec, owner) = ($s.projectiles[$p].spec.clone(), $s.projectiles[$p].owner);
+                    let (mut spec, owner) = (Proj::clone(&$s.projectiles[$p].spec), $s.projectiles[$p].owner);
                     if single_skip {
                         spec.effects.retain(|x| !x.single_first);
                     }
@@ -6494,11 +6495,11 @@ macro_rules! collide_pass {
         // alwaysMakePool or nothing hit it pools (radius / pierce IfMisses), lasting till
         // lifespanFramesIfMisses.
         if pr.frames_left <= 0.0 && (pr.hit.is_empty() || pr.always_pool) {
-            if let Some(ap) = pr.spec.acid_pool.take() {
+            if let Some(ap) = std::sync::Arc::make_mut(&mut pr.spec).acid_pool.take() {
                 // (lifespanFramesIfMisses more from then: recording alch_003, a pool made at 10 is
                 // gone at 430.)
                 pr.frames_left = ap.lifespan * FPS;
-                pr.spec.radius = ap.radius;
+                std::sync::Arc::make_mut(&mut pr.spec).radius = ap.radius;
                 pr.pierce = ap.pierce;
             }
         }
@@ -23171,7 +23172,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 let step = range / (proj.lifespan * FPS).max(1.0);
                                 for pr in &mut self.projectiles[start..] {
                                     pr.vel = [lc * step, ls * step];
-                                    pr.spec.radius = pr.spec.radius.max(step * 0.5);
+                                    std::sync::Arc::make_mut(&mut pr.spec).radius = pr.spec.radius.max(step * 0.5);
                                     pr.frames_left = pr.frames_left.max(1.0);
                                 }
                                 let to = [from[0] + lc * range, from[1] + ls * range];
@@ -25686,7 +25687,7 @@ impl Game {
             }
         }
         if !self.projectiles[p].spec.effects.is_empty() || self.projectiles[p].spec.chill.is_some() {
-            let (mut spec, owner) = (self.projectiles[p].spec.clone(), self.projectiles[p].owner);
+            let (mut spec, owner) = (Proj::clone(&self.projectiles[p].spec), self.projectiles[p].owner);
             // SlowMinusAbilityDuration.GetLifespanFrames (VERIFIED-DISASM @0xcddc50):
             // lifespanFrames + activation time - now; the projectile is made as the
             // ability goes off (recording ninja_040: Sabotage halves a MOAB's speed).
@@ -27395,7 +27396,7 @@ impl Game {
                     if !sp.exclude_tags.is_empty() && self.towers.iter().position(|t| t.id == owner).and_then(|ti| self.buffs.get(ti)).is_some_and(|b| b.unfilter) {
                         sp.exclude_tags.clear();
                     }
-                    sp
+                    std::sync::Arc::new(sp)
                 },
                 crit,
                 crit_roll: None,
@@ -28922,10 +28923,17 @@ mod tests {
         g.start_round();
         assert!(g.debug_spawn(&name, n, 0.0));
         let (mut total, mut worst, mut steps, mut peak) = (0.0f64, 0.0f64, 0usize, 0usize);
+        // The worst steps with their phases (ms): step, bloons-and-pops, towers, projectiles, damage, bloons, pops.
+        let mut worst_steps: Vec<(f64, [f64; 4], usize, u64, usize)> = Vec::new();
         while !g.bloons.is_empty() && steps < 40000 {
+            let (p0, d0, popped0) = (g.prof, super::sim_profile::TIMES.with(|v| v.get())[0], g.popped);
             let t0 = std::time::Instant::now();
             g.step();
             let dt = t0.elapsed().as_secs_f64();
+            let d1 = super::sim_profile::TIMES.with(|v| v.get())[0];
+            worst_steps.push((dt, [g.prof[0] - p0[0], g.prof[1] - p0[1], g.prof[2] - p0[2], d1 - d0], g.bloons.len(), g.popped - popped0, steps));
+            worst_steps.sort_by(|a, b| b.0.total_cmp(&a.0));
+            worst_steps.truncate(5);
             total += dt;
             worst = worst.max(dt);
             steps += 1;
@@ -28941,6 +28949,10 @@ mod tests {
                     eprintln!("peak {peak}: effects {:?}", ids);
                 }
             }
+        }
+        eprintln!("bad_bench sizes: Bloon {} bytes, Effect {} bytes, Projectile {} bytes", std::mem::size_of::<Bloon>(), std::mem::size_of::<Effect>(), std::mem::size_of::<Projectile>());
+        for (dt, ph, n, pops, at) in &worst_steps {
+            eprintln!("bad_bench worst step {at}: {:.1} ms = bloons/pops {:.1} + towers {:.1} + projectiles {:.1} (damage {:.1}); {n} bloons, {pops} layers popped", dt * 1e3, ph[0] * 1e3, ph[1] * 1e3, ph[2] * 1e3, ph[3] * 1e3);
         }
         let t = super::sim_profile::TIMES.with(|v| v.get());
         eprintln!("bad_bench phases (ms): pops/bloons {:.0}, towers {:.0}, projectiles {:.0}; target {:.0}", g.prof[0] * 1e3, g.prof[1] * 1e3, g.prof[2] * 1e3, g.perf_detail[2] * 1e3);
