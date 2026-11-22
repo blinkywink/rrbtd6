@@ -1074,12 +1074,15 @@ impl Bloon {
             if id == s {
                 return true;
             }
-            let mut parts = id.split(':');
-            let major = parts.next().unwrap_or("");
-            match parts.next() {
-                Some(minor) => major == s || (s.len() == major.len() + 1 + minor.len() && s.starts_with(major) && s[major.len()..].starts_with(':') && s.ends_with(minor)),
-                None => false,
+            // (major:minor[:...]: the major part alone, or major:minor, names it; no ':' only itself.
+            // Either is shorter than the id unless it's the whole id, checked above.)
+            if s.len() >= id.len() {
+                return false;
             }
+            let Some(k) = id.bytes().position(|c| c == b':') else { return false };
+            let (major, rest) = (&id[..k], &id[k + 1..]);
+            let minor = rest.split(':').next().unwrap_or("");
+            major == s || (s.len() == major.len() + 1 + minor.len() && s.starts_with(major) && s[major.len()..].starts_with(':') && s.ends_with(minor))
         })
     }
 
