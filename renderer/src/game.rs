@@ -21740,6 +21740,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                     let lost = target_id == 0 && { let a = tw.weapons[w].aim_id; a != 0 && !bloon_idx(&self.bloons, &self.bidx, a).is_some() };
                                     let r = match (lost, tw.game_rot) {
                                         (true, Some(g)) if attack.turn_body => g - attack.extra_rotation as f32,
+                                        // (A ChurchillBaseRotation turret too: recording churchill_l10_r40 rt
+                                        // 497, the cannon's shell ejects from the turret as it stands.)
+                                        (true, Some(g)) if tier.base_rotation => g - attack.extra_rotation as f32,
                                         _ => RAD2DEG * crt_atan2(target[0] - aim_from[0], -(target[1] - aim_from[1])),
                                     };
                                     if attack.turn_body {
@@ -21920,11 +21923,14 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                     grot = Some(tr0 + (g - tr0));
                                 }
                             }
+                            let instant_throw = tier.base_rotation && off == 0;
                             let body_rot = if let Some(fr) = fighter_rot {
                                 Some(fr)
                             } else if let Some(tr) = broadside.filter(|_| body_turns) {
-                                tw.game_rot = Some(tr);
-                                tw.turret_rel = tr - tw.base_rot;
+                                if !instant_throw {
+                                    tw.game_rot = Some(tr);
+                                    tw.turret_rel = tr - tw.base_rot;
+                                }
                                 Some(tr)
                             } else {
                                 (!body_turns && (target_id == 0 || tw.sub.is_none())).then(|| tw.ent_rots.get(ai).copied().flatten().or(tw.game_rot).unwrap_or(0.0))
@@ -21939,7 +21945,12 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 }
                             }
                             // (RotateToTargetAttackOffset turns only its attack: rotateTower off.)
-                            if grot.is_some() && body_turns && broadside.is_none() && attack.offset_rot.is_none() {
+                            // HYPOTHESIS P-INSTANTTHROW: on a ChurchillBaseRotation turret a weapon
+                            // released the frame its throw starts (animationOffset 0) is never in its
+                            // throw as RotateToTarget looks, so it doesn't turn the turret (recording
+                            // churchill_l10_r40 rt 491 / 497: the machine gun leaves the turret on the
+                            // cannon's aim).
+                            if grot.is_some() && body_turns && broadside.is_none() && attack.offset_rot.is_none() && !instant_throw {
                                 tw.game_rot = grot;
                                 tw.turret_rel = grot.unwrap() - tw.base_rot;
                                 // On a turning base the turret's angle is its base's plus its own

@@ -3366,3 +3366,10 @@ Open (pending/hero_open):
   this frame's best. churchill_l20 to rt 819. churchill_l10 rt 497 still off: the shell follows the
   turret, which in the clone swings to the machine gun's newer targets (73.42 -> 67.0 by rt 497)
   while the game's stays on the cannon's lost target (~73.27).
+- (2026-11-22) Churchill l20 bloons exact, l10 to 2 frames (rt 2588): HYPOTHESIS P-INSTANTTHROW on
+  ChurchillBaseRotation turrets: a weapon released the frame its throw starts (animationOffset 0,
+  the machine gun) doesn't turn the turret at release (its broadside aim offset path), and a lost
+  Target keeps the turret's facing (as sky_052 for turnBody). Open: churchill_l10 rt 2587, the
+  cannon's contact Explosion meets the popped Zebra's own object that frame and its three new Greens
+  the next (the clone's Explosion collides a frame later, all four together); projectile positions
+  1 ulp off from rt 203/230 (l03/l10).
