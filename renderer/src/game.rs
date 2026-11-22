@@ -360,6 +360,8 @@ pub struct Bloon {
     /// (HYPOTHESIS P-SPAWNGRID, recording ice_050: a Black spawned at 2547 isn't tried by a
     /// pierce-999 pulse covering the map on 2548).
     pub unplaced: bool,
+    /// `unplaced` because the Spawner emitted it (not a pop's child).
+    pub spawner: bool,
     /// Made its first Bloon.Move this frame (it was `unplaced` until then).
     pub first_move: bool,
     /// MoveWithWind on it (offTrackCount > 0): carried at this x its speedFrames toward its
@@ -3656,6 +3658,11 @@ impl Buff {
                 a.max *= m;
                 a.accel *= m;
                 a.lifespan *= m;
+                // (With no TravelStrait the shot lives by the tracker's lifespan (set_Lifespan in
+                // Mutate): recording adora_l20_r80, Long Arm's bolts last 180 frames, not 90.)
+                if q.speed == 0.0 {
+                    q.lifespan *= m;
+                }
             }
         }
         if let Some(fc) = &self.fan {
@@ -7610,7 +7617,7 @@ impl Game {
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
         self.bidx.get_mut().insert(id, self.bloons.len() as u32);
-        self.bloons.push(Bloon { hex_last: -1, held: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false });
+        self.bloons.push(Bloon { hex_last: -1, held: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false, spawner: false });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
         if self.defs[kind].rotate_to_follow_path {
@@ -8685,6 +8692,7 @@ impl Game {
                     c = sp.rotation;
                 }
             }
+            if env_flag!("DBGADORA") { eprintln!("DBGADORA uid {} pos {:?} q {:?} to {:?} dir {:?} a {} c {} vel {}", pr.uid, pr.pos, q, t, dir, a, c, vel); }
             // Vector2.Rotate (by -c degrees).
             let (sn, cs) = crt_sin_cos(DEG2RAD * -c);
             dir = [cs * dir[0] - sn * dir[1], cs * dir[1] + sn * dir[0]];
@@ -13704,6 +13712,7 @@ impl Game {
         if let Some(b) = self.bloons.last_mut() {
             b.fresh = false;
             b.unplaced = true;
+            b.spawner = true;
         }
         // In the path's list it goes before what the towers and the bloons' own processes
         // added this frame (recording glue_250: a round's Black listed before a Pink a
@@ -14182,7 +14191,7 @@ impl Game {
                 for k in 0..self.towers.len() {
                     let child = self.towers[k].sub.as_ref().is_some_and(|s| s.parent == pid && !s.spec.no_parent_mutators);
                     if k == o || child {
-                        let boost = crate::data::ProjBoost { frames: life, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0, adora_mult: 1.0 };
+                        let boost = crate::data::ProjBoost { frames: life, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0, adora_mult: 1.0, pierce_mult: 1.0 };
                         self.towers[k].boosts.push((boost, life));
                         self.towers[k].biohacked = self.towers[k].biohacked.max(hacked);
                     }
@@ -16345,6 +16354,7 @@ impl Game {
                     b.damage_add += pb.damage;
                     b.radius_mult *= pb.radius_mult;
                     b.adora_mult *= pb.adora_mult;
+                    b.pierce_x *= pb.pierce_mult;
                     b.tag_mods.extend(pb.tag_mods.iter().cloned());
                     if let Some(im) = pb.immune {
                         b.immune = Some(b.immune.unwrap_or(u32::MAX) & im);
@@ -22744,7 +22754,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 let r = proj.radius;
                                 // (emitFromTarget, VERIFIED-DISASM: from the Target's position, emitFromTargetLength
                                 // long; recording desperado_040 rt 73, the rifle's shot stays at the barrel.)
-                                let len = emission.line_from_target.unwrap_or(400.0);
+                                // (useTargetAsEndPoint: |Target - start| (Vector2.magnitude), unless
+                                // emitFromTarget sets its own length; VERIFIED-DECOMP @0x180c42910.)
+                                let to_target = { let (dx, dy) = (target[0] - from[0], target[1] - from[1]); (dx * dx + dy * dy).sqrt() };
+                                let len = emission.line_from_target.unwrap_or(if emission.line_target_end { to_target } else { 400.0 });
                                 let line_start = if emission.line_from_target.is_some() { target } else { from };
                                 let mut found: Vec<(f32, u64)> = Vec::new();
                                 if r > 0.0 {
@@ -22756,8 +22769,14 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                                 continue;
                                             }
                                             let d = &self.defs[b.kind];
-                                            if grid_hit(c, r, b.pos, b.cell_pos, d.radius)
+                                            // HYPOTHESIS P-LINESPAWN: GetInLine sees a bloon the Spawner
+                                            // emitted on an earlier frame though it hasn't moved yet
+                                            // (recordings adora_l20_r80 rt 1236, adora_l10_r40 rt 653: the
+                                            // Ball of Light's line meets the round's new BFB / Black).
+                                            let spawn_seen = b.unplaced && b.spawner && b.born / 4 < self.sim_elapsed;
+                                            if (grid_hit(c, r, b.pos, b.cell_pos, d.radius)
                                                 && (!self.has_grid_rank || self.ggrid.visits(c, r, i, b.cell_pos))
+                                                || spawn_seen && grid_hit(c, r, b.pos, b.pos, d.radius))
                                                 && circles_hit(c, r, b.pos, self.mrot(b), &d.circles)
                                             {
                                                 found.push(((b.pos[0] - line_start[0]).hypot(b.pos[1] - line_start[1]), b.id));
@@ -22766,8 +22785,14 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                         t = r + r + t;
                                     }
                                 }
-                                found.sort_by(|x, y| x.0.total_cmp(&y.0));
+                                // (OrderBy distance is stable over GetInLine's enumeration: bloons at the
+                                // same spot share a cell, listed in the grid fill's order; recording
+                                // adora_l10_r40 rt 604, two Blacks at one point popped 1588 then 1661.)
+                                let place = |id: u64| bloon_idx(&self.bloons, &self.bidx, id).map_or((u32::MAX, u32::MAX), |i| self.ggrid.place_of(i));
+                                let grid_order = self.has_grid_rank;
+                                found.sort_by(|x, y| x.0.total_cmp(&y.0).then_with(|| if grid_order && x.0 == y.0 { place(x.1).cmp(&place(y.1)) } else { std::cmp::Ordering::Equal }));
                                 let ids: Vec<u64> = found.into_iter().map(|f| f.1).collect();
+                                if env_flag!("DBGE") { eprintln!("DBGLINE rt {} from {:?} to {:?} len {} ids {:?} near {:?}", self.round_clock, line_start, target, len, ids, self.bloons.iter().map(|b| (b.id, b.pos, b.cell_pos, b.unplaced, self.defs[b.kind].radius)).collect::<Vec<_>>()); }
                                 // (Display only: Emit's effectAtStart / effectAtEnd at the line's ends and
                                 // effectAtCollision on up to maxCollisionEffects bloons, VERIFIED-DISASM
                                 // @0x180c42910. Desperado's rifle, the Sniper Paragon.)

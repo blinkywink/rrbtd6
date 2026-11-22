@@ -1640,6 +1640,10 @@ pub struct ProjBoost {
     /// speeds, acceleration and lifespan x this.
     #[serde(default = "one")]
     pub adora_mult: f32,
+    /// LongArmOfLightMutator.Mutate (VERIFIED-DECOMP @0x181287d60): every ProjectileModel under
+    /// the tower gets pierce x multiplier (+0x3c; recording adora_l20_r80 rt 1027, the bolts' 22).
+    #[serde(default = "one")]
+    pub pierce_mult: f32,
 }
 
 #[derive(Deserialize, Clone)]

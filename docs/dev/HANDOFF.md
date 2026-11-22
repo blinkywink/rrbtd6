@@ -127,8 +127,8 @@ Ground rules follow.
 
 Current (2026-11-20): every set full (merge 17; spike 28, sub 35, mortar 26, bomb 35, dartling 26, sniper 35, bucc 36, dart 71, tack 26, alch 35, druid 35, ninja 35, ice 26, wizard 36, ace 26, spike 29, super 35, heli 27, boomerang 100, dart 72, mortar 27, desperado 35, dartling 27 after the 2026-11-20 additions). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
 sniper tack sub beast engineer desperado dartling mortar bucc druid super ace heli spike farm mermonkey village
-paragon sky quincy gwen jones sauda obyn ezili moab logs maps maptowers merge village_std farm_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, farm_std 1, sky 39, quincy 14, moab 5,
-logs 3, dart 72, boomerang 100, paragon 12).
+paragon sky quincy gwen jones sauda obyn ezili adora moab logs maps maptowers merge village_std farm_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, farm_std 1, sky 39, quincy 14, moab 5,
+logs 3, dart 72, boomerang 100, paragon 12, adora 2).
 
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
@@ -3322,3 +3322,22 @@ Open (pending/hero_open):
 - (2026-11-22) Adora l10: Long Arm of Light's mutator also scales every AdoraTrackTargetModel
   (rotation, speeds, acceleration, lifespan x multiplier: `ProjBoost::adora_mult`). adora_l10 now
   to rt 402 on Ball of Light's sub-tower projectile only (not ported).
+- (2026-11-22) Adora l20 / l10 progress: LineProjectileEmission with useTargetAsEndPoint and no
+  useLengthSpeed (+0x30 alone, VERIFIED-DECOMP @0x180c42910) is the plain line with length
+  |Target - start| (Ball of Light: hits the frame it fires, rt 401); LongArmOfLightMutator.Mutate
+  (@0x181287d60) also multiplies every ProjectileModel's pierce (+0x3c) by `multiplier`
+  (`ProjBoost::pierce_mult`; the bolts' 22 at rt 1027). adora_l20 now to rt 1700 (weapons same),
+  adora_l10 to rt 653. Open (l20 rt 1236): the Ball's line meets BFB 5306, spawned by the Spawner
+  at 1235, before the BFB's first move; the clone's `unplaced` rule (P-SPAWNGRID, ice_050) keeps
+  it out. Moving Spawner bloons before every tower (tried) breaks boomerang (83/100): the rule is
+  narrower, maybe GetInLine's grid vs the CollisionChecker's. `DBGE` prints DBGLINE per plain line.
+- (2026-11-22) Adora l03 + l10 exact (pending/adora 2/2; l20 open in hero_open):
+  - HYPOTHESIS P-LINESPAWN: a plain line's GetInLine sees a bloon the Spawner emitted on an
+    earlier frame though it hasn't moved (`Bloon::spawner`; l20 rt 1236, l10 rt 653).
+  - Long Arm also scales the bolt's own lifespan when it has no TravelStrait (180 frames).
+  - A plain line's exact distance ties go in grid-slot order (l10 rt 604, two Blacks at one point).
+  - Open: adora_l20 rt 2652 (two long-flying bolts hit a Ceramic 6304 at 2651 in the game); the
+    bolts' second move is 1 ulp off from rt 105 (bolts 552/560/568 of the rt-103 throw).
+    `DBGADORA=1` prints each turn (pos, target, dir, angle). Velocity, frames constants,
+    Vector2.Rotate / AngleBetween and the move match the decomp; check Target.Position's circle
+    offset next.

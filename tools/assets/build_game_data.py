@@ -1516,7 +1516,9 @@ def main():
             # A plain line (LineProjectileEmission.Emit, VERIFIED-DISASM @0x180c42910): 400 long from
             # the emit point towards the target (or along the tower with useTowerRotation), its
             # bloons found by CollisionGrid.GetInLine and collided at once, nearest first.
-            plain = not (f.get("useLengthSpeed") or f.get("useTargetAsEndPoint")
+            # (useTargetAsEndPoint alone, +0x30: the same Emit with the length |Target - start|;
+            # Adora's Ball of Light, its hits the frame it fires: recording adora_l20_r80 rt 401.)
+            plain = not (f.get("useLengthSpeed")
                          or deref(f.get("projectileInitialHitModel")) or deref(f.get("projectileAtEndModel"))
                          or deref(f.get("emissionAtEndModel")))
             return {"kind": "Line", "count": 1, "line_plain": bool(plain), "line_tower_rot": bool(f.get("useTowerRotation")),
@@ -2255,7 +2257,9 @@ def main():
                     out.setdefault("boosts", []).append({"frames": frames, "immune": xf.get("immuneBloonProperties", 0),
                                                          "damage": xf.get("damageIncrease", 0),
                                                          "radius_mult": xf.get("projectileRadiusMultiplier", 1.0),
-                                                         "adora_mult": xf.get("multiplier", 1.0)})
+                                                         "adora_mult": xf.get("multiplier", 1.0),
+                                                         # Mutate also scales every ProjectileModel's pierce (+0x3c).
+                                                         "pierce_mult": xf.get("multiplier", 1.0)})
                 # MoabBarrageModel (Churchill): the `targets` strongest MOAB-class bloons take
                 # damage every interval for the ability's duration.
                 if x["type"] == "MoabBarrageModel":
