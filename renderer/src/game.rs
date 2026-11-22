@@ -3383,6 +3383,8 @@ pub struct Buff {
     /// Brews: extra damage on every damaging projectile, and extra per-tag damage.
     pub damage_add: f32,
     pub tag_mods: Vec<TagMod>,
+    /// Ability boosts naming one projectile (`ProjBoost::proj_id`): (id, damage, tag modifiers).
+    pub pid_boosts: Vec<(String, f32, Vec<TagMod>)>,
     /// An acid brew's DamageModifierForTag models (AddAcidicMixtureToProjectileMutator), which
     /// also go on the tower's DamageOverTime models and the projectiles of its effects (recording
     /// combo7_lotus rt 753: the Master Bomber's sticky ticks 3001 on a Zomg, its splash 601 on a
@@ -3410,7 +3412,7 @@ impl Buff {
             || self.pierce_x != 1.0 || self.sub_paragon.is_some() || self.pierce_add != 0.0 || self.pierce_pct.is_some() || self.speed_mult != 0.0
             || self.speed_add != 0.0 || self.ricochet.is_some() || self.camo || self.immune.is_some() || self.acid || self.cash_mult != 1.0
             || self.income_mult != 1.0 || self.cash_add != 0.0 || self.ability_cd_mult != 1.0 || self.unfilter || self.damage_add != 0.0
-            || !self.tag_mods.is_empty() || self.fan.is_some()
+            || !self.tag_mods.is_empty() || !self.pid_boosts.is_empty() || self.fan.is_some()
     }
 }
 
@@ -3448,6 +3450,7 @@ impl Default for Buff {
             unfilter: false,
             damage_add: 0.0,
             tag_mods: Vec::new(),
+            pid_boosts: Vec::new(),
             acid_mods: Vec::new(),
             fan: None,
             te_cash: 0.0,
@@ -3577,7 +3580,7 @@ impl Buff {
     /// The projectile as fired under these buffs (None if unchanged). Damage-type support reaches
     /// sub-projectiles too (explosions); pierce and speed only the shot itself.
     fn projectile(&self, p: &Proj) -> Option<Proj> {
-        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_x == 1.0 && self.sub_paragon.is_none() && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.speed_add == 0.0 && self.ricochet.is_none() && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.adora_mult == 1.0 && self.tag_mods.is_empty() && self.fan.is_none() {
+        if self.pierce_add == 0.0 && self.pierce_all == 0.0 && self.pierce_x == 1.0 && self.sub_paragon.is_none() && self.pierce_pct.is_none() && self.speed_mult == 0.0 && self.speed_add == 0.0 && self.ricochet.is_none() && self.immune.is_none() && !self.acid && self.damage_add == 0.0 && self.damage_mult == 1.0 && self.radius_mult == 1.0 && self.adora_mult == 1.0 && self.tag_mods.is_empty() && self.pid_boosts.is_empty() && self.fan.is_none() {
             return None;
         }
         let mut q = p.clone();
@@ -3738,6 +3741,27 @@ impl Buff {
                 }
             }
             boost(&mut q, self.damage_mult, self.damage_add, &self.tag_mods);
+        }
+        // ProjectileMutator.Mutate (VERIFIED-DECOMP @0x181291870): every ProjectileModel under the
+        // tower whose name is the mutator's projectileModel's gets damageIncrease on its DamageModel
+        // and the DamageModifierForTag added (recording churchill_l10_r40 rt 413: the machine gun's
+        // 4 on a Ceramic is unchanged by Armor Piercing Shells).
+        for (id, add, mods) in &self.pid_boosts {
+            fn named(p: &mut Proj, id: &str, add: f32, mods: &[TagMod]) {
+                if p.pid == id {
+                    if p.damage_model && add > 0.0 {
+                        p.damage += add;
+                    }
+                    p.tag_mods.extend(mods.iter().cloned());
+                }
+                for c in &mut p.on_contact {
+                    named(&mut c.projectile, id, add, mods);
+                }
+                for e in &mut p.on_exhaust {
+                    named(&mut e.projectile, id, add, mods);
+                }
+            }
+            named(&mut q, id, *add, mods);
         }
         if !self.acid_mods.is_empty() {
             fn deep(p: &mut Proj, mods: &[TagMod]) {
@@ -14191,7 +14215,7 @@ impl Game {
                 for k in 0..self.towers.len() {
                     let child = self.towers[k].sub.as_ref().is_some_and(|s| s.parent == pid && !s.spec.no_parent_mutators);
                     if k == o || child {
-                        let boost = crate::data::ProjBoost { frames: life, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0, adora_mult: 1.0, pierce_mult: 1.0 };
+                        let boost = crate::data::ProjBoost { frames: life, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0, adora_mult: 1.0, pierce_mult: 1.0, proj_id: None };
                         self.towers[k].boosts.push((boost, life));
                         self.towers[k].biohacked = self.towers[k].biohacked.max(hacked);
                     }
@@ -16351,6 +16375,10 @@ impl Game {
                 }
                 // Ability projectile boosts (Armor Piercing Shells, Frostbite).
                 for (pb, _) in &self.towers[t].boosts {
+                    if let Some(id) = &pb.proj_id {
+                        b.pid_boosts.push((id.clone(), pb.damage, pb.tag_mods.clone()));
+                        continue;
+                    }
                     b.damage_add += pb.damage;
                     b.radius_mult *= pb.radius_mult;
                     b.adora_mult *= pb.adora_mult;

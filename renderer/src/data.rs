@@ -1644,6 +1644,11 @@ pub struct ProjBoost {
     /// the tower gets pierce x multiplier (+0x3c; recording adora_l20_r80 rt 1027, the bolts' 22).
     #[serde(default = "one")]
     pub pierce_mult: f32,
+    /// MutateProjectileOnAbilityModel.projectileModel: only projectiles with this id (their
+    /// ProjectileModel name; ProjectileMutator.Mutate, VERIFIED-DECOMP @0x181291870) take the
+    /// damage and tag modifiers (Armor Piercing Shells: the cannon's Explosion).
+    #[serde(default)]
+    pub proj_id: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]

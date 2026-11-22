@@ -3341,3 +3341,14 @@ Open (pending/hero_open):
     `DBGADORA=1` prints each turn (pos, target, dir, angle). Velocity, frames constants,
     Vector2.Rotate / AngleBetween and the move match the decomp; check Target.Position's circle
     offset next.
+- (2026-11-22) Churchill: MutateProjectileOnAbilityModel (Armor Piercing Shells, Frostbite) only
+  mutates the ProjectileModels named like its projectileModel (ProjectileMutator.Mutate @0x181291870,
+  String.Equals on the model name; `ProjBoost::proj_id`, matched by `pid`): the cannon's Explosion,
+  not the machine gun. churchill_l10 now to rt 506. Next: MOAB Barrage (P-BARRAGE stand-in), read:
+  MoabBarrage.Activate (@0x180e3c730) = factory bloons Where(isMoab && !virtual +0x778)
+  OrderByDescending(danger) ThenByDescending((distanceTraveled + MaxDistUntilSpawn) /
+  (MaxDistUntilSpawn + MaxDistUntilLeak)) Take(10), AddMutatorForNumLayers(durationFrames);
+  MoabBarrageBloonBehavior: Initialise lastMissileTick = now - interval + initialDelay + synced
+  Next(randomDelayMaxFrames), lastExplosionTick = now + initialDelay + same draw; Process: missile
+  tick (display), explosion tick every intervalFrames up to numOfMissiles: Bloon.Damage(damage,
+  immuneBloonProperties). `tools/il2cpp/type_usage.py` now names MethodDef slots (lambdas).

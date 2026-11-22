@@ -2237,7 +2237,9 @@ def main():
                     pbm = deref(xf.get("projectileBehaviorModel"))
                     out.setdefault("boosts", []).append({
                         "frames": xf.get("lifespanFrames", 0), "damage": xf.get("damageIncrease", 0),
-                        "tag_mods": [tag_mod(pbm)] if pbm and pbm["type"] == "DamageModifierForTagModel" else []})
+                        "tag_mods": [tag_mod(pbm)] if pbm and pbm["type"] == "DamageModifierForTagModel" else [],
+                        # ProjectileMutator.Mutate matches projectileModel by name (one-to-one with id).
+                        "proj_id": (deref(xf.get("projectileModel")) or {"f": {}})["f"].get("id")})
                 # BiohackModel (Benjamin): the affectedCount nearest towers deal +damageIncrease
                 # for `lifespan` (the shutdown after it isn't modelled). filterTowers: baseIds
                 # FilterTower refuses; shutoff: GetShutOffFrames (@0x1812721d0: the first

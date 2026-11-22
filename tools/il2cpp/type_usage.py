@@ -85,6 +85,16 @@ def main():
                 return "<" + ", ".join(name(struct.unpack_from("<Q", d, pe.va_to_off(argv) + 8 * j)[0]) for j in range(argc)) + ">"
             print(f"{a}: {full(owner.get(mdef, 0))}{inst(cls_i)}::{methods[mdef][0]}{inst(meth_i)}")
             continue
+        if kind == 3:
+            # A MethodDef: the method definition index itself (lambdas' MethodInfo slots).
+            if methods is None:
+                methods = list(md.methods())
+                owner = {}
+                for ti, t in enumerate(types):
+                    for m in range(t["method_start"], t["method_start"] + t["method_count"]):
+                        owner[m] = ti
+            print(f"{a}: {full(owner.get(index, 0))}::{methods[index][0]} (method def {index})")
+            continue
         if kind != 1:
             print(f"{a}: usage kind {kind}, not a TypeInfo")
             continue
