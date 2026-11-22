@@ -3279,10 +3279,20 @@ Open (pending/hero_open):
   -91.27669 = the pistol shot's EjectRotation at 327). RotateToTargetAttackOffset.GetOrigin
   (@0x180ddaf70) is the attack's own Position (tower + offset, maybe turned by the base) raised
   10 in display space; the clone's origin formula doesn't give -91.28 here. DBGOFF prints it.
-- pat_l10 rt 401: Big Squeeze. DelayBloonChildrenSpawning.Collide (@0x180cb75e0) adds a
-  children-delay mutator (lifespanFrames 228, all layers) and PatsBigSqueezeWind (Initialise
-  @0x1810019d0: offTrack+1, returnTo = position/distance, position = model 0x28/0x2c (Pat);
-  Process @0x181001b80: after model 0x34 frames goes back to the track). Not ported.
+- pat_l10 rt 401: Big Squeeze (not ported; the clone's export has only the 9999999-damage
+  Strong-MOAB shot with its 6 s stun, so the MOAB pops at once). Decoded so far:
+  - DelayBloonChildrenSpawning.Collide (@0x180cb75e0): BehaviorMutator(model id) for lifespanFrames
+    (+0x44, 228) over 999999999 layers, then a PatsBigSqueezeWind mutator (+0x74/+0x7c from the
+    projectile's +0x188/+0x190: its position; +0x70 = lifespanFrames) for 1 layer. Model fields:
+    createWindEffectOnChildBloons +0x30, ejectLocation +0x34, lifespan +0x40, lifespanFrames +0x44.
+  - PatsBigSqueezeWind.Initialise (@0x1810019d0): framesAtStart = roundTime, distanceTraveledToReturnTo
+    = distanceTraveled, returnToLocation = Position, then Position = model startLocation (+0x28/+0x2c).
+  - Process (@0x181001b80): waits until framesAtStart + framesToWait (+0x34); then the track point
+    at its distance (Path.DistanceToPointInfoBloon) minus Position: within _UNK_183e50318 ->
+    RemoveMutatorsById(model mutatorId +0x38); else Position += normalized x _UNK_183e5030c (WIND_SPEED).
+  - Still to read: how Bloon.Degrade / SpawnChildren honours the delay mutator (the recording has
+    the four Ceramics held at Pat's spot from rt 401), BigSqueezeFortifiedEffect.Collide
+    (@0x180c87eb0), and the two constants.
 - adora_l03 rt 183, adora_l10/l20; ezili_l10/l20 (less DoT damage by rt 463); obyn_l10/l20
   (weapon order); churchill x3.
 - (2026-11-21) Obyn Brambles: TargetTrackOrDefault without forceTargetTrack (`track_fallback`):
