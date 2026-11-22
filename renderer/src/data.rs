@@ -621,10 +621,46 @@ pub struct TowerTiers {
     pub paragon: Option<ParagonDef>,
     /// (Shared: the sim reads a tower's model every step without deep-cloning it.)
     pub tiers: HashMap<String, std::sync::Arc<Tier>>,
+    /// `tiers` by tier triple (packed a << 16 | b << 8 | c, sorted): `by_tiers`, built on first use.
+    #[serde(skip)]
+    pub packed: std::sync::OnceLock<Vec<(u32, std::sync::Arc<Tier>)>>,
     pub upgrades: Vec<Upgrade>,
     /// Heroes: XP leveling (tiers are [level, 0, 0]).
     #[serde(default)]
     pub hero: Option<HeroDef>,
+}
+
+impl TowerTiers {
+    /// `tiers[key]` for the key a tower on `t` is filed under (each path's tier in decimal, run
+    /// together: [1, 0, 2] is "102", a level-12 hero's [12, 0, 0] "1200"), without hashing a string.
+    pub fn by_tiers(&self, t: [u8; 3]) -> Option<&std::sync::Arc<Tier>> {
+        let v = self.packed.get_or_init(|| {
+            let mut v: Vec<(u32, std::sync::Arc<Tier>)> = Vec::new();
+            for (k, tier) in &self.tiers {
+                for c in tier_key_splits(k) {
+                    v.push(((c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32, tier.clone()));
+                }
+            }
+            v.sort_by_key(|e| e.0);
+            v
+        });
+        let key = (t[0] as u32) << 16 | (t[1] as u32) << 8 | t[2] as u32;
+        v.binary_search_by_key(&key, |e| e.0).ok().map(|i| &v[i].1)
+    }
+}
+
+/// Every triple whose decimal key (no leading zeros) is `k`.
+fn tier_key_splits(k: &str) -> Vec<[u8; 3]> {
+    let part = |s: &str| -> Option<u8> { if s.is_empty() || (s.len() > 1 && s.starts_with('0')) || !s.bytes().all(|b| b.is_ascii_digit()) { None } else { s.parse().ok() } };
+    let mut out = Vec::new();
+    for i in 1..k.len() {
+        for j in i + 1..k.len() {
+            if let (Some(a), Some(b), Some(c)) = (part(&k[..i]), part(&k[i..j]), part(&k[j..])) {
+                out.push([a, b, c]);
+            }
+        }
+    }
+    out
 }
 
 /// `HeroModel.xpScale` / `costPerXpToLevel` and each level's `UpgradeModel.xpCost`.

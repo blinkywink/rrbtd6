@@ -1223,24 +1223,14 @@ fn tier_weapons_before_ability(tier: &Tier, slot: usize) -> usize {
 /// Bloon `id`'s storage index: a remembered slot, checked (`bloons[slot].id == id`) before it is
 /// used, else a scan whose answer is remembered. Bloon ids are unique, so this is always the
 /// scan's own answer; it saves the per-hit scans over thousands of bloons.
+/// `bloons.iter().position(|b| b.id == id)` through `Game::bidx`, which every change to the bloon
+/// list keeps exact (spawn_at, bidx_swap_remove, swap_bloons, clear_bloons, the hex retain and the
+/// first child taking its parent's id). RRBTD6_BIDX_CHECK compares each lookup with the scan.
 fn bloon_idx(bloons: &[Bloon], cache: &std::cell::RefCell<FastMap<u64, u32>>, id: u64) -> Option<usize> {
-    let mut c = cache.borrow_mut();
-    if let Some(&k) = c.get(&id) {
-        if bloons.get(k as usize).is_some_and(|b| b.id == id) {
-            return Some(k as usize);
-        }
-    }
-    let k = bloons.iter().position(|b| b.id == id);
-    match k {
-        Some(k) => {
-            if c.len() > 1 << 16 {
-                c.clear();
-            }
-            c.insert(id, k as u32);
-        }
-        None => {
-            c.remove(&id);
-        }
+    let k = cache.borrow().get(&id).map(|&k| k as usize).filter(|&k| bloons.get(k).is_some_and(|b| b.id == id));
+    if env_flag!("RRBTD6_BIDX_CHECK") {
+        let scan = bloons.iter().position(|b| b.id == id);
+        assert_eq!(k, scan, "bloon index out of step for id {id}");
     }
     k
 }
@@ -7468,6 +7458,7 @@ impl Game {
             e.1 = false;
         }
         self.bloons.clear();
+        self.bidx.get_mut().clear();
         self.path_lists.clear();
         self.path_rank.clear();
         self.pending.clear();
@@ -7618,6 +7609,7 @@ impl Game {
         let grow_t = self.grow_kinds[kind].map_or(0, |g| g.1);
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
+        self.bidx.get_mut().insert(id, self.bloons.len() as u32);
         self.bloons.push(Bloon { hex_last: -1, held: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
@@ -11923,6 +11915,7 @@ impl Game {
                 self.ggrid.swap_remove(j, self.bloons.len());
             }
         }
+        self.bidx_swap_remove(j);
         self.bloons.swap_remove(j);
     }
 
@@ -14660,7 +14653,7 @@ impl Game {
         }
         let tiers=&self.tower_tiers[tw.def].as_ref()?.tiers;
         #[cfg(test)] if self.reference_targeting{return tiers.get(&tw.tier_key()).map(|a| &**a);}
-        tiers.get(tier_model_key(tw.tiers,&mut [0;9])).map(|a| &**a)
+        self.tower_tiers[tw.def].as_ref()?.by_tiers(tw.tiers).map(|a| &**a)
     }
 
     /// Tower `t`'s model as a shared handle: a reference count, not a deep copy, for a tower on
@@ -14670,7 +14663,7 @@ impl Game {
         if tw.sub.is_none() && tw.paragon.is_none() && tw.morph.is_none() && tw.temple.is_none() {
             let tiers = &self.tower_tiers[tw.def].as_ref()?.tiers;
             #[cfg(test)] if self.reference_targeting { return tiers.get(&tw.tier_key()).cloned(); }
-            return tiers.get(tier_model_key(tw.tiers, &mut [0; 9])).cloned();
+            return self.tower_tiers[tw.def].as_ref()?.by_tiers(tw.tiers).cloned();
         }
         self.tier(t).map(|x| std::sync::Arc::new(x.clone()))
     }
@@ -16573,6 +16566,7 @@ impl Game {
         if hexed && n > 0 {
             let gone: Vec<u64> = out_children.drain(k0..).collect();
             self.bloons.retain(|b| !gone.contains(&b.id));
+            self.bidx_rebuild();
         }
         n
     }
@@ -17064,6 +17058,7 @@ impl Game {
             }
             self.ghost_cell = None;
             let mut id = self.spawn_at(c, d1, path);
+            let ch_at = self.bloons.len() as u32 - 1;
             if let Some(ch) = self.bloons.last_mut() {
                 ch.spawn_round = parent_round;
                 // (The first child is the parent object: UpdatedModel's min; the others are new
@@ -17080,6 +17075,9 @@ impl Game {
                     // (spawn_on listed it under a new id: it is the parent, still listed.)
                     let fresh = ch.id;
                     ch.id = parent_id;
+                    let m = self.bidx.get_mut();
+                    m.remove(&fresh);
+                    m.insert(parent_id, ch_at);
                     (ch.held_at, ch.held_prev) = parent_held;
                     id = parent_id;
                     if let Some(&(p, k)) = self.path_rank.get(&parent_id) {
@@ -23859,6 +23857,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
             }
             self.plist_kill(id);
             self.fact_kill(i);
+            self.bidx_swap_remove(i);
             self.bloons.swap_remove(i);
             self.bloon_destroyed(id, at, z);
             return true;
@@ -24369,7 +24368,40 @@ impl Game {
                 self.ggrid.swap(i, j);
             }
         }
+        let m = self.bidx.get_mut();
+        for (a, b) in [(i, j), (j, i)] {
+            let id = self.bloons[a].id;
+            if m.get(&id) == Some(&(a as u32)) {
+                m.insert(id, b as u32);
+            }
+        }
         self.bloons.swap(i, j);
+    }
+
+    /// Keeps `bidx` in step with `bloons.swap_remove(i)` (call it just before): drops bloon i's
+    /// entry and moves the last bloon's to i. (An entry is only touched while it points at that
+    /// slot: a first child holds its parent's id while the parent is still listed.)
+    fn bidx_swap_remove(&mut self, i: usize) {
+        let m = self.bidx.get_mut();
+        let last = self.bloons.len() - 1;
+        let id = self.bloons[i].id;
+        if m.get(&id) == Some(&(i as u32)) {
+            m.remove(&id);
+        }
+        if i != last {
+            let moved = self.bloons[last].id;
+            if m.get(&moved) == Some(&(last as u32)) {
+                m.insert(moved, i as u32);
+            }
+        }
+    }
+
+    fn bidx_rebuild(&mut self) {
+        let m = self.bidx.get_mut();
+        m.clear();
+        for (k, b) in self.bloons.iter().enumerate().rev() {
+            m.insert(b.id, k as u32);
+        }
     }
 
     fn remove_bloon(&mut self, i: usize) {
@@ -24384,6 +24416,7 @@ impl Game {
                 self.ggrid.swap_remove(i, self.bloons.len());
             }
         }
+        self.bidx_swap_remove(i);
         self.bloons.swap_remove(i);
     }
 
