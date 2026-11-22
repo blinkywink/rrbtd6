@@ -437,6 +437,8 @@ pub struct Bloon {
     pub ign_added: bool,
     /// Hex.lastTick (Ezili's MOAB Hex; -1 before its first Process).
     pub hex_last: i64,
+    /// MoabBarrageBloonBehavior states (see `barrage_tick`).
+    pub barrage: Vec<BarrageState>,
 }
 
 /// List<T>.Sort(Comparison<T>) as IL2CPP's mscorlib does it (ArraySortHelper.IntrospectiveSort):
@@ -1225,6 +1227,22 @@ fn tier_weapons_before_ability(tier: &Tier, slot: usize) -> usize {
 /// Bloon `id`'s storage index: a remembered slot, checked (`bloons[slot].id == id`) before it is
 /// used, else a scan whose answer is remembered. Bloon ids are unique, so this is always the
 /// scan's own answer; it saves the per-hit scans over thousands of bloons.
+/// MoabBarrageBloonBehavior (Initialise @0x180ffc9f0, Process @0x180ffd100).
+#[derive(Clone, Debug)]
+pub struct BarrageState {
+    pub damage: f32,
+    pub immune: u32,
+    pub interval: i64,
+    pub missiles: u32,
+    pub last_missile: i64,
+    pub last_explosion: i64,
+    pub missile_count: u32,
+    pub explosion_count: u32,
+    /// The mutator's end (sim_elapsed).
+    pub until: u64,
+    pub owner: u64,
+}
+
 /// `bloons.iter().position(|b| b.id == id)` through `Game::bidx`, which every change to the bloon
 /// list keeps exact (spawn_at, bidx_swap_remove, swap_bloons, clear_bloons, the hex retain and the
 /// first child taking its parent's id). RRBTD6_BIDX_CHECK compares each lookup with the scan.
@@ -7641,7 +7659,7 @@ impl Game {
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
         self.bidx.get_mut().insert(id, self.bloons.len() as u32);
-        self.bloons.push(Bloon { hex_last: -1, held: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false, spawner: false });
+        self.bloons.push(Bloon { barrage: Vec::new(), hex_last: -1, held: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false, spawner: false });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
         if self.defs[kind].rotate_to_follow_path {
@@ -14222,28 +14240,41 @@ impl Game {
                 }
             }
         }
-        // HYPOTHESIS P-BARRAGE: MOAB Barrage puts a damage-over-time on the `targets`
-        // strongest MOAB-class bloons on the map: `damage` every `interval` for its duration.
-        if let Some(br) = &a.barrage {
+        // MoabBarrage.Activate (VERIFIED-DECOMP @0x180e3c730): the bloon factory's bloons
+        // Where(isMoab and not destroyed) OrderByDescending(danger) ThenByDescending(PercThroughMap)
+        // (stable: factory order on ties) Take(10), each given the MoabBarrageBloonBehavior
+        // mutator for durationFrames (AddMutatorForNumLayers, one layer).
+        if let Some(br) = a.barrage.clone() {
             let owner = self.towers[t].id;
-            let mut moabs: Vec<(f32, usize)> = (0..self.bloons.len())
-                .filter(|&i| self.defs[self.bloons[i].kind].tags.iter().any(|x| x == "Moabs") && on_map(self.bloons[i].pos, 0.0))
-                .map(|i| (self.rbe[self.bloons[i].kind] * 1e4 + self.bloons[i].progress(), i))
-                .collect();
-            moabs.sort_by(|a, b| b.0.total_cmp(&a.0));
-            for &(_, i) in moabs.iter().take(br.targets as usize) {
-                self.bloons[i].effects.push(Effect {
-                    overlay: Default::default(), seq: 0,
-                    kind: EffectKind::Dot { damage: br.damage, interval: br.interval * FPS, tick: self.round_clock as f32, immune: br.immune, mods: Default::default(), start: Some(0.0) },
-                    id: "MoabBarrage".into(),
-                    frames_left: br.lifespan * FPS,
-                    total: br.lifespan * FPS,
-                    added: self.sim_elapsed,
-                    layers: 1,
-                    owner,
-                    distribute: (true, false),
-                    keep: false,
-                });
+            let mut moabs: Vec<(f32, f32, usize)> = Vec::new();
+            for &(o, alive) in &self.fact {
+                if !alive {
+                    continue;
+                }
+                let Some(i) = self.bloons.iter().position(|b| b.obj == o) else { continue };
+                let d = &self.defs[self.bloons[i].kind];
+                if d.is_moab {
+                    moabs.push((d.danger, self.perc_through_map(&self.bloons[i]), i));
+                }
+            }
+            moabs.sort_by(|x, y| y.0.total_cmp(&x.0).then(y.1.total_cmp(&x.1)));
+            let frames = |s: f32| (s * 60.0) as i64;
+            for &(_, _, i) in moabs.iter().take(10) {
+                // MoabBarrageBloonBehavior.Initialise (@0x180ffc9f0): lastMissileTick = now -
+                // intervalFrames + initialDelayFrames, lastExplosionTick = now + initialDelayFrames,
+                // both + syncedRandom.Next(randomDelayMaxFrames).
+                let now = self.sim_elapsed as i64;
+                let r = self.synced_range(0, frames(br.random_delay) as i32) as i64;
+                let st = BarrageState {
+                    damage: br.damage, immune: br.immune, interval: frames(br.interval), missiles: br.missiles,
+                    last_missile: now - frames(br.interval) + frames(br.initial_delay) + r,
+                    last_explosion: now + frames(br.initial_delay) + r,
+                    missile_count: 0, explosion_count: 0,
+                    until: self.sim_elapsed + br.duration_frames as u64, owner,
+                };
+                let b = &mut self.bloons[i];
+                b.barrage.retain(|x| x.owner != owner);
+                b.barrage.push(st);
             }
         }
         // SwordCharge.Activate (VERIFIED-DECOMP @0x180e5a0c0) = StartCharge.
@@ -24031,6 +24062,30 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
         }
     }
 
+    /// MoabBarrageBloonBehavior.Process (VERIFIED-DECOMP @0x180ffd100): CheckMissileTick (the
+    /// missile display, counted) then CheckExplosionTick (@0x180ffc330): once intervalFrames have
+    /// passed since lastExplosionTick and fewer than numOfMissiles went off, DealDamage
+    /// (@0x180ffc940: Bloon.Damage of `damage` with immuneBloonProperties, credited to the tower).
+    fn barrage_tick(&mut self, i: usize, dots: &mut Vec<DotTick>) {
+        let now = self.sim_elapsed;
+        let b = &mut self.bloons[i];
+        b.barrage.retain(|s| now < s.until);
+        let id = b.id;
+        for s in &mut b.barrage {
+            let t = now as i64;
+            if s.missile_count < s.missiles && t - s.last_missile >= s.interval {
+                s.last_missile = t;
+                s.missile_count += 1;
+            }
+            if s.explosion_count < s.missiles && t - s.last_explosion >= s.interval {
+                let prev = s.last_explosion as f32;
+                s.last_explosion = t;
+                s.explosion_count += 1;
+                dots.push((id, s.damage, s.immune, s.owner, (true, false), "MoabBarrage".to_string(), prev, 0));
+            }
+        }
+    }
+
     /// Bloon.Process's mutator timers and DamageOverTime / emit ticks for bloon `i` (the damage
     /// and emissions are applied by the caller, after the moves).
     #[allow(clippy::type_complexity)]
@@ -24062,6 +24117,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                 }
             }
         }
+        self.barrage_tick(i, dots);
         let b = &mut self.bloons[i];
         // In behaviour order (`Effect::seq`).
         let mut by_seq: Vec<usize> = (0..b.effects.len()).collect();

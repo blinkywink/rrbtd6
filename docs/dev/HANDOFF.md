@@ -3352,3 +3352,10 @@ Open (pending/hero_open):
   Next(randomDelayMaxFrames), lastExplosionTick = now + initialDelay + same draw; Process: missile
   tick (display), explosion tick every intervalFrames up to numOfMissiles: Bloon.Damage(damage,
   immuneBloonProperties). `tools/il2cpp/type_usage.py` now names MethodDef slots (lambdas).
+- (2026-11-22) MOAB Barrage ported (VERIFIED-DECOMP, replaces P-BARRAGE): `BarrageState` on the
+  bloon, `barrage_tick` beside the Hex tick; plus MutateDamageOnAbilityModel (DamageMutator.Mutate
+  @0x181282950: +damageIncrease on DamageModels whose name EndsWith targetDamageId, here the
+  Explosion's +3 for 480 frames). churchill_l20 now to rt 765. Next (edited, not built): the
+  ChurchillBaseRotation turn comes before the attacks when its model precedes the first
+  AttackModel (Churchill / Brickell; the Dart Paragon turns at frame end): churchill_l10 turns
+  one frame early from rt 73.

@@ -1732,6 +1732,16 @@ pub struct Barrage {
     pub lifespan: f32,
     #[serde(default)]
     pub immune: u32,
+    /// MoabBarrageBloonBehaviorModel.initialDelay / randomDelayMax (seconds) and numOfMissiles.
+    #[serde(default)]
+    pub initial_delay: f32,
+    #[serde(default)]
+    pub random_delay: f32,
+    #[serde(default)]
+    pub missiles: u32,
+    /// MoabBarrageModel.durationFrames: the mutator's time on the bloon.
+    #[serde(default)]
+    pub duration_frames: u32,
 }
 
 #[derive(Deserialize, Clone)]

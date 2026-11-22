@@ -2233,6 +2233,19 @@ def main():
                 # properties / +damageIncrease and the added DamageModifierForTagModel.
                 if x["type"] == "ChangeDamageTypeModel":
                     out.setdefault("boosts", []).append({"frames": xf.get("lifespanFrames", 0), "immune": xf.get("immuneBloonProperties", 0)})
+                # MutateDamageOnAbilityModel (MOAB Barrage's +3): DamageMutator.Mutate
+                # (VERIFIED-DECOMP @0x181282950) adds damageIncrease to every DamageModel whose name
+                # ends with targetDamageId for lifespanFrames: as a boost on the projectiles
+                # owning such a DamageModel (by id; one id here, the cannon's Explosion).
+                if x["type"] == "MutateDamageOnAbilityModel":
+                    target = xf.get("targetDamageId") or ""
+                    owners = sorted({pm["f"].get("id") for pm in objs.values() if pm["type"] == "ProjectileModel"
+                                     and any(isinstance(b, dict) and b.get("type") == "DamageModel"
+                                             and str(b["f"].get("_name", "")).endswith(target)
+                                             for b in (deref(y) for y in items(pm["f"].get("behaviors"))))})
+                    assert len(owners) == 1, (target, owners)
+                    out.setdefault("boosts", []).append({"frames": xf.get("lifespanFrames", 0), "damage": xf.get("damageIncrease", 0),
+                                                         "proj_id": owners[0]})
                 if x["type"] == "MutateProjectileOnAbilityModel":
                     pbm = deref(xf.get("projectileBehaviorModel"))
                     out.setdefault("boosts", []).append({
@@ -2268,7 +2281,9 @@ def main():
                     dm = (deref(xf.get("damageOverTimeModel")) or {"f": {}})["f"]
                     out["barrage"] = {"targets": xf.get("targets", 0), "damage": dm.get("damage", 0),
                                       "interval": dm.get("interval", 1.0), "lifespan": xf.get("durationFrames", 0) / 60.0,
-                                      "immune": dm.get("immuneBloonProperties", 0)}
+                                      "immune": dm.get("immuneBloonProperties", 0),
+                                      "initial_delay": dm.get("initialDelay", 0.0), "random_delay": dm.get("randomDelayMax", 0.0),
+                                      "missiles": dm.get("numOfMissiles", 0), "duration_frames": xf.get("durationFrames", 0)}
                 # PlaceProjectileAtModel (Mega Mine): the projectile at a picked point after `delay`.
                 if x["type"] == "PlaceProjectileAtModel" and deref(xf.get("projectileModel")):
                     out["place_at"] = {"projectile": projectile(deref(xf["projectileModel"])), "delay": xf.get("delay", 0.0)}
