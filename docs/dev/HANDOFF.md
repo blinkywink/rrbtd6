@@ -3290,9 +3290,16 @@ Open (pending/hero_open):
   - Process (@0x181001b80): waits until framesAtStart + framesToWait (+0x34); then the track point
     at its distance (Path.DistanceToPointInfoBloon) minus Position: within _UNK_183e50318 ->
     RemoveMutatorsById(model mutatorId +0x38); else Position += normalized x _UNK_183e5030c (WIND_SPEED).
-  - Still to read: how Bloon.Degrade / SpawnChildren honours the delay mutator (the recording has
-    the four Ceramics held at Pat's spot from rt 401), BigSqueezeFortifiedEffect.Collide
-    (@0x180c87eb0), and the two constants.
+  - Constants: WIND_SPEED 3.5 (_UNK_183e5030c, a 3D step), arrival 110.25 = 10.5^2 (sqrMagnitude).
+  - Recording pat_l10_r40 (M lines): at rt 400 the shot hits MOAB 462: Stun:BigSqueeze added
+    (360, all layers), the MOAB depletes into 4 Ceramics (462 + copies 657/666/675 at their own
+    distances), then the delay mutator (228, layers 999999999) and PatsBigSqueezeWind (1 layer) go on
+    462. All four sit at Pat's spot (-112.815, -30.9) with unchanged hp until rt 628 (no hits); at 629
+    462 starts back (2D step ~0.356: the 3.5 step is mostly height, so the start z matters), 657
+    reappears at its track spot at 630, 462 is a Green on the track at 631 (hit at 630).
+  - Still to do: how the copies follow the parent while delayed (Bloon.Degrade / SpawnChildren with
+    the delay mutator), the start location's z, BigSqueezeFortifiedEffect.Collide (@0x180c87eb0).
+    A recording with bloon heights (or a probe line for PatsBigSqueezeWind) would settle the z.
 - adora_l03 rt 183, adora_l10/l20; ezili_l10/l20 (less DoT damage by rt 463); obyn_l10/l20
   (weapon order); churchill x3.
 - (2026-11-21) Obyn Brambles: TargetTrackOrDefault without forceTargetTrack (`track_fallback`):
