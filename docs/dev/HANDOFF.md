@@ -110,6 +110,15 @@ Ground rules follow.
   `ROOT=$(tail -c 4 local_extracted/game_model/sim_model.bytes | python -I -c "import
   sys,struct;print(struct.unpack('<i',sys.stdin.buffer.read())[0])"); python -I
   tools/assets/build_game_data.py local_extracted tutorial "$ROOT"`.
+- **Performance**: `sh tools/simbench.sh` (five sim_bench runs of the test exe, late-game step
+  averages; noisy, compare sorted medians). Profile without admin rights:
+  `python -I tools/sample_prof.py -- <exe> sim_bench --ignored --nocapture` (build the test exe
+  with `CARGO_TARGET_DIR=../target/prof CARGO_PROFILE_RELEASE_DEBUG=limited` for names; samply
+  needs elevation here). Frames: `python -I tools/benchmark_frames.py --exe BTD6.exe --round 200
+  --baseline-only --pairs 1 --frames 8000`, add `--profile` (with a game build from
+  `CARGO_TARGET_DIR=target/gameprof CARGO_PROFILE_GAME_DEBUG=limited cargo build --profile game
+  -p btd6-game`) for a `<label>.prof` report. `RRBTD6_BIDX_CHECK=1` checks every bloon index
+  lookup against a scan (run the regression with it after touching bloon list mutation).
 - **Build the game**: `RUST_MIN_STACK=268435456 CARGO_BUILD_JOBS=2 sh tools/build_exe.sh`
   (BTD6.exe in the project folder). If a build fails with a linker "unresolved external" after
   a crash, delete `target/game/game/incremental/btd6_game-*` and build again.
@@ -2377,6 +2386,14 @@ P-OFFTRACKORDER: newest factory object first). (The wind_seg filing above now on
 seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
+
+- 2026-11-22: Sim perf (bit-exact, regression full): shared Arc tier models, cached env switches, then
+  an authoritative bloon id -> index map (`bidx`, updated at spawn_at / every swap_remove / swap /
+  clear / the hex retain / the first child taking its parent's id) and a tier-triple model lookup.
+  Late-game sim_bench step ~1.67 -> ~0.80 ms. The profile is now flat (towers_phase, damage,
+  line_clear, speed_mult a few % each). Frames (round 200, 4 paragons): ~250 fps, median 3.8 ms,
+  mostly the GL driver (SwapBuffers / batch flushes); CPU vertex transforms in Model::draw_at ~6%.
+  Flood (1600 Ceramics): 620 fps.
 
 - 2026-11-19: Trade Empire from the decomp (every taken ship's round cash + the whole bonus, OrderByDescending
   tier Take(cap x empires), damage buffs only on taken ships, per-mutatorId groups, CHIMPS keeps the Favored

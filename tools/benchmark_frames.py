@@ -168,6 +168,7 @@ def main():
     parser.add_argument('--trace-loads',action='store_true',help='Log first-use loading work taking at least 2 ms')
     parser.add_argument('--ab-feature',choices=['frame-pacing','text-cache','pose-reuse','sprite-storage','shadow-textures','map-batching','render-storage','static-maps','background-assets','fallback-models','prediction-retirement'],default='text-cache',help='Feature disabled in same-build reference runs')
     parser.add_argument('--same-build-ab',action='store_true',help='Compare feature off/on when running the suite without a previous executable')
+    parser.add_argument('--profile',action='store_true',help='Sample each run with tools/sample_prof.py (report: <label>.prof; timings then include the sampler)')
     parser.add_argument('--simulation-snapshot',type=Path,help='Reuse a previously frozen simulation-input directory')
     args=parser.parse_args()
     if args.upgrade_case and (args.suite or args.round or args.frames<103 or args.warmup>=100):parser.error('upgrade case requires no suite/round, frames >= 103, warmup < 100')
@@ -244,7 +245,9 @@ def main():
                     wait_for_compilers()
                     check_inputs()
                     with (output/(label+'.log')).open('w',encoding='utf-8') as log:
-                        process_metrics=run_measured([str(run_exe)],cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT,
+                        command=[str(run_exe)]
+                        if args.profile:command=[sys.executable,'-I',str(Path(__file__).resolve().parent/'sample_prof.py'),'--top','50','--out',str(output/(label+'.prof')),'--',str(run_exe)]
+                        process_metrics=run_measured(command,cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT,
                                        startupinfo=startup,creationflags=flags)
                     check_inputs()
                     expected_marker='frame-bench-inputs: isolated mode='+settings_data['mode']

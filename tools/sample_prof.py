@@ -2,7 +2,7 @@
 busiest thread ~1000 times a second, walks the stack with dbghelp's StackWalk64 and resolves names
 from the exe's PDB. Prints self and inclusive shares per function.
 
-Usage: python -I tools/sample_prof.py [--top N] [--hz H] -- EXE ARGS...
+Usage: python -I tools/sample_prof.py [--top N] [--hz H] [--out REPORT] -- EXE ARGS...
 """
 import ctypes, ctypes.wintypes as wt, collections, subprocess, sys, time
 
@@ -83,9 +83,11 @@ def thread_cpu(h):
 
 def main():
     args = sys.argv[1:]
-    top, hz = 40, 1000
+    top, hz, out = 40, 1000, None
     while args and args[0] != "--":
-        if args[0] == "--top":
+        if args[0] == "--out":
+            out = args[1]; args = args[2:]
+        elif args[0] == "--top":
             top = int(args[1]); args = args[2:]
         elif args[0] == "--hz":
             hz = int(args[1]); args = args[2:]
@@ -96,7 +98,9 @@ def main():
     import os
     args[0] = os.path.abspath(args[0])
     ctypes.WinDLL("winmm").timeBeginPeriod(1)
-    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # (With --out the command keeps this process's output, and the report goes to the file.)
+    quiet = subprocess.DEVNULL if out is None else None
+    proc = subprocess.Popen(args, stdout=quiet, stderr=quiet)
     k32.OpenProcess.restype = wt.HANDLE
     hp = k32.OpenProcess(0x1F0FFF, False, proc.pid)
     dbg.SymSetOptions(0x2 | 0x10)
@@ -172,6 +176,8 @@ def main():
             disp = ctypes.c_ulonglong(0)
             names[a] = s.Name if dbg.SymFromAddrW(wt.HANDLE(hp), ctypes.c_ulonglong(a), ctypes.byref(disp), ctypes.byref(s)) else hex(a)
         return names[a]
+    if out is not None:
+        sys.stdout = open(out, "w", encoding="utf-8")
     selfc, incl = collections.Counter(), collections.Counter()
     for st, c in stacks.items():
         selfc[name(st[0])] += c
