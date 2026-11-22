@@ -16792,7 +16792,13 @@ impl Game {
         let parent_id = b.id;
         // (A carried bloon's degrade keeps the bird's hold: the first child is the same object.)
         let parent_held = (b.held_at, b.held_prev);
-        let lineage: std::sync::Arc<[u64]> = b.lineage.iter().flat_map(|l| l.iter().copied()).chain(std::iter::once(b.layer)).collect();
+        let lineage: std::sync::Arc<[u64]> = {
+            let l = b.lineage.as_deref().unwrap_or(&[]);
+            let mut v = Vec::with_capacity(l.len() + 1);
+            v.extend_from_slice(l);
+            v.push(b.layer);
+            v.into()
+        };
         let parent_place = if self.grid_on && self.has_grid_rank { self.ggrid.place_of(i) } else { (EMPTY, EMPTY) };
         let pp0 = b.pos;
         let parent_z = b.height;
@@ -17403,10 +17409,10 @@ impl Game {
         if top && self.pop_nested {
             // SpawnChildren.CreatedChildren over the final list: the first is the parent object
             // (it moves on at its new speed), the k-th sits k x min(26.7 / count, 8.6) behind.
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = FastSet::default();
             let ids: Vec<u64> = out_children[oc0..].iter().copied().filter(|id| seen.insert(*id)).collect();
             // What this pop made sits in the parent's slot or past where storage ended.
-            let at: std::collections::HashMap<u64, usize> = std::iter::once(i)
+            let at: FastMap<u64, usize> = std::iter::once(i)
                 .chain(len_start.saturating_sub(1)..self.bloons.len())
                 .filter(|&k| k < self.bloons.len() && seen.contains(&self.bloons[k].id))
                 .map(|k| (self.bloons[k].id, k))
