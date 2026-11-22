@@ -4056,6 +4056,10 @@ pub struct Game {
     proj_obj_emit: Vec<u32>,
     /// `bloon_idx`'s remembered slots.
     bidx: std::cell::RefCell<FastMap<u64, u32>>,
+    /// Some bloon may hold a CarryProjectile not yet attached (empty `uids`): set where one is
+    /// made or a copy's is cleared, recomputed after the degrade's attach pass. While false that
+    /// pass (a scan of every bloon's effects) finds nothing and is skipped.
+    carry_pending: std::cell::Cell<bool>,
     /// Bloons destroyed this frame and where (Game::bloon_destroyed).
     destroyed_now: FastMap<u64, [f32; 2]>,
     /// The objects live projectiles held as the frame began (only kept while a spawner needs it).
@@ -6788,6 +6792,7 @@ impl Game {
             proj_objs: 0,
             proj_obj_emit: Vec::new(),
             bidx: Default::default(),
+            carry_pending: Default::default(),
             destroyed_now: Default::default(),
             proj_objs_start: Default::default(),
             over_time: Default::default(),
@@ -17301,6 +17306,7 @@ impl Game {
                     if let EffectKind::Carry { uids, .. } = &mut e.kind {
                         if n > 0 {
                             uids.clear();
+                            self.carry_pending.set(true);
                         }
                     }
                     e
@@ -17582,13 +17588,13 @@ impl Game {
             }
         }
         // The copies' carried projectiles, where the degrade put them.
-        if top {
-            let made: Vec<usize> = (0..self.bloons.len())
-                .filter(|&k| self.bloons[k].effects.iter().any(|e| matches!(&e.kind, EffectKind::Carry { uids, .. } if uids.is_empty())))
-                .collect();
+        if top && self.carry_pending.get() {
+            let pending = |b: &Bloon| b.effects.iter().any(|e| matches!(&e.kind, EffectKind::Carry { uids, .. } if uids.is_empty()));
+            let made: Vec<usize> = (0..self.bloons.len()).filter(|&k| pending(&self.bloons[k])).collect();
             for k in made {
                 self.attach_carries_as(k, Some(layer));
             }
+            self.carry_pending.set(self.bloons.iter().any(pending));
         }
         // (They come once the degrade has placed its children, each a pop of its own: recording
         // glue_205, a Corrosive MOAB's tick takes its first Ceramic and the other three stay
@@ -25912,11 +25918,11 @@ impl Game {
                     None => continue,
                 },
                 "carry" => match &e.projectile {
-                    Some(p) => EffectKind::Carry {
+                    Some(p) => { self.carry_pending.set(true); EffectKind::Carry {
                         proj: p.clone(),
                         emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
                         uids: Vec::new(),
-                    },
+                    } },
                     None => continue,
                 },
                 "pop_fx" => match &e.fx {

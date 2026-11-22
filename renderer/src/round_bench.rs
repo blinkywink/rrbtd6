@@ -30,6 +30,27 @@ pub fn setup(game:&mut Game,round:usize,degree:u32){
         eprintln!("round-bench: {name} degree {degree} at {:?}",game.towers[t].pos);
     }
     assert_eq!(game.towers.iter().filter(|t|t.paragon.is_some()).count(),count);
+    // RRBTD6_BENCH_CROWD=n: n more tier-5 towers of every kind around the map (a crowded late game).
+    let crowd=std::env::var("RRBTD6_BENCH_CROWD").ok().and_then(|v|v.parse::<usize>().ok()).unwrap_or(0);
+    if crowd>0{
+        let kinds:Vec<usize>=(0..game.tower_defs.len()).filter(|&d|game.hero_def(d).is_none()&&game.tower_tiers[d].is_some()).collect();
+        let length=game.track.length();
+        let mut placed=0;
+        'outer: for step in 0..4000usize{
+            if placed>=crowd{break;}
+            let along=game.track.pos(length*((step as f32*0.6180339)%1.0));
+            let a=step as f32*2.399963;let r=22.0+(step%5) as f32*9.0;
+            let def=kinds[placed%kinds.len()];
+            if game.place(def,[along[0]+r*a.cos(),along[1]+r*a.sin()]){
+                let tiers=[[5,2,0],[0,5,2],[2,0,5]][placed%3];
+                let t=game.towers.last_mut().unwrap();
+                if game.tower_tiers[def].as_ref().is_some_and(|tt|tt.by_tiers(tiers).is_some()){t.tiers=tiers;}
+                placed+=1;
+                if placed>=crowd{break 'outer;}
+            }
+        }
+        eprintln!("round-bench: crowd of {placed} towers");
+    }
     game.round=round-1;game.round_active=false;game.won=false;game.game_over=false;
     game.place_fx.clear();game.upgrade_fx.clear();
     eprintln!("round-bench: round {round}, {count} paragons, degree {degree}, freeplay seed 12345; no abilities automated");

@@ -1220,6 +1220,7 @@ const VINE_END_FRAMES: i32 = 23;
     let bench_steps=if autotest.is_some()&&frame_capture.is_some(){Some(std::env::var("RRBTD6_BENCH_STEPS").ok().and_then(|v|v.parse::<u32>().ok()).unwrap_or(2).clamp(1,60))}else{None};
     if bench_steps.is_some(){game.lives=1.0e12;}
     let bench_round=if bench_steps.is_some(){std::env::var("RRBTD6_BENCH_ROUND").ok().and_then(|r|r.parse::<usize>().ok())}else{None};
+    let bench_spawn:Option<(String,usize)>=std::env::var("RRBTD6_BENCH_SPAWN").ok().and_then(|v|{let (a,b)=v.split_once(':')?;Some((a.to_string(),b.parse().ok()?))});
     let bench_warmup=std::env::var("RRBTD6_BENCH_WARMUP").ok().and_then(|v|v.parse::<u32>().ok()).unwrap_or(300);
     let gallery = std::env::var("RRBTD6_GALLERY").is_ok();
     mark("loop");
@@ -1393,6 +1394,9 @@ const VINE_END_FRAMES: i32 = 23;
         if let Some(round)=bench_round{
             let degree=std::env::var("RRBTD6_BENCH_DEGREE").ok().and_then(|v|v.parse::<u32>().ok()).unwrap_or(20).clamp(1,100);
             round_bench::setup(&mut game,round,degree);selected=None;auto_start=false;
+            // RRBTD6_BENCH_SPAWN=<bloon>:<n>: only those, sent at spacing 0 when the warm-up ends
+            // (the round itself is round 1's few Reds).
+            if bench_spawn.is_some(){game.round=0;}
         }
         game.start_round();
         // RRBTD6_SANDBOX=<bloon>: the sandbox menu open, RRBTD6_SANDBOX_COUNT (10) of that bloon sent
@@ -4797,6 +4801,10 @@ const VINE_END_FRAMES: i32 = 23;
             if frames % 600 == 0 {
                 eprintln!("autotest: frame {frames} round {} lives {} cash {:.0} towers {:?}", game.round + 1, game.lives, game.cash,
                     game.towers.iter().map(|t| t.tier_key()).collect::<Vec<_>>());
+            }
+            if let Some((name,n))=bench_spawn.as_ref().filter(|_|bench_round.is_some()&&frames==bench_warmup){
+                let ok=game.debug_spawn(name,*n,0.0);
+                eprintln!("round-bench: spawned {n} {name} ({ok})");
             }
             let round_complete=bench_round.is_some()&&frames>bench_warmup&&!game.round_active&&game.bloons.is_empty();
             // RRBTD6_SIMFRAMES: the screenshot at that simulation frame instead (rendered frames

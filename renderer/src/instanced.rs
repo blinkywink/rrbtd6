@@ -146,6 +146,18 @@ pub struct Instancer {
     /// again (same triangles, colours and depth), so it's skipped. A sandbox send with no spacing
     /// stacks thousands of identical MOABs on one spot.
     seen: std::collections::HashSet<(usize, [u32; 4])>,
+    /// Per model: the pose for (time, outline scale) bits and its parts' vertex buffers. A frame
+    /// flushes many runs (regular bloons between MOABs end them); each model is posed and uploaded
+    /// once for that time instead of once per run.
+    posed: HashMap<String, Posed>,
+}
+
+struct Posed {
+    key: (u32, u32),
+    body: Vec<PosedMesh>,
+    outlines: Vec<PosedMesh>,
+    body_vbs: Vec<Stream>,
+    outline_vbs: Vec<Stream>,
 }
 
 const CULLS: [CullFace; 3] = [CullFace::Nothing, CullFace::Front, CullFace::Back];
@@ -159,7 +171,7 @@ impl Instancer {
         for cull in CULLS {
             programs.push((Program::new(BODY_VS, crate::anim::TOON_FS, false, cull)?, Program::new(OUTLINE_VS, crate::anim::OUTLINE_FS, true, cull)?));
         }
-        Some(Self { programs, vertices: Vec::new(), instances: Vec::new(), indices: HashMap::new(), run: Vec::new(), seen: Default::default() })
+        Some(Self { programs, vertices: Vec::new(), instances: Vec::new(), indices: HashMap::new(), run: Vec::new(), seen: Default::default(), posed: HashMap::new() })
     }
 
     /// Queues a bloon drawn with `model` at `pos` (Unity world) turned by `yaw`.
@@ -188,13 +200,26 @@ impl Instancer {
         }
         let run = std::mem::take(&mut self.run);
         self.seen.clear();
-        // (run entry, body meshes, outline meshes) per model.
-        let mut posed: Vec<(usize, Vec<PosedMesh>, Vec<PosedMesh>)> = Vec::new();
+        // Each model of the run posed (and its vertices uploaded) once for this time.
+        let key = (time.to_bits(), outline_scale.to_bits());
+        let mut order: Vec<(usize, String)> = Vec::new();
         for (i, (name, _)) in run.iter().enumerate() {
             let Some(m) = models.get_mut(name).and_then(|m| m.as_mut()) else { continue };
-            let idle = m.idle_clip();
-            let (body, outlines) = m.meshes(idle, time, [0.0; 3], 0.0, outline_scale, false, None);
-            posed.push((i, body, outlines));
+            let entry = self.posed.entry(name.clone()).or_insert_with(|| Posed { key: (u32::MAX, u32::MAX), body: Vec::new(), outlines: Vec::new(), body_vbs: Vec::new(), outline_vbs: Vec::new() });
+            if entry.key != key {
+                let idle = m.idle_clip();
+                let (body, outlines) = m.meshes(idle, time, [0.0; 3], 0.0, outline_scale, false, None);
+                for (k, mesh) in body.iter().enumerate() {
+                    stream(&mut entry.body_vbs, k, mq::BufferType::VertexBuffer, &mesh.vertices);
+                }
+                for (k, mesh) in outlines.iter().enumerate() {
+                    stream(&mut entry.outline_vbs, k, mq::BufferType::VertexBuffer, &mesh.vertices);
+                }
+                entry.body = body;
+                entry.outlines = outlines;
+                entry.key = key;
+            }
+            order.push((i, name.clone()));
         }
         let mut gl = unsafe { get_internal_gl() };
         gl.flush();
@@ -211,21 +236,21 @@ impl Instancer {
         ctx.apply_scissor_rect(0, 0, w as i32, h as i32);
         let empty = Texture2D::empty();
         let model = Mat4::IDENTITY.to_cols_array();
-        let mut vslot = 0;
         let inst_ids: Vec<mq::BufferId> = run.iter().enumerate().map(|(i, (_, inst))| stream(&mut self.instances, i, mq::BufferType::VertexBuffer, inst)).collect();
         for outline in [true, false] {
             for (ci, cull) in CULLS.into_iter().enumerate() {
                 let program = if outline { &self.programs[ci].1 } else { &self.programs[ci].0 };
                 let mut applied = false;
-                for (k, body, outlines) in &posed {
+                for (k, name) in &order {
                     let (k, count) = (*k, run[*k].1.len());
-                    for m in (if outline { outlines } else { body }).iter().filter(|m| m.cull == cull) {
+                    let entry = &self.posed[name];
+                    let (meshes, vbs) = if outline { (&entry.outlines, &entry.outline_vbs) } else { (&entry.body, &entry.body_vbs) };
+                    for (mi, m) in meshes.iter().enumerate().filter(|(_, m)| m.cull == cull) {
                         if !applied {
                             ctx.apply_pipeline(&program.pipeline);
                             applied = true;
                         }
-                        let vb = stream(&mut self.vertices, vslot, mq::BufferType::VertexBuffer, &m.vertices);
-                        vslot += 1;
+                        let vb = vbs[mi].id;
                         let key = std::sync::Arc::as_ptr(&m.indices) as *const u16 as usize;
                         let ib = self
                             .indices
@@ -253,6 +278,11 @@ impl Drop for Instancer {
         let ctx = unsafe { get_internal_gl() }.quad_context;
         for s in self.vertices.iter().chain(&self.instances) {
             ctx.delete_buffer(s.id);
+        }
+        for p in self.posed.values() {
+            for s in p.body_vbs.iter().chain(&p.outline_vbs) {
+                ctx.delete_buffer(s.id);
+            }
         }
         for (id, _) in self.indices.values() {
             ctx.delete_buffer(*id);

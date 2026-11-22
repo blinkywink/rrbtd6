@@ -83,9 +83,11 @@ def thread_cpu(h):
 
 def main():
     args = sys.argv[1:]
-    top, hz, out = 40, 1000, None
+    top, hz, out, lines_of = 40, 1000, None, None
     while args and args[0] != "--":
-        if args[0] == "--out":
+        if args[0] == "--lines":
+            lines_of = args[1]; args = args[2:]
+        elif args[0] == "--out":
             out = args[1]; args = args[2:]
         elif args[0] == "--top":
             top = int(args[1]); args = args[2:]
@@ -202,6 +204,17 @@ def main():
         print(f"{k[:90]}")
         for nm, n in callers.most_common(4):
             print(f"    {100 * n / max(nsamp, 1):5.1f}%  {nm[:120]}")
+    if lines_of:
+        # Inclusive samples per source line of the named function (the frame in that function).
+        per = collections.Counter()
+        for st, c in stacks.items():
+            for a in st:
+                if lines_of in name(a) and exe_base and 0 <= a - exe_base < 0x10000000:
+                    per[namer.line(a - exe_base - 1)] += c
+                    break
+        print(f"-- lines of {lines_of}")
+        for k, c in per.most_common(top):
+            print(f"{100 * c / max(nsamp, 1):5.1f}%  {k}")
     print("-- inclusive")
     for k, c in incl.most_common(top):
         print(f"{100 * c / max(nsamp, 1):5.1f}%  {k[:150]}")

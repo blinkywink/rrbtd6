@@ -168,7 +168,10 @@ def main():
     parser.add_argument('--trace-loads',action='store_true',help='Log first-use loading work taking at least 2 ms')
     parser.add_argument('--ab-feature',choices=['frame-pacing','text-cache','pose-reuse','sprite-storage','shadow-textures','map-batching','render-storage','static-maps','background-assets','fallback-models','prediction-retirement','pass-merge','mesh-instance'],default='text-cache',help='Feature disabled in same-build reference runs')
     parser.add_argument('--same-build-ab',action='store_true',help='Compare feature off/on when running the suite without a previous executable')
+    parser.add_argument('--spawn',default='',help='Round benchmarks: e.g. Bad:500, sent at spacing 0 after the warm-up; the run lasts until all are popped')
+    parser.add_argument('--crowd',type=int,default=0,help='Round benchmarks: this many extra tier-5 towers')
     parser.add_argument('--window',default='1600x900',help='Window size, e.g. 800x450 (GPU fill-rate check)')
+    parser.add_argument('--profile-lines',default='',help='With --profile: inclusive samples per source line of this function')
     parser.add_argument('--profile',action='store_true',help='Sample each run with tools/sample_prof.py (report: <label>.prof; timings then include the sampler)')
     parser.add_argument('--simulation-snapshot',type=Path,help='Reuse a previously frozen simulation-input directory')
     args=parser.parse_args()
@@ -229,7 +232,7 @@ def main():
                            RRBTD6_BENCH_SIM_DIR=str(snapshot),RRBTD6_BENCH_SETTINGS=str(settings))
                 if args.round:
                     env.pop('RRBTD6_FLOOD',None)
-                    env.update(RRBTD6_BENCH_ROUND=str(args.round),RRBTD6_BENCH_DEGREE=str(args.degree),RRBTD6_BENCH_WARMUP=str(args.warmup))
+                    env.update(RRBTD6_BENCH_SPAWN=args.spawn,RRBTD6_BENCH_CROWD=str(args.crowd),RRBTD6_BENCH_ROUND=str(args.round),RRBTD6_BENCH_DEGREE=str(args.degree),RRBTD6_BENCH_WARMUP=str(args.warmup))
                 if args.upgrade_case:
                     env.pop('RRBTD6_FLOOD',None);env.pop('RRBTD6_NOSELECT',None)
                     env.update(RRBTD6_TOWERS='DartMonkey,SuperMonkey',RRBTD6_PLACE='300,520',RRBTD6_PATHS='',RRBTD6_CASH='1000000',RRBTD6_UPGRADE_CASE='1:40:1:100')
@@ -247,7 +250,7 @@ def main():
                     check_inputs()
                     with (output/(label+'.log')).open('w',encoding='utf-8') as log:
                         command=[str(run_exe)]
-                        if args.profile:command=[sys.executable,'-I',str(Path(__file__).resolve().parent/'sample_prof.py'),'--top','50','--out',str(output/(label+'.prof')),'--',str(run_exe)]
+                        if args.profile:command=[sys.executable,'-I',str(Path(__file__).resolve().parent/'sample_prof.py'),'--top','200',*(['--lines',args.profile_lines] if args.profile_lines else []),'--out',str(output/(label+'.prof')),'--',str(run_exe)]
                         process_metrics=run_measured(command,cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT,
                                        startupinfo=startup,creationflags=flags)
                     check_inputs()
@@ -266,7 +269,7 @@ def main():
                     expected={98:1,140:2,200:4}[args.round]
                     if f'round-bench: completed round {args.round} ' not in (output/(label+'.log')).read_text():
                         raise RuntimeError('Requested round did not complete; increase --frames')
-                    if not rows or any(int(r['round'])!=args.round or int(r['paragons'])!=expected or r['round_active']!='true' for r in rows):
+                    if not rows or (not args.spawn and any(int(r['round'])!=args.round or int(r['paragons'])!=expected or r['round_active']!='true' for r in rows)):
                         raise RuntimeError('Wrong round, paragon count, or inactive gameplay in measured scene')
                 elif len(rows)!=args.frames-args.warmup-1:
                     raise RuntimeError(f'Incomplete gameplay capture: {len(rows)} frames; no timing comparison accepted')

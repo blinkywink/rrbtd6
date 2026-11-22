@@ -8,6 +8,10 @@ class SYMBOL_INFOW(ctypes.Structure):
                 ("Scope", wt.ULONG), ("Tag", wt.ULONG), ("NameLen", wt.ULONG), ("MaxNameLen", wt.ULONG),
                 ("Name", wt.WCHAR * 1024)]
 
+class IMAGEHLP_LINEW64(ctypes.Structure):
+    _fields_ = [("SizeOfStruct", wt.DWORD), ("Key", ctypes.c_void_p), ("LineNumber", wt.DWORD),
+                ("FileName", ctypes.c_wchar_p), ("Address", ctypes.c_ulonglong)]
+
 class Namer:
     BASE = 0x10000000
     def __init__(self, exe):
@@ -30,3 +34,10 @@ class Namer:
         n = s.Name if ok else None
         self.cache[rva] = n
         return n
+    def line(self, rva):
+        """(file, line) of an RVA, or None."""
+        ln = IMAGEHLP_LINEW64(); ln.SizeOfStruct = ctypes.sizeof(ln)
+        disp = wt.DWORD(0)
+        if self.d.SymGetLineFromAddrW64(self.h, ctypes.c_ulonglong(self.BASE + rva), ctypes.byref(disp), ctypes.byref(ln)):
+            return (os.path.basename(ln.FileName or ""), ln.LineNumber)
+        return None
