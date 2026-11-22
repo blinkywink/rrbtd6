@@ -3386,10 +3386,14 @@ Open (pending/hero_open):
 - (2026-11-22) Churchill l20 bloons exact, l10 to 2 frames (rt 2588): HYPOTHESIS P-INSTANTTHROW on
   ChurchillBaseRotation turrets: a weapon released the frame its throw starts (animationOffset 0,
   the machine gun) doesn't turn the turret at release (its broadside aim offset path), and a lost
-  Target keeps the turret's facing (as sky_052 for turnBody). Open: churchill_l10 rt 2587, the
-  cannon's contact Explosion meets the popped Zebra's own object that frame and its three new Greens
-  the next (the clone's Explosion collides a frame later, all four together); projectile positions
-  1 ulp off from rt 203/230 (l03/l10).
+  Target keeps the turret's facing (as sky_052 for turnBody). Open: churchill_l10 rt 2588 (corrected,
+  game blocks: hits listed after "F n" happen in frame n+1): the shell 6168 hits Zebra 6145 in frame
+  2587 and its CreateProjectileOnExhaustPierce Explosion 6177 (gap 3, max 5; Collide @0xca4050 only
+  Emits) exists from 2587 in both. In frame 2587 the machine gun pops the Zebra into 6145 + copies
+  6193/6201/6209. In frame 2588 the game's Explosion hits only 6145; the copies at 2589. The clone's
+  hits all three at 2588: the copies made in 2587's collision pass are already in its grid at 2588's
+  pass (their first move comes first), the game's aren't. Projectile positions 1 ulp off from rt
+  203/230 (l03/l10).
 - (2026-11-22) Brickell l20 exact (pending/brickell), l10 bloons exact: RotateToTargetAttackOffset.GetOrigin
   is the attack transform (ATE recorder line: tower + offsetX/offsetY turned by the tower's rotation on a
   ChurchillBaseRotation tower, offsetZ / tan60 down, `offset_z` exported) raised 10 in display space;
