@@ -2867,6 +2867,10 @@ const VINE_END_FRAMES: i32 = 23;
                 particles.draw_back(vec3(1.0, 0.0, 0.0), render3d::gl(0.0, a.cos(), a.sin()), px_per_unit, vh);
             }
             let bloon_t0 = get_time();
+            // One pose time for every MOAB-class model this frame: a run's flush (one per regular
+            // bloon between MOABs) reading the clock itself re-posed and re-uploaded every model
+            // each time (500 BADs at their peak: ~400 runs a frame, 8 ms of driver stalls).
+            let bloon_pose_t = get_time() as f32;
             // Bloons: far (larger z) first.
             // Positions computed once (not inside the sort comparator), then far-to-near.
             bloon_order.clear();
@@ -2926,7 +2930,7 @@ const VINE_END_FRAMES: i32 = 23;
                 let instance = model.as_ref().is_some_and(|m| !m.has_fx()) && instancer.is_some() && overlays.is_empty();
                 if !instance {
                     if let Some(inst) = instancer.as_mut().filter(|x| x.pending()) {
-                        inst.flush(&mut bloon_models, &shaders, get_time() as f32, outline_scale, bloon_viewport);
+                        inst.flush(&mut bloon_models, &shaders, bloon_pose_t, outline_scale, bloon_viewport);
                     }
                 }
                 let model = model_name.and_then(|m| bloon_models.get_mut(m)).and_then(|m| m.as_mut());
@@ -2949,7 +2953,7 @@ const VINE_END_FRAMES: i32 = 23;
                         continue;
                     }
                     let idle = m.idle_clip();
-                    m.draw(&shaders, idle, get_time() as f32, pos, std::f32::consts::FRAC_PI_2 - heading, outline_scale, false, None);
+                    m.draw(&shaders, idle, bloon_pose_t, pos, std::f32::consts::FRAC_PI_2 - heading, outline_scale, false, None);
                     // The overlay mesh (MoabGlueBasic...): a child of the display, same space.
                     for o in &overlays {
                         if let ProjDisplay::Mesh(om) = o {
@@ -3049,7 +3053,7 @@ const VINE_END_FRAMES: i32 = 23;
             }
             sprite_batch.flush();
             if let Some(inst) = instancer.as_mut() {
-                inst.flush(&mut bloon_models, &shaders, get_time() as f32, outline_scale, bloon_viewport);
+                inst.flush(&mut bloon_models, &shaders, bloon_pose_t, outline_scale, bloon_viewport);
             }
             bloon_time += get_time() - bloon_t0;
             let tilt = 1.0 / 60f32.to_radians().tan();

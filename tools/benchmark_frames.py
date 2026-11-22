@@ -170,6 +170,7 @@ def main():
     parser.add_argument('--same-build-ab',action='store_true',help='Compare feature off/on when running the suite without a previous executable')
     parser.add_argument('--spawn',default='',help='Round benchmarks: e.g. Bad:500, sent at spacing 0 after the warm-up; the run lasts until all are popped')
     parser.add_argument('--crowd',type=int,default=0,help='Round benchmarks: this many extra tier-5 towers')
+    parser.add_argument('--env',action='append',default=[],help='Extra KEY=VALUE for the game (kept through the RRBTD6_ strip), repeatable')
     parser.add_argument('--window',default='1600x900',help='Window size, e.g. 800x450 (GPU fill-rate check)')
     parser.add_argument('--profile-lines',default='',help='With --profile: inclusive samples per source line of this function')
     parser.add_argument('--profile',action='store_true',help='Sample each run with tools/sample_prof.py (report: <label>.prof; timings then include the sampler)')
@@ -237,6 +238,8 @@ def main():
                     env.pop('RRBTD6_FLOOD',None);env.pop('RRBTD6_NOSELECT',None)
                     env.update(RRBTD6_TOWERS='DartMonkey,SuperMonkey',RRBTD6_PLACE='300,520',RRBTD6_PATHS='',RRBTD6_CASH='1000000',RRBTD6_UPGRADE_CASE='1:40:1:100')
                 if args.trace_loads:env['RRBTD6_TIMING']='1'
+                for kv in args.env:
+                    k,_,v=kv.partition('=');env[k]=v
                 if not enabled and not args.reference_exe:
                     feature_env={'frame-pacing':'RRBTD6_LEGACY_FRAME_PACING','prediction-retirement':'RRBTD6_NO_PREDICTIVE_RETIRE','fallback-models':'RRBTD6_KEEP_FALLBACK_MODELS','background-assets':'RRBTD6_NO_BACKGROUND_ASSETS','pose-reuse':'RRBTD6_NO_POSE_REUSE','text-cache':'RRBTD6_NO_TEXT_CACHE','sprite-storage':'RRBTD6_KEEP_SPRITE_DUPLICATES','shadow-textures':'RRBTD6_NO_SHARED_SHADOWS','map-batching':'RRBTD6_NO_MAP_BATCHING','render-storage':'RRBTD6_LEGACY_RENDER_STORAGE','static-maps':'RRBTD6_NO_STATIC_MAP_GPU','pass-merge':'RRBTD6_NO_PASS_MERGE','mesh-instance':'RRBTD6_NO_MESH_INSTANCE'}
                     env[feature_env[args.ab_feature]]='1'
