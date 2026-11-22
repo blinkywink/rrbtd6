@@ -1220,8 +1220,15 @@ impl Prefetch {
     /// joined only when finished; the normal load path can take over any partial
     /// upload when a display is required immediately, without omitting a frame.
     pub fn advance(&mut self, directory:&Path)->Option<(std::path::PathBuf,Option<AnimModel>)>{
+        self.advance_where(|path|path.parent()==Some(directory))
+    }
+
+    /// `advance` for the finished jobs `wanted` picks. An upload already in progress is only
+    /// polled by a caller that wants it, so two callers never take each other's model.
+    pub fn advance_where(&mut self, mut wanted:impl FnMut(&Path)->bool)->Option<(std::path::PathBuf,Option<AnimModel>)>{
+        if self.warming.as_ref().is_some_and(|(path,_)|!wanted(path)){return None;}
         if self.warming.is_none(){
-            let path=self.pending.iter().filter(|(path,job)|path.parent()==Some(directory)&&job.is_finished())
+            let path=self.pending.iter().filter(|(path,job)|wanted(path)&&job.is_finished())
                 .map(|(path,_)|path).min().cloned()?;
             let staged=self.pending.remove(&path).unwrap().join().ok().flatten();
             let Some(staged)=staged else{return Some((path,None));};

@@ -777,6 +777,9 @@ async fn game_main() {
     let mut prediction_key=None;
     let mut predicted_models=Vec::<((usize,String),std::path::PathBuf)>::new();
     let mut predicted_effects=Vec::<&'static str>::new();
+    // The projectile displays the selected tower's next upgrades (and its Paragon) or the tower in
+    // hand would fire, warmed like the placed towers' so a new tier's first shot doesn't load them.
+    let mut predicted_projectiles=Vec::<String>::new();
     // Scope preparation to the round's reachable displays; decoded jobs and
     // cooperative GPU uploads share a four-model staging limit.
     let mut warm_round=None;
@@ -1715,6 +1718,11 @@ const VINE_END_FRAMES: i32 = 23;
             if let Some((path,model))=prefetch.advance(&bloon_model_root){
                 if let Some(name)=path.file_name().and_then(|n|n.to_str()){bloon_models.insert(name.to_owned(),model);}
             }
+            // The selected tower's next tiers (and the tower in hand), uploaded ahead too: an
+            // upgrade or placement then finds its model ready instead of uploading it that frame.
+            if let Some((path,model))=prefetch.advance_where(|p|predicted_models.iter().any(|(_,w)|w==p)){
+                if let Some((key,_))=predicted_models.iter().find(|(_,w)|*w==path){tier_anims.insert(key.clone(),model);}
+            }
             let changed=warm_towers.len()!=game.towers.len()||game.towers.iter().zip(&warm_towers)
                 .any(|(t,key)|*key!=(t.id,t.def,t.tiers,t.paragon.as_ref().map(|p|p.0)));
             if changed{
@@ -1728,7 +1736,7 @@ const VINE_END_FRAMES: i32 = 23;
             // One in-flight display, polled once per frame. The same loader and
             // texture data serve both preparation and immediate first-use draws.
             if projectile_upload.is_none(){
-                if let Some(name)=warm_projectiles.iter().find(|name|!proj_tried.contains(*name)){
+                if let Some(name)=warm_projectiles.iter().chain(predicted_projectiles.iter()).find(|name|!proj_tried.contains(*name)){
                     projectile_upload=Some((name.clone(),Box::pin(load_proj(mod_assets::projectile(&root,name)))));
                 }
             }
@@ -1741,7 +1749,8 @@ const VINE_END_FRAMES: i32 = 23;
                 }
             }
             if effect_upload.is_none(){
-                if let Some(name)=warm_effects.iter().map(String::as_str).chain(predicted_effects.iter().copied()).find(|name|!particles.is_prepared(name)){
+                if let Some(name)=warm_effects.iter().map(String::as_str).chain(predicted_effects.iter().copied())
+                    .chain(predicted_projectiles.iter().filter_map(|n|proj_fx.get(n)).map(String::as_str)).find(|name|!particles.is_prepared(name)){
                     effect_upload=Some((name.to_owned(),Box::pin(particles::EffectDef::load_cooperative(root.join("effects").join(name)))));
                 }
             }
@@ -2341,9 +2350,22 @@ const VINE_END_FRAMES: i32 = 23;
             let picked=selected.filter(|&t|t<game.towers.len());
             let key=(picked.map(|t|{let t=&game.towers[t];(t.id,t.def,t.tiers,t.paragon.as_ref().map(|p|p.0))}),placing);
             if prediction_key!=Some(key){
-                prediction_key=Some(key);predicted_models.clear();predicted_effects.clear();
+                prediction_key=Some(key);predicted_models.clear();predicted_effects.clear();predicted_projectiles.clear();
                 if let Some(t)=picked{
                     let tw=&game.towers[t];
+                    if let Some(tt)=game.tower_tiers[tw.def].as_ref(){
+                        for path in 0..3{
+                            let mut tiers=tw.tiers;tiers[path]+=1;
+                            if let Some(tier)=tt.by_tiers(tiers){
+                                predicted_projectiles.extend(projectile_art(tier).into_iter().filter_map(|id|proj_index.get(id)).cloned());
+                            }
+                        }
+                        if tw.paragon.is_none()&&tw.tiers.iter().any(|&x|x>=5){
+                            if let Some(pd)=tt.paragon.as_ref(){
+                                predicted_projectiles.extend(projectile_art(&pd.tier).into_iter().filter_map(|id|proj_index.get(id)).cloned());
+                            }
+                        }
+                    }
                     let hero=game.hero_def(tw.def).is_some();
                     for path in 0..3{
                         if game.next_upgrade(t,path).is_none(){continue;}
@@ -2360,6 +2382,9 @@ const VINE_END_FRAMES: i32 = 23;
                     }
                 }
                 if let Some(d)=placing{
+                    if let Some(tier)=game.tower_tiers[d].as_ref().and_then(|tt|tt.by_tiers([0,0,0]).or(tt.by_tiers([1,0,0]))){
+                        predicted_projectiles.extend(projectile_art(tier).into_iter().filter_map(|id|proj_index.get(id)).cloned());
+                    }
                     if let Some(dir)=tier_index[d].get("000").or(tier_index[d].get("100")){
                         predicted_models.push(((d,dir.clone()),mod_assets::tier(&root,game.tower_model(d),&dir)));
                     }
