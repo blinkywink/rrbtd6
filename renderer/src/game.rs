@@ -123,6 +123,15 @@ mod coop_cash;
 pub(crate) mod coop_areas;
 
 use crate::data::{AREA_LAND, AREA_SKIPPED, Area, BloonDef, Brew, Emission, GameData, Proj, TagMod, Tier, TowerDef, TowerTiers};
+
+/// A debug / experiment switch read from the environment once (the sim checks these in its hot
+/// loops; GetEnvironmentVariableW per call cost ~6% of a late-game step).
+macro_rules! env_flag {
+    ($name:literal) => {{
+        static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *FLAG.get_or_init(|| std::env::var_os($name).is_some())
+    }};
+}
 use std::collections::HashMap;
 
 mod geraldo;
@@ -1209,6 +1218,31 @@ fn tier_weapons_before_ability(tier: &Tier, slot: usize) -> usize {
         seen += n;
     }
     tier.attacks.iter().map(|x| x.weapons.len()).sum()
+}
+
+/// Bloon `id`'s storage index: a remembered slot, checked (`bloons[slot].id == id`) before it is
+/// used, else a scan whose answer is remembered. Bloon ids are unique, so this is always the
+/// scan's own answer; it saves the per-hit scans over thousands of bloons.
+fn bloon_idx(bloons: &[Bloon], cache: &std::cell::RefCell<FastMap<u64, u32>>, id: u64) -> Option<usize> {
+    let mut c = cache.borrow_mut();
+    if let Some(&k) = c.get(&id) {
+        if bloons.get(k as usize).is_some_and(|b| b.id == id) {
+            return Some(k as usize);
+        }
+    }
+    let k = bloons.iter().position(|b| b.id == id);
+    match k {
+        Some(k) => {
+            if c.len() > 1 << 16 {
+                c.clear();
+            }
+            c.insert(id, k as u32);
+        }
+        None => {
+            c.remove(&id);
+        }
+    }
+    k
 }
 
 /// CollisionGrid cells (CollisionChecker): 10 x 10 from (worldXMin - 52, worldZMin - 52).
@@ -3967,6 +4001,8 @@ pub struct Game {
     proj_objs: u32,
     /// Each pooled projectile object's last emmisionIndex.
     proj_obj_emit: Vec<u32>,
+    /// `bloon_idx`'s remembered slots.
+    bidx: std::cell::RefCell<FastMap<u64, u32>>,
     /// Bloons destroyed this frame and where (Game::bloon_destroyed).
     destroyed_now: FastMap<u64, [f32; 2]>,
     /// The objects live projectiles held as the frame began (only kept while a spawner needs it).
@@ -4531,7 +4567,7 @@ macro_rules! collide_pass {
                     // bite curves after MOAB 359's front circle); then RotateToTarget (@0x180c87720):
                     // the direction turned by Vector2.AngleBetween(direction, targetPos - position)
                     // when that is within maxTurnAngle, the rotation read back from it.
-                    let live = pr.aim.and_then(|id| $s.bloons.iter().find(|b| b.id == id));
+                    let live = pr.aim.and_then(|id| bloon_idx(&$s.bloons, &$s.bidx, id).map(|j| &$s.bloons[j]));
                     // (A target bloon made before the shot moves before its Process, after this
                     // pass: Game::arrive_follow places the shot again from its new spot.)
                     let older = live.is_some_and(|b| b.born < pr.born) && (ar.keep_update || ar.rotate);
@@ -4553,7 +4589,7 @@ macro_rules! collide_pass {
                             pr.grot = Some(pr.dir_rot());
                         }
                     }
-                    let live = if older { pr.aim.and_then(|id| $s.bloons.iter().find(|b| b.id == id)) } else { live };
+                    let live = if older { pr.aim.and_then(|id| bloon_idx(&$s.bloons, &$s.bidx, id).map(|j| &$s.bloons[j])) } else { live };
                     let above = match (ar.above_moab, live) {
                         (true, Some(b)) if $s.defs[b.kind].is_boss => Some(181.0f32),
                         (true, Some(b)) if $s.defs[b.kind].is_moab => Some(121.0f32),
@@ -4566,7 +4602,7 @@ macro_rules! collide_pass {
                     pr.pos = np;
                     // (Its z goes the same way, to the Target's Position.z: recording sky_040, an arc
                     // at a MOAB climbs 7 -> 119.6, so its blast at 120 is over the trees.)
-                    if let Some(h) = pr.aim.and_then(|id| $s.bloons.iter().find(|b| b.id == id)).map(|b| b.height) {
+                    if let Some(h) = pr.aim.and_then(|id| bloon_idx(&$s.bloons, &$s.bidx, id).map(|j| &$s.bloons[j])).map(|b| b.height) {
                         pr.arrive_tz = h;
                     }
                     pr.z = pr.arrive_z0 + (pr.arrive_tz - pr.arrive_z0) * e;
@@ -4827,7 +4863,7 @@ macro_rules! collide_pass {
             pr.wait = (pr.wait - 1.0).max(0.0);
             // (CollideOnlyWithTarget shots keep their Target as it is: no homing.)
             if let Some(id) = pr.target.filter(|_| pr.spec.instant || !pr.spec.only_target) {
-                let at = $s.bloons.iter().find(|b| b.id == id).map(|b| b.pos);
+                let at = bloon_idx(&$s.bloons, &$s.bidx, id).map(|j| &$s.bloons[j]).map(|b| b.pos);
                 match (at, pr.spec.instant) {
                     // (Instant: its target's position once the bloons have moved, below.)
                     (Some(_), true) => {}
@@ -5000,13 +5036,13 @@ macro_rules! collide_pass {
             // (A plain Line: its GetInLine list, in that order, from its emission.)
             if let Some(ids) = $s.cand_only.clone() {
                 for id in ids {
-                    if let Some(i) = $s.bloons.iter().position(|b| b.id == id) {
+                    if let Some(i) = bloon_idx(&$s.bloons, &$s.bidx, id) {
                         $cand.push(i as _);
                     }
                 }
             } else if let Some(ids) = $s.projectiles[$p].line_hits.take() {
                 for id in ids {
-                    if let Some(i) = $s.bloons.iter().position(|b| b.id == id) {
+                    if let Some(i) = bloon_idx(&$s.bloons, &$s.bidx, id) {
                         $cand.push(i as _);
                     }
                 }
@@ -5026,7 +5062,7 @@ macro_rules! collide_pass {
         while !flying && k < $cand.len() && $s.projectiles[$p].pierce > 0.0 && $s.projectiles[$p].wait <= 0.0 {
             let mut i = $cand[k] as usize;
             if !$s.bloons.get(i).is_some_and(|b| b.id == cand_ids[k]) {
-                match $s.bloons.iter().position(|b| b.id == cand_ids[k]) {
+                match bloon_idx(&$s.bloons, &$s.bidx, cand_ids[k]) {
                     Some(j) => {
                         i = j;
                         $cand[k] = j as _;
@@ -5082,7 +5118,7 @@ macro_rules! collide_pass {
             let ign = $s.ignore_zone;
             if let Some((bits, chance)) = ign {
                 let uid = $s.projectiles[$p].uid;
-                let bi = $s.bloons.iter().position(|o| o.id == b.id);
+                let bi = bloon_idx(&$s.bloons, &$s.bidx, b.id);
                 if let Some(bi) = bi {
                     let has = $s.bloons[bi].ign_added;
                     if !has && !$s.bloons[bi].ign_checked.contains(&uid) {
@@ -5121,7 +5157,7 @@ macro_rules! collide_pass {
                 // until completedIntialDelay; after it, while its Target is valid only that bloon
                 // (recording sniper_paragon_r40 rt 233: shrapnel on its way to 794 passes a Green).
                 || pr.tad.as_ref().is_some_and(|t| !t.0)
-                || (pr.tad.as_ref().is_some_and(|t| t.0) && pr.seek.is_some_and(|sid| sid != b.id && $s.bloons.iter().any(|x| x.id == sid)))
+                || (pr.tad.as_ref().is_some_and(|t| t.0) && pr.seek.is_some_and(|sid| sid != b.id && bloon_idx(&$s.bloons, &$s.bidx, sid).is_some()))
                 || pr.carrier == b.id
                 // Projectile.IsCollisionValid (VERIFIED-DISASM @0xcac350): with
                 // canCollisionBeBlockedByMapLos, Map.IsTargetLineClear from the shot to the
@@ -5643,7 +5679,7 @@ macro_rules! collide_pass {
                         $s.damage(i, total - 1, &mut $kids);
                         $s.no_pop_cash = false;
                         $s.block_children = false;
-                        if let (Some(j), Some(r)) = ($s.bloons.iter().position(|b| b.id == id0), $s.names.iter().position(|n| *n == to)) {
+                        if let (Some(j), Some(r)) = (bloon_idx(&$s.bloons, &$s.bidx, id0), $s.names.iter().position(|n| *n == to)) {
                             $s.bloons[j].kind = r;
                             $s.bloons[j].hp = $s.defs[r].max_health;
                         }
@@ -5686,7 +5722,7 @@ macro_rules! collide_pass {
                 // rt 3467, a chilled Zebra's children popped a layer again still at 0.75).)
                 if n > 0 {
                     for kid in std::iter::once(id).chain($kids.iter().copied()).collect::<Vec<_>>() {
-                        if let Some(j) = $s.bloons.iter().position(|b| b.id == kid) {
+                        if let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, kid) {
                             for e in $s.bloons[j].effects.iter_mut().filter(|e| e.id == "Skywarden:Chilled" || e.id == "Skywarden:ChilledRadius") {
                                 e.layers = 2;
                             }
@@ -5704,9 +5740,9 @@ macro_rules! collide_pass {
                         let owner = $s.projectiles[$p].owner;
                         let by = $s.projectiles[$p].emitted_by;
                         let tiers = $s.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
-                        let at = $s.bloons.iter().find(|b| b.id == bid).map_or(bp, |b| b.pos);
+                        let at = bloon_idx(&$s.bloons, &$s.bidx, bid).map(|j| &$s.bloons[j]).map_or(bp, |b| b.pos);
                         // (Bloon +0x170, its layer as the hit left it: what collidedWith holds.)
-                        let blayer = $s.bloons.iter().find(|b| b.id == bid).map(|b| b.layer);
+                        let blayer = bloon_idx(&$s.bloons, &$s.bidx, bid).map(|j| &$s.bloons[j]).map(|b| b.layer);
                         let start = $s.projectiles.len();
                         $s.emit_target = Some(bid);
                         $s.emit_as(by, at, 0.0, &c.emission, &c.projectile, None, tiers, owner);
@@ -5740,9 +5776,9 @@ macro_rules! collide_pass {
                 // shows at that bloon's Position until its first Process, blown or not (recording
                 // sky_400 rt 3050: a Zebra's four Pinks all at -110.32, the fourth, spaced to 190.4
                 // near the entrance, not blown); otherwise on its track spot (sky_300 rt 2555).)
-                let anchor = $s.bloons.iter().find(|b| b.id == id).filter(|b| b.wind.is_some()).map(|b| b.pos);
+                let anchor = bloon_idx(&$s.bloons, &$s.bidx, id).map(|j| &$s.bloons[j]).filter(|b| b.wind.is_some()).map(|b| b.pos);
                 for kid in $kids.iter().copied().collect::<Vec<_>>() {
-                    if let Some(j) = $s.bloons.iter().position(|b| b.id == kid) {
+                    if let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, kid) {
                         if $s.bloons[j].wl.as_ref().is_some_and(|w| w.start) {
                             let mut st = $s.bloons[j].wl.take().unwrap();
                             st.start = false;
@@ -5784,7 +5820,7 @@ macro_rules! collide_pass {
                         $s.projectiles[$p].single_used = Some(true);
                         let uid = $s.projectiles[$p].uid;
                         $s.single_obj.insert(uid, true);
-                        if let Some(j) = $s.bloons.iter().position(|b| b.id == id) {
+                        if let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, id) {
                             let props = $s.bloons[j].properties(&$s.defs[$s.bloons[j].kind]);
                             let sp = &$s.projectiles[$p].spec;
                             let will = !(e.only_if_damaged && sp.damage_model && (sp.immune & props != 0 || dmg < 1.0));
@@ -5803,7 +5839,7 @@ macro_rules! collide_pass {
                         spec.effects.retain(|x| !x.single_first);
                     }
                     for kid in std::iter::once(id).chain($kids.iter().copied()).collect::<Vec<_>>() {
-                        if let Some(j) = $s.bloons.iter().position(|b| b.id == kid) {
+                        if let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, kid) {
                             if kid == id {
                                 $s.apply_effects(j, &spec, owner, dmg, true);
                             } else {
@@ -5844,7 +5880,7 @@ macro_rules! collide_pass {
                 if let Some(kb) = $s.projectiles[$p].spec.knockback.clone().filter(|_| !(hit_moab && n > 0)) {
                     let mut valid = None;
                     for kid in std::iter::once(id).chain($kids.iter().copied()) {
-                        let Some(j) = $s.bloons.iter().position(|b| b.id == kid) else { continue };
+                        let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, kid) else { continue };
                         let tags = &$s.defs[$s.bloons[j].kind].tags;
                         let has = |t: &str| tags.iter().any(|x| x == t);
                         let m = if has("Moabs") { kb.moab } else if has("Lead") || has("Ceramic") || has("Fortified") { kb.heavy } else { kb.light };
@@ -5907,7 +5943,7 @@ macro_rules! collide_pass {
                 }
                 popped_now = n;
                 if n > 0 && !$s.projectiles[$p].spec.state_emits.is_empty() {
-                    let gone = !$s.bloons.iter().any(|b| b.id == id);
+                    let gone = !bloon_idx(&$s.bloons, &$s.bidx, id).is_some();
                     // (Projectile.Exhausted runs its OnExhaust behaviours at once (VERIFIED-DECOMP
                     // @0x180c8c570): the blasts of shots already spent in this pass come before
                     // these, recording sky_025 rt 2491, FrozenRemains 2398 .. 2356's blasts 2749 ..
@@ -5950,7 +5986,7 @@ macro_rules! collide_pass {
             // ninja_010 rt 2069: no roll for a Red the hit destroyed), on what the bloon is now.
             // (A bloon this hit destroyed isn't IsBloonValidForPushback (isDestroyed); a
             // degraded one is the same object, found by its id.)
-            if let (Some(w), Some(i)) = ($s.projectiles[$p].spec.wind.clone(), $s.bloons.iter().position(|b| b.id == id)) {
+            if let (Some(w), Some(i)) = ($s.projectiles[$p].spec.wind.clone(), bloon_idx(&$s.bloons, &$s.bidx, id)) {
                 let is_moab = $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Moabs");
                 // Wind.Collide (VERIFIED-DISASM @0xcf7fd0): syncedRandom.NextDouble <= chance;
                 // MoveWithWind.Attatched (@0xffec70): NextDouble x (max - min) + min back.
@@ -6002,7 +6038,7 @@ macro_rules! collide_pass {
                     // listed again; recording ninja_520 rt 247.)
                     let mut seen = std::collections::HashSet::new();
                     for kid in $kids.clone().into_iter().filter(|&k| k != id && seen.insert(k)) {
-                        if let Some(k) = $s.bloons.iter().position(|b| b.id == kid) {
+                        if let Some(k) = bloon_idx(&$s.bloons, &$s.bidx, kid) {
                             let wmax = if w.max > 99999.0 { $s.bloons[k].dist } else { w.max };
                             let mut back = ($s.synced_double() as f32) * (wmax - w.min) + w.min;
                             if w.tag_scale > 0.0 && w.tags.iter().any(|t| $s.defs[$s.bloons[k].kind].tags.contains(t)) {
@@ -6041,7 +6077,7 @@ macro_rules! collide_pass {
             // (Not on a boss or a bloon with BadImmunityModel: recording
             // boomerang_paragon_r98, the press leaves a BAD where it is.)
             if let Some(pb) = $s.projectiles[$p].spec.push.clone().filter(|pb| !(pb.only_if_damaged && (immune || dmg < 1.0))) {
-                if let Some(i) = $s.bloons.iter().position(|b| b.id == id) {
+                if let Some(i) = bloon_idx(&$s.bloons, &$s.bidx, id) {
                     let d = &$s.defs[$s.bloons[i].kind];
                     if !d.bad_immunity && !d.tags.iter().any(|t| t == "Boss") && (pb.tag.is_empty() || d.tags.contains(&pb.tag)) {
                         let m = moab_class(&$s.names[$s.bloons[i].kind]).and_then(|k| pb.mult.get(k)).copied().unwrap_or(1.0);
@@ -6065,7 +6101,7 @@ macro_rules! collide_pass {
             // CreateLightningEffect: a bolt from where the last jump ended (the shot's origin
             // first) to the bloon it hit (visual).
             if let Some(bl) = $s.projectiles[$p].spec.bolts.clone() {
-                let to = $s.bloons.iter().find(|b| b.id == id).map_or($s.projectiles[$p].prev, |b| b.pos);
+                let to = bloon_idx(&$s.bloons, &$s.bidx, id).map(|j| &$s.bloons[j]).map_or($s.projectiles[$p].prev, |b| b.pos);
                 let pr = &mut $s.projectiles[$p];
                 let from = pr.bolt_from.unwrap_or(pr.origin);
                 pr.bolt_from = Some(to);
@@ -6137,7 +6173,7 @@ macro_rules! collide_pass {
             let pr = &mut $s.projectiles[$p];
             // CollideBloon adds the layer it hit; what that layer became carries it in its
             // lineage.
-            if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM hit rt {} proj {} bloon {} layer {} pierce {} rad {} ppos {:?} bp {:?} pid {}", $s.round_clock, pr.uid, id, layer, pr.pierce, pr.spec.radius, pr.pos, bp, pr.spec.pid); }
+            if env_flag!("DBGE") { eprintln!("DBGAIM hit rt {} proj {} bloon {} layer {} pierce {} rad {} ppos {:?} bp {:?} pid {}", $s.round_clock, pr.uid, id, layer, pr.pierce, pr.spec.radius, pr.pos, bp, pr.spec.pid); }
             pr.hit.push(layer);
             pr.ignore_first = false;
             // CollideBloon: timeSinceLastCollisionCheck = 0.
@@ -6216,7 +6252,7 @@ macro_rules! collide_pass {
                     // (An instant shot is on its Target: Instant.Process put it there this frame, before the
                     // collision; recording sniper_030 rt 2876, Shrapnel from a bounced bullet whose Blue
                     // it popped starts on the Blue's spot this frame, not the last.)
-                    let at = if c.at_shot || !$s.bloons.iter().any(|b| b.id == id) { inst_pp } else { bp };
+                    let at = if c.at_shot || !bloon_idx(&$s.bloons, &$s.bidx, id).is_some() { inst_pp } else { bp };
                     now_after.push((at, c.clone(), skip));
                     continue;
                 }
@@ -6442,10 +6478,10 @@ macro_rules! collide_pass {
         let pr = &$s.projectiles[$p];
         // An instant shot whose expire projectile goes where its living target is expires
         // after the bloons have moved (below).
-        let later = pr.spec.instant && pr.pierce > 0.0 && pr.spec.on_exhaust.iter().any(|e| e.use_target) && pr.target.is_some_and(|id| $s.bloons.iter().any(|b| b.id == id));
+        let later = pr.spec.instant && pr.pierce > 0.0 && pr.spec.on_exhaust.iter().any(|e| e.use_target) && pr.target.is_some_and(|id| bloon_idx(&$s.bloons, &$s.bidx, id).is_some());
         // (An ArriveAtTarget shot following an older bloon arrives after the bloons move.)
         let follow = pr.pierce > 0.0 && pr.arrive_at.is_some() && pr.spec.arrive.as_ref().is_some_and(|a| a.keep_update)
-            && pr.aim.and_then(|id| $s.bloons.iter().find(|b| b.id == id)).is_some_and(|b| b.born < pr.born);
+            && pr.aim.and_then(|id| bloon_idx(&$s.bloons, &$s.bidx, id).map(|j| &$s.bloons[j])).is_some_and(|b| b.born < pr.born);
         let later = later || follow;
         $s.projectiles[$p].follow_expire = follow;
         let pr = &$s.projectiles[$p];
@@ -6698,6 +6734,7 @@ impl Game {
             proj_pool: Vec::new(),
             proj_objs: 0,
             proj_obj_emit: Vec::new(),
+            bidx: Default::default(),
             destroyed_now: Default::default(),
             proj_objs_start: Default::default(),
             over_time: Default::default(),
@@ -8126,7 +8163,7 @@ impl Game {
                 // (In one cell, the bucket's order as the grid was filled: recordings
                 // druid_420_strong rt 3180, carried Red 4361 (slot 0) over 4245 (slot 2);
                 // druid_400 rt 2252, 1380 (slot 0) over 1452.)
-                let slot = self.bloons.iter().position(|x| x.id == b.id).map_or(u32::MAX, |i| self.ggrid.place_of(i).1);
+                let slot = bloon_idx(&self.bloons, &self.bidx, b.id).map_or(u32::MAX, |i| self.ggrid.place_of(i).1);
                 (r, slot, b.order)
             };
             cands.sort_by(|(_, x), (_, y)| {
@@ -8150,7 +8187,7 @@ impl Game {
                     }
                 }
             });
-            if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM bounce rt {} uid {} from {:?} shared {:?} cands {:?}", self.round_clock, self.projectiles[k].uid, from, (shared.small.clone(), shared.big.len()), cands.iter().map(|(_, b)| { let kk = (b.prev_dist / 7.0).max(0.0) as usize; let sp = self.track_segs.get(b.path as usize).and_then(|sg| sg.get(kk)).copied().unwrap_or([0.0; 2]); (b.id, b.pos[0], b.wind.is_some(), b.prev_dist, ((sp[0] - from[0]).powi(2) + (sp[1] - from[1]).powi(2)).sqrt(), range, b.path, seg(b)) }).collect::<Vec<_>>()); }
+            if env_flag!("DBGE") { eprintln!("DBGAIM bounce rt {} uid {} from {:?} shared {:?} cands {:?}", self.round_clock, self.projectiles[k].uid, from, (shared.small.clone(), shared.big.len()), cands.iter().map(|(_, b)| { let kk = (b.prev_dist / 7.0).max(0.0) as usize; let sp = self.track_segs.get(b.path as usize).and_then(|sg| sg.get(kk)).copied().unwrap_or([0.0; 2]); (b.id, b.pos[0], b.wind.is_some(), b.prev_dist, ((sp[0] - from[0]).powi(2) + (sp[1] - from[1]).powi(2)).sqrt(), range, b.path, seg(b)) }).collect::<Vec<_>>()); }
             let ids: Vec<u64> = cands.iter().take(n).map(|(_, b)| b.id).collect();
             let layers: Vec<u64> = cands.iter().take(n).map(|(_, b)| b.layer).collect();
             if ids.is_empty() {
@@ -8161,7 +8198,7 @@ impl Game {
             // (A MOAB-class Target carries its first collision circle within reach, as
             // Targetting.CanHitMoab.)
             let circle_of = |g: &Self, id: u64| -> [f32; 2] {
-                let Some(b) = g.bloons.iter().find(|b| b.id == id) else { return [0.0; 2] };
+                let Some(b) = bloon_idx(&g.bloons, &g.bidx, id).map(|j| &g.bloons[j]) else { return [0.0; 2] };
                 let d = &g.defs[b.kind];
                 if !d.is_moab {
                     return [0.0; 2];
@@ -8192,7 +8229,7 @@ impl Game {
                     if j == 0 {
                         return [0.0; 2];
                     }
-                    let Some(b) = self.bloons.iter().find(|b| b.id == id) else { return [0.0; 2] };
+                    let Some(b) = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]) else { return [0.0; 2] };
                     let d = &self.defs[b.kind];
                     if !d.is_moab || d.circles.is_empty() || b.off_track() {
                         return [0.0; 2];
@@ -8247,7 +8284,7 @@ impl Game {
                 self.proj_objs - 1
             });
             self.proj_obj.insert(sp.uid, obj);
-            if std::env::var_os("RRBTD6_POLOG").is_some() {
+            if env_flag!("RRBTD6_POLOG") {
                 eprintln!("POLOG {} {} {} {} {}", self.round_clock, sp.uid, obj, sp.spec.pid, self.proj_obj_emit.get(obj as usize).copied().unwrap_or(0));
             }
             // (ProjectileCreateEffectOnEmitModel, as in emit.)
@@ -8265,7 +8302,7 @@ impl Game {
                 if !(pr.spec.lightning && pr.uid < bound && pr.born < now4 && pr.lt_ready <= sim_now && pr.lt_hit_at.is_none() && pr.pierce > 0.0) {
                     return None;
                 }
-                let b = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id))?;
+                let b = pr.target.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]))?;
                 // (So is one on a nonTargetable bloon (Projectile.IsCollisionValid): recording
                 // map_quad_druid_204_r40 rt 2476, bolt 5150 sits on a Pink in Quad's exit stretch
                 // and goes at 2479.)
@@ -8281,7 +8318,7 @@ impl Game {
         let only: Vec<u64> = self
             .projectiles
             .iter()
-            .filter(|pr| pr.spec.lightning && pr.uid < bound && pr.born < now4 && pr.lt_ready <= sim_now && pr.lt_hit_at.is_none() && pr.pierce > 0.0 && pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).is_some_and(|b| !b.hit_by(&pr.hit)))
+            .filter(|pr| pr.spec.lightning && pr.uid < bound && pr.born < now4 && pr.lt_ready <= sim_now && pr.lt_hit_at.is_none() && pr.pierce > 0.0 && pr.target.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])).is_some_and(|b| !b.hit_by(&pr.hit)))
             .map(|pr| pr.uid)
             .collect();
         let pierce0: Vec<(u64, f32)> = self.projectiles.iter().filter(|pr| only.contains(&pr.uid)).map(|pr| (pr.uid, pr.pierce)).collect();
@@ -8294,7 +8331,7 @@ impl Game {
             for uid in &only {
                 if let Some(k) = self.projectiles.iter().position(|pr| pr.uid == *uid) {
                     let (t, born, shot_cseq) = (self.projectiles[k].target, self.projectiles[k].born, self.projectiles[k].cseq);
-                    if let Some(bi) = t.and_then(|id| self.bloons.iter().position(|b| b.id == id)) {
+                    if let Some(bi) = t.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id)) {
                         let b = &mut self.bloons[bi];
                         // (A copy the shot's own first hit made has its stamp and still comes after it:
                         // recording druid_420_last rt 2766, Black 3077's copy 3197 hit where it stood.)
@@ -8350,7 +8387,7 @@ impl Game {
                 }
             }
             for id in remove_after {
-                if let Some(bi) = self.bloons.iter().position(|b| b.id == id) {
+                if let Some(bi) = bloon_idx(&self.bloons, &self.bidx, id) {
                     self.move_bloon(bi, zones, shoves, leak_voice);
                 }
             }
@@ -8383,7 +8420,7 @@ impl Game {
             if !(ar.keep_update || ar.rotate) || pr.born >= now4 {
                 continue;
             }
-            let Some(b) = pr.aim.and_then(|id| self.bloons.iter().find(|b| b.id == id)) else { continue };
+            let Some(b) = pr.aim.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])) else { continue };
             if b.born >= pr.born {
                 continue;
             }
@@ -8433,7 +8470,7 @@ impl Game {
             // then: recording ninja_002, a shuriken still turns for a Black behind the entrance
             // trees on its first frame.)
             let look = (self.sim_elapsed.saturating_sub(pr.seek_t) >= 5 || (pr.dir.is_none() && pr.seek.is_none())).then(|| {
-                let keep = pr.seek.filter(|&id| self.bloons.iter().find(|b| b.id == id).is_some_and(|b| self.seek_valid(pr, sk, b, None)));
+                let keep = pr.seek.filter(|&id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).is_some_and(|b| self.seek_valid(pr, sk, b, None)));
                 let pick = (sk.new_targets && (keep.is_none() || sk.constantly)).then(|| self.seek_pick(pr, sk, None, 0.0));
                 (keep, pick)
             });
@@ -8465,7 +8502,7 @@ impl Game {
             // rt 1858-1860: Guided Magic heads for a newer Black's previous-frame spot each frame;
             // sub_*: older bloons, their moved spot).
             let born = self.projectiles[p].born;
-            let q = self.projectiles[p].seek.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| {
+            let q = self.projectiles[p].seek.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])).map(|b| {
                 // (A MermonkeyTrance made after the projectile moves its bloon after the look too:
                 // recording combo4_beast_mermonkey rt 622, a trident turning for a DDT tranced at
                 // 619 aims at its spot before that frame's orbit step.)
@@ -8566,7 +8603,7 @@ impl Game {
         }
         let keep = {
             let pr = &self.projectiles[p];
-            pr.seek.filter(|&id| self.bloons.iter().find(|b| b.id == id).is_some_and(|b| self.seek_valid(pr, &synth, b, None)))
+            pr.seek.filter(|&id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).is_some_and(|b| self.seek_valid(pr, &synth, b, None)))
         };
         self.projectiles[p].seek = keep;
         let (_, _, _, last) = self.projectiles[p].adora.unwrap();
@@ -8611,7 +8648,7 @@ impl Game {
         // (Target.Position: the bloon's plus the collision circle it was aimed through; recording
         // adora_l10_r40 rt 33, four bolts turning for a MOAB's front circle, 6.3 ahead.)
         let off = self.projectiles[p].seek_off.unwrap_or([0.0; 2]);
-        let q = self.projectiles[p].seek.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| if b.born > born || (b.born == born && b.cseq > cseq) { b.prev } else { b.pos }).map(|q| [q[0] + off[0], q[1] + off[1]]);
+        let q = self.projectiles[p].seek.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])).map(|b| if b.born > born || (b.born == born && b.cseq > cseq) { b.prev } else { b.pos }).map(|q| [q[0] + off[0], q[1] + off[1]]);
         let pr = &mut self.projectiles[p];
         let (mut vel, mut acc, mut dir, last) = pr.adora.unwrap();
         // Vector2.AngleBetween (VERIFIED-DECOMP @0x180f45550): -(atan2(b) - atan2(a)), wrapped,
@@ -9776,7 +9813,7 @@ impl Game {
     fn fighter_search(&mut self, t: usize) {
         let now = self.round_clock;
         let Some(a) = self.towers[t].air.as_ref() else { return };
-        let keep = a.fp_bloon.is_some_and(|id| self.bloons.iter().any(|b| b.id == id));
+        let keep = a.fp_bloon.is_some_and(|id| bloon_idx(&self.bloons, &self.bidx, id).is_some());
         if keep && now - a.fp_search < 15 {
             return;
         }
@@ -9900,7 +9937,7 @@ impl Game {
             // (Its place in the process list is before the bloons made after it: one the towers'
             // attacks moved early this frame is read where it was; recording bucc_400 FM lines,
             // rt 138, the MOAB at -120.53.)
-            let pt = match a.fp_bloon.and_then(|id| self.bloons.iter().find(|b| b.id == id)) {
+            let pt = match a.fp_bloon.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])) {
                 Some(b) if early.contains(&b.id) && b.born > a.fp_born => b.prev,
                 Some(b) => b.pos,
                 None => {
@@ -10122,7 +10159,7 @@ impl Game {
                 g.perc_through_map(b) >= 0.01
             };
             let Some(bid) = self.typed_target_from_ex(pos, sh.range, TargetMode::First, &valid, true) else { continue };
-            let Some(b) = self.bloons.iter().find(|b| b.id == bid) else { continue };
+            let Some(b) = bloon_idx(&self.bloons, &self.bidx, bid).map(|j| &self.bloons[j]) else { continue };
             let d = &self.defs[b.kind];
             let cap = match d.base_id.as_str() {
                 "Moab" => sh.moab,
@@ -10138,7 +10175,7 @@ impl Game {
             // (A bloon made this frame isn't in the process list until the next: its timer's 31
             // ticks start then, so it moves shoved 30 frames from the next frame on; recording
             // heli_205_village_r102 rt 1251, a BFB's MOAB shoved as it's made, back until 1281.)
-            let fresh = self.bloons.iter().find(|x| x.id == bid).is_some_and(|x| x.fresh);
+            let fresh = bloon_idx(&self.bloons, &self.bidx, bid).map(|j| &self.bloons[j]).is_some_and(|x| x.fresh);
             self.shoved.insert(bid, (now + if fresh { 31 } else { 30 }, cap, id, b.layer));
             self.shove_last.insert(id, now);
         }
@@ -10293,7 +10330,7 @@ impl Game {
                 best = Some((d.danger, b.prev_dist, b.id));
             }
         }
-        if let Some(b) = best.and_then(|x| self.bloons.iter().find(|b| b.id == x.2)) {
+        if let Some(b) = best.and_then(|x| bloon_idx(&self.bloons, &self.bidx, x.2).map(|j| &self.bloons[j])) {
             if reached(b) && ok(self, b) {
                 return Some(b.id);
             }
@@ -10312,7 +10349,7 @@ impl Game {
         let camo = tier.attacks.first().is_some_and(|a| a.camo) || self.buffs.get(t).is_some_and(|b| b.camo);
         let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind]));
         let id = self.first_target_from(here, 99999.0, &ok)?;
-        let b = self.bloons.iter().find(|b| b.id == id)?;
+        let b = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])?;
         let off = self.defs[b.kind].radius * 0.5 + pd;
         let d = off + b.dist;
         let tr = &self.tracks[b.path as usize];
@@ -10599,12 +10636,12 @@ impl Game {
                 st.hover = false;
                 st.hov = 0;
             }
-            held.retain(|b| self.bloons.iter().any(|x| x.id == *b));
+            held.retain(|b| bloon_idx(&self.bloons, &self.bidx, *b).is_some());
             // UpdateGrappleDamage.
             if !held.is_empty() && rt >= st.last_grapple + rate {
                 let ids = held.clone();
                 self.bird_hit(&ids, &g, g.initial, g.grapple_moab, owner);
-                held.retain(|b| self.bloons.iter().any(|x| x.id == *b));
+                held.retain(|b| bloon_idx(&self.bloons, &self.bidx, *b).is_some());
                 st.last_grapple = rt;
             }
             // UpdateTargeting.
@@ -10621,7 +10658,7 @@ impl Game {
                             // handlerSendAnimationState.
                             if st.hover {
                                 if let Some(hi) = self.towers.iter().position(|o| o.id == st.hov) {
-                                    let bp = self.bloons.iter().find(|x| x.id == b.0).map_or(pos, |x| x.pos);
+                                    let bp = bloon_idx(&self.bloons, &self.bidx, b.0).map(|j| &self.bloons[j]).map_or(pos, |x| x.pos);
                                     Self::face_point(&mut self.towers[hi], bp);
                                     self.towers[hi].show = Some(("IdleBirdGo".into(), 0.0));
                                 }
@@ -10677,7 +10714,7 @@ impl Game {
             }
             // UpdateMovement.
             let dest = match st.target {
-                GyrTarget::Bloon(b, _) => self.bloons.iter().find(|x| x.id == b).map_or(home, |x| Self::gyr_at(x, st.stamp)),
+                GyrTarget::Bloon(b, _) => bloon_idx(&self.bloons, &self.bidx, b).map(|j| &self.bloons[j]).map_or(home, |x| Self::gyr_at(x, st.stamp)),
                 GyrTarget::Seg(p, k) => self.track_segs[p as usize][k],
                 GyrTarget::Point(q, _) => q,
                 // (Target(tower): its position, or the idle point while one is set.)
@@ -10757,7 +10794,7 @@ impl Game {
                         st.hov = self.towers[pi].id;
                         st.idle = None;
                     }
-                    GyrTarget::Bloon(b, _) if self.bloons.iter().any(|x| x.id == b) => {
+                    GyrTarget::Bloon(b, _) if bloon_idx(&self.bloons, &self.bidx, b).is_some() => {
                         self.towers[t].attack_t = 0.0;
                         // The segment in range furthest from the exit. (UpdateMovement @0xdc8130: the
                         // target is snatched, or only hit if it has passed that segment or can't be,
@@ -10766,7 +10803,7 @@ impl Game {
                         let dseg = self.bird_dest_segment(t, pi);
                         let mut tagged: Vec<u64> = Vec::new();
                         let can_all = {
-                            let x = &self.bloons[self.bloons.iter().position(|o| o.id == b).unwrap()];
+                            let x = &self.bloons[bloon_idx(&self.bloons, &self.bidx, b).unwrap()];
                             // (Its distanceTraveled as the bird's Process sees it: one listed after the
                             // bird hasn't moved yet this frame. Recording map_winterpark_beast_204_r40 rt
                             // 1188: PR lines put GyrfalconPattern 573 before Bloon 588, a MOAB at 643.66
@@ -10781,9 +10818,9 @@ impl Game {
                         // (The others' test is against the target's own cost, GetPierceUsage(target
                         // model): what's left goes down by each one's cost. Recording
                         // beast_205_village_r102 rt 1435: after three Bfbs and a DDT, a Zomg.)
-                        let main_use = self.bloons.iter().find(|o| o.id == b).map_or(0.0, |o| self.grab_cost(o, &g) as f32);
+                        let main_use = bloon_idx(&self.bloons, &self.bidx, b).map(|j| &self.bloons[j]).map_or(0.0, |o| self.grab_cost(o, &g) as f32);
                         for x in std::iter::once(b).chain(self.bird_grab(dest, g.radius, &g, st.stamp, &held, b)) {
-                            let Some(i) = self.bloons.iter().position(|o| o.id == x) else { continue };
+                            let Some(i) = bloon_idx(&self.bloons, &self.bidx, x) else { continue };
                             let use_ = self.grab_cost(&self.bloons[i], &g) as f32;
                             if x != b && left < main_use {
                                 continue;
@@ -10791,7 +10828,7 @@ impl Game {
                             left -= use_;
                             if x == b {
                                 for h in &held {
-                                    if let Some(o) = self.bloons.iter().find(|o| o.id == *h) {
+                                    if let Some(o) = bloon_idx(&self.bloons, &self.bidx, *h).map(|j| &self.bloons[j]) {
                                         left -= self.grab_cost(o, &g) as f32;
                                     }
                                 }
@@ -10830,7 +10867,7 @@ impl Game {
                                 break;
                             }
                         }
-                        held.retain(|o| self.bloons.iter().any(|x| x.id == *o));
+                        held.retain(|o| bloon_idx(&self.bloons, &self.bidx, *o).is_some());
                         // What's next: keepPickingUpBloons flies on to a bloon near the bird that
                         // hasn't passed the segment; with none it carries what it has.
                         let next = if can_all && g.keep && left > 0.0 {
@@ -10874,7 +10911,7 @@ impl Game {
 
     fn gyr_valid(&self, st: &GyrState) -> bool {
         match st.target {
-            GyrTarget::Bloon(b, _) => self.bloons.iter().any(|x| x.id == b),
+            GyrTarget::Bloon(b, _) => bloon_idx(&self.bloons, &self.bidx, b).is_some(),
             GyrTarget::Tower(c) | GyrTarget::Point(_, c) => self.towers.iter().any(|o| o.id == c),
             GyrTarget::None => false,
             _ => true,
@@ -10891,7 +10928,7 @@ impl Game {
             }
             let (pos, held, dists) = (a.pos, a.grab.clone(), a.gy.dists.clone());
             for h in &held {
-                if let Some(b) = self.bloons.iter_mut().find(|b| b.id == *h) {
+                if let Some(b) = bloon_idx(&self.bloons, &self.bidx, *h).map(|j| &mut self.bloons[j]) {
                     let off = dists.iter().find(|d| d.0 == *h).map_or([0.0; 2], |d| d.2);
                     let was = b.pos;
                     // (First carried this frame: a snatch, or a copy that carries on in the claws.)
@@ -10923,7 +10960,7 @@ impl Game {
     /// was, at its distance, moving on from 302).
     fn bird_release_ex(&mut self, held: &mut Vec<u64>, st: &mut GyrState, rt: i64, destroyed: bool) {
         for h in held.drain(..) {
-            if let Some(b) = self.bloons.iter_mut().find(|b| b.id == h) {
+            if let Some(b) = bloon_idx(&self.bloons, &self.bidx, h).map(|j| &mut self.bloons[j]) {
                 b.effects.retain(|e| e.id != "BeastGrab");
                 b.held = false;
                 b.held_at = 0;
@@ -10939,7 +10976,7 @@ impl Game {
                     let step = speed_frames(self.defs[kind].speed) * b.speed_mult(&self.defs[kind]) * self.map_speed;
                     let d = self.held_at_spawn(kind, path, dist + step);
                     let q = self.tracks[path as usize].bloon_pos(d);
-                    let b = self.bloons.iter_mut().find(|b| b.id == h).unwrap();
+                    let b = bloon_idx(&self.bloons, &self.bidx, h).map(|j| &mut self.bloons[j]).unwrap();
                     b.dist = d;
                     b.pos = q;
                     b.prev = q;
@@ -11142,7 +11179,7 @@ impl Game {
     /// NOT YET MODELLED: GalvanizedBehavior's magnet and chain lightning, mutatorDurations per
     /// bloon type, the stage passing to children.
     fn galvanize(&mut self, id: u64, p: usize, dmg: f32, g: [f32; 4], kids: &mut Vec<u64>) {
-        let Some(j) = self.bloons.iter().position(|b| b.id == id) else { return };
+        let Some(j) = bloon_idx(&self.bloons, &self.bidx, id) else { return };
         let props = self.bloons[j].properties(&self.defs[self.bloons[j].kind]);
         let spec = &self.projectiles[p].spec;
         if !(spec.damage_model && spec.immune & props == 0 && dmg >= 1.0) {
@@ -11186,7 +11223,7 @@ impl Game {
             self.damage(j, g[2].round() as i32, kids);
             // (The duration by what the stun's damage left: recording sky_050 rt 288, a MOAB it
             // pops stays a stopped Ceramic 3 s, stunDuration.)
-            let base = self.bloons.iter().find(|b| b.id == id).map_or_else(|| String::new(), |b| self.defs[b.kind].base_id.clone());
+            let base = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map_or_else(|| String::new(), |b| self.defs[b.kind].base_id.clone());
             let secs = self.projectiles[p].spec.galvanize_durations.iter().find(|(b, _)| *b == base).map_or(g[1], |x| x.1);
             // (That Bloon.Damage is the tower's too: DamageBasedAttackSpeed.OnBloonDamaged counts it
             // as another hit (recording sky_050 rt 288: the rate 72 -> 66, two capped stacks).)
@@ -11194,7 +11231,7 @@ impl Game {
             if let Some(ti) = self.towers.iter().position(|t| t.id == owner) {
                 self.rage_add(ti, g[2].round());
             }
-            if let Some(k) = self.bloons.iter().position(|b| b.id == id) {
+            if let Some(k) = bloon_idx(&self.bloons, &self.bidx, id) {
                 self.effect_seq += 1;
                 let f = (secs * 60.0).floor();
                 let seq = self.effect_seq;
@@ -11218,7 +11255,7 @@ impl Game {
                 self.bloons[k].effects.push(e);
             }
         }
-        if let Some(k) = self.bloons.iter().position(|b| b.id == id) {
+        if let Some(k) = bloon_idx(&self.bloons, &self.bidx, id) {
             let v = (stage.min(2) + 1, now + dur);
             self.bloons[k].galv = v;
             self.bloons[k].galv_zone.clear();
@@ -11307,7 +11344,7 @@ impl Game {
         let Some(ty) = TYPES.iter().find(|t| t.1 == immune).map(|t| t.0) else { return };
         // (A bloon the hit popped still counts: its IsDestroyed is set after the event; recording
         // sky_rod_super rt 1531, Lightning 3593 on a popped Red, gone at once.)
-        let bp = self.bloons.iter().find(|b| b.id == id).map_or(at, |b| b.pos);
+        let bp = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map_or(at, |b| b.pos);
         for t in 0..self.towers.len() {
             if self.towers[t].id == owner || self.towers[t].rod_cd > 0.0 {
                 continue;
@@ -11352,7 +11389,7 @@ impl Game {
             return;
         }
         self.projectiles[p].rod_next = now + (re.cooldown * FPS) as i64;
-        let Some(j) = self.bloons.iter().position(|b| b.id == id) else { return };
+        let Some(j) = bloon_idx(&self.bloons, &self.bidx, id) else { return };
         let props = self.bloons[j].properties(&self.defs[self.bloons[j].kind]);
         let spec = &self.projectiles[p].spec;
         if !(spec.damage_model && spec.immune & props == 0 && dmg >= 1.0) {
@@ -11497,7 +11534,7 @@ impl Game {
     /// mutator for stage min(v, 2) + 1 (1 without one): from `mutators` (applyWind) on this
     /// projectile's first hit, else `mutatorsWithoutWind`. NOT YET MODELLED: EmitWindVacuum (v > 2).
     fn windlash_hit(&mut self, id: u64, p: usize, dmg: f32, w: &crate::data::Windlash) {
-        let Some(j) = self.bloons.iter().position(|b| b.id == id) else { return };
+        let Some(j) = bloon_idx(&self.bloons, &self.bidx, id) else { return };
         let props = self.bloons[j].properties(&self.defs[self.bloons[j].kind]);
         let spec = &self.projectiles[p].spec;
         if !(spec.damage_model && spec.immune & props == 0 && dmg >= 1.0) {
@@ -11894,7 +11931,7 @@ impl Game {
         let mut kids = Vec::new();
         for id in ids {
             kids.clear();
-            let Some(i) = self.bloons.iter().position(|b| b.id == *id) else { continue };
+            let Some(i) = bloon_idx(&self.bloons, &self.bidx, *id) else { continue };
             let tags = &self.defs[self.bloons[i].kind].tags;
             let extra = if tags.iter().any(|t| t == "Moabs") { moab } else { 0.0 } + if tags.iter().any(|t| t == "Grow") { g.regrow_add } else { 0.0 };
             let tally0 = self.damage_tally;
@@ -13993,7 +14030,7 @@ impl Game {
                 .map(|b| b.id).collect();
             let owner = self.towers[t].id;
             for id in ids {
-                let Some(j) = self.bloons.iter().position(|b| b.id == id) else { continue };
+                let Some(j) = bloon_idx(&self.bloons, &self.bidx, id) else { continue };
                 let (tally0, saved) = (self.damage_tally, self.distribute);
                 self.distribute = (true, true);
                 self.hit_tower = Some(owner);
@@ -14391,7 +14428,7 @@ impl Game {
         let v = ((raw * mark) * inc) * self.hit_cash.0 as f32 + (self.hit_cash.1 as f32 + worth);
         let v = v * self.sim_cash_modifier() as f32;
         #[cfg(test)]
-        if std::env::var_os("RRBTD6_REC_POPS").is_some() {
+        if env_flag!("RRBTD6_REC_POPS") {
             eprintln!("DBGAIM HIT rt {} tower {:?} raw {} inc {} v {}", self.round_clock, self.hit_tower, raw, inc, v);
         }
         self.pay_pop(self.hit_tower, v as f64);
@@ -14446,7 +14483,7 @@ impl Game {
             return;
         }
         #[cfg(test)]
-        if std::env::var_os("RRBTD6_REC_POPS").is_some() {
+        if env_flag!("RRBTD6_REC_POPS") {
             eprintln!("DBGAIM UNSTAGED rt {} tower {:?} towers {:?} v {}", self.round_clock, tower, self.towers.iter().map(|t| t.id).collect::<Vec<_>>(), v);
         }
         self.earn(v);
@@ -14467,7 +14504,7 @@ impl Game {
             }
         }
         #[cfg(test)]
-        if sum > 0.0 && std::env::var_os("RRBTD6_REC_POPS").is_some() {
+        if sum > 0.0 && env_flag!("RRBTD6_REC_POPS") {
             eprintln!("DBGAIM STAGED rt {} sum {}", self.round_clock, sum);
         }
         if sum > 0.0 {
@@ -14622,8 +14659,20 @@ impl Game {
             return Some(t);
         }
         let tiers=&self.tower_tiers[tw.def].as_ref()?.tiers;
-        #[cfg(test)] if self.reference_targeting{return tiers.get(&tw.tier_key());}
-        tiers.get(tier_model_key(tw.tiers,&mut [0;9]))
+        #[cfg(test)] if self.reference_targeting{return tiers.get(&tw.tier_key()).map(|a| &**a);}
+        tiers.get(tier_model_key(tw.tiers,&mut [0;9])).map(|a| &**a)
+    }
+
+    /// Tower `t`'s model as a shared handle: a reference count, not a deep copy, for a tower on
+    /// its own tier's model (sub-towers, paragons, morphs and temples are copied).
+    pub fn tier_arc(&self, t: usize) -> Option<std::sync::Arc<Tier>> {
+        let tw = &self.towers[t];
+        if tw.sub.is_none() && tw.paragon.is_none() && tw.morph.is_none() && tw.temple.is_none() {
+            let tiers = &self.tower_tiers[tw.def].as_ref()?.tiers;
+            #[cfg(test)] if self.reference_targeting { return tiers.get(&tw.tier_key()).cloned(); }
+            return tiers.get(tier_model_key(tw.tiers, &mut [0; 9])).cloned();
+        }
+        self.tier(t).map(|x| std::sync::Arc::new(x.clone()))
     }
 
     /// The tower attacks anywhere on the map (no range circle).
@@ -16599,13 +16648,16 @@ impl Game {
         let (id, start) = (self.bloons[i].id, out_children.len());
         let layer0 = self.bloons[i].layer;
         let n = self.damage_inner(i, dmg, out_children);
+        // (Whether the hit bloon's object lives on: its own slot first, the full scan only if it
+        // moved; the same answer as the scan, without one per hit.)
+        let alive = n == 0 || self.bloons.get(i).is_some_and(|b| b.id == id) || bloon_idx(&self.bloons, &self.bidx, id).is_some();
         // HYPOTHESIS P-DEADCOPIES: when the hit bloon's own object is destroyed (no first child
         // carrying it on), the copies its pop made don't carry its layers: the projectile can hit
         // them again (recording mortar_250 rt 633 / 652 / 672 / 843: a blast that destroys a
         // Black hits its surviving copy the next frame).
-        if self.pop_depth == 0 && n > 0 && !self.pop_after_move && !self.bloons.iter().any(|b| b.id == id) {
+        if self.pop_depth == 0 && n > 0 && !self.pop_after_move && !alive {
             for k in out_children[start..].to_vec() {
-                if let Some(b) = self.bloons.iter_mut().find(|b| b.id == k) {
+                if let Some(b) = bloon_idx(&self.bloons, &self.bidx, k).map(|j| &mut self.bloons[j]) {
                     if let Some(l) = b.lineage.as_ref() {
                         let keep: std::sync::Arc<[u64]> = l.iter().copied().filter(|&x| x > layer0).collect();
                         b.lineage = Some(keep);
@@ -16618,10 +16670,10 @@ impl Game {
         // a MOAB popping into Ceramics destroys nothing (recording desperado_502: bloon 426 hit at
         // rt 98 lives on as a Ceramic, stacks unchanged); one hit destroys at most its own bloon
         // (desperado_500: one a throw once every throw kills).
-        self.last_destroyed = (n > 0 && !self.bloons.iter().any(|b| b.id == id)) as u64;
+        self.last_destroyed = (n > 0 && !alive) as u64;
         if held {
             for k in out_children[start..].iter().rev().copied().filter(|k| *k != id).collect::<Vec<_>>() {
-                if let Some(j) = self.bloons.iter().position(|b| b.id == k) {
+                if let Some(j) = bloon_idx(&self.bloons, &self.bidx, k) {
                     // (Its layers' cash is still in the hit's damage result, BloonDegradeStepper
                     // .GetCashForLayers summed: the hit pays the whole worth of each child it
                     // doesn't make; recording beast_005 rt 201, a held MOAB pays 1 + 3 Ceramics' 95.)
@@ -16964,7 +17016,7 @@ impl Game {
         // nothing (recording dart_002 rt 2601: Regrow 682, popped down to Blue, regrown to Green,
         // pops for $0), nor does anything at 0.
         #[cfg(test)]
-        if std::env::var_os("RRBTD6_REC_POPS").is_some() && !(self.defs[kind].layer_number <= pay_lowest && !self.no_pop_cash) {
+        if env_flag!("RRBTD6_REC_POPS") && !(self.defs[kind].layer_number <= pay_lowest && !self.no_pop_cash) {
             eprintln!("DBGAIM NOPAY rt {} kind {} layer {} lowest {} nopop {}", self.round_clock, self.names[kind], self.defs[kind].layer_number, parent_lowest, self.no_pop_cash);
         }
         if self.defs[kind].layer_number <= pay_lowest && !self.no_pop_cash {
@@ -16973,7 +17025,7 @@ impl Game {
             // RRBTD6_REC_POPS (with --one): every paid pop (DBGAIM so compare.sh keeps it), to
             // find which pop a cash difference comes from.
             #[cfg(test)]
-            if std::env::var_os("RRBTD6_REC_POPS").is_some() {
+            if env_flag!("RRBTD6_REC_POPS") {
                 eprintln!("DBGAIM POP rt {} depth {} acc {:?} owner {} kind {} id {} phase {} cash {} dist {}", self.round_clock, self.pop_depth, self.hit_acc, self.hit_tower.unwrap_or(u64::MAX), self.names[kind], self.bloons.get(i).map_or(0, |b| b.id), self.phase, raw * inc, start_dist);
             }
         }
@@ -17407,7 +17459,7 @@ impl Game {
         }
         if top {
             for (cid, w) in std::mem::take(&mut self.wind_copy_draws) {
-                let Some(k) = self.bloons.iter().position(|b| b.id == cid) else { continue };
+                let Some(k) = bloon_idx(&self.bloons, &self.bidx, cid) else { continue };
                 let ck = self.bloons[k].kind;
                 // (distanceMax over 99999: its distanceTraveled; MoveWithWind.Attatched.)
                 let wmax = if w.max > 99999.0 { self.bloons[k].dist } else { w.max };
@@ -17447,7 +17499,7 @@ impl Game {
         }
         let hit_ctx = (self.hit_cash, self.hit_tower);
         for (damage, immune, owner, distribute) in destroy_ticks {
-            let Some(j) = self.bloons.iter().position(|b| b.id == parent_id) else { break };
+            let Some(j) = bloon_idx(&self.bloons, &self.bidx, parent_id) else { break };
             if immune & self.bloons[j].properties(&self.defs[self.bloons[j].kind]) != 0 {
                 continue;
             }
@@ -17836,7 +17888,7 @@ impl Game {
             // recording map_geared_spike_204_r40, the shuffles fit Geared's points along the path.)
             if !self.towers[t].on_the_move { pts.sort_by(|a, b| ((a[0] - tp[0]) * (a[0] - tp[0]) + (a[1] - tp[1]) * (a[1] - tp[1])).total_cmp(&((b[0] - tp[0]) * (b[0] - tp[0]) + (b[1] - tp[1]) * (b[1] - tp[1])))); }
             let n = pts.len();
-            if std::env::var_os("DBGE").is_some() { eprintln!("DBGSUP rt {} key {} pts {:?}", self.round_clock, key, pts); }
+            if env_flag!("DBGE") { eprintln!("DBGSUP rt {} key {} pts {:?}", self.round_clock, key, pts); }
             for i in 0..n {
                 let j = i + (self.synced_double() * (n - i) as f64) as usize;
                 pts.swap(i, j.min(n - 1));
@@ -17923,7 +17975,7 @@ impl Game {
         let paths: Vec<u8> = best.iter().map(|e| e.0).collect();
         let seg = match self.first_target_from(tower, 99999.0, &|_, b| paths.contains(&b.path)) {
             Some(id) => {
-                let path = self.bloons.iter().find(|b| b.id == id).map(|b| b.path);
+                let path = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| b.path);
                 best.iter().find(|e| Some(e.0) == path).map(|e| (e.0, e.1))
             }
             None => {
@@ -17980,7 +18032,7 @@ impl Game {
         let in_range = |q: [f32; 2]| (q[0] - tower[0]) * (q[0] - tower[0]) + (q[1] - tower[1]) * (q[1] - tower[1]) <= range * range;
         let d2 = |q: [f32; 2], b: [f32; 2]| (q[0] - b[0]) * (q[0] - b[0]) + (q[1] - b[1]) * (q[1] - b[1]);
         let near = self.first_target_from(tower, range, &|_, b| paths.contains(&b.path)).and_then(|id| {
-            let b = self.bloons.iter().find(|b| b.id == id)?;
+            let b = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])?;
             let mut m = 99999.0f32;
             let mut out = None;
             for (k, q) in self.track_segs[b.path as usize].iter().enumerate() {
@@ -17997,7 +18049,7 @@ impl Game {
         let seg = match near {
             Some(sg) => Some(sg),
             None => {
-                let far = self.first_target_from(tower, 99999.0, &|_, b| paths.contains(&b.path)).and_then(|id| self.bloons.iter().find(|b| b.id == id).map(|b| (b.path, b.dist, b.pos)));
+                let far = self.first_target_from(tower, 99999.0, &|_, b| paths.contains(&b.path)).and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| (b.path, b.dist, b.pos)));
                 let mut found = None;
                 if let Some((bp, bd, bpos)) = far {
                     let mut m = 99999.0f32;
@@ -18156,14 +18208,14 @@ impl Game {
         let mut ids = self.first_targets_from(self.towers[t].pos, range, &ok);
         // (Stable: equal dangers keep the First order.)
         ids.sort_by(|a, b| {
-            let da = self.bloons.iter().find(|x| x.id == *a).map_or(0.0, |x| self.defs[x.kind].danger);
-            let db = self.bloons.iter().find(|x| x.id == *b).map_or(0.0, |x| self.defs[x.kind].danger);
+            let da = bloon_idx(&self.bloons, &self.bidx, *a).map(|j| &self.bloons[j]).map_or(0.0, |x| self.defs[x.kind].danger);
+            let db = bloon_idx(&self.bloons, &self.bidx, *b).map(|j| &self.bloons[j]).map_or(0.0, |x| self.defs[x.kind].danger);
             db.total_cmp(&da)
         });
         let cands: Vec<(f32, u64, u32)> = ids
             .into_iter()
             .filter_map(|id| {
-                let b = self.bloons.iter().find(|b| b.id == id)?;
+                let b = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])?;
                 let d = &self.defs[b.kind];
                 let has = |x: &str| d.tags.iter().any(|y| y == x);
                 let cost = if has("Zomg") { td.zomg } else if has("Bad") || has("Miniboss") { td.bad } else { 1 };
@@ -18177,7 +18229,7 @@ impl Game {
                 continue;
             }
             left -= cost;
-            let Some(i) = self.bloons.iter().position(|b| b.id == id) else { continue };
+            let Some(i) = bloon_idx(&self.bloons, &self.bidx, id) else { continue };
             // The ability's attack: RotateToTarget (additionalRotation -90, from the tower raised 10)
             // turns the tower, and the hook leaves the weapon's eject point (0, 2, 3.5) turned with it
             // (recording bucc_040 rt 120: tower -209.33203, hook at (-1.82026, -0.7643168), z 3.5).
@@ -18253,7 +18305,7 @@ impl Game {
     /// blocker overridden, no effect, the tower). Not pulled: the latched bloonFollowProjectileModel
     /// (Game::latch_set / latch_step).
     fn great_white_hit(&mut self, p: usize, id: u64, gw: Box<crate::data::GreatWhite>) {
-        let Some(i) = self.bloons.iter().position(|b| b.id == id) else { return };
+        let Some(i) = bloon_idx(&self.bloons, &self.bidx, id) else { return };
         let owner = self.projectiles[p].owner;
         let by = self.projectiles[p].emitted_by;
         let Some((t, wi)) = self.gw_limiter(owner) else { return };
@@ -18373,7 +18425,7 @@ impl Game {
     /// bloon for every layer until OnDestroy removes it.
     fn latch_set(&mut self, p: usize, id: u64) {
         let Some(latch) = self.projectiles[p].spec.latch.clone() else { return };
-        let Some(i) = self.bloons.iter().position(|b| b.id == id) else { return };
+        let Some(i) = bloon_idx(&self.bloons, &self.bidx, id) else { return };
         let pp = self.projectiles[p].pos;
         let b = &self.bloons[i];
         let mut best = b.pos;
@@ -18408,7 +18460,7 @@ impl Game {
         while k < self.projectiles.len() {
             let Some((id, off, brot, prot, layer)) = self.projectiles[k].latch_on else { k += 1; continue };
             let rotate = self.projectiles[k].spec.latch.as_ref().is_some_and(|l| l.rotate);
-            match self.bloons.iter().find(|b| b.id == id).filter(|b| b.layer == layer) {
+            match bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).filter(|b| b.layer == layer) {
                 Some(b) => {
                     let delta = b.rot - brot;
                     let (sa, ca) = crt_sin_cos(DEG2RAD * -delta);
@@ -18455,7 +18507,7 @@ impl Game {
                 // (Each latch has its own slow: another Great White's latch on the bloon keeps it
                 // slowed; recording beast_merge_h300_max rt 452, follow 574 on the MOAB 484 left.)
                 if let Some(bid) = bid.filter(|&bid| !self.projectiles.iter().any(|q| q.latch_on.is_some_and(|l| l.0 == bid))) {
-                    if let Some(b) = self.bloons.iter_mut().find(|b| b.id == bid) {
+                    if let Some(b) = bloon_idx(&self.bloons, &self.bidx, bid).map(|j| &mut self.bloons[j]) {
                         b.effects.retain(|e| e.id != "LatchToBloon");
                     }
                 }
@@ -18517,7 +18569,7 @@ impl Game {
                 k += 1;
                 continue;
             }
-            let Some(i) = self.bloons.iter().position(|b| b.id == h.target) else {
+            let Some(i) = bloon_idx(&self.bloons, &self.bidx, h.target) else {
                 self.hooks.remove(k);
                 continue;
             };
@@ -18565,7 +18617,7 @@ impl Game {
     /// sub_050). Children of popped bloons don't count. (throwOffsetSecond, used on every other
     /// launch when set, is zero on every Sub.)
     fn preemptive_strikes(&mut self, target: u64) {
-        let Some(moab) = self.bloons.iter().find(|b| b.id == target).map(|b| self.defs[b.kind].tags.iter().any(|t| t == "Moabs")) else {
+        let Some(moab) = bloon_idx(&self.bloons, &self.bidx, target).map(|j| &self.bloons[j]).map(|b| self.defs[b.kind].tags.iter().any(|t| t == "Moabs")) else {
             return;
         };
         let single = Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
@@ -18619,7 +18671,7 @@ impl Game {
             if let Some((fx, k)) = self.tier(t).and_then(|tr| tr.preempt_fx.clone()) {
                 self.place_fx.push((at, fx, k));
             }
-            let obj = self.bloons.iter().find(|b| b.id == target).map(|b| b.obj);
+            let obj = bloon_idx(&self.bloons, &self.bidx, target).map(|j| &self.bloons[j]).map(|b| b.obj);
             for pr in &mut self.projectiles[start..] {
                 pr.target = Some(target);
                 pr.target_obj = obj;
@@ -18677,7 +18729,7 @@ impl Game {
             let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
             let start = self.projectiles.len();
             self.emit(at, 0.0, &fs.emission, &fs.projectile, None, tiers, owner);
-            let obj = self.bloons.iter().find(|b| b.id == target).map(|b| b.obj);
+            let obj = bloon_idx(&self.bloons, &self.bidx, target).map(|j| &self.bloons[j]).map(|b| b.obj);
             for pr in &mut self.projectiles[start..] {
                 pr.target = Some(target);
                 pr.target_obj = obj;
@@ -18697,7 +18749,7 @@ impl Game {
     fn leap_target(&self, t: usize) -> Option<usize> {
         let tp = self.towers[t].pos;
         let valid = |_: &Self, b: &Bloon| b.hp > 0 && on_map(b.pos, 0.0);
-        let idx = |id: u64| self.bloons.iter().position(|b| b.id == id);
+        let idx = |id: u64| bloon_idx(&self.bloons, &self.bidx, id);
         match self.towers[t].target {
             TargetMode::Close => self.closest_target(tp, 99999.0, |b| valid(self, b), |b| b.pos),
             TargetMode::Strong => {
@@ -18734,7 +18786,7 @@ impl Game {
             return;
         }
         let now = self.sim_elapsed as i64;
-        let at = bloon.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map_or(p, |b| b.pos);
+        let at = bloon.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])).map_or(p, |b| b.pos);
         self.towers[t].leap = Some(LeapState { spec: lp.clone(), pending: None, land_at: now + lp.land, finish_at: now + lp.finish, bloon, at });
         self.towers[t].leap_paused = true;
     }
@@ -18757,7 +18809,7 @@ impl Game {
             let Some(mut st) = self.towers[t].leap.clone() else { continue };
             let now = self.sim_elapsed as i64;
             if st.land_at >= 0 {
-                if let Some(b) = st.bloon.and_then(|id| self.bloons.iter().find(|b| b.id == id)) {
+                if let Some(b) = st.bloon.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])) {
                     st.at = b.pos;
                 }
                 if st.land_at <= now {
@@ -19069,7 +19121,7 @@ impl Game {
             // (Its 3D distance: the tower at height 0, the bloon at its Position.z; recording
             // boomerang_paragon_r90_t, a MOAB popped into a Ceramic still 120 up is let go, and
             // a Ceramic is no MOAB to GetClosestTarget now.)
-            let kept = st.seen.and_then(|id| self.bloons.iter().find(|b| b.id == id)).is_some_and(|b| {
+            let kept = st.seen.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])).is_some_and(|b| {
                 let (dx, dy) = (b.pos[0] - c[0], b.pos[1] - c[1]);
                 !(1600.0 < dx * dx + dy * dy + b.height * b.height)
             });
@@ -19508,7 +19560,7 @@ impl Game {
                 }
             }
             #[cfg(test)] let model_start=std::time::Instant::now();
-            let Some(mut tier) = self.tier(t).cloned() else { continue };
+            let Some(mut tier) = self.tier_arc(t) else { continue };
             #[cfg(test)] {self.perf_detail[0]+=model_start.elapsed().as_secs_f64();}
             // Submerge.UpdateAttackStates (VERIFIED-DISASM @0xdb9de0): the tower's attacks whose
             // name has "Submerge" in it are paused while it is surfaced, the others while it is
@@ -19520,7 +19572,7 @@ impl Game {
                 Some(_) if tier.attacks.iter().any(|a| a.model_name.contains("Submerge")) => {
                     sub_paused = tier.attacks.iter().map(|a| a.model_name.contains("Submerge") != sub_state).collect();
                 }
-                Some(sm) if sub_state => tier.attacks = vec![sm.attack.clone()],
+                Some(sm) if sub_state => { let a = vec![sm.attack.clone()]; std::sync::Arc::make_mut(&mut tier).attacks = a; }
                 Some(_) => {}
                 None => self.towers[t].submerged = false,
             }
@@ -19956,7 +20008,7 @@ impl Game {
                         // leave along -4.52). INFERRED: the Target's offset from the bloon as found.
                         if attack.rotate_always && attack.turn_body && attack.offset_rot.is_none() {
                             let held = self.towers[t].rot_held.get(&attack.model_name).copied();
-                            let at = held.and_then(|(id, off)| self.bloons.iter().find(|b| b.id == id).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
+                            let at = held.and_then(|(id, off)| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
                             match at {
                                 Some(q) => {
                                     let tp = self.towers[t].pos;
@@ -19970,7 +20022,7 @@ impl Game {
                         }
                         if air_turn {
                             let kept = self.towers[t].air.as_ref().and_then(|a| a.hm_target.get(ai).copied().flatten());
-                            let tgt = kept.and_then(|(id, off)| self.bloons.iter().find(|b| b.id == id).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
+                            let tgt = kept.and_then(|(id, off)| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
                             let r_att = buff.attack_range(attack);
                             self.air_rotate_to(t, ai, r_att, tgt);
                         }
@@ -20592,7 +20644,7 @@ impl Game {
                 let mut acid_bz: Option<f32> = None;
                 if attack.pool_fallback {
                     if let Some((d, p, id)) = best.filter(|b| b.2 != 0) {
-                        if let Some(b) = self.bloons.iter().find(|b| b.id == id) {
+                        if let Some(b) = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]) {
                             let df = &self.defs[b.kind];
                             let off = if df.tags.iter().any(|t| t == "Boss") { 180.0 } else if df.is_moab { 120.0 } else { 20.0 };
                             acid_bz = Some(b.height - off);
@@ -20635,7 +20687,7 @@ impl Game {
                     self.fighter_search(t);
                     best = None;
                     if let Some(a) = self.towers[t].air.as_ref() {
-                        if let Some(b) = a.fp_bloon.and_then(|id| self.bloons.iter().find(|b| b.id == id)) {
+                        if let Some(b) = a.fp_bloon.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])) {
                             let rot = RAD2DEG * crt_atan2(b.pos[0] - a.pos[0], -(b.pos[1] - a.pos[1]));
                             if round_angle(rot - a.fp_rot).abs() < fov * 0.5 && (camo || !b.camo(&self.defs[b.kind])) {
                                 best = Some((0.0, b.pos, b.id));
@@ -20650,7 +20702,7 @@ impl Game {
                     // (Its bloon targets are the bloons' positions, height and all, not the bloons:
                     // recording obyn_l20_r80 rt 401, Brambles stays at the ZOMG's spot at z 120.)
                     if let Some((sc, q, id)) = best.filter(|b| b.2 != 0) {
-                        aim_z = self.bloons.iter().find(|b| b.id == id).map_or(aim_z, |b| b.height);
+                        aim_z = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map_or(aim_z, |b| b.height);
                         best = Some((sc, q, 0));
                     }
                     if best.is_none() && (self.sandbox || self.round_active || !self.bloons.is_empty()) {
@@ -20872,13 +20924,13 @@ impl Game {
                 // target where it was as the frame before began; recording mermonkey_040 rt 121-126,
                 // the ability turning the tower from 122).
                 if attack.rotate_always && attack.turn_body && attack.offset_rot.is_none() {
-                    let held = best.filter(|b| b.2 != 0).and_then(|(_, aim, id)| self.bloons.iter().find(|b| b.id == id).map(|b| (id, [aim[0] - b.pos[0], aim[1] - b.pos[1]])));
+                    let held = best.filter(|b| b.2 != 0).and_then(|(_, aim, id)| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| (id, [aim[0] - b.pos[0], aim[1] - b.pos[1]])));
                     match held {
                         Some(h) => { self.towers[t].rot_held.insert(attack.model_name.clone(), h); }
                         None => { self.towers[t].rot_held.remove(&attack.model_name); }
                     }
                     if let Some((_, _, id)) = best.filter(|b| b.2 != 0) {
-                        if let Some(b) = self.bloons.iter().find(|b| b.id == id) {
+                        if let Some(b) = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]) {
                             let tp = self.towers[t].pos;
                             let from = [tp[0], aim_origin_y(tp[1], self.stand_z(tp), DISPLAY_TOWER_HEIGHT)];
                             let q = b.prev;
@@ -20901,8 +20953,8 @@ impl Game {
                     // to a Red 62 away (range 54.6) the frame its search came up empty.)
                     let found = best.filter(|b| b.2 != 0);
                     let old = self.towers[t].air.as_ref().and_then(|a| a.hm_target.get(ai).copied().flatten());
-                    let old_at = old.and_then(|(id, off)| self.bloons.iter().find(|b| b.id == id).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
-                    let kept = found.and_then(|(_, aim, id)| self.bloons.iter().find(|b| b.id == id).map(|b| (id, [aim[0] - b.pos[0], aim[1] - b.pos[1]])));
+                    let old_at = old.and_then(|(id, off)| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]));
+                    let kept = found.and_then(|(_, aim, id)| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| (id, [aim[0] - b.pos[0], aim[1] - b.pos[1]])));
                     if let Some(a) = self.towers[t].air.as_mut() {
                         if a.hm_target.len() <= ai {
                             a.hm_target.resize(ai + 1, None);
@@ -21129,7 +21181,7 @@ impl Game {
                             let r = buff.attack_range(attack);
                             // (A fresh FindTarget: recording heli_upgrades_r30 rt 1193, the young darts
                             // turn the heli from -68.39 to -51.62, to a bloon other than the held one.)
-Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|b| b.id == id).map(|b| (0.0f32, b.pos, id))))
+Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| (0.0f32, b.pos, id))))
                         } else {
                             None
                         }
@@ -21297,7 +21349,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             st.banana_due = st.banana_due.saturating_sub(1);
                             st.rand_target = None;
                         }
-                        if std::env::var_os("DBGE").is_some() { eprintln!("DBGAIM throw rt {} w {} at {:?} id {}", clock, w, p, st.aim_id); }
+                        if env_flag!("DBGE") { eprintln!("DBGAIM throw rt {} w {} at {:?} id {}", clock, w, p, st.aim_id); }
                     }
                     // (Between rounds Process does nothing, so a throw in progress waits too: recording
                     // sub_005, a throw due at the round's end leaves on the next round's first frame.)
@@ -21315,7 +21367,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     if started.is_some() && weapon.cycle_random {
                         let seed = self.freeplay_seed;
                         let d = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
-                        if std::env::var_os("RRBTD6_RNG_LOG").is_some() {
+                        if env_flag!("RRBTD6_RNG_LOG") {
                             eprintln!("RNG {} {d:?} @{}", self.round_clock, std::panic::Location::caller().line());
                         }
                         if let Some(c) = &weapon.cycle_anim {
@@ -21346,7 +21398,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     // the bloon was when the throw started: readers get copies of the struct;
                     // recording sub_052, a missile whose target died in the throw.)
                     if st.anim >= 0 && st.aim_id != 0 {
-                        if let Some(b) = self.bloons.iter().find(|b| b.id == st.aim_id) {
+                        if let Some(b) = bloon_idx(&self.bloons, &self.bidx, st.aim_id).map(|j| &self.bloons[j]) {
                             st.aim_obj = Some(b.obj);
                         }
                     }
@@ -21367,7 +21419,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                     // (An emission rotation offset of 0 (Skywarden's) turns it as any other: recording
                     // sky_052 rt 496, the tower at its Black as the throw starts.)
                     if st.anim >= 0 && aim_id != 0 && attack.rotate && !turning && weapon.aim_offset.is_none_or(|o| o == 0.0) && extra_rot == 0.0 && newest == w && in_list {
-                        if let Some(b) = self.bloons.iter().find(|b| b.id == aim_id) {
+                        if let Some(b) = bloon_idx(&self.bloons, &self.bidx, aim_id).map(|j| &self.bloons[j]) {
                             let target = [b.pos[0] + aim_off[0], b.pos[1] + aim_off[1]];
                             let aim_from = [pos[0], aim_origin_y(pos[1], stand_z, attack.marker_z.unwrap_or(DISPLAY_TOWER_HEIGHT))];
                             let r = RAD2DEG * crt_atan2(target[0] - aim_from[0], -(target[1] - aim_from[1]));
@@ -21485,7 +21537,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                         // @0xb9bb90) fails for a destroyed bloon, so RotateToTarget no longer turns the
                         // tower and the shot goes along its current facing (recording dart_040_club:
                         // three towers on a Green the first one's darts popped that frame).
-                        let locked = (aim_id != 0).then(|| self.bloons.iter().find(|b| b.id == aim_id).map(|b| ([b.pos[0] + aim_off[0], b.pos[1] + aim_off[1]], b.id))).flatten();
+                        let locked = (aim_id != 0).then(|| bloon_idx(&self.bloons, &self.bidx, aim_id).map(|j| &self.bloons[j]).map(|b| ([b.pos[0] + aim_off[0], b.pos[1] + aim_off[1]], b.id))).flatten();
                         // (The attack only looks for a new target when a throw starts: Weapon.Process
                         // calls Attack.FindTarget once lastEmission + rateFrames is reached; recording
                         // dart_040_club, rt 2378.)
@@ -21526,7 +21578,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             (None, None) => (aimed, 0),
                         };
                         if let (Some(_), true) = (young, target_id != 0) {
-                            if let Some(b) = self.bloons.iter().find(|b| b.id == target_id) {
+                            if let Some(b) = bloon_idx(&self.bloons, &self.bidx, target_id).map(|j| &self.bloons[j]) {
                                 target = b.pos;
                             }
                         }
@@ -21605,7 +21657,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                     // (A Target whose bloon died during the throw isn't turned to: the
                                     // tower keeps its facing (recording sky_052 rt 560, -72.41 held from
                                     // 556 when the zap took its Black).)
-                                    let lost = target_id == 0 && { let a = tw.weapons[w].aim_id; a != 0 && !self.bloons.iter().any(|b| b.id == a) };
+                                    let lost = target_id == 0 && { let a = tw.weapons[w].aim_id; a != 0 && !bloon_idx(&self.bloons, &self.bidx, a).is_some() };
                                     let r = match (lost, tw.game_rot) {
                                         (true, Some(g)) if attack.turn_body => g - attack.extra_rotation as f32,
                                         _ => RAD2DEG * crt_atan2(target[0] - aim_from[0], -(target[1] - aim_from[1])),
@@ -21664,7 +21716,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                     // -21.56. OPEN: the first shot after an upgrade made the turret, recording
                                     // bucc_upgrades_r30 rt 1306, went at display - offset laid out on the tower:
                                     // RRBTD6_CARRIER_FIRST=1 tries that rule.)
-                                    if std::env::var_os("RRBTD6_CARRIER_FIRST").is_none() { tr + weapon.aim_offset.unwrap_or(0.0) as f32 } else { tr - weapon.aim_offset.unwrap_or(0.0) as f32 }
+                                    if !env_flag!("RRBTD6_CARRIER_FIRST") { tr + weapon.aim_offset.unwrap_or(0.0) as f32 } else { tr - weapon.aim_offset.unwrap_or(0.0) as f32 }
                                 });
                             }
                             // (A projectile-made sub-tower's turret: relative to its rotation, back.)
@@ -21769,7 +21821,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                         // (Target.Position: a MOAB circle's offset too; recording
                                         // super_250_village_r102 rt 614, an arm on a DDT's front circle.)
                                         for (hk, id) in tw.face_ids.iter().enumerate().filter_map(|(k, x)| x.map(|x| (k, x))) {
-                                            if let Some(b) = self.bloons.iter().find(|b| b.id == id) {
+                                            if let Some(b) = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]) {
                                                 let o = tw.face_offs.get(hk).copied().unwrap_or([0.0; 2]);
                                                 let d = [b.pos[0] + o[0] - pos[0], -(b.pos[1] + o[1] - pos[1])];
                                                 let l = (d[0] * d[0] + d[1] * d[1]).sqrt();
@@ -21802,7 +21854,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             // after the pistol's throw at 327.)
                             if attack.offset_rot.is_some() && tier.base_rotation {
                                 if let Some(r) = attack_rot {
-                                    if std::env::var_os("DBGE").is_some() { eprintln!("DBGOFF aim {} target {:?} tpos {:?}", r, target, tw.pos); }
+                                    if env_flag!("DBGE") { eprintln!("DBGOFF aim {} target {:?} tpos {:?}", r, target, tw.pos); }
                                     tw.offset_aim = Some(r);
                                 }
                             }
@@ -22198,7 +22250,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             } else {
                                 // (Tower.Rotation: the base's on a ChurchillBaseRotation tower.)
                                 let r = if tier.base_rotation { self.towers[t].base_rot } else { grot.or(self.towers[t].game_rot).unwrap_or(0.0) };
-                                if std::env::var_os("DBGE").is_some() { eprintln!("DBGCLOSE rt {} grot {:?} game_rot {:?} base {} rel {} target {:?}", self.round_clock, grot, self.towers[t].game_rot, self.towers[t].base_rot, self.towers[t].turret_rel, target); }
+                                if env_flag!("DBGE") { eprintln!("DBGCLOSE rt {} grot {:?} game_rot {:?} base {} rel {} target {:?}", self.round_clock, grot, self.towers[t].game_rot, self.towers[t].base_rot, self.towers[t].turret_rel, target); }
                                 let (sa, ca) = crt_sin_cos(DEG2RAD * -r);
                                 let mut best = (f32::INFINITY, from, ez);
                                 for m in &emission.closest {
@@ -22264,7 +22316,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 // Darkness's bolts fly at their MOAB while the tower stays at 0).
                                 let bloon_from = match weapon.bloon_dir.as_deref() { Some("tower") => Some(pos), Some("eject") => Some(from), _ => None };
                                 // (Target.bloon's own position: no collision-circle offset.)
-                                let bloon_at = self.bloons.iter().find(|b| b.id == target_id).map(|b| b.pos);
+                                let bloon_at = bloon_idx(&self.bloons, &self.bidx, target_id).map(|j| &self.bloons[j]).map(|b| b.pos);
                                 // (Not from a carrier plane: FireFromAirUnit fires along the plane; recording
                                 // bucc_400 rt 31, the missile leaves straight up.)
                                 let fighter = tier.air.as_ref().is_some_and(|x| x.fighter.is_some());
@@ -22515,8 +22567,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                     pr.instant_z = Some(aim_z);
                                 }
                             } else if proj.instant || emission.kind == "AtTarget" || emission.kind == "InstantDamage" {
-                                let bfound = self.bloons.iter().find(|b| b.id == target_id).map(|b| (b.pos, b.obj));
-                                let bz = self.bloons.iter().find(|b| b.id == target_id).map(|b| b.height);
+                                let bfound = bloon_idx(&self.bloons, &self.bidx, target_id).map(|j| &self.bloons[j]).map(|b| (b.pos, b.obj));
+                                let bz = bloon_idx(&self.bloons, &self.bidx, target_id).map(|j| &self.bloons[j]).map(|b| b.height);
                                 let (bpos, bobj) = (bfound.map(|f| f.0), bfound.map(|f| f.1).or(lost_obj));
                                 for pr in &mut self.projectiles[start..] {
                                     pr.target = (target_id != 0).then_some(target_id);
@@ -22601,7 +22653,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             // MarkedToPopProjectileBehavior.SetTarget (VERIFIED-DISASM @0x180ccc970): the
                             // target's lineage goes into its attack's FilterMarkedToPop.
                             if attack.mtp_filter && target_id != 0 {
-                                if let Some(b) = self.bloons.iter().find(|b| b.id == target_id) {
+                                if let Some(b) = bloon_idx(&self.bloons, &self.bidx, target_id).map(|j| &self.bloons[j]) {
                                     let mut ids = vec![b.layer];
                                     ids.extend(b.lineage.iter().flat_map(|l| l.iter().copied()));
                                     let k = if attack.model_name.contains("Marking") { 0 } else { 1 };
@@ -22724,7 +22776,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                     }
                                     if let Some((fx, k)) = &lf.hit {
                                         for id in ids.iter().take(lf.max_hits.max(0) as usize) {
-                                            if let Some(b) = self.bloons.iter().find(|b| b.id == *id) {
+                                            if let Some(b) = bloon_idx(&self.bloons, &self.bidx, *id).map(|j| &self.bloons[j]) {
                                                 self.place_fx.push((b.pos, fx.clone(), *k));
                                             }
                                         }
@@ -22817,11 +22869,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 // Projectile.IsCollisionValid: none, no initial hit; recording
                                 // dartling_500 rt 3291, a Camo Rainbow the 5-0-0 can't see.)
                                 let line_sees_camo = self.projectiles.get(start).is_none_or(|pr| pr.buff_camo || !pr.spec.filters.iter().any(|f| f == "FilterInvisibleModel"));
-                                let valid_at = ids.iter().position(|id| self.bloons.iter().find(|b| b.id == *id).is_some_and(|b| line_sees_camo || !b.camo(&self.defs[b.kind])));
+                                let valid_at = ids.iter().position(|id| bloon_idx(&self.bloons, &self.bidx, *id).map(|j| &self.bloons[j]).is_some_and(|b| line_sees_camo || !b.camo(&self.defs[b.kind])));
                                 if let (Some(ip), Some(k)) = (emission.line_initial.clone(), valid_at) {
                                     let first = ids[k];
                                     ids.drain(..=k);
-                                    if let Some(bp) = self.bloons.iter().find(|b| b.id == first).map(|b| b.pos) {
+                                    if let Some(bp) = bloon_idx(&self.bloons, &self.bidx, first).map(|j| &self.bloons[j]).map(|b| b.pos) {
                                         let mut single = emission.clone();
                                         single.kind = "Single".into();
                                         single.count = 1;
@@ -22928,11 +22980,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             // was when fired (its Curve only eases the motion), then expires.
                             if let Some(ar) = proj.arrive.as_ref().filter(|a| a.time > 0.0 || a.alt_speed > 0.0) {
                                 let now = self.sim_elapsed;
-                                let bheight = self.bloons.iter().find(|b| b.id == target_id).map(|b| b.height);
+                                let bheight = bloon_idx(&self.bloons, &self.bidx, target_id).map(|j| &self.bloons[j]).map(|b| b.height);
                                 // (A throw whose bloon died before the release goes at its spot with no
                                 // height to make up: recording sky_052 rt 502, a bolt at a Black a zap
                                 // took at 496 eases in over the 2D distance (0.632 / 0.955 of the way).)
-                                let lost = target_id == 0 && { let a = self.towers[t].weapons[w].aim_id; a != 0 && !self.bloons.iter().any(|b| b.id == a) };
+                                let lost = target_id == 0 && { let a = self.towers[t].weapons[w].aim_id; a != 0 && !bloon_idx(&self.bloons, &self.bidx, a).is_some() };
                                 // Weapon.Emit (VERIFIED-DECOMP @0x180c4ea20): a Target no longer valid is replaced
                                 // by storedTargetPosition, set as the throw starts only with
                                 // storeTargetOnAnimationStart (the Skywarden's bolts fly on to the spot:
@@ -22970,7 +23022,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                         // track point 2 up. INFERRED.)
                                         // (Not from a closest-offset marker's own height: recording brickell_l03_r20, a sea
                                         // mine from z 7.)
-                                        if target_id == 0 && !lost && weapon.eject[2] == 0.0 && emission.closest.is_empty() && std::env::var_os("NOEJ0").is_none() {
+                                        if target_id == 0 && !lost && weapon.eject[2] == 0.0 && emission.closest.is_empty() && !env_flag!("NOEJ0") {
                                             pr.z = tz;
                                         }
                                         let (dx, dy, dz) = (target[0] - pr.pos[0], target[1] - pr.pos[1], pr.z - tz);
@@ -23538,7 +23590,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             let Some(p) = self.projectiles.iter().position(|pr| pr.uid == u) else { continue };
             let pr = &self.projectiles[p];
             let Some(d) = pr.dir else { continue };
-            let tp = match pr.aim.and_then(|id| self.bloons.iter().find(|b| b.id == id)) {
+            let tp = match pr.aim.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])) {
                 Some(tb) => {
                     let q = if tb.cseq > gseq { tb.prev } else { tb.pos };
                     [q[0] + pr.aim_off[0], q[1] + pr.aim_off[1]]
@@ -23784,7 +23836,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
             // (recording bomb_005: 52 Blacks popped at 1190, cash + 572). HYPOTHESIS P-PRELEAKLOOP:
             // the movement loop carries on from this index.
             let leak_id = self.bloons[i].id;
-            if self.leak_immune <= 0.0 && self.pre_leak_abilities() && !self.bloons.iter().any(|x| x.id == leak_id) {
+            if self.leak_immune <= 0.0 && self.pre_leak_abilities() && !bloon_idx(&self.bloons, &self.bidx, leak_id).is_some() {
                 return true;
             }
             let b = &mut self.bloons[i];
@@ -24208,7 +24260,7 @@ impl Game {
     /// included (recording brickell_l10_r40 rt 617: a SeaMineSeeking at a MOAB 120 up climbs 2.98 a
     /// frame).
     fn contact_dir(&mut self, start: usize, tgt: Option<u64>) {
-        let Some(b) = tgt.and_then(|id| self.bloons.iter().find(|b| b.id == id)) else { return };
+        let Some(b) = tgt.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])) else { return };
         let (bp, bz) = (b.pos, b.height);
         for pr in &mut self.projectiles[start..] {
             let v = [bp[0] - pr.pos[0], -(bp[1] - pr.pos[1]), bz - pr.z];
@@ -24225,7 +24277,7 @@ impl Game {
     }
 
     fn contact_seek(&mut self, start: usize, tgt: Option<u64>) {
-        let Some(id) = tgt.filter(|&id| self.bloons.iter().any(|b| b.id == id)) else { return };
+        let Some(id) = tgt.filter(|&id| bloon_idx(&self.bloons, &self.bidx, id).is_some()) else { return };
         for pr in &mut self.projectiles[start..] {
             if pr.spec.seek.is_some() && pr.seek.is_none() {
                 pr.seek = Some(id);
@@ -24240,7 +24292,7 @@ impl Game {
         // off a Ceramic turns -7.87 from its new spot, not -9.02 from the last).
         // (Its Instant ran in process-list order: a bloon newer than the shot hadn't moved yet;
         // recording sniper_040 rt 2286, off a Blue made after it.)
-        let q = match pr.target.filter(|_| pr.spec.instant).and_then(|id| self.bloons.iter().find(|b| b.id == id)) {
+        let q = match pr.target.filter(|_| pr.spec.instant).and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])) {
             Some(b) => {
                 let at = if b.born > pr.born { b.prev } else { b.pos };
                 [at[0] + pr.inst_off[0], at[1] + pr.inst_off[1]]
@@ -24373,9 +24425,9 @@ impl Game {
         let seed = self.freeplay_seed;
         let d = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
         // RRBTD6_RNG_LOG: every draw with its round time, to line up with a recording's R lines.
-        if std::env::var_os("RRBTD6_RNG_LOG").is_some() {
+        if env_flag!("RRBTD6_RNG_LOG") {
             eprintln!("RNG {} {d:?} @{}", self.round_clock, std::panic::Location::caller().line());
-            if std::env::var("RRBTD6_RNG_BT").ok().and_then(|v| v.parse::<i64>().ok()) == Some(self.round_clock) { eprintln!("{}", std::backtrace::Backtrace::force_capture()); }
+            if { static BT: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new(); *BT.get_or_init(|| std::env::var("RRBTD6_RNG_BT").ok().and_then(|v| v.parse::<i64>().ok())) } == Some(self.round_clock) { eprintln!("{}", std::backtrace::Backtrace::force_capture()); }
         }
         d
     }
@@ -26091,8 +26143,8 @@ impl Game {
                 // Target's cached first spot (recording sub_030: a Ballistic Missile explodes where
                 // it first was, not where its bloon died); no target at all, its own position. A live
                 // target: its position plus the aim's collision circle (sub_032: a blast on a MOAB).
-                let at = if ex.use_target { pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).or_else(|| pr.target_obj.and_then(|o| self.bloons.iter().find(|b| b.obj == o))).map_or(pr.target_cache.unwrap_or(at), |b| [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]]) } else { at };
-                if ex.use_target && !pr.target.is_some_and(|id| self.bloons.iter().any(|b| b.id == id)) {
+                let at = if ex.use_target { pr.target.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])).or_else(|| pr.target_obj.and_then(|o| self.bloons.iter().find(|b| b.obj == o))).map_or(pr.target_cache.unwrap_or(at), |b| [b.pos[0] + pr.inst_off[0], b.pos[1] + pr.inst_off[1]]) } else { at };
+                if ex.use_target && !pr.target.is_some_and(|id| bloon_idx(&self.bloons, &self.bidx, id).is_some()) {
                     ex.stale_target = pr.target_obj.map(|o| (o, pr.inst_off));
                 }
                 ex.src = pr.uid;
@@ -26106,7 +26158,7 @@ impl Game {
                 // new bloon is that bloon now; recording sub_paragon_r40 rt 1375, a strike's Black
                 // 1512 popped at 1363, its object back as 1570, which the TargetDamage hits.)
                 let mut tgt = pr.aim.or(pr.target);
-                if pr.aim.is_none() && !tgt.is_some_and(|id| self.bloons.iter().any(|b| b.id == id)) {
+                if pr.aim.is_none() && !tgt.is_some_and(|id| bloon_idx(&self.bloons, &self.bidx, id).is_some()) {
                     if let Some(b) = pr.target_obj.and_then(|o| self.bloons.iter().find(|b| b.obj == o)) {
                         tgt = Some(b.id);
                     }
@@ -26151,7 +26203,7 @@ impl Game {
                 // (A point Target, the burst's empty-clip point, is where the arc came down: recording
                 // sky_420_close rt 322, the blast 57.1 from the tower, pierce 4 + 5.)
                 let at = match target {
-                    Some(id) => self.bloons.iter().find(|b| b.id == id).map(|b| [b.pos[0] + ex.target_off[0], b.pos[1] + ex.target_off[1]]),
+                    Some(id) => bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| [b.pos[0] + ex.target_off[0], b.pos[1] + ex.target_off[1]]),
                     None => Some(pos),
                 };
                 let dist = match (tpos, at) { (Some(a), Some(b)) => (b[0] - a[0]).hypot(b[1] - a[1]), _ => 0.0 };
@@ -26247,7 +26299,7 @@ impl Game {
                 }
             }
             if ex.collide_sub && self.in_step {
-                if let Some(id) = target.filter(|id| self.bloons.iter().any(|b| b.id == *id)) {
+                if let Some(id) = target.filter(|id| bloon_idx(&self.bloons, &self.bidx, *id).is_some()) {
                     let uids: Vec<u64> = self.projectiles[start..].iter().map(|pr| pr.uid).collect();
                     for pr in &mut self.projectiles[start..] {
                         pr.line_hits = Some(vec![id]);
@@ -26327,12 +26379,12 @@ impl Game {
         let n_line = self.projectiles.len() - start;
         let mut ids = scan(self);
         let line_sees_camo = self.projectiles.get(start).is_none_or(|pr| pr.buff_camo || !pr.spec.filters.iter().any(|f| f == "FilterInvisibleModel"));
-        let valid_at = ids.iter().position(|id| self.bloons.iter().find(|b| b.id == *id).is_some_and(|b| line_sees_camo || !b.camo(&self.defs[b.kind])));
+        let valid_at = ids.iter().position(|id| bloon_idx(&self.bloons, &self.bidx, *id).map(|j| &self.bloons[j]).is_some_and(|b| line_sees_camo || !b.camo(&self.defs[b.kind])));
         let mut initial: Vec<u64> = Vec::new();
         if let (Some(ip), Some(k)) = (emission.line_initial.clone(), valid_at) {
             let first = ids[k];
             ids.drain(..=k);
-            if let Some(bp) = self.bloons.iter().find(|b| b.id == first).map(|b| b.pos) {
+            if let Some(bp) = bloon_idx(&self.bloons, &self.bidx, first).map(|j| &self.bloons[j]).map(|b| b.pos) {
                 let s0 = self.projectiles.len();
                 self.emit_rot = Some(rot);
                 self.emit(bp, gd[1].atan2(gd[0]), &single, &ip, None, tiers, owner);
@@ -26390,7 +26442,7 @@ impl Game {
     /// sub_005: an Airburst dart popping its MOAB splits at z 100, over the 100-high logs).
     fn emit_height(&self) -> f32 {
         let z = self.emit_z;
-        let Some(b) = self.emit_target.and_then(|id| self.bloons.iter().find(|b| b.id == id)) else { return z };
+        let Some(b) = self.emit_target.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])) else { return z };
         let t = b.height - if self.defs[b.kind].is_moab { 120.0 } else { 20.0 };
         if z < t { t } else { z }
     }
@@ -26434,8 +26486,8 @@ impl Game {
             // before createNextProjAt moves, so it looks again each frame.
             let pick = if oi.only_if_target {
                 let Some(id) = self.interval_target(p, oi.range) else { continue };
-                if std::env::var_os("DBGE").is_some() { let b = self.bloons.iter().find(|b| b.id == id).unwrap(); eprintln!("DBGAIM interval rt {} ball {:?} -> {} {} pos {:?} dist {} prev_dist {} wind {:?} lin {:?} layer {}", self.round_clock, self.projectiles[p].pos, id, self.names[b.kind], b.pos, b.dist, b.prev_dist, b.wind, b.lineage, b.layer); }
-                self.bloons.iter().find(|b| b.id == id).map(|b| (b.id, b.pos))
+                if env_flag!("DBGE") { let b = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).unwrap(); eprintln!("DBGAIM interval rt {} ball {:?} -> {} {} pos {:?} dist {} prev_dist {} wind {:?} lin {:?} layer {}", self.round_clock, self.projectiles[p].pos, id, self.names[b.kind], b.pos, b.dist, b.prev_dist, b.wind, b.lineage, b.layer); }
+                bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| (b.id, b.pos))
             } else {
                 // (No target asked for: the emission's own.)
                 None
@@ -26553,7 +26605,7 @@ impl Game {
         } else {
             off.sort_by_key(|&i| std::cmp::Reverse(self.bloons[i].obj));
         }
-        if std::env::var_os("DBGE").is_some() && off.len() > 1 { eprintln!("DBGAIM offtrack rt {} {:?}", self.round_clock, off.iter().map(|&i| (self.bloons[i].id, self.bloons[i].pos[0], self.grid_query_key(pos, i), self.path_rank.get(&self.bloons[i].id).copied(), grid_cell(self.bloons[i].cell_pos))).collect::<Vec<_>>()); }
+        if env_flag!("DBGE") && off.len() > 1 { eprintln!("DBGAIM offtrack rt {} {:?}", self.round_clock, off.iter().map(|&i| (self.bloons[i].id, self.bloons[i].pos[0], self.grid_query_key(pos, i), self.path_rank.get(&self.bloons[i].id).copied(), grid_cell(self.bloons[i].cell_pos))).collect::<Vec<_>>()); }
         off.first().map(|&i| self.bloons[i].id)
     }
 
@@ -26615,7 +26667,7 @@ impl Game {
             self.apply_effects(bi, &bs, owner, 0.0, false);
         }
         if let (Some(area), Some(em)) = (weapon.blazing_area.clone(), weapon.blazing_emission.clone()) {
-            if let Some(b) = self.bloons.iter().find(|b| b.id == target_id) {
+            if let Some(b) = bloon_idx(&self.bloons, &self.bidx, target_id).map(|j| &self.bloons[j]) {
                 let off = self.towers[t].weapons[w].aim_off;
                 let at = [b.pos[0] + off[0], b.pos[1] + off[1]];
                 let z = b.height;
@@ -26854,7 +26906,7 @@ impl Game {
                 // Position + the circle's offset; recording map_haunted_beast_240_r40 rt 346, a
                 // Piranha's bite at MOAB 359's front circle, -36.48 where the centre gives -33.13.)
                 let off = self.emit_target_off;
-                if let Some(bp) = self.emit_target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]).or(self.emit_aim) {
+                if let Some(bp) = self.emit_target.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])).map(|b| [b.pos[0] + off[0], b.pos[1] + off[1]]).or(self.emit_aim) {
                     let mut v = [bp[0] - pos[0], -(bp[1] - pos[1])];
                     if em.offset != 0.0 {
                         let a = DEG2RAD * -em.offset;
@@ -26949,7 +27001,7 @@ impl Game {
             self.proj_obj.insert(self.next_uid, obj);
             // RRBTD6_POLOG: each projectile's pooled object as it is made ("POLOG rt uid obj pid
             // stale-emmisionIndex").
-            if std::env::var_os("RRBTD6_POLOG").is_some() {
+            if env_flag!("RRBTD6_POLOG") {
                 eprintln!("POLOG {} {} {} {} {}", self.round_clock, self.next_uid, obj, spec.pid, self.proj_obj_emit.get(obj as usize).copied().unwrap_or(0));
             }
             // TravelCurvy.Initialise (VERIFIED-DISASM @0xcf5ee0): a syncedRandom Next() as it is
@@ -27173,7 +27225,7 @@ impl Game {
         let now4 = self.sim_elapsed * 4;
         let mut huge: Vec<u64> = self.projectiles.iter().filter(|p| p.spec.pct_max.as_ref().is_some_and(|m| m.offscreen) && p.pierce > 0.0 && p.born < now4).map(|p| p.uid).collect();
         let tags: Vec<Vec<String>> = self.projectiles.iter().filter_map(|p| p.spec.pct_max.as_ref().map(|m| m.tags.clone())).collect();
-        let ids: Vec<u64> = ids.into_iter().filter(|id| self.bloons.iter().find(|b| b.id == *id).is_some_and(|b| tags.iter().any(|tg| tg.iter().all(|t| self.defs[b.kind].tags.contains(t))))).collect();
+        let ids: Vec<u64> = ids.into_iter().filter(|id| bloon_idx(&self.bloons, &self.bidx, *id).map(|j| &self.bloons[j]).is_some_and(|b| tags.iter().any(|tg| tg.iter().all(|t| self.defs[b.kind].tags.contains(t))))).collect();
         if ids.is_empty() {
             return;
         }
@@ -27339,7 +27391,7 @@ impl Game {
         self.logic_sim_time(self.steps as u32, self.round_clock as u32);
         // RRBTD6_BFLOG: Factory<Bloon>'s list as the frame starts ("BFC rt id,..." with x for a dead
         // entry), against a recording's BF lines.
-        if std::env::var_os("RRBTD6_BFLOG").is_some() {
+        if env_flag!("RRBTD6_BFLOG") {
             let by_obj: FastMap<u32, u64> = self.bloons.iter().map(|b| (b.obj, b.id)).collect();
             let l: Vec<String> = self.fact.iter().map(|&(o, alive)| match (alive, by_obj.get(&o)) { (true, Some(id)) => id.to_string(), _ => "x".into() }).collect();
             eprintln!("BFC {} {}", self.round_clock, l.join(","));
@@ -27445,7 +27497,7 @@ impl Game {
         let mut k = 0;
         while k < self.outside_track.len() {
             let id = self.outside_track[k];
-            match self.bloons.iter().find(|b| b.id == id).map(|b| (b.pos, b.kind)) {
+            match bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).map(|b| (b.pos, b.kind)) {
                 None => {
                     self.outside_track.remove(k);
                 }
@@ -27538,7 +27590,7 @@ impl Game {
         // The zone exits' DamageOverTime.OnDestroy ticks (`exit_ticks`): in the Spirit's turn, before
         // the bloons move; Bloon.Damage's PreCheckDamageOutcome as for any tick.
         for (id, damage, mods, immune, owner, distribute) in std::mem::take(&mut self.exit_ticks) {
-            let Some(i) = self.bloons.iter().position(|b| b.id == id) else { continue };
+            let Some(i) = bloon_idx(&self.bloons, &self.bidx, id) else { continue };
             if immune & self.bloons[i].properties(&self.defs[self.bloons[i].kind]) != 0 || self.bloon_nontarget(&self.bloons[i]) {
                 continue;
             }
@@ -27748,14 +27800,14 @@ impl Game {
         let mut galv: Vec<(u64, u64)> = self.bloons.iter().filter(|b| b.galv_chain.is_some() && (b.galv.0 > 0 || !b.galv_zone.is_empty())).map(|b| (b.galv_seq, b.id)).collect();
         galv.sort_unstable();
         for (_, id) in galv {
-            if let Some(i) = self.bloons.iter().position(|b| b.id == id) {
+            if let Some(i) = bloon_idx(&self.bloons, &self.bidx, id) {
                 self.galv_magnet_step(i);
             }
         }
         // EmitOnTime (Sticky Bomb's splash): from where its bloon is after this frame's move
         // (recording ninja_004 rt 253: at -60.11, not -60.63).
         for (r, from) in emitted {
-            if let Some(q) = self.bloons.iter().find(|b| b.id == from).map(|b| b.pos) {
+            if let Some(q) = bloon_idx(&self.bloons, &self.bidx, from).map(|j| &self.bloons[j]).map(|b| b.pos) {
                 for pr in &mut self.projectiles[r] {
                     pr.pos = q;
                     pr.prev = q;
@@ -27785,7 +27837,7 @@ impl Game {
             if self.projectiles.iter().any(|q| q.latch_on.is_some_and(|l| l.0 == bid)) {
                 continue;
             }
-            if let Some(b) = self.bloons.iter_mut().find(|b| b.id == bid) {
+            if let Some(b) = bloon_idx(&self.bloons, &self.bidx, bid).map(|j| &mut self.bloons[j]) {
                 b.effects.retain(|e| e.id != "LatchToBloon");
             }
         }
@@ -27829,13 +27881,13 @@ impl Game {
             // (Instant.Process sets the whole Position, so z too: the bloon's height, 120 on a MOAB
             // (recording sniper_250: an Elite shot on a MOAB at z 120 is above the blocker that ends
             // one at 20).)
-            let tz = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| b.height).filter(|_| !pr.spec.instant_keep_z);
+            let tz = pr.target.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])).map(|b| b.height).filter(|_| !pr.spec.instant_keep_z);
             if let Some(z) = tz {
                 pr.z = z;
             } else if let (None, Some(z)) = (pr.target, pr.instant_z) {
                 pr.z = z;
             }
-            if let Some(q) = pr.target.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| {
+            if let Some(q) = pr.target.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])).map(|b| {
                 let at = if b.born > born { b.prev } else { b.pos };
                 [at[0] + off[0], at[1] + off[1]]
             }).or(pr.instant_pos) {
@@ -27901,7 +27953,7 @@ impl Game {
             // the old one while this one's damage lands (what PostDegrade hands on).
             let later: Vec<(String, f32)> = dots[k + 1..].iter().filter(|d| d.0 == id).map(|d| (d.5.clone(), d.6)).collect();
             let set_ticks = |g: &mut Self, from: bool| {
-                let Some(b) = g.bloons.iter_mut().find(|b| b.id == id) else { return };
+                let Some(b) = bloon_idx(&g.bloons, &g.bidx, id).map(|j| &mut g.bloons[j]) else { return };
                 for (eid, prev) in &later {
                     let (a, z) = if from { (clock, *prev) } else { (*prev, clock) };
                     if let Some(EffectKind::Dot { tick, .. }) = b.effects.iter_mut().map(|e| (e.id == *eid, &mut e.kind)).find(|(m, k)| *m && matches!(k, EffectKind::Dot { tick, .. } if *tick == a)).map(|(_, k)| k) {
@@ -27910,7 +27962,7 @@ impl Game {
                 }
             };
             set_ticks(self, true);
-            let Some(i) = self.bloons.iter().position(|b| b.id == id) else { continue };
+            let Some(i) = bloon_idx(&self.bloons, &self.bidx, id) else { continue };
             // (A tick that does nothing (immune, or refused below) doesn't degrade the bloon: its later
             // behaviours' lastTick go back to now, as after an ordinary hit; recording
             // map_kartsndarts_druid_052_r40 rt 501, the refused first ticks don't come again.)
@@ -27936,7 +27988,7 @@ impl Game {
             self.hit_cash = (1.0, 0.0);
             self.hit_tower = None;
             (self.pop_after_move, self.distribute) = (false, (true, false));
-            if self.bloons.iter().find(|b| b.id == id).is_some_and(|b| b.kind != kind0) || !self.bloons.iter().any(|b| b.id == id) {
+            if bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j]).is_some_and(|b| b.kind != kind0) || !bloon_idx(&self.bloons, &self.bidx, id).is_some() {
                 degraded.push(id);
                 // (Bloon.Process goes on down its behaviour list from the next index, now the new
                 // ones: a DamageOverTime there with triggerImmediate (lastTick -999999999) ticks at
@@ -27944,7 +27996,7 @@ impl Game {
                 // Spirit's Middle zone pops the MOAB, its Close one then hits the Ceramic it
                 // became; glue / alch, with a lastTick, don't).)
                 let eid = dots[k].5.clone();
-                if let Some(i) = self.bloons.iter().position(|b| b.id == id) {
+                if let Some(i) = bloon_idx(&self.bloons, &self.bidx, id) {
                     let tags = self.defs[self.bloons[i].kind].tags.clone();
                     let b = &mut self.bloons[i];
                     let mut more = Vec::new();
@@ -28553,7 +28605,7 @@ pub(crate) mod tests_support {
 
 #[cfg(test)]
 mod sim_profile {
-    thread_local! {pub static TIMES:std::cell::Cell<[f64;6]>=const{std::cell::Cell::new([0.0;6])};}
+    thread_local! {pub static TIMES:std::cell::Cell<[f64;10]>=const{std::cell::Cell::new([0.0;10])};}
     pub struct Timer{start:std::time::Instant,index:usize}
     impl Timer{pub fn new(index:usize)->Self{Self{start:std::time::Instant::now(),index}}}
     impl Drop for Timer{fn drop(&mut self){TIMES.with(|v|{let mut t=v.get();t[self.index]+=self.start.elapsed().as_secs_f64();v.set(t);});}}
@@ -28589,7 +28641,7 @@ mod tests {
         // Bloons spawn just off the map edge (Path.spawnDist), so the flood is in tower range
         // from its first frames: a heavier load than when they started at the path's far end.
         let (avg, worst) = late_game_load(4, 6000, 1800, false);
-        eprintln!("perf_budget: direct_native_step={} avg={:.3}ms worst={:.3}ms",std::env::var_os("RRBTD6_NATIVE_STEP").is_some(),avg*1000.0,worst*1000.0);
+        eprintln!("perf_budget: direct_native_step={} avg={:.3}ms worst={:.3}ms",env_flag!("RRBTD6_NATIVE_STEP"),avg*1000.0,worst*1000.0);
         // Hits now follow the collision grid's query order (every reachable bloon is ordered,
         // not the first few in storage order): a little more work per projectile.
         assert!(avg < 2.6e-3, "sim step avg {:.3} ms over the 2.6 ms budget", avg * 1e3);
@@ -28672,7 +28724,7 @@ mod tests {
         let count: u32 = std::env::var("RRBTD6_BENCH_COUNT").ok().and_then(|v| v.parse().ok()).unwrap_or(10000);
         g.sandbox_spawn(&std::env::var("RRBTD6_BENCH_BLOON").unwrap_or_else(|_| "Zomg".into()), false, false, false, count, 0.0);
         let frames: usize = std::env::var("RRBTD6_BENCH_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(1500);
-        super::sim_profile::TIMES.with(|v| v.set([0.0; 6]));
+        super::sim_profile::TIMES.with(|v| v.set([0.0; 10]));
         let (mut sum, mut worst) = (0.0f64, 0.0f64);
         for f in 0..frames {
             let t0 = std::time::Instant::now();
@@ -28688,7 +28740,7 @@ mod tests {
                 (sum, worst) = (0.0, 0.0);
                 g.prof = [0.0; 3];
                 g.perf_detail = [0.0; 3];
-                super::sim_profile::TIMES.with(|v| v.set([0.0; 6]));
+                super::sim_profile::TIMES.with(|v| v.set([0.0; 10]));
             }
         }
     }
@@ -28747,10 +28799,10 @@ mod tests {
     /// ~20 tier-5 towers and a Ceramic flood (`rate` a frame up to `cap` bloons) for `frames`
     /// steps; returns the average and worst step time (seconds) after the first 600.
     fn late_game_load(rate: usize, cap: usize, frames: usize, print: bool) -> (f64, f64) {
-        let native_step=std::env::var_os("RRBTD6_NATIVE_STEP").is_some();
+        let native_step=env_flag!("RRBTD6_NATIVE_STEP");
         let (mut g,k)=late_game_scenario();
-        super::sim_profile::TIMES.with(|v|v.set([0.0;6]));
-        g.reference_targeting=std::env::var_os("RRBTD6_REFERENCE_TARGETING").is_some();
+        super::sim_profile::TIMES.with(|v|v.set([0.0;10]));
+        g.reference_targeting=env_flag!("RRBTD6_REFERENCE_TARGETING");
         let (mut total, mut worst, mut n, mut peak) = (0.0f64, 0.0f64, 0u32, 0usize);
         for f in 0..frames {
             if g.bloons.len() < cap {
@@ -29558,11 +29610,11 @@ mod tests {
             }
             // RRBTD6_REC_CASH: the clone's cash each recorded frame (DBGAIM so --one keeps it), to
             // set against the F lines' cash.
-            if std::env::var_os("RRBTD6_REC_CASH").is_some() {
+            if env_flag!("RRBTD6_REC_CASH") {
                 eprintln!("DBGAIM CASH {} {}", rt, g.cash);
             }
             // RRBTD6_REC_TD: each tower's damage dealt and cash earned (the recorder's TD lines).
-            if std::env::var_os("RRBTD6_REC_TD").is_some() {
+            if env_flag!("RRBTD6_REC_TD") {
                 for tw in &g.towers {
                     eprintln!("DBGAIM TD {} {} {} {}", rt, tw.id, tw.damage, tw.cash_earned);
                 }
@@ -29575,7 +29627,7 @@ mod tests {
                         if !g.activate_ability(&name) {
                             break;
                         }
-                        if std::env::var_os("DBGE").is_some() { eprintln!("DBGAB rt {} {}", g.round_clock, name); }
+                        if env_flag!("DBGE") { eprintln!("DBGAB rt {} {}", g.round_clock, name); }
                     }
                 }
             }
@@ -31700,7 +31752,7 @@ mod beast_tests {
         let start = names.iter().position(|n| n == "PathLHStart").unwrap();
         g.bloons.clear();
         let id = g.spawn_on(g.by_name["Red"], 5.0, split as u8);
-        let i = g.bloons.iter().position(|b| b.id == id).unwrap();
+        let i = bloon_idx(&g.bloons, &g.bidx, id).unwrap();
         g.bloons[i].base = g.tracks[start].length();
         let before = g.bloons[i].progress();
         g.push_back(i, 20.0);

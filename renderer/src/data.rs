@@ -619,7 +619,8 @@ pub struct TowerTiers {
     /// The Paragon: its TowerModel's tier data and its upgrade.
     #[serde(default)]
     pub paragon: Option<ParagonDef>,
-    pub tiers: HashMap<String, Tier>,
+    /// (Shared: the sim reads a tower's model every step without deep-cloning it.)
+    pub tiers: HashMap<String, std::sync::Arc<Tier>>,
     pub upgrades: Vec<Upgrade>,
     /// Heroes: XP leveling (tiers are [level, 0, 0]).
     #[serde(default)]
