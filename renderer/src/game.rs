@@ -1437,6 +1437,17 @@ fn empty_raise(attack: &crate::data::Attack, weapon: &crate::data::Weapon) -> f3
     if attack.marker_z.is_some() { weapon.eject[2] } else { DISPLAY_TOWER_HEIGHT }
 }
 
+/// An attack's offsetX / offsetY as its transform carries it: Vector2.Rotate by the tower's
+/// rotation (game frame; recorder ATE line, brickell_l10_r40 rt 1007: (0, 4) at -32.46 is
+/// (-2.147, 3.375)).
+fn offset_turned(ox: f32, oy: f32, rot: f32) -> (f32, f32) {
+    if ox == 0.0 && oy == 0.0 {
+        return (ox, oy);
+    }
+    let (s, c) = crt_sin_cos(DEG2RAD * -rot);
+    (c * ox - s * oy, c * oy + s * ox)
+}
+
 /// Vector2.Rotate((0, 1), deg) in the clone's frame (the game's y flipped): a projectile's
 /// direction for a rotation in the game's degrees.
 fn game_dir(deg: f32) -> [f32; 2] {
@@ -18963,6 +18974,7 @@ impl Game {
             tw.base_state.3 = disp;
         }
         let target = tw.base_state.3;
+        if env_flag!("DBGBASE") { eprintln!("DBGBASE t {} now {} base {} target {} offset_aim {:?} game_rot {:?}", t, now, tw.base_rot, target, tw.offset_aim, tw.game_rot); }
         tw.base_rot = move_towards_angle(tw.base_rot, target, 0.5);
         tw.game_rot = Some(tw.base_rot + tw.turret_rel);
         if tw.base_rot == target || !any_bloon {
@@ -21041,12 +21053,15 @@ impl Game {
                 }
                 // RotateToTargetAttackOffset.SetRotation (VERIFIED-DECOMP @0x180ddb500): the attack's
                 // own rotation, Vector2.get_Rotation(Target.Position - GetOrigin) + additionalRotation,
-                // GetOrigin (@0x180ddaf70) its spot (the tower + offsetX / offsetY, the tower's
-                // rotation ignored) raised 10 in display space; the weapons eject and aim along it
+                // GetOrigin (@0x180ddaf70) its spot (the tower + offsetX / offsetY at offsetZ, so
+                // offsetZ / tan60 down; the tower's rotation ignored) raised 10 in display space; the weapons eject and aim along it
                 // (recording mermonkey_300 rt 607: an Instant shot at -42.49, the tower at -38.83).
                 if let (Some([ox, oy, add, _]), Some((_, aim, _))) = (attack.offset_rot, best) {
                     let tp = self.towers[t].pos;
-                    let from = [tp[0] + ox, tp[1] - oy + DISPLAY_TOWER_HEIGHT / TAN60];
+                    // (On a ChurchillBaseRotation tower the attack's transform turns with the base;
+                    // otherwise the tower's rotation is ignored, mermonkey_300.)
+                    let (ox, oy) = if tier.base_rotation { offset_turned(ox, oy, self.towers[t].game_rot.unwrap_or(0.0)) } else { (ox, oy) };
+                    let from = [tp[0] + ox, tp[1] - oy + (attack.offset_z + DISPLAY_TOWER_HEIGHT) / TAN60];
                     attack_rot = Some(RAD2DEG * crt_atan2(aim[0] - from[0], -(aim[1] - from[1])) + add);
                     turning = true;
                 }
@@ -21824,7 +21839,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             // 2415, a shot along 247.5.)
                             if let Some([ox, oy, add, start]) = attack.offset_rot {
                                 let tp = tw.pos;
-                                let from = [tp[0] + ox, tp[1] - oy + DISPLAY_TOWER_HEIGHT / TAN60];
+                                let (ox, oy) = if tier.base_rotation { offset_turned(ox, oy, tw.game_rot.unwrap_or(0.0)) } else { (ox, oy) };
+                                let from = [tp[0] + ox, tp[1] - oy + (attack.offset_z + DISPLAY_TOWER_HEIGHT) / TAN60];
                                 // (RotateToStartingPoint @0x180ddb3f0: SetRotation at the origin +
                                 // Vector2.Rotate((0, 1), startRotation): -112.500015 for 247.5.)
                                 let to = if lost { let d = game_dir(start); [from[0] + d[0], from[1] + d[1]] } else { target };

@@ -2089,6 +2089,10 @@ def main():
                     # [offsetX, offsetY, additionalRotation, startRotation].
                     "offset_rot": next(([af.get("offsetX", 0.0), af.get("offsetY", 0.0), float(x["f"].get("additionalRotation", 0)), x["f"].get("startRotation", 0.0)]
                                         for x in items(af["behaviors"]) if x and x["type"] == "RotateToTargetAttackOffsetModel"), None),
+                    # AttackModel.offsetZ: the attack transform's height (its y sits z / tan60 down
+                    # in the sim frame; recorder ATE line, brickell_l10_r40: (-9, 2.49, 18.2) for a
+                    # tower at (-9, 9) with offsetY 4).
+                    "offset_z": af.get("offsetZ", 0.0),
                     # FilterTargetAngleModel in the attack's filter (not a carrier plane's pattern):
                     # [fieldOfView, baseTowerRotationOffset, ignoreTowerRotation].
                     "target_angle": (None if any(y and y["type"].startswith("FighterPilotPattern") for y in items(af["behaviors"])) else

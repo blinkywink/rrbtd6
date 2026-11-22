@@ -127,8 +127,8 @@ Ground rules follow.
 
 Current (2026-11-20): every set full (merge 17; spike 28, sub 35, mortar 26, bomb 35, dartling 26, sniper 35, bucc 36, dart 71, tack 26, alch 35, druid 35, ninja 35, ice 26, wizard 36, ace 26, spike 29, super 35, heli 27, boomerang 100, dart 72, mortar 27, desperado 35, dartling 27 after the 2026-11-20 additions). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
 sniper tack sub beast engineer desperado dartling mortar bucc druid super ace heli spike farm mermonkey village
-paragon sky quincy gwen jones sauda obyn ezili adora moab logs maps maptowers merge village_std farm_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, farm_std 1, sky 39, quincy 14, moab 5,
-logs 3, dart 72, boomerang 100, paragon 12, adora 2).
+paragon sky quincy gwen jones sauda obyn ezili adora brickell pat moab logs maps maptowers merge village_std farm_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, farm_std 1, sky 39, quincy 14, moab 5,
+logs 3, dart 72, boomerang 100, paragon 12, adora 2, brickell 1, pat 2).
 
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
@@ -3373,3 +3373,12 @@ Open (pending/hero_open):
   cannon's contact Explosion meets the popped Zebra's own object that frame and its three new Greens
   the next (the clone's Explosion collides a frame later, all four together); projectile positions
   1 ulp off from rt 203/230 (l03/l10).
+- (2026-11-22) Brickell l20 exact (pending/brickell), l10 bloons exact: RotateToTargetAttackOffset.GetOrigin
+  is the attack transform (ATE recorder line: tower + offsetX/offsetY turned by the tower's rotation on a
+  ChurchillBaseRotation tower, offsetZ / tan60 down, `offset_z` exported) raised 10 in display space;
+  mermonkey (no base rotation) keeps the unturned offset. Pat l03 + l20 exact (pending/pat). Open:
+  brickell_l03 rt 1107: after the base's no-bloon pause (from 866) the clone resumes toward the pistol's
+  rt-929 aim (44.86); the game waits for the next throw (1112). SetRotation (@0x180ddb500) makes the
+  transform ignore its parent's rotation for ignoreParentRotationFrames (Brickell 2 s) after a throw;
+  Process (@0x180ddb390) then clears it (or, alwaysIgnoreParentRotation, RotateToStartingPoint each
+  frame): the turret's angle the base reads is probably the local one riding the base again. `DBGBASE`.
