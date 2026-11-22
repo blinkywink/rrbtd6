@@ -13026,7 +13026,7 @@ impl Game {
                 }
             }
         }
-        let t = &mut spec.tier;
+        let t = std::sync::Arc::make_mut(&mut spec.tier);
         match beast {
             "Piranha" => {
                 let s = 1.0 - r * pp.destroy;
@@ -14744,6 +14744,19 @@ impl Game {
             let tiers = &self.tower_tiers[tw.def].as_ref()?.tiers;
             #[cfg(test)] if self.reference_targeting { return tiers.get(&tw.tier_key()).cloned(); }
             return self.tower_tiers[tw.def].as_ref()?.by_tiers(tw.tiers).cloned();
+        }
+        // (Shared handles for every model kept as one: no per-frame deep copy.)
+        if let Some(s) = &tw.sub {
+            return Some(s.spec.tier.clone());
+        }
+        if let Some((_, t)) = &tw.paragon {
+            return Some(t.clone());
+        }
+        if let Some((t, _, _)) = &tw.morph {
+            return Some(t.clone());
+        }
+        if let Some((_, t)) = &tw.temple {
+            return Some(t.clone());
         }
         self.tier(t).map(|x| std::sync::Arc::new(x.clone()))
     }

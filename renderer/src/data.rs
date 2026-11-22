@@ -3175,7 +3175,7 @@ pub struct SubTowerSpec {
     /// Footprint radius.
     #[serde(default)]
     pub radius: f32,
-    pub tier: Tier,
+    pub tier: std::sync::Arc<Tier>,
     /// The sub-tower's TowerModel.areaTypes (pets: Piranha = water [1], others land [2]).
     #[serde(default)]
     pub areas: Vec<i32>,
