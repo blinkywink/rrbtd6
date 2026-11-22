@@ -21646,6 +21646,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 aim_z = self.towers[t].weapons[w].aim_z0;
                                 (aimed, 0)
                             }
+                            // HYPOTHESIS P-LOSTRELEASE: on a ChurchillBaseRotation turret (not a dart
+                            // tower's facing shot, dart_040_club) a throw released on a later frame than it
+                            // started keeps the attack's old Target, its cached spot once the bloon is
+                            // gone (Target.Position), not this frame's best (recording
+                            // churchill_l10_r40 rt 497: the cannon's shell, thrown at 485 at a Green the
+                            // machine gun popped, goes to where it was).
+                            (None, _) if lost && started.is_none() && tier.base_rotation => (aimed, 0),
                             (None, Some((_, p, id))) => (p, id),
                             (None, None) if ambient => (pos, 0),
                             (None, None) => (aimed, 0),

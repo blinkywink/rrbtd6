@@ -3358,4 +3358,11 @@ Open (pending/hero_open):
   Explosion's +3 for 480 frames). churchill_l20 now to rt 765. Next (edited, not built): the
   ChurchillBaseRotation turn comes before the attacks when its model precedes the first
   AttackModel (Churchill / Brickell; the Dart Paragon turns at frame end): churchill_l10 turns
-  one frame early from rt 73.
+  one frame early from rt 73. TRIED, REVERTED: the Dart Paragon also lists it before its attacks
+  and its frame-end turn is verified (dart 68/72 with the change); the model fields don't tell them
+  apart either. The difference is elsewhere (when Churchill's turret takes its target angle).
+- (2026-11-22) HYPOTHESIS P-LOSTRELEASE (base-rotation turrets only): a throw released on a later
+  frame than it started keeps the attack's old Target, its cached spot once the bloon is gone, not
+  this frame's best. churchill_l20 to rt 819. churchill_l10 rt 497 still off: the shell follows the
+  turret, which in the clone swings to the machine gun's newer targets (73.42 -> 67.0 by rt 497)
+  while the game's stays on the cannon's lost target (~73.27).
