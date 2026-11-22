@@ -1503,6 +1503,12 @@ def main():
         if e is None:
             return {"kind": "Single", "count": 1}
         f = e["f"]
+        # AdoraEmissionModel (Adora 10+): `count` bolts angleBetween apart, centred on the aim
+        # (recording adora_l10_r40 rt 31: four at -121.45 / -91.45 / -61.45 / -31.45). INFERRED as
+        # an arc of (count - 1) x angleBetween; AdoraEmission.GetDirection (@0x180c36770) not read through.
+        if e["type"] == "AdoraEmissionModel":
+            n = int(f.get("count", 1) or 1)
+            return {"kind": "Arc", "count": n, "angle": f.get("angleBetween", 0.0) * (n - 1), "offset": 0.0, "air_rot": False}
         if e["type"] == "ArcEmissionModel":
             return {"kind": "Arc", "count": f.get("SliceSize", 1), "angle": f.get("angle", 0.0), "offset": f.get("offset", 0.0),
                     "air_rot": bool(f.get("useAirUnitRotation"))}

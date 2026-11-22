@@ -3297,3 +3297,8 @@ Open (pending/hero_open):
   FilterBloon + line of sight only (no collidedWith check); at rt 8 bolt 444 hits its own Target
   and doesn't turn that frame. Next: read AdoraTrackTarget.Process (@0x180c84eb0) for when a lost
   Target is replaced at once (GetNewTarget @0x180c84980) vs the 4-frame search clock.
+- (2026-11-22) Adora: adora_l03 MATCH; adora_l10 to rt 402 (abilities), adora_l20 to rt 105 (1 ulp).
+  AdoraTrackTarget.Collide's reset (lastTargetSearchElapsed 0 on hitting its Target) now holds when
+  it comes before the behaviour's first Process (`adora_reset`); the tracker aims at Target.Position
+  with the collision circle offset (`seek_off`); AdoraEmissionModel exported as an Arc of
+  (count - 1) x angleBetween (INFERRED, GetDirection @0x180c36770 not read through).

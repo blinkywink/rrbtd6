@@ -3080,6 +3080,8 @@ pub struct Projectile {
     dz: f32,
     /// The point a point-targeted throw aimed at (its Target's position).
     point_target: Option<[f32; 2]>,
+    /// AdoraTrackTarget.Collide's reset came before its first Process.
+    adora_reset: bool,
     /// BloonSlap: piercedAmount and maxPiercedAmount (-1 until its first slap).
     slapped: i32,
     slap_max: i32,
@@ -6140,6 +6142,11 @@ macro_rules! collide_pass {
                 // (recording ace_003 rt 2634: a dart takes 2372 the frame after hitting 2364).
                 if let Some(a) = pr.adora.as_mut() {
                     a.3 = 0;
+                } else if pr.spec.adora.is_some() {
+                    // (Before its first Process the behaviour is already there, Initialise done:
+                    // the reset holds; recording adora_l03_r20 rt 183, a bolt made at 182 hits its
+                    // Black and turns for a new Pink that frame.)
+                    pr.adora_reset = true;
                 }
             }
             pr.pierce -= pr.spec.pierce_cost;
@@ -8532,7 +8539,8 @@ impl Game {
             if pr.adora.is_none() {
                 // (lastTargetSearchElapsed starts at its creation: recording ace_003, a dart made at
                 // rt 1 flies straight until its first search at 6.)
-                pr.adora = Some((f(sp.max), false, pr.dir.unwrap_or([0.0, 1.0]), (pr.born / 4) as i64));
+                let start = (pr.born / 4) as i64;
+                pr.adora = Some((f(sp.max), false, pr.dir.unwrap_or([0.0, 1.0]), if pr.adora_reset { 0 } else { start }));
                 // TrackTargetAfterDelay.Initialise (VERIFIED-DISASM @0x180cf0040): random =
                 // new System.Random(emmisionIndex + Simulation.time).
                 if sp.after_delay.is_some() {
@@ -8588,7 +8596,10 @@ impl Game {
         // (Made the same frame, the one made later: recording sniper_paragon_r40_pool rt 213, a
         // shrapnel turns for a Ceramic of the MOAB its shot popped as it was before moving.)
         let (born, cseq) = (self.projectiles[p].born, self.projectiles[p].cseq);
-        let q = self.projectiles[p].seek.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| if b.born > born || (b.born == born && b.cseq > cseq) { b.prev } else { b.pos });
+        // (Target.Position: the bloon's plus the collision circle it was aimed through; recording
+        // adora_l10_r40 rt 33, four bolts turning for a MOAB's front circle, 6.3 ahead.)
+        let off = self.projectiles[p].seek_off.unwrap_or([0.0; 2]);
+        let q = self.projectiles[p].seek.and_then(|id| self.bloons.iter().find(|b| b.id == id)).map(|b| if b.born > born || (b.born == born && b.cseq > cseq) { b.prev } else { b.pos }).map(|q| [q[0] + off[0], q[1] + off[1]]);
         let pr = &mut self.projectiles[p];
         let (mut vel, mut acc, mut dir, last) = pr.adora.unwrap();
         // Vector2.AngleBetween (VERIFIED-DECOMP @0x180f45550): -(atan2(b) - atan2(a)), wrapped,
@@ -21366,7 +21377,6 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                             } else {
                                 tw.game_rot = Some(r);
                                 tw.turret_rel = r - tw.base_rot;
-                                if std::env::var_os("DBGEJ").is_some() { eprintln!("DBGSITE1 rt {} r {}", self.round_clock, r); }
                             }
                         }
                     } else if st.anim >= 0 && aim_id == 0 && !ambient && attack.rotate && !turning && weapon.aim_offset.is_none() && extra_rot == 0.0 {
@@ -22135,7 +22145,6 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                     let a = DEG2RAD * -r;
                                     let (sa, ca) = crt_sin_cos(a);
                                     let (mut ox, mut oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
-                                    if std::env::var_os("DBGEJ").is_some() { eprintln!("DBGEJ rt {} r {} grot {:?} body {:?} ent {:?} gr {:?} base {} rel {} e {:?} pos {:?} o {} {}", self.round_clock, r, grot, body_rot, self.towers[t].ent_rots, self.towers[t].game_rot, self.towers[t].base_rot, self.towers[t].turret_rel, [ex, ey, ez], pos, ox, oy); }
                                     // (An arm turned on its own, rotateTower off: GetEjectPosition
                                     // (VERIFIED-DECOMP @0x180c4f390) makes ONE Vector2.Rotate by the
                                     // rotation its transform chain holds, the arm's stored rotation
@@ -23005,6 +23014,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| self.bloons.iter().find(|
                                 if target_id == 0 && pr.point_target.is_none() {
                                     pr.point_target = Some(target);
                                 }
+
                                 if brew_to.is_some() {
                                     pr.brew_to = brew_to.clone();
                                 }
@@ -27106,6 +27116,7 @@ impl Game {
                 charge_cb: None,
                 dz: 0.0,
                 point_target: None,
+                adora_reset: false,
                 slapped: 0,
                 slap_max: -1,
                 freeze_until: -1,
