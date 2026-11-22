@@ -46,6 +46,9 @@ struct DrawCall {
     uniforms: Option<Vec<u8>>,
     render_pass: Option<RenderPass>,
     capture: bool,
+    /// (rrbtd6) An instanced draw: a static mesh (vertex, index buffers, index count) placed per
+    /// instance by `inst_shader` (position + yaw cos / sin), in this call's place in the order.
+    instanced: Option<(miniquad::BufferId, miniquad::BufferId, i32, Vec<[f32; 8]>)>,
 }
 
 impl DrawCall {
@@ -71,7 +74,43 @@ impl DrawCall {
             uniforms,
             render_pass,
             capture: false,
+            instanced: None,
         }
+    }
+}
+
+/// (rrbtd6) The default triangles shader with a per-instance placement: as `render3d::Model::draw_at`
+/// on the CPU (z negated, turned by yaw about +y, offset, then `gl` negates z back).
+mod inst_shader {
+    pub const VERTEX: &str = r#"#version 100
+    attribute vec3 position;
+    attribute vec2 texcoord;
+    attribute vec4 color0;
+    attribute vec4 normal;
+    attribute vec4 inst0;
+    attribute vec4 inst1;
+
+    varying lowp vec2 uv;
+    varying lowp vec4 color;
+
+    uniform mat4 Model;
+    uniform mat4 Projection;
+
+    void main() {
+        float x = position.x;
+        float z = -position.z;
+        float rx = x * inst1.x + z * inst1.y;
+        float rz = -x * inst1.y + z * inst1.x;
+        vec3 p = vec3(rx + inst0.x, position.y + inst0.y, -(rz + inst0.z));
+        gl_Position = Projection * Model * vec4(p, 1);
+        color = color0 / 255.0;
+        uv = texcoord;
+    }"#;
+
+    #[repr(C)]
+    pub struct Uniforms {
+        pub projection: [f32; 16],
+        pub model: [f32; 16],
     }
 }
 
@@ -568,6 +607,9 @@ pub struct QuadGl {
     draw_calls: Vec<DrawCall>,
     draw_calls_bindings: Vec<Bindings>,
     draw_calls_count: usize,
+    /// (rrbtd6) Instancing pipelines (no depth, depth) and per-call instance stream buffers.
+    inst_pipelines: Option<[miniquad::Pipeline; 2]>,
+    inst_buffers: Vec<(miniquad::BufferId, usize)>,
     state: GlState,
     start_time: f64,
 
@@ -605,6 +647,8 @@ impl QuadGl {
             draw_calls: Vec::with_capacity(200),
             draw_calls_bindings: Vec::with_capacity(200),
             draw_calls_count: 0,
+            inst_pipelines: None,
+            inst_buffers: Vec::new(),
             start_time: miniquad::date::now(),
 
             white_texture,
@@ -728,6 +772,50 @@ impl QuadGl {
         let merge = *MERGE.get_or_init(|| std::env::var_os("RRBTD6_NO_PASS_MERGE").is_none());
         let mut open: Option<Option<miniquad::RenderPass>> = None;
         let mut applied: Option<GlPipeline> = None;
+        let mut inst_slot = 0usize;
+        if self.inst_pipelines.is_none() && self.draw_calls[0..self.draw_calls_count].iter().any(|d| d.instanced.is_some()) {
+            let shader = ctx
+                .new_shader(
+                    miniquad::ShaderSource::Glsl { vertex: inst_shader::VERTEX, fragment: shader::FRAGMENT },
+                    miniquad::ShaderMeta {
+                        images: vec!["Texture".to_string()],
+                        uniforms: miniquad::UniformBlockLayout {
+                            uniforms: vec![
+                                miniquad::UniformDesc::new("Projection", UniformType::Mat4),
+                                miniquad::UniformDesc::new("Model", UniformType::Mat4),
+                            ],
+                        },
+                    },
+                )
+                .expect("instanced mesh shader");
+            let blend = Some(BlendState::new(
+                Equation::Add,
+                BlendFactor::Value(BlendValue::SourceAlpha),
+                BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+            ));
+            let make = |ctx: &mut dyn miniquad::RenderingBackend, depth: bool| {
+                ctx.new_pipeline(
+                    &[miniquad::BufferLayout::default(), miniquad::BufferLayout { step_func: miniquad::VertexStep::PerInstance, ..Default::default() }],
+                    &[
+                        miniquad::VertexAttribute::new("position", miniquad::VertexFormat::Float3),
+                        miniquad::VertexAttribute::new("texcoord", miniquad::VertexFormat::Float2),
+                        miniquad::VertexAttribute::new("color0", miniquad::VertexFormat::Byte4),
+                        miniquad::VertexAttribute::new("normal", miniquad::VertexFormat::Float4),
+                        miniquad::VertexAttribute::with_buffer("inst0", miniquad::VertexFormat::Float4, 1),
+                        miniquad::VertexAttribute::with_buffer("inst1", miniquad::VertexFormat::Float4, 1),
+                    ],
+                    shader,
+                    PipelineParams {
+                        color_blend: blend,
+                        depth_write: depth,
+                        depth_test: if depth { Comparison::LessOrEqual } else { Comparison::Always },
+                        primitive_type: PrimitiveType::Triangles,
+                        ..Default::default()
+                    },
+                )
+            };
+            self.inst_pipelines = Some([make(ctx, false), make(ctx, true)]);
+        }
         for (dc, bindings) in self.draw_calls[0..self.draw_calls_count]
             .iter_mut()
             .zip(self.draw_calls_bindings.iter_mut())
@@ -743,6 +831,59 @@ impl QuadGl {
             };
 
             let keep = merge && !pipeline.wants_screen_texture && open == Some(dc.render_pass);
+            if let Some((vb, ib, icount, list)) = dc.instanced.as_ref() {
+                if !keep {
+                    if open.take().is_some() {
+                        ctx.end_render_pass();
+                    }
+                    if let Some(render_pass) = dc.render_pass {
+                        ctx.begin_pass(Some(render_pass), PassAction::Nothing);
+                    } else {
+                        ctx.begin_default_pass(PassAction::Nothing);
+                    }
+                    open = Some(dc.render_pass);
+                }
+                // Its instance data, in a stream buffer of its own (grown when short).
+                if self.inst_buffers.len() <= inst_slot {
+                    let cap = list.len().max(64).next_power_of_two();
+                    self.inst_buffers.push((ctx.new_buffer(BufferType::VertexBuffer, BufferUsage::Stream, BufferSource::empty::<[f32; 8]>(cap)), cap));
+                } else if self.inst_buffers[inst_slot].1 < list.len() {
+                    ctx.delete_buffer(self.inst_buffers[inst_slot].0);
+                    let cap = list.len().next_power_of_two();
+                    self.inst_buffers[inst_slot] = (ctx.new_buffer(BufferType::VertexBuffer, BufferUsage::Stream, BufferSource::empty::<[f32; 8]>(cap)), cap);
+                }
+                let ibuf = self.inst_buffers[inst_slot].0;
+                inst_slot += 1;
+                ctx.buffer_update(ibuf, BufferSource::slice(&list[..]));
+                let depth = dc.pipeline == PipelinesStorage::TRIANGLES_DEPTH_PIPELINE;
+                ctx.apply_pipeline(&self.inst_pipelines.as_ref().unwrap()[depth as usize]);
+                applied = None;
+                if let Some((x, y, w, h)) = dc.viewport {
+                    ctx.apply_viewport(x, y, w, h);
+                } else {
+                    ctx.apply_viewport(0, 0, width as i32, height as i32);
+                }
+                if let Some(clip) = dc.clip {
+                    ctx.apply_scissor_rect(clip.0, height as i32 - (clip.1 + clip.3), clip.2, clip.3);
+                } else {
+                    ctx.apply_scissor_rect(0, 0, width as i32, height as i32);
+                }
+                ctx.apply_bindings(&Bindings {
+                    vertex_buffers: vec![*vb, ibuf],
+                    index_buffer: *ib,
+                    images: vec![dc.texture.unwrap_or(white_texture)],
+                });
+                ctx.apply_uniforms(miniquad::UniformsSource::table(&inst_shader::Uniforms {
+                    projection: projection.to_cols_array(),
+                    model: dc.model.to_cols_array(),
+                }));
+                ctx.draw(0, *icount, list.len() as i32);
+                if !merge {
+                    ctx.end_render_pass();
+                    open = None;
+                }
+                continue;
+            }
             if !keep {
                 if open.take().is_some() {
                     ctx.end_render_pass();
@@ -947,6 +1088,7 @@ impl QuadGl {
                 || draw_call.vertices_count >= self.max_vertices - vertices.len()
                 || draw_call.indices_count >= self.max_indices - indices.len()
                 || draw_call.capture != self.state.capture
+                || draw_call.instanced.is_some()
                 || self.state.break_batching
         }) {
             let uniforms = self.state.pipeline.map_or(None, |pipeline| {
@@ -978,6 +1120,7 @@ impl QuadGl {
             self.draw_calls[self.draw_calls_count].pipeline = pip;
             self.draw_calls[self.draw_calls_count].render_pass = self.state.render_pass;
             self.draw_calls[self.draw_calls_count].capture = self.state.capture;
+            self.draw_calls[self.draw_calls_count].instanced = None;
             self.draw_calls[self.draw_calls_count].indices_start = self.batch_index_buffer.len();
             self.draw_calls[self.draw_calls_count].vertices_start = self.batch_vertex_buffer.len();
 
@@ -994,6 +1137,71 @@ impl QuadGl {
         dc.indices_count += indices.len();
 
         dc.texture = self.state.texture;
+    }
+
+    /// (rrbtd6) Queues one instance of a static mesh (`vb` / `ib`, `icount` indices) at `inst`
+    /// ([x, y, z, _, cos yaw, sin yaw, _, _]), merged into the previous call when that is the same
+    /// mesh under the same state. Only with the default triangles pipeline (no material): returns
+    /// false otherwise and the caller draws it the ordinary way.
+    pub fn geometry_instanced(
+        &mut self,
+        vb: miniquad::BufferId,
+        ib: miniquad::BufferId,
+        icount: i32,
+        texture: Option<miniquad::TextureId>,
+        inst: [f32; 8],
+    ) -> bool {
+        if self.state.pipeline.is_some() || self.state.draw_mode != DrawMode::Triangles {
+            return false;
+        }
+        let pip = self.pipelines.get(self.state.draw_mode, self.state.depth_test_enable);
+        if let Some(dc) = self.draw_calls_count.checked_sub(1).and_then(|ix| self.draw_calls.get_mut(ix)) {
+            if let Some((v, i, _, list)) = dc.instanced.as_mut() {
+                if *v == vb
+                    && *i == ib
+                    && dc.texture == texture
+                    && dc.clip == self.state.clip
+                    && dc.viewport == self.state.viewport
+                    && dc.model == self.state.model()
+                    && dc.pipeline == pip
+                    && dc.render_pass == self.state.render_pass
+                    && dc.capture == self.state.capture
+                    && !self.state.break_batching
+                {
+                    list.push(inst);
+                    return true;
+                }
+            }
+        }
+        if self.draw_calls_count >= self.draw_calls.len() {
+            self.draw_calls.push(DrawCall::new(texture, self.state.model(), self.state.draw_mode, pip, None, self.state.render_pass));
+        }
+        let dc = &mut self.draw_calls[self.draw_calls_count];
+        dc.texture = texture;
+        dc.uniforms = None;
+        dc.vertices_count = 0;
+        dc.indices_count = 0;
+        dc.clip = self.state.clip;
+        dc.viewport = self.state.viewport;
+        dc.model = self.state.model();
+        dc.pipeline = pip;
+        dc.draw_mode = self.state.draw_mode;
+        dc.render_pass = self.state.render_pass;
+        dc.capture = self.state.capture;
+        dc.indices_start = self.batch_index_buffer.len();
+        dc.vertices_start = self.batch_vertex_buffer.len();
+        let mut list = match dc.instanced.take() {
+            Some((_, _, _, mut l)) => {
+                l.clear();
+                l
+            }
+            None => Vec::new(),
+        };
+        list.push(inst);
+        dc.instanced = Some((vb, ib, icount, list));
+        self.draw_calls_count += 1;
+        self.state.break_batching = false;
+        true
     }
 
     pub fn delete_pipeline(&mut self, pipeline: GlPipeline) {

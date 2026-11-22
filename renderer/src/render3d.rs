@@ -193,6 +193,8 @@ pub struct Model {
     /// Per part: moved by the map's prop animation (motion_paths.json, map_motion.rs), so drawn
     /// from its live vertices instead of the static map batches.
     pub dynamic: Vec<bool>,
+    /// Per part: its vertices and indices as static GPU buffers, made on the first instanced draw.
+    gpu_parts: std::cell::RefCell<Vec<Option<(miniquad::BufferId, miniquad::BufferId)>>>,
 }
 
 /// NinjaKiwi/BTD6/Gradient_3Color (DXBC): per pixel, t = mesh UV v; below `_Middle` it blends
@@ -406,7 +408,7 @@ impl Model {
         let mut transparent_order: Vec<usize> = (0..parts.len()).filter(|&i| fxs[i].as_ref().is_some_and(|f| f.shader.transparent)).collect();
         transparent_order.sort_by_key(|&i| fxs[i].as_ref().map_or(0, |f| f.queue));
         let hidden = vec![false; parts.len()];
-        let mut model=Model { parts, names, paths: scene_paths, hidden, grads, fx: fxs, transparent_order,gpu_map:None, blend, dynamic };
+        let mut model=Model { parts, names, paths: scene_paths, hidden, grads, fx: fxs, transparent_order,gpu_map:None, blend, dynamic, gpu_parts: Default::default() };
         if dir.file_name().is_some_and(|n|n.to_string_lossy().starts_with("map_")){
             model.gpu_map=crate::static_map::Geometry::build(&model,&mut budget).await;
             if std::env::var_os("RRBTD6_TIMING").is_some(){if let Some(g)=&model.gpu_map{let (runs,bytes)=g.resource_sizes();eprintln!("static-map: {runs} immutable draws, {bytes} buffer bytes");}}
@@ -555,8 +557,32 @@ impl Model {
 
     /// Draw with a yaw (radians, about +y, Unity convention: +z forward) and offset (Unity world).
     pub fn draw_at(&self, pos: [f32; 3], yaw: f32, scratch: &mut Vec<Vertex>) {
+        static INSTANCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let instance = *INSTANCE.get_or_init(|| std::env::var_os("RRBTD6_NO_MESH_INSTANCE").is_none() && unsafe { get_internal_gl() }.quad_context.info().backend == miniquad::Backend::OpenGl);
+        self.draw_at_with(pos, yaw, scratch, instance);
+    }
+
+    /// `draw_at`, instanced on the GPU or (`instance` false) transformed on the CPU.
+    pub fn draw_at_with(&self, pos: [f32; 3], yaw: f32, scratch: &mut Vec<Vertex>, instance: bool) {
         let (s, c) = yaw.sin_cos();
         for (i, m) in self.parts.iter().enumerate() {
+            // The GPU places the part (macroquad's instanced draw call, kept in its place in the
+            // draw order and merged with the next draw of the same part): no per-vertex work or
+            // upload on the CPU. A part with the game's translated shader keeps the CPU path.
+            if instance && self.fx.get(i).is_none_or(|f| f.is_none()) && !m.indices.is_empty() {
+                let gl = unsafe { get_internal_gl() };
+                let mut cache = self.gpu_parts.borrow_mut();
+                if cache.len() < self.parts.len() {
+                    cache.resize(self.parts.len(), None);
+                }
+                let (vb, ib) = *cache[i].get_or_insert_with(|| {
+                    (gl.quad_context.new_buffer(miniquad::BufferType::VertexBuffer, miniquad::BufferUsage::Immutable, miniquad::BufferSource::slice(&m.vertices)),
+                     gl.quad_context.new_buffer(miniquad::BufferType::IndexBuffer, miniquad::BufferUsage::Immutable, miniquad::BufferSource::slice(&m.indices)))
+                });
+                if gl.quad_gl.geometry_instanced(vb, ib, m.indices.len() as i32, m.texture.as_ref().map(|t| t.raw_miniquad_id()), [pos[0], pos[1], pos[2], 0.0, c, s, 0.0, 0.0]) {
+                    continue;
+                }
+            }
             scratch.clear();
             scratch.extend(m.vertices.iter().map(|vx| {
                 let (x, y, z) = (vx.position.x, vx.position.y, -vx.position.z);
@@ -575,6 +601,50 @@ impl Model {
             draw_geometry(scratch,&m.indices,m.texture.as_ref());
         }
     }
+}
+
+/// RRBTD6_MESH_INSTANCE_CHECK: real projectile meshes drawn by `draw_at` on the CPU and as GPU
+/// instances into one render target, several positions and turns each; prints how many pixels
+/// differ (and by how much) per model.
+pub async fn verify_mesh_instancing(root: &Path) {
+    let target = render_target_ex(512, 288, RenderTargetParams { sample_count: 1, depth: true });
+    let mut scratch = Vec::new();
+    let mut total = (0usize, 0usize, 0u8);
+    for name in ["APMJuggernautProjectile", "APMUltraJuggernautProjectile", "AscendedShadowBombTagsActive", "FlashBomb", "MagusWallOfFire", "Glaive"] {
+        let Some(model) = Model::load(&root.join("models").join("projectiles").join(name)).await else {
+            eprintln!("mesh-instance-check: {name} not found");
+            continue;
+        };
+        let mut camera = camera([0.0, 0.0], 512.0, 288.0);
+        camera.fovy = 60.0;
+        camera.render_target = Some(target.clone());
+        let mut pixels = Vec::new();
+        for instance in [false, true] {
+            set_camera(&camera);
+            clear_background(BLACK);
+            for k in 0..6 {
+                let yaw = k as f32 * 1.37 - 2.0;
+                let pos = [k as f32 * 9.0 - 22.0, 10.0, (k % 3) as f32 * 8.0 - 8.0];
+                model.draw_at_with(pos, yaw, &mut scratch, instance);
+            }
+            set_default_camera();
+            pixels.push(target.texture.get_texture_data().bytes);
+        }
+        let (mut n, mut lit, mut worst) = (0usize, 0usize, 0u8);
+        for (a, b) in pixels[0].chunks_exact(4).zip(pixels[1].chunks_exact(4)) {
+            if a[0] != 0 || a[1] != 0 || a[2] != 0 {
+                lit += 1;
+            }
+            if a != b {
+                n += 1;
+                worst = worst.max(a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0));
+            }
+        }
+        eprintln!("mesh-instance-check: {name}: {n} of {lit} lit pixels differ, largest channel difference {worst}");
+        total = (total.0 + n, total.1 + lit, total.2.max(worst));
+        next_frame().await;
+    }
+    eprintln!("mesh-instance-check: total {} of {} pixels differ, largest {}", total.0, total.1, total.2);
 }
 
 /// Opt-in real-scene comparison, with a fixed shader clock so animated water
@@ -661,7 +731,7 @@ pub fn extract_part(m: &Model, name: &str) -> Option<(Model, Vec3)> {
     let tip = v.iter().map(|x| x.position - c).max_by(|a, b| a.length().total_cmp(&b.length()))?;
     let verts = v.iter().map(|x| Vertex { position: x.position - c, ..*x }).collect();
     let part = Mesh { vertices: verts, indices: p.indices.clone(), texture: p.texture.clone() };
-    Some((Model { parts: vec![part], names: vec![name.into()], paths: vec![String::new()], hidden: vec![false], grads: vec![None], fx: vec![None], transparent_order: Vec::new(),gpu_map:None, blend: vec![0], dynamic: vec![false] }, tip.normalize_or_zero()))
+    Some((Model { parts: vec![part], names: vec![name.into()], paths: vec![String::new()], hidden: vec![false], grads: vec![None], fx: vec![None], transparent_order: Vec::new(),gpu_map:None, blend: vec![0], dynamic: vec![false], gpu_parts: Default::default() }, tip.normalize_or_zero()))
 }
 
 /// Draws `m` (centred) at GL position `at`, rotating its `axis` onto `dir` (both GL space).

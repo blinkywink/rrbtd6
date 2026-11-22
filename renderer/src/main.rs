@@ -1118,6 +1118,7 @@ const VINE_END_FRAMES: i32 = 23;
     if std::env::var_os("RRBTD6_SHADOW_TEXTURE_CHECK").is_some(){anim::verify_shadow_sharing(&root).await;}
     if std::env::var_os("RRBTD6_MAP_BATCH_CHECK").is_some(){render3d::verify_map_batching(&root).await;}
     if std::env::var_os("RRBTD6_STATIC_MAP_CHECK").is_some(){render3d::verify_static_maps(&root).await;}
+    if std::env::var_os("RRBTD6_MESH_INSTANCE_CHECK").is_some(){render3d::verify_mesh_instancing(&root).await;}
     let mortar_target = tex(root.join("sprites").join("IngameUi").join("MortarTarget.png")).await;
     let mut speed = 1u32;
     let mut coop_config:Option<rrbtd6_coop::MatchStart>=None;
