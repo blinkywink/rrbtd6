@@ -93,6 +93,9 @@ public class Scenario
     /// After this many recorded frames every ability is activated (Ability.Activate(true): cooldown
     /// ignored); -1 never.
     public int ability { get; set; } = -1;
+    // Every frame (after it, as `ability`), Activate(false) on every ability: each goes off whenever
+    // its cooldown allows (to record cooldown effects such as Submerge's).
+    public bool ability_auto { get; set; }
     /// Recorded frames [first, last] to log the bloon grid's buckets for (GB lines).
     public int[] gridlog { get; set; }
     /// GameModel.randomSeed to start the simulation with (Simulation.Initialise seeds syncedRandom
@@ -122,6 +125,12 @@ public class Scenario
     public bool fx_particles { get; set; } = false;
     /// Log every Targetting.CanHitMoab call (CM lines).
     public bool canhitmoab { get; set; } = false;
+    /// "# cg" lines: each BloonModel's collisionGroup array pointer.
+    public bool cgprobe { get; set; } = false;
+    // PathManager.targets each frame: "PMT key bloonId distanceTraveled PercThroughMap".
+    public bool pmprobe { get; set; } = false;
+    /// RotateToTarget.ApplyRotation probe (RP / RQ lines).
+    public bool rotprobe { get; set; } = false;
     /// Read-only: log Attack.GetPathSegmentsInRangeFast's PathSegmentInRange flags between
     /// recorded frames segprobe_from..segprobe_to (SG lines).
     public bool segprobe { get; set; } = false;
@@ -411,6 +420,24 @@ public class Recorder : MelonMod
                 var xsl = new List<string>();
                 for (int k = 0; xs != null && k < xs.Length; k++) xsl.Add(F(xs[k]));
                 Out.WriteLine($"# xpscale {string.Join(",", xsl)} map {sim.model.map.mapDifficulty} rating {F(sim.model.selectedDifficultyRating)} endRound {sim.map.spawner.endRound}");
+                // With cgprobe: "# cg bloonId arrayPointer": which BloonModels share one
+                // collisionGroup array (CollisionGroupData.precalculatedOffset is per array).
+                if (Sc.cgprobe)
+                {
+                    try
+                    {
+                        var bms = sim.model.bloons;
+                        for (int q = 0; q < bms.Length; q++)
+                        {
+                            var bm = bms[q];
+                            var cgm = bm?.collisionGroup;
+                            if (cgm == null) continue;
+                            var arr = cgm.collisionGroup;
+                            Out.WriteLine($"# cg {bm.id} {cgm.Pointer.ToInt64():x} {(arr == null ? 0 : arr.Pointer.ToInt64()):x} {(arr == null || arr.Length == 0 ? 0 : arr[0].Pointer.ToInt64()):x}");
+                        }
+                    }
+                    catch (Exception e) { Out.WriteLine($"# cg error {e.Message}"); }
+                }
                 foreach (var t in Sc.towers) Out.WriteLine($"# tower {t.id} {F(t.x)} {F(t.y)}");
                 // segprobe lines from before the file was open (the towers' first segment lists).
                 foreach (var l in PreLines) Out.WriteLine(l);
@@ -433,6 +460,7 @@ public class Recorder : MelonMod
                 for (int k = 0; k < Sc.towers.Count; k++)
                     if (!string.IsNullOrEmpty(Sc.towers[k].target)) Out.WriteLine($"# target {k} {Sc.towers[k].target}");
                 if (Sc.ability >= 0) Out.WriteLine($"# ability {Sc.ability}");
+                if (Sc.ability_auto) Out.WriteLine("# ability_auto");
                 for (int k = 0; k < Sc.towers.Count; k++)
                 {
                     if (Sc.towers[k].camo) Out.WriteLine($"# camo {k}");
@@ -1136,6 +1164,30 @@ static class DrainXpPatch
 // Il2CppInterop trampoline, and the game then aims at the MOAB's centre (moab_* recordings made with it,
 // 2026-11-15, were wrong and re-recorded).)
 
+// RotateToTarget.ApplyRotation (with rotprobe): "RP frame tower targetX targetY targetZ
+// towerX towerY rotationBefore" before it runs, and "RQ frame tower rotationAfter" after.
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.RotateToTarget), nameof(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.RotateToTarget.ApplyRotation))]
+static class RotProbePatch
+{
+    static void Prefix(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.RotateToTarget __instance)
+    {
+        var w = Recorder.Out;
+        if (Recorder.Sc == null || w == null || !Recorder.Sc.rotprobe) return;
+        try
+        {
+            var at = __instance.attack; var t = at.tower; var tp = at.target.Position;
+            w.WriteLine($"RP {Recorder.Recorded} {t.Id.Id} {Recorder.F(tp.x)} {Recorder.F(tp.y)} {Recorder.F(tp.z)} {Recorder.F(t.Position.X)} {Recorder.F(t.Position.Y)} {Recorder.F(t.Rotation)}");
+        }
+        catch { }
+    }
+    static void Postfix(Il2CppAssets.Scripts.Simulation.Towers.Behaviors.Attack.Behaviors.RotateToTarget __instance)
+    {
+        var w = Recorder.Out;
+        if (Recorder.Sc == null || w == null || !Recorder.Sc.rotprobe) return;
+        try { var t = __instance.attack.tower; w.WriteLine($"RQ {Recorder.Recorded} {t.Id.Id} {Recorder.F(t.Rotation)}"); } catch { }
+    }
+}
+
 // Bloon.SetRotation on MOAB-class bloons: "SR frame bloon r rotationAfter" (with canhitmoab).
 [HarmonyPatch(typeof(Il2CppAssets.Scripts.Simulation.Bloons.Bloon), nameof(Il2CppAssets.Scripts.Simulation.Bloons.Bloon.SetRotation))]
 static class SetRotationPatch
@@ -1411,6 +1463,19 @@ static class SimulatePatch
                     MelonLogger.Msg($"SimRecorder ability {alts[k].model.name} activated at frame {Recorder.Recorded}");
                 }
             });
+        if (Recorder.Sc.ability_auto)
+            Part("ability_auto", () =>
+            {
+                var bridge = InGame.instance.bridge;
+                var alts = bridge.GetAllAbilities(bridge.GetInputId(), true);
+                for (int k = 0; k < alts.Count; k++)
+                {
+                    var ab = alts[k].ability;
+                    if (!ab.IsReady(false) || !ab.CanUseAbility()) continue;
+                    ab.Activate(false);
+                    Recorder.Out.WriteLine($"AB {ab.tower.Id.Id} {alts[k].model.name}");
+                }
+            });
         if (Recorder.Recorded == Recorder.Sc.paragon_investment_frame && Recorder.Sc.paragon_investment >= 0)
             Part("paragon_investment", () =>
             {
@@ -1628,6 +1693,15 @@ static class SimulatePatch
                 if (stun) w.WriteLine(line);
             }
         });
+        if (Recorder.Sc.pmprobe) Part("pmtargets", () =>
+        {
+            foreach (var kv in sim.map.pathManager.targets)
+            {
+                var b = kv.Value.bloon;
+                if (b == null) { w.WriteLine($"PMT {kv.Key} -1"); continue; }
+                w.WriteLine($"PMT {kv.Key} {b.Id.Id} {Recorder.F(b.distanceTraveled)} {Recorder.F(b.PercThroughMap())}");
+            }
+        });
         // Each path's bloonsList (Path.Process adds them to its segments in this order).
         Part("paths", () =>
         {
@@ -1700,6 +1774,24 @@ static class SimulatePatch
                         var atg = at.target;
                         var atb = atg._bloon;
                         w.WriteLine($"AT {t.Id.Id} {ak} {(atb == null ? -1 : atb.Id.Id)} {(atg.IsValid ? 1 : 0)}");
+                        // "ATE tower attack x y z": the attack entity's TransformBehavior position
+                        // (RotateToTarget.ApplyRotation's origin).
+                        try
+                        {
+                            var etb = at.entity?.transformBehaviorCache;
+                            if (etb != null) { var ep = etb.position; w.WriteLine($"ATE {t.Id.Id} {ak} {Recorder.F(ep.X)} {Recorder.F(ep.Y)} {Recorder.F(ep.Z)}"); }
+                        }
+                        catch (Exception) { }
+                        // "ATP tower attack x y z offx offy offz": Target.Position and bloonTargetOffset.
+                        if (atb != null)
+                        {
+                            try
+                            {
+                                var tp = atg.Position; var to = atg.bloonTargetOffset;
+                                w.WriteLine($"ATP {t.Id.Id} {ak} {Recorder.F(tp.x)} {Recorder.F(tp.y)} {Recorder.F(tp.z)} {Recorder.F(to.x)} {Recorder.F(to.y)} {Recorder.F(to.z)}");
+                            }
+                            catch (Exception) { }
+                        }
                         // Read-only: Attack.useOnTheMoveTargetting when set: "OM tower attack".
                         if (at.useOnTheMoveTargetting) w.WriteLine($"OM {t.Id.Id} {ak}");
                         // Read-only: GyrfalconPattern state: "GY tower attack timeOfNextIdleMove targetValid hoveredTower cooldownStartedAt".
@@ -1756,6 +1848,8 @@ static class SimulatePatch
                 }
                 if (fm != null)
                     w.WriteLine($"FM {t.Id.Id} {Recorder.F(fm.transformPosition.x)} {Recorder.F(fm.transformPosition.y)} {Recorder.F(fm.rotation.x)} {Recorder.F(fm.rotation.y)} {Recorder.F(fm.targetPosition.x)} {Recorder.F(fm.targetPosition.y)} {fm.timer} {(fm.flyoverEngaged ? 1 : 0)}");
+                // "TD tower damageDealt cashEarned": what ParagonTower.GetTowerInvestment reads.
+                try { w.WriteLine($"TD {t.Id.Id} {t.damageDealt} {Recorder.F((float)t.cashEarned)}"); } catch (Exception) { }
                 int i = 0;
                 var l = t.attackBehaviorsInDependants.list;
                 for (int k = 0; k < l.Count; k++)
@@ -1780,6 +1874,17 @@ static class SimulatePatch
                             var node = fa.display?.node;
                             string dr = node == null || node.rotation == null ? "none" : Recorder.F(node.rotation.value);
                             w.WriteLine($"FA {t.Id.Id} {i - 1} {dr} {Recorder.F(t.Position.Z)} {fa.timeOfLastTargetUpdate} {(fa.lastFireResult ? 1 : 0)}");
+                            // "FG tower weapon names...": the filters its look is handed to
+                            // (filterTargetAngleFilterBehaviors), by weapon model name, when it changes.
+                            try
+                            {
+                                var g = fa.filterTargetAngleFilterBehaviors;
+                                var sb = new System.Text.StringBuilder();
+                                if (g != null) for (int z = 0; z < g.Count; z++) sb.Append(' ').Append(g[z]?.weapon?.weaponModel?.name ?? "?");
+                                var fg = $"FG {t.Id.Id} {i - 1}{sb}";
+                                if (Recorder.weaponNamed.Add(fg)) w.WriteLine(fg);
+                            }
+                            catch (Exception) { }
                         }
                     }
                     // Zoned<Bloon> (Vagrant's bloon zone) methods' addresses, once: "zone_methods IsInZone Process".

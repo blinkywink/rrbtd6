@@ -1,0 +1,1 @@
+{"name": "sub_200_sentry", "map": "Logs", "difficulty": "Hard", "mode": "Clicks", "frames": 3600, "quit": true, "round": 40, "towers": [{"id": "MonkeySub-200", "x": -2.8, "y": 3.0}, {"id": "EngineerMonkey-100", "x": -90.1, "y": -4.3}], "cash": 10000000, "seed": 699336078}

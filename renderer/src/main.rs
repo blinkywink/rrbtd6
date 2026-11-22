@@ -2155,8 +2155,12 @@ const VINE_END_FRAMES: i32 = 23;
                 }
             }
         } else if let Some(t) = picking.filter(|_| in_map && is_mouse_button_pressed(MouseButton::Left)) {
-            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Point{tower:game.towers[t].id,at:mouse_world});}else if game.is_necro(t){game.necro_select(t, mouse_world);}else{game.towers[t].point = Some(mouse_world);game.towers[t].point_z = 0.0;}
-            picking = None;
+            // (A point outside a range-locked attack's range isn't taken: the picker stays open.)
+            if !game.is_necro(t) && !game.point_allowed(t, mouse_world) {
+            } else {
+                if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Point{tower:game.towers[t].id,at:mouse_world});}else if game.is_necro(t){game.necro_select(t, mouse_world);}else{game.set_point(t, mouse_world);}
+                picking = None;
+            }
         } else if let Some(def) = placing {
             // InputManager.Update (mouse, nudge mode on: Game.DisableNudgeMode is only offered
             // on touch screens): CursorDown / CursorUp on the button's edges, then
@@ -4437,7 +4441,7 @@ const VINE_END_FRAMES: i32 = 23;
                     }
                     hud::Action::Target(m) => {
                         if let Some(t) = selected {
-                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Target{tower:game.towers[t].id,mode:coop_game::target_code(m)});}else{game.towers[t].target = m;}
+                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Target{tower:game.towers[t].id,mode:coop_game::target_code(m)});}else{game.set_target(t, m);}
                         }
                     }
                     hud::Action::SetPoint => picking = selected,

@@ -184,13 +184,13 @@ impl Replica{
                 let Some(t)=self.tower(g,slot,*tower)else{return false;};
                 let Some(&mode)=TARGETS.get(*mode as usize)else{return false;};
                 if !g.target_modes(t).contains(&mode){return false;}
-                g.towers[t].target=mode;true
+                g.set_target(t,mode);true
             },
             Action::Point{tower,at}=>{
                 let Some(t)=self.tower(g,slot,*tower)else{return false;};
                 if g.is_necro(t){g.necro_select(t,*at);return true;}
                 if !g.uses_point(t){return false;}
-                g.towers[t].point=Some(*at);g.towers[t].point_z=0.0;true
+                g.set_point(t,*at)
             },
             Action::StartRound=>{g.start_round();true},
             Action::Pointer{at}=>{self.pointers[slot as usize]=Some(*at);true},

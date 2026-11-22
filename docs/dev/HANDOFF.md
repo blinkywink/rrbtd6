@@ -116,10 +116,10 @@ Ground rules follow.
 
 ## Regression baseline (must not drop)
 
-Current (2026-11-18): every set full (merge 17). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
+Current (2026-11-20): every set full (merge 17; spike 28, sub 35, mortar 26, bomb 35, dartling 26, sniper 35, bucc 36, dart 71, tack 26, alch 35, druid 35, ninja 35, ice 26, wizard 36, ace 26, spike 29, super 35, heli 27, boomerang 100, dart 72, mortar 27, desperado 35, dartling 27 after the 2026-11-20 additions). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
 sniper tack sub beast engineer desperado dartling mortar bucc druid super ace heli spike farm mermonkey village
-paragon sky quincy moab logs maps maptowers merge village_std farm_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, farm_std 1, sky 39, quincy 14, moab 5,
-logs 3, dart 70, boomerang 99, paragon 12).
+paragon sky quincy gwen jones sauda obyn ezili moab logs maps maptowers merge village_std farm_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, farm_std 1, sky 39, quincy 14, moab 5,
+logs 3, dart 72, boomerang 100, paragon 12).
 
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
@@ -172,6 +172,553 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### DONE (2026-11-20): MOAB Takedown order (was HYPOTHESIS P-TAKEDOWN), shared collision circles by family, angle filters regathered by supports
+- MOAB Takedown target order:
+  - TargetGrapplable.GetTargets (VERIFIED-DECOMP @0x180de4610): BloonManager.GetTargets First
+    within the ability attack's range (exported `takedown.range`; 9999999 on every Buccaneer),
+    with FilterBloon (@0x180de4010: Attack.FilterTarget, MOAB-class tag 0x2000, not grappled).
+  - Then OrderByDescending(BloonModel.danger), stable. The clone had sorted by RBE; DDT danger
+    13 is above ZOMG 12.
+  - GrappleEmission.Emit (@0x180c41090) walks that list, skipping what it can't afford.
+  - GetHooksRequired (@0x180de40f0): Zomg (0x400) zomgHooksRequired; Bad (0x1000) or Miniboss
+    (0x8000) badHooksRequired; else 1. The tag bits are in BloonModel/Tag order (Camo 1 ... Moabs
+    0x2000, Boss 0x4000, Miniboss 0x8000).
+- CollisionGroupData sharing: probe cg_probe (scenario flag `cgprobe`: "# cg model groupModel
+  array data0" lines).
+  - Every BloonModel of a baseId shares its CollisionGroupData objects (Fortified, Camo, Glued,
+    Shielded); each boss tier has its own.
+  - So `kind_rot` (precalculatedOffset = the family's last SetRotation) is keyed by
+    `coll_group`.
+  - Recording bucc_050_danger_r102 rt 794: a Zomg's frags meet it by the ZomgFortified's 90, not
+    its own 37.4.
+  - `visible_spot` (GetVisibleTargets' CanHitMoab) now uses `mrot` too (rt 941).
+- FilterTargetAngleFilter (Initialise @0x180c76d80, FilterEmission @0x180c76350): a look pushes
+  its time / result into the filters on its list.
+  - Initialise lists the shareFilterTargets filters already there; UpdatedModel regathers,
+    appending.
+  - So once any support's mutator has changed the tower (a Radar Scanner village), the lists hold
+    each other both ways, for good. New recorder line "FG tower weapon names..." shows the lists.
+  - `Buff::touched` sets `Tower.upgraded`.
+- DONE: recording bucc_050_danger_r102 (pending/bucc) MATCHES; the rt 1149 DDT hit was the
+  spawn order below.
+
+### DONE (2026-11-20): round-102 village batch 4 (3 of 6 fixed to MATCH)
+- mortar_205 MATCH (mortar 27):
+  - RemoveBloonModifiers.Collide (@0x180cd5820): bloonTagExcludeList / bloonTagExplicitList
+    (export `cleanse_exclude` / `cleanse_require`). Shattering Shells leave Zomgs and Bads
+    fortified.
+  - With no DamageModel, cleanseOnlyIfDamaged's WillDamageBloon test is skipped (the
+    StripExplosion).
+  - Bloon.UpdatedModel (@0x180fb7b40): a new maxHealth scales health:
+    (int)((float)health / old x new).
+- desperado_502 MATCH (desperado 35): TheBlazingSun.ProjectilesCreated (@0x180c961a0), at
+  stacksToBurn stacks, puts burnBehaviorModel straight on each shot's Target bloon and emits
+  burnBehaviorArea at Target.Position through its emission (`blazing_created`; export
+  `blazing_burn` / `blazing_area` / `blazing_emission`). This was missing entirely before.
+- dartling_502 MATCH (dartling 27): the weapon path's Ray of Doom scan skips `unplaced` bloons,
+  like `exhaust_line`. The line walked again after the initial hit doesn't take the new MOABs of
+  the BFB it popped.
+- DONE (2026-11-20): combo set (pending/combo, round 102, 1800 frames): two villages + Ninja
+  2-0-5, Alchemist 4-0-0 + village + Dart 2-0-5, Super 0-4-0 + Village 0-3-0 + Alchemist 4-0-1
+  with abilities at 120, Tack 2-0-5 + Village 2-2-0 + Alchemist 4-0-0 + Ice 0-3-0 + Sniper 0-2-3.
+  Three matched as recorded; combo_abilities (rt 287) fixed: a brew gone with its last shot is
+  off at once, so the tower's later weapons that frame run at the plain rate (the Tech Terror's
+  first arm doubled at the brewed rate, its second didn't: `brew_rate` in the weapon loop).
+- DONE (2026-11-20): combo batch 2: combo2_two_alch MATCH as recorded; combo2_abilities MATCH
+  after (a) RangeMutatorClass's name pairing: the lifespan add comes from the first attack of the
+  same name in the unmutated model (Blade Maelstrom's attack is named like the main one: 2 s +
+  0.342 x 0.1 = 122 frames) and (b) Turbo Charge off for the weapons in its last frame (as brews).
+- DONE (2026-11-20): combo batch 3 (Mortar 2-0-4 + Heli 2-0-3 + Village 2-2-0 + Alchemist 4-0-0;
+  Druid 2-0-4 + Spike 2-0-4 + Village 0-2-0 + Farm 2-0-3, abilities; Engineer 2-0-4 + Sniper 2-0-4
+  + Village 0-3-0 + Alchemist 4-0-1 + Bomb 2-0-4, abilities), all MATCH after:
+  (a) a banana's RandomPosition point is drawn the frame it goes, in the farm's turn (after the
+  Spike Factory's reshuffle that frame; farm_004 alone can't tell);
+  (b) BeserkerBrewMutator.Mutate (@0x1811bf5d0): set_Rate(rate - rate x rateUp), not rate x
+  (1 - rateUp) (a 1.5 s Bomb at 76 frames, not 77): `Buff::brew_up` / `WeaponState::brew_up`;
+  (c) MoabShoveMutator.Mutate (@0x18121ff50): Zomg and Ddt take zomgPushSpeedScaleCap even with
+  the zone's Zomg filter (`MoabShove::zomg_cap`; a 2-0-3's DDT at x0.75);
+  (d) compare: the ability throw pass keyed towers without weapons (a village) too.
+- combo batch 4 (pending/combo_open, round 102): fixes so far, all sets still full:
+  (a) RateBasedAnimationOffset from the MUTATED model rate, redone as it changes (Dartling 0-0-4's
+  guns leave 15 / 26 / 39 frames on under a Jungle Drums village and a brew landing mid-wait);
+  (b) a brewed tower's projectile models are run-time copies (TravelStraitSlowdown maxDistance =
+  lifespanFrames x speedFrames: a 0-0-4 pellet under a village goes 199.3, not 182).
+  OPEN combo4_dartling_sky rt 921 (4 frames): EmitIceShrapnel (count 2, range 300) skips a camo
+  DDT at (-100, 40) 52 from the bolt for two Bfbs ~60 away (both shards at -90), yet at rt 1494
+  targets another camo DDT; not camo, not path-segment order, not segment distance, not LOS.
+  GetTargets(range = model +0x5c, count = +0x60, segments from the BloonManager static at
+  +0x48..0x58, camo flag false). Chilled.BloonFilter (@0x180c99ba0): not tag bits 0x1000/0x8000,
+  not BloonModel.isImmuneToSlow (+0x93).
+  (2026-11-21) Not a plain camo filter: with `!b.camo()` rt 921 matches but rt 1494 breaks.
+  There the shards (from ZomgFortified 3854 at (-61.89, -22.9)) go to Bfb 4700 (24.35) and camo
+  DDT 7772 (34.85, never decamoed), skipping Bfbs 4847 (24.56) and 4769 (27.72) on the same
+  segment as 4700 (all three under IceShardFreeze since 1441). At 920 (from Zomg 627) they go to
+  4700 (76.28) and 3854 (78.27), skipping DDT 4631 (72.08). So the pick is not by bloon distance:
+  look at BloonManager.GetTargets (@0x180fcacc0: PathManager.GetPathSegmentsInRange(pos, range
+  + 40 unless param_7, ...), then the brackets) for the order it hands out (segment point
+  distance? one bracket per segment?).
+  combo4_quincy: rt 214 FIXED, a hero counts in VagrantWeaponBehavior's tower zone (Quincy +
+  village + Alchemist: 3 towers, 22 frames); the first shot is rate-timed (no target: the Zomg's
+  circle is behind the entrance trees). rt 1032 FIXED: at the Vigilante recompute a
+  non-fixedRange Vagrant weapon counts the bloons of the tower-range attack's zone (the
+  shotgun's 36 zone held 1, the 60 one 5: 38 frames as the game's), a fixedRange one and an
+  attack at the tower's range keep their own (desperado_032 / 052). Bloons now match all 1800
+  frames; OPEN rt 1230: Quincy's L15 LongProjectile arrows (6940 / 6952, made 1218; seek 360
+  deg/s, RetargetOnContact distance 54) hit DDT 6477 at 1229 and the game's snap 82.97 -> 95.73
+  (12.8 deg in one frame, so a retarget, not the 6 deg/frame seek) toward +x; every bloon within
+  54 is already in their hit list (3259, 4284, 4358, 4403, 584 at 1218, 6764 at 1219, 6477 at
+  1229), so the clone finds none and keeps 82.97. Find what Retarget aims at then (GetClosestTarget
+  ignoring collidedWith? the seek target's circle?): the heading fits neither 6477's centre
+  (-2.8 deg) nor its back circle (-4.4 deg) from the shot.
+  FIXED 2026-11-21: the retarget is DDT 5322, 74 off; GetClosestTarget's CanHitMoab turns the
+  circles by the family's shared rotation (`mrot`), not the bloon's own, so its front circle
+  (10.4 ahead, r 19.85) is within 54. rt 1480 FIXED: a berserker brew's pierce goes on every
+  projectile (the exploding arrow's Explosion 10 + 3 = 13). combo4_quincy MATCHES (moved to
+  pending/combo). OLD NOTES rt 214: Desperado 2-0-4 placed after Quincy / Village 2-2-0 / Alchemist
+  4-0-0. (1) Its placement rates 18 / 29 are VagrantWeaponBehavior with 0 towers: 1.2 x 0.85 /
+  1.45 / dist 1.5 / standoff 1.6 = 17.6 frames (the clone counts the 2 towers already standing:
+  20 / 33), so the zone starts empty; 22 / 33 later. (2) The first throw: game 214, clone 216,
+  both weapons; the only bloon is a Zomg 87.5 away, so it is the moment its collision circle
+  reaches the 66 range (0.3 apart): the Zomg family's shared rotation (kind_rot) or the circle
+  reach, not the rate (an empty-zone start changed nothing).
+  DONE combo4_beast_mermonkey MATCH: a TranceBloon projectile takes its attack's FilterOutTag
+  tags (a 2-0-4 totem passes a Zomg with pierce unspent and trances the DDT; the 2-0-5 has no
+  filter, so its Zomg trances stay); a MermonkeyTrance made after a seeking shot moves its bloon
+  after the shot's look (the trident aims at the DDT's spot before that frame's orbit step).
+- OPEN combo batch 5 (pending/combo_open):
+  combo5_water (Logs: Bucc 2-0-4, Sub 2-0-4, Mermonkey 0-2-4, Village 2-2-0): FIXED rt 739
+  (PlacementAreaTypeRangeBuff's RangeMutator @0x181245af0 multiplies range on water: `Buff::
+  range_m`, no lifespan stretch; was P-WATERRANGE additive) and rt 958
+  (CollideExtraPierceReduction.FilterCollision @0x180c9ca40: without
+  destroyProjectileIfPierceNotEnough a tagged bloon is met only while pierce >= extra + 1:
+  `pierce_tags_need`; the totem's 2-pierce trance passes a DDT). OPEN rt 769: the Buccaneer
+  2-0-4's secondary (FireWhenAlternateWeaponIsReady, fov [90, -90, 19]) fires 2 frames after its
+  main's 767 shots; set_FireWeapon (@0x180c77eb0) sets frameOfValidFire = clock + 1 and Process
+  (@0x180c77da0) clears it once that is < its frame, so it should lapse at 769. A sim-vs-round
+  clock lag would fit here but breaks 6 bucc recordings. The recording's FA lines: the
+  secondary's filter looked at 749 (false; 729 before), its next look at 769 (true), and it fired
+  then: the main's 767 arming still counted at 769 here, while bucc_010 (main ~846, look true at
+  848) shows no fire then (game 1105).
+  FIXED 2026-11-21: the arming lasts through main + 2 (Process clears it only once
+  frameOfValidFire = time + 1 is below the clock, after the fire check); bucc 36/36 still, and
+  combo5_water now MATCHES (moved to pending/combo).
+  combo5_status (Ice 2-0-5, Glue 0-2-5, Village 2-2-0, Sniper 0-2-5): DDT 6686 (37 hp) is
+  popped at 854 in the game by its MoabDamageOnHit DoT; the game's re-adds at 683 / 734 / 785
+  reset the mutator to 57 frames (M add before 6 after 57) but the one at 836 doesn't (before 6
+  after 6); the clone refreshes it at 836 (40 left at 853). Mutable.AddMutator (@0x180f34f20):
+  with its duration-modifier flag (param 4) the time is (int)(time x the smallest modifier the
+  bloon's vtable +0x298 returns, entries with their flag set), at least 1; an existing mutator of
+  that id (refresh path, param 8) is reset to ITS OWN initial time (+0x28) only when its time
+  left is under that scaled time. So at 836 some modifier on the DDT cut 57 to <= 6: find which
+  bloon behaviour / mutator reports duration modifiers (the DDT had Glue, SuperGlue,
+  GlueDegradeSplat, then CryoIce / Permafrost; Ice 2-0-5's or Glue 0-2-5's?).
+  (2026-11-21) The refreshes per id (M add before / after): Glue 810 is reset at 684 / 735 (759,
+  708 left) but not at 786 / 837 (759, 708 kept); GlueDegradeSplat 405 is never reset (354 /
+  303 / 252 / 201 kept) while GlueDegradeSplatEffect 405 always is; MoabDamageOnHit 57 is reset at
+  684 / 735 / 786, not 837. So the scaling is per mutator, not one bloon-wide factor. The DDT's
+  model has no BadImmunity / MinibossImmunity / MutationImunity (the only FilterMutation
+  implementers besides Tower's), so look at a mutator-side rule instead (AddMutator's refresh
+  path: the existing mutator's own fields, e.g. its initial time +0x28 and a 'dontRefresh' /
+  stacking flag on the model) before chasing bloon behaviours.
+- combo batch 7 (pending/combo_open): combo7_ninja_paragon rt 332 FIXED (an emitOnDestroy
+  explosion off a popped bloon has that bloon in its collidedWith, as the timed splash: the
+  Zomg's sticky bomb blast passes its four Bfbs, pierce unspent); OPEN rt 380 (two Ceramics only
+  in the game after a long chain of blast / sticky hits at 378). 2026-11-21: the first position diff was
+  rt 282 (FIXED: CreateProjectileOnContact.Collide @0x180cc1570 sets its emission's Target to the
+  hit bloon, so the Ascended Shadow's seeking Shurikens start on the Zomg they came off, though
+  it's in their collidedWith, and turn 1 / 3.48 of the way to it each frame: `contact_seek`).
+  Now rt 380: Ceramics 2288 / 2316 at the entrance clamp take 32 (1609) and 27 (1700, M deplete
+  5: DepleteMutatorsForNumLayers, down to a 1-hp Yellow), the Explosion 1713 and Shurikens 1724
+  then hit the Yellows for nothing, and at the frame's end the recording has them as Ceramics
+  with 60 hp at 174.65 (1.05 past the clamp); the clone destroys them. Find what turns a 1-hp
+  Yellow back into a full Ceramic (the Ninja paragon? a regrow-like behaviour?). Not reused
+  objects: both keep their lineage (2294,1986,1534,581 / 2322,2005,1543,581) through 381, and
+  they move 1.05 that frame (a Ceramic's speed), so the bloon really is a 60-hp Ceramic again.
+  CORRECTION 2026-11-21: a frame's event lines (HP / H / M / X / R) are written BEFORE its F
+  line, its state lines (B / P / W) after: the "380" hits above are frame 381's. So in frame 380
+  the game destroys 2270 / 2279 / 2298 / 2307 (three shuriken hits each) and nothing touches
+  2288 / 2316; the clone's Shurikens 103 (pierce 4, radius 12) hit them (its 209 / 210). The
+  game's Shurikens (1724 / 1768 / 1812 / 1900, from FlashBomb contacts on BFB 575) only ever log
+  contacts with 575 (no damage: it's in their collidedWith), never with the Ceramics ~12 away.
+  CollideBloon adds one id (the bloon's layer, +0x170) and HaveAlreadyCollidedWithBloonInLineage
+  is a plain intersection with the bloon's lineage, so collidedWith doesn't explain it: check
+  the clone's Shurikens' positions (103 at (-148.59, 17.50) has no game twin) and the collision
+  candidates (grid cells?) next. DONE meanwhile: passOnCollidedWith copies the shot's whole
+  collidedWith (CreateProjectileOnContact.Collide @0x180ca2a60: UnionWith on +0x160).
+  NARROWED 2026-11-21: ids map by creation order (per FlashBomb: Explosion, then three Shurikens),
+  so the clone's Shurikens 103 is the game's 1878, and their hits agree at 377 (BFBs 1528 /
+  1537), 378 (three Moabs), 379 (2008); the game's 1878 then hits 2288 / 2316 in frame 381, the
+  clone's 103 in frame 380, one frame early. Those two are non-first children made at 378 at dist
+  119.5 (BFB 1986's pop) whose first move (379) snapped them to the entrance clamp (173.6): in the
+  game they aren't collision candidates in frame 380 (their BloonGrid cell still the pre-snap
+  one?) but are in 381 after a normal move. Check how the clone files a bloon whose first move is
+  the clamp snap (cell_pos / cell_next at rt 380, grid_hit) against BloonGrid's update in
+  Bloon.Move.
+  FIXED 2026-11-21 (INFERRED from the recording): the collision grid's bucket index is
+  y x width + x with x unclamped, so a bloon filed left of the grid (its spawn spot at -214, the
+  grid from -202) sits in the previous row's last cell: the paragon's global Sabotage still
+  reaches it, shurikens beside the entrance don't. Now rt 574: ZomgFortified 2971, spawned at
+  573, gets Sabotage (M add) that frame in the game and moves at half speed; the clone's
+  Sabotage misses it (0.152 vs 0.076 a frame). The paragon's SabotageAttack (rate 1 s, fireWithoutTarget,
+  lifespan 1 s of round time) throws match (481 / 541 in the round gap too); its projectile 2957
+  (made 541) logs its HP on 2971 in frame 573, the frame 2971 first appears (at its spawn
+  distance 133.6, not yet moved). The clone makes the Zomg after that frame's collision pass and
+  it is unplaced (no grid cell) in 574's, so its first Sabotage is 575. Find whether the radius
+  999 Sabotage collides outside the CollisionChecker grid pass (its own Process, after the
+  Spawner) and reaches unplaced bloons, or whether the Spawner runs before the collision pass.
+  (2026-11-21) CollisionChecker.Process (@0x180f31590) has no large-radius special case. In this
+  recording all 25 round-spawned bloons (all MOAB-class, at their spawn distance 146.1 / 133.6)
+  take their first Sabotage hit in the frame they first appear in the B / L lines; popped
+  children (390) a frame later. Making the frame's spawns before the collision pass (and
+  collidable then) takes this recording to rt 739, but in general it breaks nearly every set
+  (boomerang 5/100, ninja 15/35...), so the clone's spawn frame is right for everything else.
+  Likely model: the Spawner makes the bloon at the end of frame N-1; the path list (L) and the
+  B lines only show it from frame N (Path.Process files it on its first Process), but frame N's
+  CollisionGrid.Fill already has it at its spawn spot. Only global projectiles (radius 999)
+  can reach bloons behind the entrance, so implement just that: in frame N's collision pass,
+  let projectiles with a huge radius meet the bloons the Spawner is about to make this frame
+  (or run a small extra pass for them right after emit_frame_spawn), effects and
+  DamagePercentOfMax included (Sabotage: 12000 -> 9000 on 2971, slow x0.5).
+  FIXED 2026-11-21: it's DamagePercentOfMax.OnBloonSpawned (@0x180cb5d40): a bloon the round
+  spawns with the model's tags is collided at once by each projectile with an offscreen-only
+  DamagePercentOfMax (offscreenDamageOverride on: + (uint)(maxHealth x 0.25)); `spawn_global_pass`
+  runs that collision right after the frame's spawns (`pct_max` exported). Now matches to rt 1202.
+  Then FIXED: a carried (wind) bloon moves at its slowed model speed (SlowMutator sets
+  BloonModel speed; rt 1203), and an altSpeed ArriveAtTarget shot retimed by OnBloonDestroyEvent
+  also re-derives its arrival / expiry frame (rt 1543: 31 frames, not 30). Bloons now exact all
+  1800 frames. OPEN rt 1774 (11 position frames): Alchemist potion 13253 released at 1773 for a
+  throw begun at 1768 at Ceramic 12361, which left the B lines after 1768 (destroyed during the
+  windup; its id stays in the L list); the game's potion expires at age 1 on its start spot
+  (XS through ArriveAtTarget.SetTarget @0x180c87ad0: isInitialTargetValid = Target.IsValid
+  (@0x180b9bb90: false for a destroyed bloon or one whose object id no longer matches), false ->
+  perc = 1, so it arrives / expires at once) and the AcidSplash is made there. The clone flies it to
+  the spot (`lost`, recording sky_052 rt 502). Find what differs from sky_052 (that bolt's Target
+  replaced by a point when the Black died? the bloon object reused?). Not object reuse: in the clone the dead
+  Ceramic's object (130) is still unclaimed at the release. Both cases have the same
+  ArriveAtTarget model (altSpeed, expireOnArrival, no keepUpdating) and the attack's Target still
+  names the dead bloon (AT lines); the difference seen so far: sky_052's Black died in the frame
+  the throw began (its Target made on an already-destroyed bloon), combo7's Ceramic during the
+  windup. Next: decompile Weapon.SpawnDart / Emission (what Target the projectile gets when the
+  attack's bloon is gone) and Target..ctor(bloon) (what it stores when the bloon is already dead).
+  FIXED 2026-11-21: Weapon.Emit (@0x180c4ea20) swaps an invalid Target for storedTargetPosition,
+  which Weapon.Process stores at the throw's start only with WeaponModel.storeTargetOnAnimationStart
+  (the Skywarden's ArcWeapon alone); any other ArriveAtTarget shot gets an invalid Target, perc 1,
+  and expires where it starts (`store_target`). combo7_ninja_paragon MATCHES (pending/combo). combo7_lotus (Lotus Island):
+  the Sniper 2-0-5's LeakDangerAttackSpeed (GetRate @0x180c7bd00: rate / (PercThroughMap x
+  leakDanger + 1) of the FIRST bloon of a map-level list, map +0x98 -> +0x60) halves its rate at
+  120 in the game (4 -> 2 frames) and quarters it at 501; the clone goes 4 -> 1 at 121
+  The cause is the danger at Retaliation's activation (scenario ability at 120; Retaliation is
+  TurboModel x0.25 for 7 s, ends at 540 in both): game 2 frames = 0.0649 x 0.25 / (perc + 1)
+  with perc ~ -0.5 until 501 (then ~0: 1 frame); the clone recomputes then with st.danger 0 (it
+  only refreshes danger on shots) and the only listed bloon, Zomg 315 at 25.7 on path 0 (spawn
+  58.11, leak 1049.01), gives -0.033 by Path.get_MaxDistUntilSpawn / Leak (@0x180f70c20 /
+  0x180f70b10, no routers on Lotus). So the game's PathManager.targets[0] (Process @0x180f6c720,
+  FindGlobalBest @0x180f6a7d0 per path, the Path.targets comparers) is another bloon, likely an
+  off-map / unlisted one near dist -437: probe it (log targets[0] and its PercThroughMap).
+  Also refresh st.danger whenever a leakDanger weapon's rate is recomputed (GetRate reads it
+  live), once the right bloon is known.
+  UPDATE 2026-11-21: rt 120 FIXED (probe combo7_lotus_pm PMT lines: targets[0] is Zomg 315 at
+  -0.0325, the same as the clone; 0.0649 x 0.25 / 0.9675 = 1.007 frames rounds UP to 2 since the
+  rate is under 0.1 s; st.danger is now refreshed whenever a leakDanger weapon's rate is
+  recomputed). rt 634 FIXED: support reach is the tower's position within the support radius
+  (Support.IsInZone @0x180d9e020, distance^2 <= radius^2), no footprint: the Sniper 44.94 from
+  the Radar Scanner village (40) has no camo, so it never sees DDT 599. rt 861 FIXED: an acid
+  brew's mutator ending is a model change, the Caltrops' TrackTargetSupplier points are remade
+  (acid flag + tag mods in the signature). rt 1410 FIXED: AbilityModel.activateOnLivesLost
+  (Retaliation): Ability.OnLivesLost (@0x180dfa4b0) activates it when not active (Activate needs
+  IsReady): the Sniper goes to 1 frame as a camo Ceramic leaks. rt 753 FIXED: an acid brew's
+  DamageModifierForTag models also reach the tower's DamageOverTime models and its effects'
+  projectiles (the Master Bomber's sticky tick 3001 on a Zomg, its splash 601 on a
+  ZomgFortified); a berserker brew's +1 damage reaches neither (`Buff::acid_mods`). rt 1251
+  FIXED: a shot in the frame a brew lands doesn't count against it (the Sniper's acid lasts ten
+  shots after rt 1221). combo7_lotus now MATCHES (moved to pending/combo).
+- OPEN pending/combo_open/combo2_big rt 200: Ninja 0-2-4's second Caltrops: game at -105.51
+  (list made rt 1, first point -102.55 matches), clone at -124.84 (its list remade at rt 2 as the
+  later-placed Village 2-2-0's +10% range arrives; without any remake the clone's second point is
+  -110.69, also wrong). The game also puts two Caltrops at -125.08 at rt 230. Find when the game
+  regenerates the TrackTargetSupplier points (UpdatedModel on a support mutator? the range used)
+  and the exact range of the rt 2 list.
+  FIXED 2026-11-21 (after combo7_lotus's acid-remake fix the early lists match): rt 407, the
+  Ninja's shuriken takes its acid brew's last shot and the Caltrops attack, processed after it
+  in that frame, remakes its points then (combo7_lotus: the Caltrops' own last shot, remade the
+  next frame). A brew dropped mid-turn refreshes the tower's buffs and its TrackTargetSupplier
+  lists before the tower's next attack (`buffs_stale`). combo2_big MATCHES (moved to
+  pending/combo).
+- OPEN (recordings in research/dumps/recordings, not in sets):
+  - sky_205_village_r102: rt 601 FIXED. TravelStraitSlowdownModel.Clone (@0x181202bd0) sets
+    maxDistance = lifespanFrames x speedFrames; the village's RangeMutatorClass (@0x18122cb10)
+    raises the lifespan 0.19333 -> x1.1 (set_Lifespan: 13 frames), so 97.5, not 90 (slowdown
+    now exports the model's lifespan as its 4th value). Only for run-time model copies (paragon /
+    DamageBasedAttackSpeed towers, as slow_frames): a village Dartling's pellets keep 130
+    (dartling_205_village_r102 rt 33). rt 1054 FIXED: StatePoppedBasedPierce
+    (x-x-2+; OnBloonDamaged @0x180d990e0, Process @0x180d99210, PierceMutator.Mutate
+    @0x180d92b80): a hit on a bloon with a mutator id containing "Freeze" (IceShardFreeze; not
+    the x-x-2 freeze's empty id: sky_025) puts pierce x1.5 on every projectile model of the
+    tower (the Chilled shards and FrozenRemains too) for (int)(1 s x 60) round frames; and
+    DamageImmunityBypassModel (Damage.Collide @0x180cd5660: the property comes off
+    immuneBloonProperties; the bolts' Frozen) so a bolt isn't spent on a frozen bloon. OPEN at
+    rt 1240: the game's EmitIceShrapnel comes off the 4th bloon of the bolt's hits (Bfb 616),
+    the clone's off the first (607, stage 3 in the clone). Chilled.Collide (@0x180c99c50)
+    reads the stage from the ChilledBehavior on the bloon (behaviours +0x768); with the
+    mutator but no behaviour it restarts at stage 1. NOT the freeze (tried: 607 frozen from
+    the 1178 shards, no change). Look at what 607's two damaging shard hits at 1178 do to its
+    ChilledBehavior (the shards' own Chilled? a re-add making a fresh behaviour?).
+  - DONE mermonkey_205_village_r102 MATCHES (mermonkey 35): (rt 474) a tranced bloon walking
+    back keeps the orbit's z (tower z + 45; MermonkeyTrance.MoveTowardsTarget @0x180fbf090 sets
+    x / y only), so move_bloon_track leaves an off-track bloon's height: the Zomg at 45 is behind
+    the entrance trees (100) for TrackTarget.IsBloonValid's line test (@0x180cf44e0); (rt 624)
+    FilterTowerParentModel (FilterTower @0x180c216a0) keeps the Trance Totem's Conch +3 pierce
+    off its own Mermonkey (`Support.not_parent`): tridents of 2, as in every recording.
+  - beast_205_village_r102: rt 632 FIXED. The Gyrfalcon's grab (`bird_grab`, Targetting.
+    GetTargets) also takes a MOAB-class bloon through CanHitMoab circles within radius + 40: a
+    ZomgFortified 68 away. rt 1435 FIXED, now MATCHES (moved to beast): UpdateMovement
+    (@0x180dc8130) tests each extra bloon against GetPierceUsage of the TARGET's model (the
+    stack copy taken before the loop), then takes off the snatched one's own cost: after three
+    Bfbs and a DDT a Zomg is still taken though less is left than its own cost.
+
+### DONE (2026-11-20): round-102 village batch 3 (7 of 8 MATCH)
+- MATCH first time: wizard_205, ace_205, spike_502, boomerang_502, dart_205.
+- Fixed to MATCH:
+  - super_250 (rt 614): the Anti-Bloon faces the middle of its arms' Target.Positions,
+    including a MOAB circle's offset (`face_offs`).
+  - heli_205, Comanche Commander + village:
+    - FollowTouchSetting.Process (@0x180db8c70) calls HeliGroupOffset.Update only while the
+      cursor is active and on the map. Before that GetAvailableOffset (@0x18102df90) gives
+      (0, 0), so with no cursor the minis stay on the Heli (`touch_group`).
+    - MoabShoveZone counts the tower's camo buff.
+    - Its GetTarget First takes a segment's bloons in list order, not by how far along
+      (`typed_target_from_ex` bracket; INFERRED for GetTarget, Pursuit's GetTargets is
+      unchanged).
+    - A bloon made the frame it's shoved moves shoved 31 frames' worth (30 moves from the next
+      frame).
+- New counts: wizard 36, ace 26, spike 29, super 35, heli 27, boomerang 100, dart 72.
+- engineer_502_village_r102 (pending/engineer_open):
+  - rt 642 FIXED. Tower.AddMutatorIncludeSubTowers (VERIFIED-DECOMP @0x180c0a1c0): a support's
+    mutator on a tower also goes on its child towers (TowerManager.GetChildTowers), wherever
+    they stand. A sentry 48 from a 0-2-0 village, its Engineer inside, sees and shoots a camo
+    DDT (probe engineer_502_rotprobe RP lines: ApplyRotation's target is the DDT's moved spot,
+    106.08). Clone: `compute_buffs` merges the parent's supports by id.
+  - rt 1256 FIXED: the Engineer aims at DDT 5631's front circle by the family's rotation,
+    which ends each frame on the newest mover's (DDT 20, 160.43) in process-list creation order.
+    The clone's bloon list is swap-removed, so its last mover was DDT 19 (263.3). A move now
+    sets the family's `kind_rot` only if no newer bloon (create_seq) set it this step
+    (`kind_rot_cseq`). Probe engineer_502_rotprobe_1258 (RP lines).
+  - OPEN at rt 1602: Sentry 7404's Target on 9227 has the front circle (ATP offset (-0.07,
+    10.4)); the clone aims at the back circle (-9.6), the family rotation 180 apart. Likely
+    another order case: which DDT's SetRotation was last when the sentry looked (sentries are
+    newer than most bloons: `process_bloons_before`).
+    - More: the sentry's range is 55 (50 x 1.1, the parent's village buff). From its rt 1601 spot
+      the front circle is 75.34 away, out of reach (55 + 19.85); from its rt 1600 spot 73.32,
+      in reach. So the game's Target (with its offset) was taken a frame earlier than the
+      clone's (Weapon.Process' throw start vs the search).
+    - Tried and wrong: keeping the old offset while the target id is the same (breaks engineer
+      rt 325 and sub_052 rt 1455).
+
+### DONE (2026-11-20): round-102 village batch 2 (tack 502, alch 502 MATCH; glue fixes)
+- New sets: tack 26, alch 35. Glue Gunner 2-0-5 fixes (VERIFIED-DECOMP):
+  - SlowForBloon.Collide (@0x180cdd420) has its own Collide: no SlowModifierForTag lifespan
+    override, removeMutatorIfNotMatching, chance or Permafrost test (export `for_bloon`).
+    Super Glue on a ZOMG 60 frames, not 13.5 s.
+  - It tests BloonModel.baseId (+0x30): baseId.Contains(bloonId), or one of bloonIds
+    Contains(baseId). Super Glue's Moab / Ddt variant holds a DdtCamo.
+  - AddBehaviorToBloon.Collide (@0x180c81390): lifespanFrames x each
+    AddBehaviorModifierForTagModel whose tag the bloon has and whose mutatorId equals the
+    mutationId (export `ab_mods`, effect `abtb`). Corrosive Glue's dot / splat on MOABs:
+    1080 x 0.375 = 405 frames.
+  - (BloonModel +0x93 isImmuneToSlow: SlowForBloon.Collide returns at once. The clone has no
+    isImmuneToSlow check anywhere yet. OPEN.)
+- OPEN pending/glue_open/glue_205_village_r102: bloons and positions match all 1800 frames.
+  - From rt 1677 the path list order differs: DDTs 899 and 978 both pop to their CorrosiveDot
+    tick, and the game's 899 children come first.
+  - The DoT ticks go in DoT-behaviour creation order. Check how the copies' seq is set (game M
+    lines: the first copy by id keeps "45" left on every re-add after 1376).
+- DONE druid_250_village_r102 MATCHES (druid 35). Lightning bounces (`lightning_phase_one`):
+  - Candidates on a segment within range + 40 and MOAB-class go through the real
+    Targetting.CanHitMoab circle test: each circle at the family's precalculatedOffset (`mrot`)
+    under range + its radius. It was the centre within range + the largest radius. rt 1349:
+    Bfbs 107.6 away by their back circles.
+  - The bolt's own new Target is the bloon's centre. A split on a MOAB whose segment isn't in
+    range carries the reaching circle's offset (rt 652 / 790).
+- ninja_502_village_r102 (still pending/ninja_open), fixed so far:
+  - TrackTarget's Target is the bloon's centre, never a circle (rt 576: a Seeking Shuriken's
+    turn 135.4 / 3.48 to a ZomgFortified's centre).
+  - TargetCamo.prioritiseCamo (+0x68; Initialise @0x180dde240 copies the tower's toggle, off
+    until the player turns it on): camo priority is `prio_camo && camo_prio`, not `||`
+    (rt 620: First takes a Zomg over a camo DDT).
+  - `circle_off` turns by the family rotation (`mrot`), like every other CanHitMoab user.
+  - rt 1465: the Spawner runs before the towers. Its bloon's SetRotation is what the towers'
+    targeting reads that frame: the Grandmaster aims at DDT 5691's back circle by the new DDT's
+    90.
+    - The projectiles' collisions don't see it: the CollisionChecker comes before the Spawner
+      (bucc_050_danger rt 1148).
+    - Clone: `spawn_rot`, set where the frame's spawns are queued, read only by `mrot_target`
+      in the towers' segment / circle targeting, cleared after `towers_phase`.
+  - MATCHES now (ninja 35).
+- ice_205_village_r102 MATCHES after these fixes (ice 26).
+
+### DONE (2026-11-20): round-102 village stress batch (5 new recordings, all MATCH)
+- New recordings: bomb_502, dartling_205 (Locked), sniper_250 and sub_052 (Logs), each with a
+  0-2-0 village at round 102, plus bucc_050_danger. Sets: bomb 35, dartling 26, sniper 35,
+  sub 35, bucc 36. Fixes:
+  - RangeSupport's MutatorTower stretches the attack's GetDescendant<TravelStraitModel>
+    (VERIFIED-DECOMP @0x180d795b0: FUN_1818cec20, depth first).
+    - With an instant Sniper bullet, that's the Shrapnel (`sub_life_stretch` in `emit`):
+      sniper_250 rt 242, fragments 13 frames.
+    - The first weapon's own shot is still stretched where it's fired.
+  - The Spawner's bloon is made before the frame's moves. Its SetPath -> SetRotation (Bloon.
+    SetRotation @0x180fb6750 always rewrites the shared precalculatedOffset) is overwritten by
+    the family's moves that frame.
+    - The clone makes spawns after the moves, so `emit_frame_spawn` keeps a family rotation set
+      by this step's moves (`kind_rot_moved`).
+    - Probe sub_052_village_sr SR lines; sub_052 rt 1696 (Ballistic Missile at DDT 2616's
+      front circle by ~0); bucc_050_danger rt 1149.
+  - Tried and wrong: keeping the Attack's old bloonTargetOffset while it holds the same bloon
+    (sub_052 broke at rt 1455).
+
+### NOTE (2026-11-20): P-HELIREPULSE source found; P-COMANCHE5 comment was stale
+- HeliMovement.Attatched (@0x180d2a160) puts a `Zoned<HeliMovement>` behaviour on the heli's
+  transform entity (FUN_18195c330 = Entity.AddBehavior<T> then Init @0x18239f1a0).
+  - Its arguments: GetRangeDelegate (HeliMovement.GetRange @0x180d2b260), zoneEnter = HeliEnter
+    (@0x180d2b600: adds the other heli to heliPositionsInRepulseRange unless it's itself),
+    zoneExit = HeliExit (@0x180d2b6b0).
+  - The Zoned`1 fields: transform, getRange, zoneEnter, zoneExit, filter, range, inZone, outZone.
+  - Its generic Process isn't in methods_live.tsv (a shared instantiation). To finish it, find
+    the Zoned<HeliMovement> vtable's Process and port the enter / exit order.
+  - The clone's INFERRED rule (each heli checks after its own move, the list used from its next
+    move) reproduces heli_005 exactly.
+- STAND-IN P-COMANCHE5 in `comanche_defence` was stale: Comanche Commander is ported (heli_005 /
+  025 / 205 exact). Comment fixed.
+
+### DONE (2026-11-20): Mark / Trojan cash order (was STAND-IN P-THRIVEORDER)
+- DesperadoMark.PreDegrade (VERIFIED-DECOMP @0x180fe5ff0) multiplies the hit's DamageResult cash
+  (+0x34, every layer the hit pops) by popCashMultiplier (+0x34), once.
+- IncreaseBloonWorthWithTier.Collide (@0x180cc1520) puts a BloonWorthMutator (Mutate
+  @0x1811d1d60) on the bloon for one layer. It adds layerNumber x cashPerTier to the bloon
+  model's DistributeCashModel.additive (+0x30); a bloon with tag bit 0x20000 also gets
+  additionalCash (+0x34) = 0.
+- DistributeCash.PostDegrade (@0x180fea0e0) pays ((cash x income) x multiplier + additive) x
+  Thrive.
+- The clone took both from every popped layer carrying them and added the worth after the
+  multiplier. It now reads both from the hit bloon (`damage`, `hit_mark`) and pays
+  ((raw x mark x income) x multiplier + (additive + worth)) x Thrive.
+- INFERRED: the mark's PreDegrade runs before GiveCashOnPop's (the gold reads the marked cash).
+- NOT MODELLED: the 0x20000-tag additionalCash = 0.
+
+### DONE (2026-11-20): Mortar's starting point (was STAND-IN P-CLOSETRACK in init_point); dead P-ACEPATH removed
+- TargetSelectedPoint.Initialise (VERIFIED-DECOMP @0x180dec5d0), without startWithClosestTrackPoint:
+  only a tower whose baseId is "MortarMonkey" gets a point, Map.GetTrackStartPoint(40)
+  (@0x180f5b3a0). That point is on the first path that isn't hidden-and-inactive and has no entry
+  router, at spawnDist + 40 via Path.DistanceToPath / DistanceToPoint.
+- Every other point tower (Dartling's Locked) has no point until one is set. The clone gave both
+  the nearest track point.
+- Recording mortar_000_nopoint (pending/mortar, set now 26) MATCHES: a Mortar placed with no point.
+- Removed: `closest_track_point` (no callers left) and `pattern_point` (STAND-IN P-ACEPATH, dead
+  code).
+
+### DONE (2026-11-20): Paragon power from damage dealt and cash earned (was STAND-IN P-PARAGONPOWER)
+- ParagonTower.GetTowerInvestment (VERIFIED-DECOMP @0x180d519f0), per sacrificed tower:
+  - [0] = (float)Tower.damageDealt (long, +0x160) / popsOverX + cashEarnedContributionModifier
+    (+0x5c, 4) x Tower.cashEarned (float, +0x170) / popsOverX.
+  - Below tier 5: [2] = tier sum x nonTier5TowersMultByX, [1] = worth / (paragon cost /
+    moneySpentOverX).
+  - A tier 5 from the fourth on: [3] = tier5TowersMultByX.
+  - The clone used the pop count with no cash; it now uses `damage` and `cash_earned`
+    (export: cashEarnedContributionModifier).
+- SimRecorder writes `TD tower damageDealt cashEarned` each frame. The harness prints the
+  clone's numbers with RRBTD6_REC_TD=1. Recording dart_paragon_dmg_r40 (pending/paragon_dmg):
+  the game's 417 / 25 / 1225 at rt 1799 equal the clone's exactly. The degree is 1 either way
+  (9 power), so this recording can't show the degree change.
+- INFERRED: the tier 5s are counted in placement order.
+- DONE P-AIMULP (2026-11-20): a Dart Paragon bought from a 5-0-0 that had turned keeps that
+  Tower.Rotation as its ChurchillBaseRotation base. The upgrade keeps the Tower; the clone had
+  started the base at 0. The aim origin and target were already right (RP / ATP / ATE recorder
+  lines).
+  - RotateToTarget.ApplyRotation (@0x180dd7930) stores the aim relative to the tower's rotation,
+    and the throw reads tower + (aim - tower). With the base at -44.741474 that's 61.14343, one
+    float step off the bare aim.
+  - Now `paragon_buy` starts base_rot at the tower's facing with turret_rel 0.
+  - Recording dart_paragon_dmg_r40 MATCHES (moved into the dart set: 71).
+  - New recorder probe: scenario flag `rotprobe` gives RP / RQ lines, read-only before / after
+    ApplyRotation.
+
+### DONE (2026-11-20): placement overlap ported (was STAND-IN P-SUBBLOCK)
+Map.CanPlace (@0x180f513d0) checks every tower entity, sub-towers included, skipping one whose footprint
+model has doesntBlockTowerPlacement (FootprintModel +0x28; +0x29 ignoresPlacementCheck, +0x2a
+ignoresTowerOverlap). Map.OverlapsOtherEntity (@0x180f5d590): the entity's radius (TowerModel +0x40) <= 0 never
+blocks; an entity at z >= _DAT_183e4fed8 never blocks; a RectangleFootprintModel (xWidth / yWidth, +0x30 / +0x34)
+is an AABB about the entity's position tested against the placing circle; otherwise circle-circle, strict <.
+The constant is 250.0. Ported: `foot` (rect, no_block, ignore_overlap) on shop towers and sub-towers
+(`place_radius` = TowerModel.radius) and the four circle / AABB cases in `can_place`; so Comanche helis,
+Marines, totems and Geraldo's items now block, sentries / drones / planes don't, and Banana Farm (30 x 30),
+Heli Pilot (27 x 27), Monkey Ace (28 x 18), Rosalia and Pontoon block as rectangles (test
+rectangle_footprint_blocks_its_corners). NOT ported yet: CanPlace's area-height check (area flag +0x6b) and
+AirUnitModel.blocksPlacement / blockingRadius (+0x44 / +0x48): an air unit blocks placement within
+blockingRadius + the placed radius (<=) of where it flies; only Rosalia's has it (6), and her
+RosaliaMovementModel flight isn't modelled yet (hero work); a footprint per upgrade
+tier (the base tower's is used). The AABB-circle edge is taken strict as the circles are (INFERRED).
+
+Not worth a stand-in note any more: P-CASHROLL (no CashModel with minimum != maximum exists), P-COMANCHE5
+(heli_005, Comanche Commander, MATCHes with the helis compared).
+
+### DONE (2026-11-20): Submerged Sub 5-0-0 exact (was STAND-IN P-SUBMERGE) + ability cooldown speed
+New SimRecorder scenario flag `ability_auto` (every frame Activate(false) on each ready ability, `AB` lines;
+the harness does the same through `activate_ability`). Recording pending/sub/sub_500_cd (Logs: Sub 5-0-0 set to
+Submerge, Boomerang 0-4-0 near and far, abilities auto) MATCH; sub 34/34. What it took:
+- Submerge.OnChangeTargetPriority (VERIFIED-DECOMP @0x180d9a610): the "Submerge" target submerges the Sub, any
+  other surfaces it: `Game::set_target` (harness, UI, co-op).
+- LinkProjectileRadiusToTowerRange.OnRangeChanged (@0x180d34730): the TOWER model's range + offset, not the
+  attack's (the submerged attack's range is 2000).
+- ProjectileModel.usePointCollisionWithBloons (only the Sub's pulses): the bloon's centre within the radius
+  (`point_collision`).
+- AddTagToBloon.Collide (@0x180c842c0) + FilterOutTag (@0x180c3f810, BloonModel.HasTag): the reactor pulse tags
+  a bloon ReactorDamage for (int)(lifespan x 60) = 16 frames, all layers, and skips tagged bloons
+  (`add_tags`, EffectKind::Tag). The exporter reads the lifespan under the `_mutator` key (fields one off).
+- Ability cooldown speed: AbilityCooldownScaleSupport's mutator (CooldownMutator.Mutate @0x181171710) adds
+  (scale - 1) to AbilityModel.cooldownSpeedScale; Ability.Process takes 1 / (1 - it) a frame. Turbo Charge
+  every 2160 frames under Submerge's 1.2 (was 2250). Monkey Village's Primary Mentoring uses the same rule now.
+- INFERRED: a tower in range of both Submerge supports gets one (both Boomerangs at 1.25).
+
+### DONE (2026-11-20): Spike Factory Close / Smart / Automatic targeting (were STAND-IN P-CLOSETRACK / P-SMARTTRACK) and the Flagship buff (was STAND-IN P-FLAGSHIP)
+New seeded recordings (all MATCH): pending/spike/spike_002_close, spike_002_smart, spike_005_auto (spike 28/28),
+pending/bucc/bucc_500_flag (Logs: Flagship, Monkey Ace and Dart Monkey on land, Mermonkey on water; bucc 35/35).
+- The attack's TrackTargetSupplier exists whatever target type is selected: its point list is made and shuffled
+  (12 Next draws) before the selected supplier's first throw (`track_supply_touch`); that was the whole first diff.
+- Close = CloseTargetTrack: the verified track_closest branch (Attack.GetVisibleInRangePathSegment point,
+  two jitter draws at throw time).
+- Smart = SmartTargetTrack (GeneratePoints @0x180ddcda0, <GetTargets>d__10.MoveNext @0x180df1360, FilterBloon
+  @0x180ddcc50, FindSegAlongPath @0x180ddccb0): `smart_track_point`.
+- Automatic = AutoTargetTrack (GeneratePoints @0x180db19a0, MoveNext @0x180dbda40, FindSegmentWithFirstBloon
+  @0x180db17d0, FindFutureIntersectingSegmentOfFirstBloon @0x180db1470, ConvertToTargetWithRandomOffset
+  @0x180db1290): `auto_track_point`. TargetType statics: First +0x18, Last +0x30, Close +0x48, Strong +0x78.
+- INFERRED in both: Spawner.GetAllPathsForRound (@0x180f73320: the spawn junction's paths for the round plus
+  what follows them) taken as the active paths; only single-path Tutorial recorded. To do: a multi-path map.
+- FlagshipAttackSpeedIncrease.CanBuff (@0x180c77f00): amphibious models (areaTypes water + land) only on a water
+  area (or with areaType 6); else water-based models (areaTypes has water) or baseId "MonkeyAce" (literal
+  0x184f7ad80); nothing else. The old "any tower on water" rule fails bucc_500_flag (the Ace's 45 throws vs 36).
+- Still STAND-IN P-CLOSETRACK: `closest_track_point` for the tower's starting `point` (a different use).
+
+### DONE (2026-11-20): Advanced Intel's SharedTowerGrid is stateful (was STAND-IN P-SHARED)
+Recording pending/sub/sub_200_sentry (Logs: Sub 2-0-0 on water, Engineer 1-0-0 on land; sub 33/33) MATCH.
+- Sub-towers' attacks are in the grid too (no tower filter in Attack.InitTargetPathSegments @0x180daeef0 or
+  SharedTowerGrid.TowerPathSegmentsChanged @0x180f28f70; sentries have addsToSharedGrid): the Sub fires at
+  rt 2051 at a bloon only a sentry reaches.
+- Entries are {segment record (segment, inRange, canSeeCamo, line of sight), tower model name}. A changed list
+  first removes EVERY entry on the old list's segments with an equal record and the same name, then adds;
+  Attack.OnDestroy (@0x180daf600) -> TowerPathSegmentsRemoved (@0x180f295a0) removes the same way. So an
+  expiring sentry erases its same-named siblings' entries on its segments (rt 3540: the Sub takes Pink 1125,
+  not the Black on a segment only an older sentry still covered). `shared_grid_update` keeps the grid
+  (lists recomputed when an attack's position / range / camo / model change).
+
+### DONE (2026-11-20): Necromancer undead start through Path.DistanceToPath (was STAND-IN P-NECROPATH); P-TRACKTRAVEL verified
+- NecromancerEmission.Emit (VERIFIED-DECOMP @0x180c66360): `path` (+0xb0) is the target segment's path at the
+  start of each Emit; each undead's distance (the segment centre, less Next(maxPathRandomRange) + half when the
+  player didn't choose the segment) goes through Path.DistanceToPath on it, the returned path REPLACING the
+  emission's (kept for the next undead in that Emit), then Path.DistanceToPointSTL there. The clone clamped to
+  the one path. The router chain is now one function, `distance_to_path` (shared with TravelAlongPath.Process).
+- TravelAlongPathModel.ctor (VERIFIED-DECOMP @0x181202680): speedFrames = speed x 0.016666668f (literal
+  0x183e4fca0), lifespanFrames = (int)(lifespan x 60f) (`TrackTravel::speed_frames` / `lifespan_frames`).
+- Full regression: every set full. Not exercised by a recording yet: undead past a path's end on a multi-path map.
+
 ### DONE (2026-11-19): Sauda's Sword Charge from the decomp (was OPEN P-SWORDCHARGE) + TravelAlongPath path chain
 VERIFIED-DECOMP. The clone sent one track projectile per track at once from its end, with no active state.
 - SwordCharge (Initialise @0x180e5b720, Activate = StartCharge @0x180e5a0c0 / @0x180e5c2c0, Process
@@ -193,8 +740,7 @@ VERIFIED-DECOMP. The clone sent one track projectile per track at once from its 
   router with Splitter.Rout, slot 8, the bloons' round-robin `routs`; clamped without one), then
   IsStartOfMap / IsEndOfMap (@0x180f6fb70 / @0x180f6f8d0, inclusive false per the disasm: no router on
   the new path and the distance EXACTLY 0 / totalPathLength / spawnDist / leakDist) -> destroyed where it
-  is (no last move); else Position = the path point. Still HYPOTHESIS P-TRACKTRAVEL: speedFrames = speed
-  / 60 and the lifespan countdown (frames_left) instead of age < lifespanFrames.
+  is (no last move); else Position = the path point. P-TRACKTRAVEL since VERIFIED (2026-11-20, below).
 - Exporter `track_charge` = {projectile, initial, end, iterations}. Test sauda_abilities checks the delay,
   leakDist start, end delay, Finish and the mutual refusal.
 - No Sauda recording yet: a hero set (Sauda 3 / 14 / 20 with Sword Charge at a fixed frame) would confirm
@@ -2657,3 +3203,97 @@ seek / closest, which skip carried bloons anyway.)
   To port: make the hook a real projectile (its P positions are compared): its first frame one
   LinearTravel step from the eject point (rt 121 at (-24.44,-13.78) for a ship at (-2.8,3)), the kill
   at the snap, then 2.5/frame back to the tower. Replace P-TAKEDOWN's instant kill.
+
+### DONE (2026-11-21): Gwendolin exact (gwen 5/5) — heroes started
+SimRecorder places any hero by id and level (the account owning only Quincy doesn't matter).
+Recordings pending/gwen: gwen_l01_r20, l05_dart_r40 (a Dart Monkey in Heat It Up's reach),
+l07_r40, l12_r60, l20_r80 (Cocktail of Fire at 400): 5/5 MATCH. Ported:
+- BonusProjectileAfterInterval (ProjectilesCreated @0x180c6baf0): count + 1 each emission; at
+  interval (40) and cooldownFrames (90) of round time since the last, count 0 and the bonus
+  projectile from the tower's position with the shot's Target (Heat It Up).
+- PierceUpTowers / HeatItUpDamageBuff.Expired (@0x180cd0960 / @0x180cc07e0): towers within the
+  projectile's radius of the tower (not itself, sub-towers too) get a timed mutator for
+  lifespanFrames: PierceUpMutator (+increase pierce on every projectile, `pierce_all`),
+  HeatItUpDamageMutator (DamageModels lose immunity bits 0x11, `immune`). `Tower::timed_muts`.
+- A point-targeted ArriveAtTarget throw with ejectZ 0 starts at its target's height (Cocktail of
+  Fire at z 2; INFERRED).
+NEXT: 24 scenarios written for Striker Jones, Obyn, Ezili, Pat, Churchill, Adora, Sauda (Tutorial)
+and Brickell (Logs water): <hero>_l03_r20 / l10_r40 / l20_r80 (ability at 400) — record, compare,
+fix; then the remaining heroes (Benjamin, Etienne, Psi, Geraldo, Corvus, Rosalia, Silas, DanDMonke).
+
+### DONE (2026-11-21): Striker Jones exact (jones 3/3)
+Recordings pending/jones: jones_l03_r20, l10_r40, l20_r80: 3/3 MATCH. Ported Black Resistance
+(level 9): AddBehaviorToBloonInZoneModel with an IgnoreDmgImmunityModel gives every bloon
+IgnoreDmgImmunity. Its PreCollision (@0x180ff8120) runs at CollideBloon's start, before the hit
+filters: once per projectile per bloon object, chance >= 1 or syncedRandom NextDouble <= chance
+adds a permanent mutator removing removeBloonProperties (Black); a failed roll remembers the
+projectile. Only the first child of a pop keeps the object (and so its roll state); the others roll
+again. `Bloon::ign_checked` / `ign_added`, `Game::ignore_zone`.
+Also recorded (pending/hero_open): ezili, obyn, pat, churchill, adora, sauda, brickell x3.
+MATCH already: ezili_l03, obyn_l03, pat_l03, pat_l20, sauda_l03, sauda_l10.
+Open: churchill_l03 (1 ulp eject y rt 203), pat_l10 (ProjectileSlap pushes a MOAB back at rt 237;
+the clone has no knockback on it), adora, ezili_l10/l20 (Sacrificial Totem at the track point),
+obyn_l10/l20 (Brambles), sauda_l20 (Sword Charge's next wave 1 frame early), brickell (sea mine
+RandomPositionModel areaType "water" lowercase: the exporter missed it).
+
+### DONE (2026-11-21): Sauda exact (sauda 3/3); Brickell / Pat / Adora progress
+Every hero recording is "# forced 0" (the account owns only Quincy): no areaPlacedOn, so
+FilterTowerByPlaceableAreaModel (Naval Tactics) never passes for the hero (`tower_on_area`).
+Ported (all VERIFIED-DECOMP):
+- SwordCharge: a projectile ended by TravelAlongPath is still listed in that frame's Process
+  (`charge_late`); ClearHitBloonsWhenNoLongerColliding keeps hits by LAYER id (it compared
+  layer ids to bloon ids, so every hit was forgotten each frame).
+- RandomPositionModel areaType goes through ToLower ("water").
+- EmissionClosestOffset (Brickell mines): the throw marker closest to the Target, turned by
+  Tower.Rotation, no display height.
+- ChurchillBaseRotation for RotateToTargetAttackOffset towers (Brickell): turns before the
+  attacks, target = the pistol attack's rotation at its last throw (`offset_aim`).
+- BrickellFreezeOtherMines (freeze 24 frames on a mine's collide; a new mine collides only from
+  2 frames after it is made) and Blast Chain's BrickellFreezeMinesMutator (freeze x0.2, seeker
+  speed x2) replacing the old turbo STAND-IN. PlaceProjectileAt (Mega Mine): emitted delayFrames
+  after Activate at the last location ((0,0) for Activate(true)).
+- CreateProjectileOnContact: dontCreateAtBloon spawns at the shot's z; passOnDirectionToContact
+  gives a 3D Direction (`dz`, TravelStrait climbs). TrackTarget listed before TravelStrait turns
+  first (`before_travel`: the move is redone from prev along the new heading).
+- BloonSlap (Pat 10+): knockback x4 for lifespan, counted against pierce (`slap`).
+- Adora's bolt has no TravelStrait: speed 0, AdoraTrackTarget moves it alone.
+Open (pending/hero_open):
+- brickell_l10 rt 673 / l03 rt 505: the base's turn target is off (clone -99.63 vs game
+  -91.27669 = the pistol shot's EjectRotation at 327). RotateToTargetAttackOffset.GetOrigin
+  (@0x180ddaf70) is the attack's own Position (tower + offset, maybe turned by the base) raised
+  10 in display space; the clone's origin formula doesn't give -91.28 here. DBGOFF prints it.
+- pat_l10 rt 401: Big Squeeze. DelayBloonChildrenSpawning.Collide (@0x180cb75e0) adds a
+  children-delay mutator (lifespanFrames 228, all layers) and PatsBigSqueezeWind (Initialise
+  @0x1810019d0: offTrack+1, returnTo = position/distance, position = model 0x28/0x2c (Pat);
+  Process @0x181001b80: after model 0x34 frames goes back to the track). Not ported.
+- adora_l03 rt 183, adora_l10/l20; ezili_l10/l20 (less DoT damage by rt 463); obyn_l10/l20
+  (weapon order); churchill x3.
+- (2026-11-21) Obyn Brambles: TargetTrackOrDefault without forceTargetTrack (`track_fallback`):
+  bloon targets as positions (bloon height kept, the Instant shot doesn't follow), else the visible
+  in-range segment with the least distanceUntilLeak. obyn_l03 MATCH; obyn_l10 now to rt 1081 and
+  obyn_l20 to rt 721: the second Nature's Ward Totem throw (TargetTrack, supplier list) aims
+  elsewhere (game throw rotation -50.14, clone at (-106.1, -18.9)). Counting blocking sub-towers
+  in RandomPosition didn't change it (the totem isn't RandomPosition). Next: the supplier state at 721.
+- (2026-11-21) Obyn: obyn_l03 and obyn_l20 MATCH; obyn_l10 to rt 1995. Ported: abilities process in
+  their behaviour place (`Ability::attack_pos`: ability point lists made before the tower's later
+  attacks; the recorder's weapon slots in that order when an ability sits between attacks), the
+  non-forced TargetTrackOrDefault list shuffled twice at start (INFERRED: the game's three 12-point
+  shuffles, the Totem's list the third), an instant create-at-target throw's tower on its point
+  (`point_target`), a projectile-made sub-tower's slow zone from its second frame and gone in
+  the frame its TowerExpire comes due. Open: obyn_l10 rt 1995, Wall of Trees (Collidable 567 at
+  (-113.1, -18.9), radius 4) eats a Blue at x -124.3 in the game, its first hit since rt 400.
+- (2026-11-21) Obyn exact (obyn 3/3): Wall of Trees eats bloons (WallOfTreesModel: Collide's
+  huge Bloon.Damage; STAND-IN: rbeCapacity cash payout / MOAB filter past it not ported); a
+  TargetTrack with onlyTargetPathsWithBloons remakes its points at round end (OnEarlyRoundEnd,
+  cursor kept); the track fallback's Target takes its two offset draws.
+- (2026-11-21) Ezili exact (ezili 3/3): MOAB Hex (HexManagerModel's HexModel, `Tier::hex`):
+  Hex.Process ticks MOAB-class bloons every (int)(interval x 60) frames for (int)(maxHealth x
+  damagePercentOfMax) + 1; Hex.ModifyDamageResult: a pop of a hexed bloon goes through every layer
+  (the clone drops the children). STAND-IN: HexManager's jump to a new target and the tower
+  damage credit aren't ported.
+- (2026-11-21) Adora open (adora_l03 rt 183): bolt 505 thrown at 182 at the weapon's Target 496
+  (a Black another bolt pops at 183) turns 9 degrees LEFT and slows on its first move (toward the
+  new Pink 513), the clone flies straight. AdoraTrackTarget.IsBloonValid (@0x180c84d00) is
+  FilterBloon + line of sight only (no collidedWith check); at rt 8 bolt 444 hits its own Target
+  and doesn't turn that frame. Next: read AdoraTrackTarget.Process (@0x180c84eb0) for when a lost
+  Target is replaced at once (GetNewTarget @0x180c84980) vs the 4-frame search clock.

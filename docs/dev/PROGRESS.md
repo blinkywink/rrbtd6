@@ -113,7 +113,7 @@ Environment, metadata dump, `sim_model` located, Rust workspace, first benchmark
 - [x] Spike Factory, Banana Farm and Monkey Village (shop only; no number key):
   - Spikes: round-time lifespans that survive `AgeModel.rounds` round ends (P-ROUNDS), the start-of-round production burst (P-ROUNDRATE), pierce-indexed pile sprites (`SetSpriteFromPierceModel`, mapped by list in `build_display_plan.py`), and bloon-type damage bonuses (`DamageModifierForBloonTypeModel`).
   - Bananas: random drop points (P-RANDPOS), a per-round shot quota (`EmissionsPerRoundFilterModel`), hover-to-collect cash with a "+$" popup, instant cash for Marketplace, and the Monkey Bank (P-BANK; C collects).
-  - Village: a generic support-buff system (range, rate, pierce, projectile speed, camo, damage type, pop cash, discounts; P-SUPPORT, P-DISCOUNT). It also gives Shinobi Tactics its stacking Ninja buff.
+  - Village: a generic support-buff system (range, rate, pierce, projectile speed, camo, damage type, pop cash, discounts; P-DISCOUNT). It also gives Shinobi Tactics its stacking Ninja buff.
   - Particle-only projectiles (Wizard bolts, fireballs) export the first cell of their particle texture as a stand-in sprite.
 - [x] Druid: random-spread thorns, chaining lightning (P-LIGHTNING), Ball Lightning interval shots (P-INTERVAL), tornadoes that strip glue / ice (P-REMOVEMUT) and map-wide Jungle Vines (P-ATTARGET) with pierce-refreshing roots. All 64 tiers, models, icons and projectile art. Display GUIDs were matched to prefabs by which crosspaths use them.
   - `export_projectiles.py` takes optional names to re-export, and retries a failed mesh export after freeing its loaded bundles (this fixed the tornado, Shuriken and InfernoRingMeteor decompress failures).

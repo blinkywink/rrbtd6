@@ -325,6 +325,27 @@ def main():
     # ProjectileModel's radius is the tower model's range + projectileRadiusOffset.
     radius_link = {}
 
+    def footprint(f):
+        """TowerModel.footprint (+0xb8) for Map.CanPlace / OverlapsOtherEntity: a
+        RectangleFootprintModel's xWidth / yWidth (else a circle of the tower's radius), and
+        FootprintModel.doesntBlockTowerPlacement / ignoresTowerOverlap."""
+        fp = deref(f.get("footprint"))
+        if not fp:
+            return None
+        ff = fp["f"]
+        return {"rect": [ff.get("xWidth", 0.0), ff.get("yWidth", 0.0)] if fp.get("type") == "RectangleFootprintModel" else None,
+                "no_block": bool(ff.get("doesntBlockTowerPlacement")), "ignore_overlap": bool(ff.get("ignoresTowerOverlap"))}
+
+    def immunity_bypass(pb):
+        flags = {"Lead": 1, "Black": 2, "White": 4, "Purple": 8, "Frozen": 16}
+        m = 0
+        for x in pb.get("DamageImmunityBypassModel") or []:
+            for k, v in (x.get("f") or {}).items():
+                if isinstance(v, str) and not k.startswith("_"):
+                    for part in v.replace(",", " ").split():
+                        m |= flags.get(part, 0)
+        return m
+
     def projectile(pobj, depth=0):
         """Generic projectile description (recursive for sub-projectiles)."""
         f = pobj["f"]
@@ -338,6 +359,12 @@ def main():
         if ring and not pb.get("DamageModel"):
             pb["DamageModel"] = ring
         dmg = (pb.get("DamageModel") or [{"f": {}}])[0]["f"]
+        # WallOfTreesModel (Obyn's Wall of Trees): WallOfTrees.Collide (VERIFIED-DECOMP @0x180cf7240)
+        # adds the bloon's leak RBE and layers, then Bloon.Damage with a huge amount: the bloon is
+        # eaten (recording obyn_l10_r40 rt 1995: a Blue at 0 health). STAND-IN: the cash payout at
+        # rbeCapacity (EmitCash) and FilterCollision's MOAB rule past it aren't ported.
+        if pb.get("WallOfTreesModel") and not pb.get("DamageModel"):
+            dmg = {"damage": 9999999.0, "immuneBloonProperties": 0, "distributeToChildren": True}
         ts = (pb.get("TravelStraitModel") or [{"f": {}}])[0]["f"]
         age = (pb.get("AgeModel") or [{"f": {}}])[0]["f"]
         if not age and pb.get("AgeRandomModel"):
@@ -356,13 +383,15 @@ def main():
             sd = pb["TravelStraitSlowdownModel"][0]["f"]
             ts = {"speed": sd["speed"], "lifespan": 99999.0}
         sdm = (pb.get("TravelStraitSlowdownModel") or [{"f": None}])[0]["f"]
-        slowdown = [sdm.get("slowdownSpeed", 0.0), sdm.get("minSpeed", 0.0), sdm.get("maxDistance", 0.0)] if sdm else None
+        slowdown = [sdm.get("slowdownSpeed", 0.0), sdm.get("minSpeed", 0.0), sdm.get("maxDistance", 0.0), sdm.get("lifespan", 0.0)] if sdm else None
         # Hero homing shots (AdoraTrackTargetModel, SilasTrackTargetModel) accelerate from
         # minimumSpeed to maximumSpeed while turning `rotation` degrees per frame. STAND-IN
         # P-HEROTRACK: constant maximumSpeed, seeking like TrackTargetModel.
         hero_track = next((pb[k][0]["f"] for k in ("AdoraTrackTargetModel", "SilasTrackTargetModel") if pb.get(k)), None)
         if not ts and hero_track:
-            ts = {"speed": hero_track.get("maximumSpeed", 300.0),
+            # (AdoraTrackTarget moves the shot itself (Game::adora_step): with no TravelStrait of
+            # its own nothing else does; recording adora_l03_r20, Adora's bolt 6 a frame at 360.)
+            ts = {"speed": 0.0 if pb.get("AdoraTrackTargetModel") else hero_track.get("maximumSpeed", 300.0),
                   "lifespan": hero_track.get("lifespan") or age.get("lifespan") or 3.0}
         random_range = None
         if not ts and pb.get("RandomRangeTravelStraitModel"):
@@ -447,6 +476,10 @@ def main():
                             # cascadeMutators: passed to AddMutator as its refresh switch.
                             "cascade": bool(sf.get("cascadeMutators", False)),
                             "minus_age": s["type"] == "SlowMinusAbilityDurationModel",
+                            # SlowForBloon.Collide (VERIFIED-DECOMP @0x180cdd420) adds its mutator for
+                            # its own lifespan: none of Slow.Collide's tag lifespan overrides,
+                            # removeMutatorIfNotMatching, chance or Permafrost test.
+                            "for_bloon": s["type"] == "SlowForBloonModel",
                             # SlowOnPop.Collide (VERIFIED-DISASM @0x180cde190): only when Bloon.WillPopBloon.
                             "only_if_pop": s["type"] == "SlowOnPopModel"})
             # Slow.Collide (VERIFIED-DECOMP @0x180cde360): chance > 0 draws a synced NextDouble and
@@ -593,6 +626,11 @@ def main():
                     # Shock, no cascade, goes on the hit bloon only; its copy keeps the copied
                     # mutator's 42 frames).
                     e["kids"] = bool(sf.get("cascadeMutators", False))
+            # AddBehaviorToBloon.Collide (VERIFIED-DECOMP @0x180c81390): its lifespanFrames, times
+            # each AddBehaviorModifierForTagModel (`ab_mods`) whose tag the bloon has and whose
+            # mutatorId equals the mutationId.
+            for e in effects[n0:]:
+                e["abtb"] = True
             # AddBehaviorToBloonModel.chance (Icicles 0.25): a syncedRandom draw per hit.
             if sf.get("chance", 0.0) > 0.0:
                 for e in effects[n0:]:
@@ -735,6 +773,8 @@ def main():
         out = {
             "pierce": f["pierce"], "max_pierce": f.get("maxPierce", 0.0), "radius": radius_link.get(pobj["i"], f["radius"]),
             "pid": f.get("id") or "",
+            # BrickellFreezeOtherMinesModel (sea mines): freezeDuration (seconds).
+            "freeze_others": next((b["f"].get("freezeDuration", 0.0) for b in pb.get("BrickellFreezeOtherMinesModel", [])), None),
             # ProjectileModel ctor: checkCollisionIntervalFrames = (int)(interval x 60), truncated.
             "check_frames": int(struct.unpack("<f", struct.pack("<f", float(f.get("checkCollisionInterval") or 0.0) * 60.0))[0]),
             "vs_blocker_radius": f.get("vsBlockerRadius", 0.0), "ignore_blockers": f.get("ignoreBlockers", False),
@@ -743,7 +783,9 @@ def main():
             # ProjectileModel.ignoreNonTargetable: Projectile.IsCollisionValid lets it hit a
             # nonTargetable bloon (one on an invulnerable stretch of track).
             "ignore_nontarget": bool(f.get("ignoreNonTargetable", False)),
-            "damage": dmg.get("damage", 0.0), "immune": dmg.get("immuneBloonProperties", 0),
+            # DamageImmunityBypassModel (Damage.Collide @0x180cd5660: each IImmunityBypass's
+            # property, Enum-parsed, comes off immuneBloonProperties before Bloon.Damage).
+            "damage": dmg.get("damage", 0.0), "immune": dmg.get("immuneBloonProperties", 0) & ~immunity_bypass(pb),
             "ring_inner": ring[0]["f"].get("innerRingRadius", 0.0) if ring else 0.0,
             # DamageModel.distributeToChildren / overrideDistributeBlocker.
             "distribute": bool(dmg.get("distributeToChildren", True)),
@@ -803,7 +845,14 @@ def main():
             "rebound_clear": bool(pb.get("MapBorderReboundModel") and pb["MapBorderReboundModel"][0]["f"].get("clearCollidedWith")),
             # ProjectileBlockerCollisionReboundModel: bounces off blocker areas' edges.
             "blocker_rebound": next(({"clear": b["f"].get("clearCollidedWith", False)} for b in pb.get("ProjectileBlockerCollisionReboundModel", [])), None),
-            "knockback": (pb.get("KnockbackModel") or [{"f": None}])[0]["f"],
+            # BloonSlapModel (Pat Fusty 10+): its mutator (get_Mutator @0x1811c0ef0) a knockback with
+            # heavyMultiplier / lightMultiplier for lifespanFrames; BloonSlap.Collide (@0x180c882b0)
+            # counts valueForNormalBloons / valueForCeramicBloons against the projectile's pierce.
+            "knockback": (pb.get("KnockbackModel") or [{"f": None}])[0]["f"] or next(
+                ({"lightMultiplier": float(b["f"].get("lightMultiplier", 0)), "heavyMultiplier": float(b["f"].get("heavyMultiplier", 0)),
+                  "moabMultiplier": float(b["f"].get("heavyMultiplier", 0)), "lifespan": b["f"].get("lifespan", 0.0)}
+                 for b in pb.get("BloonSlapModel", [])), None),
+            "slap": next(([b["f"].get("valueForNormalBloons", 1), b["f"].get("valueForCeramicBloons", 1)] for b in pb.get("BloonSlapModel", [])), None),
             "filters": filters,
             "filter_chance": filter_chance,
             "no_hit": "FilterAllModel" in filters,
@@ -826,6 +875,10 @@ def main():
             "override_filter": out_require_effects,
             "effects": effects,
             "effect_mods": effect_mods,
+            # AddBehaviorModifierForTagModel (Corrosive Glue's dot on MOABs): tag, mutatorId,
+            # mutatorMultiplier.
+            "ab_mods": [{"tag": m["f"].get("tag") or "", "id": m["f"].get("mutatorId") or "", "mult": m["f"].get("mutatorMultiplier", 1.0)}
+                        for m in pb.get("AddBehaviorModifierForTagModel", [])],
             "path": path,
             "arrive": arrive,
             "cash": cash,
@@ -887,7 +940,10 @@ def main():
                                "new_targets": tf.get("trackNewTargets", True),
                                "lifetime": bool(tf.get("useLifetimeAsDistance")),
                                "constantly": bool(tf.get("constantlyAquireNewTarget")),
-                               "within": tf.get("timeInFrames") if k == "TrackTargetWithinTimeModel" else None}
+                               "within": tf.get("timeInFrames") if k == "TrackTargetWithinTimeModel" else None,
+                               # Listed before the TravelStrait: it turns before the first move too.
+                               "before_travel": (lambda bl: next((i for i, x in enumerate(bl) if x and x["type"] == k), 99)
+                                                 < next((i for i, x in enumerate(bl) if x and x["type"] == "TravelStraitModel"), -1))(list(items(f["behaviors"])))}
         # AdoraTrackTargetModel: its own homing (AdoraTrackTarget, ported), on top of TravelStrait.
         if pb.get("AdoraTrackTargetModel"):
             af = pb["AdoraTrackTargetModel"][0]["f"]
@@ -1038,6 +1094,10 @@ def main():
             out["cleanse_regrow"] = bool(rf.get("cleanseRegen"))
             out["cleanse_fortified"] = bool(rf.get("cleanseFortified"))
             out["cleanse_lead"] = bool(rf.get("cleanseLead"))
+            # RemoveBloonModifiers.Collide (VERIFIED-DECOMP @0x180cd5820): nothing on a bloon with a
+            # tag of bloonTagExcludeList, nor on one missing a tag of bloonTagExplicitList.
+            out["cleanse_exclude"] = [t for t in (deref(rf.get("bloonTagExcludeList")) or []) if isinstance(t, str)]
+            out["cleanse_require"] = [t for t in (deref(rf.get("bloonTagExplicitList")) or []) if isinstance(t, str)]
         # TravelAlongPathModel (Sword Charge): moves along the track at `speed` for `lifespan`,
         # from its end back when `reverse`.
         if pb.get("TravelAlongPathModel"):
@@ -1187,6 +1247,7 @@ def main():
                                           "pass_on_collided": cf.get("passOnCollidedWith", False),
                                           # dontCreateAtBloon: made where the shot is, not on the bloon.
                                           "at_shot": bool(cf.get("dontCreateAtBloon", False)),
+                                          "pass_dir": bool(cf.get("passOnDirectionToContact", False)),
                                           "after_damage": after_damage(cc)})
             for cc in pb.get("EmitOnDamageModel", []):
                 cf = cc["f"]
@@ -1330,8 +1391,51 @@ def main():
         # CollideExtraPierceReductionModel: each hit uses this much more pierce.
         # (By tag when one is given: each hit on a bloon with that tag uses extraAmount more.)
         tagged = [c["f"] for c in pb.get("CollideExtraPierceReductionModel", []) if c["f"].get("bloonTag")]
+        # ProjectileModel.usePointCollisionWithBloons: the bloon's position as a point in the
+        # projectile's circle (recording sub_500_cd: the submerged Sub's pulse meets a MOAB only once
+        # its centre is within 52).
+        if f.get("usePointCollisionWithBloons"):
+            out["point_collision"] = True
+        # DamagePercentOfMaxModel (VERIFIED-DECOMP GetDamageAdditive @0x180cb5b90, OnBloonSpawned
+        # @0x180cb5d40): (uint)(maxHealth x percent) more damage on a bloon with the tags; with
+        # damageBloonsOffscreenOnly only through OnBloonSpawned, which collides the new bloon at once
+        # (the Ascended Shadow's Sabotage: 25% off every MOAB-class bloon the round sends).
+        # PierceUpTowersModel / HeatItUpDamageBuffModel (VERIFIED-DECOMP Expired @0x180cd0960 /
+        # @0x180cc07e0): as the projectile expires, TowerManager.GetTowersInRange of its radius round
+        # the tower (useTowerPosition) or itself, not its own tower: Tower.AddMutatorIncludeSubTowers
+        # for lifespanFrames of PierceUpMutator (@0x1811ea410: every projectile pierce + increase) or
+        # HeatItUpDamageMutator (@0x1811e40b0: every DamageModel's immuneBloonProperties & ~0x11).
+        tb = []
+        for d in pb.get("PierceUpTowersModel", []):
+            df = d["f"]
+            tb.append({"kind": "pierce", "value": df.get("increase", 0.0), "frames": int(df.get("lifespanFrames") or round(df.get("lifespan", 0.0) * 60)),
+                       "id": df.get("mutatorId", ""), "tower_pos": bool(df.get("useTowerPosition")), "closest": bool(df.get("useClosest"))})
+        for d in pb.get("HeatItUpDamageBuffModel", []):
+            df = d["f"]
+            tb.append({"kind": "unimmune", "value": 17.0, "frames": int(df.get("lifespanFrames") or round(df.get("lifespan", 0.0) * 60)),
+                       "id": df.get("mutatorId", ""), "tower_pos": bool(df.get("useTowerPosition")), "closest": False})
+        if tb:
+            out["tower_buffs"] = tb
+        for d in pb.get("DamagePercentOfMaxModel", []):
+            df = d["f"]
+            tg = deref(df.get("tags"))
+            out["pct_max"] = {"percent": df.get("percent", 0.0), "tags": [x for x in (tg if isinstance(tg, list) else items(df.get("tags"))) if isinstance(x, str)],
+                              "offscreen": bool(df.get("damageBloonsOffscreenOnly"))}
+        # AddTagToBloon.Collide (VERIFIED-DECOMP @0x180c842c0, collisionPass -1): Bloon.AddMutatorForNumLayers
+        # of a mutator adding bloonTag to the bloon's model, for lifespanFrames ((int)(lifespan x 60)),
+        # `layers` layers; FilterOutTag (@0x180c3f810) reads BloonModel.HasTag (recording sub_500_cd:
+        # a reactor pulse's ReactorDamage keeps the next pulses off the bloon for a while).
+        # (The serialized lifespan reads under the `_mutator` name here: the fields sit one off.)
+        if pb.get("AddTagToBloonModel"):
+            out["add_tags"] = [{"tag": t["f"].get("bloonTag") or "", "id": t["f"].get("mutationId") or "",
+                                "frames": int((t["f"].get("lifespan") or t["f"].get("_mutator") or 0.0) * 60), "layers": t["f"].get("layers", 1)}
+                               for t in pb["AddTagToBloonModel"]]
         out["pierce_cost"] = 1.0 + sum(c["f"].get("extraAmount", 0) for c in pb.get("CollideExtraPierceReductionModel", []) if not c["f"].get("bloonTag"))
         out["pierce_tags"] = [[c["bloonTag"], float(c.get("extraAmount", 0))] for c in tagged]
+        # CollideExtraPierceReduction.FilterCollision (@0x180c9ca40): without
+        # destroyProjectileIfPierceNotEnough, a bloon with the tag is only met while pierce >=
+        # extraAmount + 1 (recording combo5_water rt 957: a 2-pierce trance passes a DDT).
+        out["pierce_tags_need"] = [[c["bloonTag"], float(c.get("extraAmount", 0))] for c in tagged if not c.get("destroyProjectileIfPierceNotEnough")]
         out["morph_to"] = next((m["f"].get("bloonId") for m in pb.get("MorphBloonModel", [])), None)
         # ProjectileModel.ignorePierceExhaustion: Projectile.CollideBloon (@0xc8b970) doesn't
         # exhaust it at 0 pierce (a Wall of Fire waits for its RefreshPierce).
@@ -1458,6 +1562,13 @@ def main():
                     # rotateProjectileWithTower off (Emit @0x180c3d170): each shot goes along the
                     # normalized flat line from the tower to the Target, not the tower's heading.
                     "with_tower": bool(f.get("rotateProjectileWithTower", True))}
+        # EmissionClosestOffsetModel (Brickell's sea mines): one shot from the throw marker
+        # closest to the Target (EmissionClosestOffset.Emit @0x180c39750).
+        if e["type"] == "EmissionClosestOffsetModel":
+            ms = [m["f"] for m in items(f.get("throwMarkerOffsetModels")) if m]
+            return {"kind": "Single", "count": 1,
+                    "closest": [[m.get("ejectX", 0.0), m.get("ejectY", 0.0), m.get("ejectZ", 0.0), m.get("rotation", 0.0)] for m in ms],
+                    "with_tower": bool(f.get("rotateProjectileWithTower", True))}
         return {"kind": "Single", "count": 1}
 
     def tap_fx(xf):
@@ -1511,6 +1622,11 @@ def main():
                              ("TargetEliteTargettingModel", "Elite")):
                     if x["type"] == t and m not in targets:
                         targets.append(m)
+            # TargetTrackOrDefaultModel without forceTargetTrack (Obyn's Brambles): GetTargets
+            # (VERIFIED-DECOMP @0x180e07820) takes its bloon targets when there are any, the track
+            # points (GeneratePoints) only otherwise. INFERRED: the bloon targets are First's.
+            if not targets and any(x and x["type"] == "TargetTrackOrDefaultModel" and not x["f"].get("forceTargetTrack") for x in items(af["behaviors"])):
+                targets = ["First"]
             # Spike Factory track modes (Smart Spikes and up): Normal / Close / Smart / Automatic,
             # with the set-point mode kept in its place among them.
             track_modes = {"TargetTrackModel": "Track", "CloseTargetTrackModel": "CloseTrack",
@@ -1586,11 +1702,20 @@ def main():
                                     if x and x["type"] == "TargetTrackModel")
             track_closest = False
             track_default = False
+            track_fallback = False
             for x in items(af["behaviors"]):
                 if x and x["type"] == "TargetTrackOrDefaultModel" and x["f"].get("forceTargetTrack"):
                     track_target = x["f"].get("maxTrackOffset", 0.0)
                     track_closest = bool(x["f"].get("useClosestTrack"))
                     track_default = True
+                # Without forceTargetTrack: bloon targets if any, else the track points
+                # (GetTargets @0x180e07820: Any() on the bloon enumerator, else GetTrackTargets;
+                # GeneratePoints @0x180e07640: the closest visible point, or the visible in-range
+                # segments). Recording obyn_l10_r40 rt 400: Brambles on (-71.1, -18.9), no bloon near.
+                if x and x["type"] == "TargetTrackOrDefaultModel" and not x["f"].get("forceTargetTrack"):
+                    track_target = x["f"].get("maxTrackOffset", 0.0)
+                    track_closest = bool(x["f"].get("useClosestTrack"))
+                    track_fallback = True
                 # CloseTargetTrackModel (Cleansing Foam, Bloon Trap): the track spot nearest the
                 # tower; it is the attack's default, so the selectable point mode is left out
                 # (STAND-IN: one target mode per attack).
@@ -1715,6 +1840,16 @@ def main():
                                 "standoff": next(([x["f"].get("maxRateIncrease", 0.0), x["f"].get("rateDecreasePerBloon", 0.0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "StandoffModel"), None),
                                 # TheBlazingSunModel: [maxStacks, stacksToBurn, attackSpeedPerStack, debuffExpiresAfterFrames].
                                 "blazing_sun": next(([x["f"].get("maxStacks", 0), x["f"].get("stacksToBurn", 0), x["f"].get("attackSpeedPerStack", 0.0), x["f"].get("debuffExpiresAfterFrames", 0)] for x in items(w["f"].get("behaviors")) if x and x["type"] == "TheBlazingSunModel"), None),
+                                # TheBlazingSun.ProjectilesCreated (VERIFIED-DECOMP @0x180c961a0): with
+                                # stacksToBurn stacks, each shot's valid Target bloon gets
+                                # burnBehaviorModel (an AddBehaviorToBloon: its effects), and
+                                # burnBehaviorArea is emitted through `emission` at Target.Position.
+                                "blazing_burn": next(([dict(e, abtb=True) for e in projectile({"i": -1, "f": {"behaviors": [deref(x["f"].get("burnBehaviorModel"))], "pierce": 0.0, "maxPierce": 0.0, "radius": 0.0, "id": "", "ignoreBlockers": True}}, 1).get("effects", [])]
+                                                      for x in items(w["f"].get("behaviors")) if x and x["type"] == "TheBlazingSunModel" and deref(x["f"].get("burnBehaviorModel"))), []),
+                                "blazing_area": next((projectile(deref(x["f"].get("burnBehaviorArea")), 1)
+                                                      for x in items(w["f"].get("behaviors")) if x and x["type"] == "TheBlazingSunModel" and deref(x["f"].get("burnBehaviorArea"))), None),
+                                "blazing_emission": next((emission(deref(x["f"].get("emission")))
+                                                          for x in items(w["f"].get("behaviors")) if x and x["type"] == "TheBlazingSunModel" and deref(x["f"].get("emission"))), None),
                                 "cycle_random": any(x and x["type"] == "CycleAnimationModel" and x["f"].get("randomize") for x in items(w["f"].get("behaviors"))),
                                 # CycleAnimationModel (minAnimationState, maxAnimationState, loopMode,
                                 # randomize): the state each throw starts (GetAnimation @0x180c72140).
@@ -1745,6 +1880,10 @@ def main():
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "FlipFollowPathModel" and deref(x["f"].get("effectOnFlip"))
                                                  and prefab_name(deref(x["f"]["effectOnFlip"])["f"].get("assetId"))), None),
                                 "start_cooldown": bool(w["f"].get("startInCooldown")),
+                                # WeaponModel.storeTargetOnAnimationStart (Weapon.Process @0x180c50670:
+                                # storedTargetPosition = the Target's position as the throw starts; Weapon.Emit
+                                # @0x180c4ea20 aims at it when the Target is no longer valid).
+                                "store_target": bool(w["f"].get("storeTargetOnAnimationStart")),
                                 # SpinModel.rotationPerSecond (Blade Maelstrom, The Tack Zone): Spin turns
                                 # each shot by its running angle.
                                 "spin": next((x["f"].get("rotationPerSecond", 0.0) for x in items(w["f"].get("behaviors"))
@@ -1778,6 +1917,13 @@ def main():
                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "LineEffectModel"), None),
                                 "emission": emission(deref(w["f"]["emission"])),
                                 "projectile": projectile(deref(w["f"]["projectile"])), "crit": crit,
+                                # BonusProjectileAfterIntervalModel (VERIFIED-DECOMP ProjectilesCreated
+                                # @0x180c6baf0): every interval-th emission, once cooldownFrames of round
+                                # time have passed since the last, an extra projectile (Gwendolin's Heat It Up).
+                                "bonus_after": next(({"interval": int(x["f"].get("interval", 0)), "cooldown": int(x["f"].get("cooldownFrames") or round(x["f"].get("cooldown", 0.0) * 60)),
+                                                      "tower_pos": bool(x["f"].get("useTowerPosition")),
+                                                      "projectile": projectile(deref(x["f"]["projectileModel"])), "emission": emission(deref(x["f"]["emissionModel"]))}
+                                                     for x in items(w["f"].get("behaviors")) if x and x["type"] == "BonusProjectileAfterIntervalModel"), None),
                                 "alternate": alternate, "spread": spread, "per_round": per_round, "mana": next((int(x["f"].get("graveyardManaChange", 0)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "MagusPerfectusGraveyardModel"), 0), "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "gw_limit": gw_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
@@ -1836,13 +1982,15 @@ def main():
             random_land = None
             if rpm and random_position is None:
                 random_position = [rpm["minDistance"], rpm["maxDistance"]]
-                random_land = rpm.get("targetRadius", 0.0) if rpm.get("areaType") == "Land" else None
+                random_land = rpm.get("targetRadius", 0.0) if (rpm.get("areaType") or "").lower() == "land" else None
+            # (areaType goes through String.ToLower before the enum parse: UpdateValidPositions
+            # @0x180dd3470; Brickell's sea mines say "water".)
             # RandomPosition (VERIFIED-DISASM): rings of candidate offsets, shuffled, sorted into
             # in / out of idealDistanceWithinTrack x placeable with / without blocking towers.
             random_pos = ({"min": rpm["minDistance"], "max": rpm["maxDistance"], "point": rpm["pointDistance"],
                            "radius": rpm.get("targetRadius", 0.0), "ideal": rpm.get("idealDistanceWithinTrack", 0.0),
-                           "water": rpm.get("areaType") == "Water"}
-                          if rpm and rpm.get("areaType") in ("Land", "Water") else None)
+                           "water": (rpm.get("areaType") or "").lower() == "water"}
+                          if rpm and (rpm.get("areaType") or "").lower() in ("land", "water") else None)
             friendly_ignore = ",".join(x["f"].get("ignoreList") or "" for x in items(af["behaviors"])
                                        if x and x["type"] == "TargetFriendlyModel")
             attack_brew = next((br for w in items(af["weapons"]) if w
@@ -1916,14 +2064,18 @@ def main():
                     "turn_eject_z": next((x["f"].get("weaponEjectZ", 0.0) for x in items(af["behaviors"]) if x and x["type"] == "RotateToPointerModel"), 0.0),
                     # RotateToPointerModel.rotateOnlyOnEmit (Mortar): one turn step as a throw starts.
                     "turn_on_emit": any(x and x["type"] == "RotateToPointerModel" and x["f"].get("rotateOnlyOnEmit") for x in items(af["behaviors"])),
-                    "targets": targets, "weapons": weapons,
+                    # TranceBloon (Mermonkey totems): the attack's FilterOutTag also keeps its
+                    # projectile off those bloons (recording combo4_beast_mermonkey rt 619: a 2-0-4
+                    # totem's trance passes a Zomg, pierce unspent, and takes the DDT).
+                    "targets": targets, "weapons": [dict(w, projectile=dict(w["projectile"], exclude_tags=list(dict.fromkeys(w["projectile"].get("exclude_tags", []) + exclude_tags))))
+                                                    if any(e.get("kind") == "trance" for e in w["projectile"].get("effects", [])) else w for w in weapons],
                     # FighterPilotPattern* target suppliers (carrier planes) with the attack's
                     # FilterTargetAngleModel fieldOfView: the plane's pattern target, in that arc.
                     "fighter": (next((flt["f"].get("fieldOfView", 360.0) for y in items(af["behaviors"]) if y and y["type"] == "AttackFilterModel"
                                       for flt in items(y["f"]["filters"]) if flt and flt["type"] == "FilterTargetAngleModel"), 360.0)
                                 if any(y and y["type"].startswith("FighterPilotPattern") for y in items(af["behaviors"])) else None),
                     "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
-                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "fixed_range": bool(af.get("fixedRange")), "track_target": track_target, "track_only_bloons": track_only_bloons, "track_closest": track_closest, "track_default": track_default,
+                    "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "fixed_range": bool(af.get("fixedRange")), "track_target": track_target, "track_only_bloons": track_only_bloons, "track_closest": track_closest, "track_default": track_default, "track_fallback": track_fallback,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
                     # RotateToTargetAttackOffsetModel: the attack turns itself from its offset spot,
                     # [offsetX, offsetY, additionalRotation, startRotation].
@@ -1946,7 +2098,12 @@ def main():
                     # TargetSelectedPointModel.startWithClosestTrackPoint: the point starts on the
                     # attack's visible in-range path segment (TargetSelectedPoint.Process).
                     "point_start_track": any(x and x["type"] == "TargetSelectedPointModel" and x["f"].get("startWithClosestTrackPoint")
-                                             for x in items(af["behaviors"]))}
+                                             for x in items(af["behaviors"])),
+                    # TargetSelectedPointModel.lockToInsideTowerRange: the point can only be set within
+                    # the attack's range (TargetSelectedPoint.IsPointInRangeOfAttack @0x180dec7e0: Wall
+                    # of Fire with a top-path Wizard, Bloon Trap, Cleansing Foam, Spike Factory, Skywarden).
+                    "point_lock": any(x and x["type"] in ("TargetSelectedPointModel", "TargetSelectedPointOrDefaultModel")
+                                      and x["f"].get("lockToInsideTowerRange") for x in items(af["behaviors"]))}
 
         def ability(b):
             """AbilityModel: ActivateAttackModel attacks (on for `lifespan` seconds, or one volley
@@ -1956,7 +2113,7 @@ def main():
                    "description": bf.get("description"), "upgrade": bf.get("addedViaUpgrade"),
                    "ready": bool(bf.get("startOffCooldown")), "activate": [], "turbo": None,
                    # activateOnPreLeak (Bomb Blitz), maxActivationsPerRound, resetCooldownOnTierUpgrade.
-                   "pre_leak": bool(bf.get("activateOnPreLeak")), "per_round": bf.get("maxActivationsPerRound", 0),
+                   "pre_leak": bool(bf.get("activateOnPreLeak")), "on_lives_lost": bool(bf.get("activateOnLivesLost")), "per_round": bf.get("maxActivationsPerRound", 0),
                    "full_start": bool(bf.get("resetCooldownOnTierUpgrade")),
                    # cooldownSpeedScale (+0x88): Ability.Process (@0x180dfafc0) takes 1 / (1 - it)
                    # off the cooldown a frame (a Beast Handler ContributionMutator raises it).
@@ -2003,6 +2160,9 @@ def main():
                             takedown = {"hooks": tg.get("hooks", 1), "zomg": tg.get("zomgHooksRequired", 9999999),
                                         "bad": tg.get("badHooksRequired", 9999999), "mult": mt.get("multiplier", 1.0),
                                         "add": mt.get("additive", 0.0), "exclude": excl,
+                                        # TargetGrapplable.GetTargets: BloonManager.GetTargets within the
+                                        # attack's range (Attack +0x9c).
+                                        "range": a["f"].get("range", 0.0),
                                         "turn": next((y["f"].get("additionalRotation", 0) for y in items(a["f"].get("behaviors")) if y and y["type"] == "RotateToTargetModel"), 0),
                                         "eject": next(([w["f"].get("ejectX", 0.0), w["f"].get("ejectY", 0.0), w["f"].get("ejectZ", 0.0)] for w in items(a["f"].get("weapons")) if w), [0.0, 0.0, 0.0]),
                                         # CreateRopeEffectModel on the hook (display only): [chain prefab,
@@ -2099,10 +2259,13 @@ def main():
                 # PlaceProjectileAtModel (Mega Mine): the projectile at a picked point after `delay`.
                 if x["type"] == "PlaceProjectileAtModel" and deref(xf.get("projectileModel")):
                     out["place_at"] = {"projectile": projectile(deref(xf["projectileModel"])), "delay": xf.get("delay", 0.0)}
-                # BrickellFreezeMinesAbilityBuffModel: her attacks x multiplier interval for
-                # `lifespan` (STAND-IN: every attack, not only the mines; projectile speed not applied).
+                # BrickellFreezeMinesAbilityBuffModel (Blast Chain): Activate (@0x180e19130) adds its
+                # BrickellFreezeMinesMutator (Mutate @0x181273f80: BrickellFreezeOtherMinesModel
+                # freezeDuration x multiplier, the SeaMineSeeking TravelStrait speed x
+                # projectileSpeedMultiplier) for `lifespan` to the tower and every projectile it
+                # emitted, and freezes those mines for the mutated duration.
                 if x["type"] == "BrickellFreezeMinesAbilityBuffModel":
-                    out["turbo"] = {"lifespan": xf.get("lifespan", 0.0), "mult": xf.get("multiplier", 1.0), "extra_damage": 0}
+                    out["freeze_mines"] = [xf.get("multiplier", 1.0), xf.get("projectileSpeedMultiplier", 1.0), xf.get("lifespan", 0.0)]
                 # SwordChargeModel (Sauda): its projectile runs along the track. LeapingSwordModel
                 # (LeapingSword.StartJumpTo @0x180e39ff0 / Land @0x180e39230): landDelayFrames,
                 # timeUntilFinishFrames, the impact and then the DoT projectile at the landing spot.
@@ -2290,12 +2453,15 @@ def main():
                         add = float(0xFFFF & ~bypass)
                     if kind == "damage":
                         add = xf.get("damageIncrease", 0.0)
-                    sets, bases = [], []
+                    sets, bases, area_types = [], [], []
                     for flt in items(xf.get("filters")):
                         if flt and flt["type"] == "FilterInSetModel":
                             sets.append(flt["f"]["towerSet"])
                         if flt and flt["type"] == "FilterInBaseTowerIdModel":
                             bases += [s for s in (deref(flt["f"].get("baseIds")) or []) if isinstance(s, str)]
+                        # FilterTowerByPlaceableAreaModel (non-exclusive; Naval Tactics: water).
+                        if flt and flt["type"] == "FilterTowerByPlaceableAreaModel" and not flt["f"].get("exclusive"):
+                            area_types += [v for v in (deref(flt["f"].get("areaTypes")) or []) if isinstance(v, int)]
                     rng = xf.get("range") or 0.0
                     glob = bool(xf.get("isGlobal")) or rng >= 999999
                     use_tower = xf.get("useTowerRange") or rng <= 0
@@ -2318,7 +2484,7 @@ def main():
                                             "radius": None if glob or use_tower else rng,
                                             "self": x["type"] != "CallToArmsModel" and bool(xf.get("canEffectThisTower", xf.get("canAffectThisTower", True))),
                                             "instant": x["type"] == "CallToArmsModel",
-                                            "stacks": 1, "sets": sets, "bases": bases, "tier_cap": 5,
+                                            "stacks": 1, "sets": sets, "bases": bases, "area_types": area_types, "tier_cap": 5,
                                             "lifespan": xf.get("lifespan", 0.0),
                                             "icon": xf.get("buffIconName") if xf.get("showBuffIcon") else None,
                                             "buff_name": xf.get("buffLocsName") or "", "buff_max": xf.get("maxStackSize") or 0})
@@ -2328,7 +2494,10 @@ def main():
             if not b:
                 continue
             if b["type"] == "AbilityModel":
-                abilities.append(ability(b))
+                # (attack_pos: the tower's attacks listed before it; its ActivateAttack attacks
+                # process in that place: recording obyn_l20_r80, Brambles' list shuffled before
+                # the Totem attack's.)
+                abilities.append(dict(ability(b), attack_pos=len(attacks)))
             if b["type"] in ("AttackModel", "AttackAirUnitModel"):
                 attacks.append(parse_attack(b))
         # Monkeyopolis.Process (VERIFIED-DECOMP @0x180d49350), once: Banana Farms below tier 5 in
@@ -2478,6 +2647,8 @@ def main():
               if not kind:
                   continue
               sets, bases, min_tiers = [], [], [0, 0, 0]
+              # FilterTowerParentModel (FilterTower @0x180c216a0): not the owner's parent tower.
+              not_parent = any(x and x["type"] == "FilterTowerParentModel" for x in items(sf.get("filters")))
               for x in items(sf.get("filters")):
                   if x and x["type"] == "FilterInTowerTiersModel":
                       min_tiers = [x["f"].get("path%dMinTier" % k, 0) for k in (1, 2, 3)]
@@ -2499,7 +2670,7 @@ def main():
                                "only_paragon": bool(sf.get("onlyAffectParagon")),
                                "min_tiers": min_tiers,
                                "stacks": max(sf.get("maxStacks") or 0, sf.get("stackLimit") or 0, sf.get("maxStackCount") or 0, 1),
-                               "sets": sets, "bases": bases, "tier_cap": sf["upgrade"] if b["type"] == "FreeUpgradeSupportModel" else sf.get("tierCap", 5),
+                               "sets": sets, "not_parent": not_parent, "bases": bases, "tier_cap": sf["upgrade"] if b["type"] == "FreeUpgradeSupportModel" else sf.get("tierCap", 5),
                                # BuffIndicatorUi: the icon shown over towers this buffs.
                                "icon": sf.get("buffIconName") if sf.get("showBuffIcon") else None,
                                # SupportModel's BuffIndicatorModel (.ctor @0x181249bb0): buffName,
@@ -2661,8 +2832,16 @@ def main():
                         pets.append(sp)
         # Skywarden: ToggleFocusStanceModel (Focus: range / interval / lifespan multipliers) and
         # DamageBasedAttackSpeedModel (faster per `threshold` damage dealt, reset when idle).
-        stance, damage_speed, rod_manager = None, None, None
+        stance, damage_speed, rod_manager, state_pierce = None, None, None, None
         for b in items(tobj["f"]["behaviors"]):
+            # StatePoppedBasedPierceModel (Skywarden x-x-2+; StatePoppedBasedPierce.OnBloonDamaged
+            # @0x180d990e0, PierceMutator.Mutate @0x180d92b80).
+            if b and b["type"] == "StatePoppedBasedPierceModel":
+                bf = b["f"]
+                state_pierce = {"states": [t for t in items(bf.get("bloonStates")) if isinstance(t, str)],
+                                "duration": bf.get("buffDuration", 0.0), "mult": bf.get("pierceMultiplier", 0.0),
+                                "add": bf.get("pierceAdditive", 0.0), "cap": bf.get("pierceCap", 0.0),
+                                "must_mod": bool(bf.get("mustBeModified"))}
             # LightningRodManagerModel (Skywarden x-5-x; LightningRodManager.OnBloonDamaged
             # @0x180d32ea0): the damage types whose hits make a rod zap.
             if b and b["type"] == "LightningRodManagerModel":
@@ -2811,7 +2990,7 @@ def main():
                 "air": air, "submerge": submerge, "air_modes": air_modes,
                 # PursuitSettingModel.pursuitDistance (PursuitSetting.GetPursuitDestination).
                 "pursuit_distance": next((x["f"].get("pursuitDistance", 0.0) for b in items(f["behaviors"]) if b and b["type"] in ("AttackModel", "AttackAirUnitModel")
-                                          for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed, "rod_manager": rod_manager, "round_speed": round_speed, "magus": magus, "paragon_towers": paragon_towers, "mopolis": mopolis_out, "mopolis_cost": mopolis_cost,
+                                          for x in items(b["f"]["behaviors"]) if x and x["type"] == "PursuitSettingModel"), None), "grapple": grapple, "stance": stance, "damage_speed": damage_speed, "state_pierce": state_pierce, "rod_manager": rod_manager, "round_speed": round_speed, "magus": magus, "paragon_towers": paragon_towers, "mopolis": mopolis_out, "mopolis_cost": mopolis_cost,
                 # TapTowerAbilityBehavior.IsBanned (VERIFIED-DECOMP @0x180e5dcb0), the model part:
                 # Overclock / Take Aim can't pick a paragon, a Beast Handler pet, an
                 # IgnoreAllMutatorsTowerModel tower, an ignoreTowerForSelection one (IsSelectable), a
@@ -2912,8 +3091,18 @@ def main():
                 # off by itself every `interval` seconds.
                 "auto_ability": next((b["f"].get("interval", 0.0) for b in items(tobj["f"]["behaviors"])
                                       if b and b["type"] == "ActivateAbilityAfterIntervalModel"), None),
+                # AddBehaviorToBloonInZoneModel with an IgnoreDmgImmunityModel (Striker Jones's Black
+                # Resistance, zoneRadius 9999999): every bloon gets IgnoreDmgImmunity; its PreCollision
+                # (VERIFIED-DECOMP @0x180ff8120): once per projectile, chance >= 1 or syncedRandom
+                # NextDouble <= chance -> a mutator removing removeBloonProperties for good.
+                "ignore_zone": next(([x["f"].get("removeBloonProperties", 0), x["f"].get("chance", 1.0)]
+                                     for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "AddBehaviorToBloonInZoneModel"
+                                     for x in items(b["f"].get("behaviors")) if x and x["type"] == "IgnoreDmgImmunityModel"), None),
                 # AddBehaviorToBloonInZoneModel with a GrowBlockModel (Grow Blocker, Druid Paragon):
                 # regrow bloons in the zone don't regrow (zoneRadius; 0 = bound to the range).
+                # HexManagerModel (Ezili's MOAB Hex): its HexModel's [damagePercentOfMax, interval].
+                "hex": next(([deref(b["f"].get("hex"))["f"].get("damagePercentOfMax", 0.0), deref(b["f"].get("hex"))["f"].get("interval", 1.0)]
+                             for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "HexManagerModel" and deref(b["f"].get("hex"))), None),
                 "grow_block": next(((0.0 if b["f"].get("bindRadiusToTowerRange") else b["f"].get("zoneRadius", 0.0))
                                     for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "AddBehaviorToBloonInZoneModel"
                                     and any(x and x["type"] == "GrowBlockModel" for x in items(b["f"].get("behaviors")))), None),
@@ -3048,6 +3237,9 @@ def main():
                                      "bfb": b["f"].get("bfbPushSpeedScaleCap", 1.0),
                                      "zomg": None if any(x and x["type"] == "FilterOutTagModel" and x["f"].get("tag") == "Zomg"
                                                          for x in items(b["f"].get("filters"))) else b["f"].get("zomgPushSpeedScaleCap", 1.0),
+                                     # MoabShoveMutator.Mutate (@0x18121ff50): Zomg and Ddt by baseId take
+                                     # zomgPushSpeedScaleCap whatever the filters.
+                                     "zomg_cap": b["f"].get("zomgPushSpeedScaleCap", 1.0),
                                      "camo": not any(x and x["type"] == "FilterInvisibleModel" and x["f"].get("isActive", True)
                                                      for x in items(b["f"].get("filters")))}
                                     for b in items(f["behaviors"]) if b and b["type"] == "MoabShoveZoneModel"), None),
@@ -3112,6 +3304,8 @@ def main():
                        for x in items(b["f"].get("behaviors")) if x and x.get("type") == "DisplayModel"), None)
         rounds = next((b["f"].get("rounds", 0) for b in bs if b["type"] == "TowerExpireModel"), 0)
         spec = {"name": f["_name"], "tier": tier(tobj), "lifespan": expire, "round_end": round_end, "rounds": rounds, "radius": foot.get("radius", f.get("radius", 0.0)),
+                # Map.OverlapsOtherEntity: the TowerModel's radius and footprint.
+                "place_radius": f.get("radius", 0.0), "foot": footprint(f),
                 "areas": [a for a in (deref(f.get("areaTypes")) or []) if isinstance(a, int)],
                 "base": prefab_name(f.get("display")), "model": prefab_name(turret or display),
                 "credit_parent": any(b["type"] == "CreditPopsToParentTowerModel" for b in bs),
@@ -3165,7 +3359,7 @@ def main():
         proj = deref(weapon["f"].get("projectile")) or {"f": {"pierce": 0.0, "radius": 0.0, "behaviors": None}, "i": None}
         pb = {b["type"]: b["f"] for b in items(proj["f"]["behaviors"]) if b}
         return {
-            "name": name, "cost": f["cost"], "range": f["range"], "radius": f["radius"],
+            "name": name, "cost": f["cost"], "range": f["range"], "radius": f["radius"], "foot": footprint(f),
             "global": f.get("isGlobalRange", False),
             "areas": [a for a in (deref(f.get("areaTypes")) or []) if isinstance(a, int)],
             "icon": f["icon"].split("[")[-1].rstrip("]") if "[" in f["icon"] else name + "Icon",
@@ -3284,7 +3478,7 @@ def main():
                                                "damagePercentPerDegree", "damageIncreasePerDegree", "damageIncreaseForDegrees",
                                                "degreeCount", "maxPowerFromPops", "maxPowerFromMoneySpent", "maxPowerFromNonTier5Count",
                                                "maxPowerFromTier5Count", "popsOverX", "moneySpentOverX", "nonTier5TowersMultByX",
-                                               "tier5TowersMultByX")}
+                                               "tier5TowersMultByX", "cashEarnedContributionModifier")}
         paragon_degree["requirements"] = [v for v in items(pf.get("powerDegreeRequirements")) if isinstance(v, (int, float))]             or [v for v in (deref(pf.get("powerDegreeRequirements")) or []) if isinstance(v, (int, float))]
     medium = {m["class"]: m for m in json.load(open(os.path.join(root, "data", "modes.json")))["Medium"]}
     round_set = json.load(open(os.path.join(root, "data", "round_sets.json")))["DefaultRoundSet"]

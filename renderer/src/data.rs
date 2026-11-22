@@ -332,6 +332,9 @@ pub struct TowerDef {
     /// TowerModel.areaTypes: where it can be placed (1 water, 2 land).
     #[serde(default)]
     pub areas: Vec<i32>,
+    /// TowerModel.footprint (placement overlap).
+    #[serde(default)]
+    pub foot: Option<Footprint>,
     pub cost: f64,
     pub range: f32,
     pub radius: f32,
@@ -480,6 +483,9 @@ pub struct ParagonDegree {
     pub money_spent_over_x: f32,
     pub non_tier5_towers_mult_by_x: f32,
     pub tier5_towers_mult_by_x: f32,
+    /// ParagonTower.GetTowerInvestment: cash earned counts this much as damage dealt.
+    #[serde(default)]
+    pub cash_earned_contribution_modifier: f32,
     /// powerDegreeRequirements: total power needed for each degree (index 0 = degree 1).
     #[serde(rename = "requirements")]
     pub requirements: Vec<f32>,
@@ -726,6 +732,9 @@ pub struct Tier {
     /// DamageBasedAttackSpeedModel (Skywarden).
     #[serde(default)]
     pub damage_speed: Option<DamageSpeed>,
+    /// StatePoppedBasedPierceModel (Skywarden x-x-2+).
+    #[serde(default)]
+    pub state_pierce: Option<StatePierce>,
     /// LightningRodManagerModel (Skywarden x-5-x): damageTypesToZap.
     #[serde(default)]
     pub rod_manager: Option<Vec<String>>,
@@ -831,6 +840,13 @@ pub struct Tier {
     /// ActivateAbilityAfterIntervalModel.interval: seconds between automatic uses.
     #[serde(default)]
     pub auto_ability: Option<f32>,
+    /// AddBehaviorToBloonInZone + IgnoreDmgImmunity (Black Resistance): [bloon properties removed,
+    /// chance per projectile].
+    #[serde(default)]
+    pub ignore_zone: Option<(u32, f32)>,
+    /// HexManagerModel's HexModel [damagePercentOfMax, interval] (Ezili's MOAB Hex).
+    #[serde(default)]
+    pub hex: Option<[f32; 2]>,
     /// Grow Blocker zone radius (0: the tower's range).
     #[serde(default)]
     pub grow_block: Option<f32>,
@@ -899,8 +915,15 @@ pub struct Support {
     pub stacks: u32,
     #[serde(default)]
     pub sets: Vec<u32>,
+    /// FilterTowerParentModel: not the support tower's own parent.
+    #[serde(default)]
+    pub not_parent: bool,
     #[serde(default)]
     pub bases: Vec<String>,
+    /// FilterTowerByPlaceableAreaModel.areaTypes (non-exclusive): the tower must take one of
+    /// these and stand on an area of it (water 1 also takes type 7).
+    #[serde(default)]
+    pub area_types: Vec<i32>,
     /// Only heroes (MonkeySubParagonSupport.Filter: TowerModel.IsHero).
     #[serde(default)]
     pub heroes: bool,
@@ -1006,6 +1029,9 @@ pub struct MoabShove {
     pub moab: f32,
     pub bfb: f32,
     pub zomg: Option<f32>,
+    /// zomgPushSpeedScaleCap: a Zomg's or Ddt's cap, even with Zomgs filtered out.
+    #[serde(default = "one")]
+    pub zomg_cap: f32,
     #[serde(default)]
     pub camo: bool,
 }
@@ -1116,6 +1142,9 @@ pub struct Attack {
     /// TargetSelectedPointModel.startWithClosestTrackPoint (Wall of Fire past 3-x-x).
     #[serde(default)]
     pub point_start_track: bool,
+    /// TargetSelectedPointModel.lockToInsideTowerRange: a point set for it must be within its range.
+    #[serde(default)]
+    pub point_lock: bool,
     #[serde(default)]
     pub glue_filter: u32,
     #[serde(default)]
@@ -1163,6 +1192,13 @@ pub struct Attack {
     #[serde(default)]
     pub track_closest: bool,
     /// The track spot comes from TargetTrackOrDefault (forceTargetTrack), not CloseTargetTrack.
+    /// TargetTrackModel.onlyTargetPathsWithBloons: GetTargets skips paths without bloons, and
+    /// its points are remade at each round end (OnEarlyRoundEnd).
+    #[serde(default)]
+    pub track_only_bloons: bool,
+    /// TargetTrackOrDefaultModel without forceTargetTrack: track points only when no bloon.
+    #[serde(default)]
+    pub track_fallback: bool,
     #[serde(default)]
     pub track_default: bool,
     /// RandomPositionBasicModel min/max radius: aims at a random spot around the tower (bananas).
@@ -1312,6 +1348,10 @@ pub struct Weapon {
     /// WeaponModel.startInCooldown / customStartCooldown (seconds).
     #[serde(default)]
     pub start_cooldown: bool,
+    /// WeaponModel.storeTargetOnAnimationStart (the Skywarden's bolts): a throw whose Target is
+    /// gone at its release aims at where it was as the throw started.
+    #[serde(default)]
+    pub store_target: bool,
     #[serde(default)]
     pub custom_start: f32,
     /// WeaponModel.ejectX/Y/Z: launch point relative to the tower (x right, y forward, z up).
@@ -1327,6 +1367,14 @@ pub struct Weapon {
     /// TheBlazingSun's muzzle effects (prefab, scale): [under stacksToBurn, overheated].
     #[serde(default)]
     pub blazing_fx: Option<[Option<(String, f32)>; 2]>,
+    /// TheBlazingSun.ProjectilesCreated: burnBehaviorModel's effects, burnBehaviorArea and the
+    /// emission it goes out through.
+    #[serde(default)]
+    pub blazing_burn: Vec<EffectSpec>,
+    #[serde(default)]
+    pub blazing_area: Option<Box<Proj>>,
+    #[serde(default)]
+    pub blazing_emission: Option<Emission>,
     /// LineEffectModel (Ray of Doom): the beam drawn along its line shots.
     #[serde(default)]
     pub line_fx: Option<LineFx>,
@@ -1336,6 +1384,10 @@ pub struct Weapon {
     /// AlternateProjectileModel: every `interval`-th shot fires this instead (Flash Bomb).
     #[serde(default)]
     pub alternate: Option<Alternate>,
+    /// BonusProjectileAfterIntervalModel: every `interval`-th emission, `cooldown` frames of round
+    /// time after the last, `projectile` too (from the tower's position with `tower_pos`).
+    #[serde(default)]
+    pub bonus_after: Option<BonusAfter>,
     /// RandomAngleOffsetModel: shots deviate by up to this many degrees either way.
     #[serde(default)]
     pub spread: f32,
@@ -1560,6 +1612,19 @@ pub struct TrackTravel {
     pub fixed_rotation: bool,
 }
 
+impl TrackTravel {
+    /// TravelAlongPathModel.ctor (VERIFIED-DECOMP @0x181202680): speedFrames = speed x the f32
+    /// literal 0.016666668 (0x183e4fca0), not speed / 60 (one ulp apart for speeds 25, 300, 500).
+    pub fn speed_frames(&self) -> f32 {
+        self.speed * (1.0f32 / 60.0)
+    }
+
+    /// lifespanFrames = (int)(lifespan x 60f): 0.8333333 s is 49 frames.
+    pub fn lifespan_frames(&self) -> f32 {
+        (self.lifespan * 60.0) as i32 as f32
+    }
+}
+
 #[derive(Deserialize, Clone)]
 pub struct PlaceAt {
     pub projectile: Proj,
@@ -1653,6 +1718,9 @@ pub struct Takedown {
     /// FilterWithTagsModel (inclusive): tags never hooked.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// The ability attack's range (TargetGrapplable.GetTargets searches within it).
+    #[serde(default)]
+    pub range: f32,
     /// CreateRopeEffectModel (display only): chain prefab, hook prefab, spriteSpacing, spriteOffset.
     #[serde(default)]
     pub rope: Option<(Option<String>, Option<String>, f32, f32)>,
@@ -1698,6 +1766,16 @@ pub struct BurstFire {
 }
 
 #[derive(Deserialize, Clone)]
+pub struct BonusAfter {
+    pub interval: u32,
+    pub cooldown: i64,
+    #[serde(default)]
+    pub tower_pos: bool,
+    pub projectile: Proj,
+    pub emission: Emission,
+}
+
+#[derive(Deserialize, Clone)]
 pub struct Alternate {
     pub interval: u32,
     pub projectile: Proj,
@@ -1713,6 +1791,10 @@ pub struct Emission {
     /// Its EmissionSupplyRandomTargetModels: [minRadius, maxRadius, mapBorder, spawnOnTarget].
     #[serde(default)]
     pub supply: Vec<[f32; 4]>,
+    /// EmissionClosestOffsetModel's ThrowMarkerOffsetModels [ejectX, ejectY, ejectZ, rotation]:
+    /// the shot leaves from the one closest to the Target (Brickell's sea mines).
+    #[serde(default)]
+    pub closest: Vec<[f32; 4]>,
     /// ArcEmissionModel.useProjectileRotation.
     #[serde(default)]
     pub proj_rot: bool,
@@ -1975,6 +2057,9 @@ pub struct Contact {
     /// dontCreateAtBloon: made where the shot is instead of on the bloon.
     #[serde(default)]
     pub at_shot: bool,
+    /// passOnDirectionToContact: the new shots' Direction is Normalized(bloon - shot), 3D.
+    #[serde(default)]
+    pub pass_dir: bool,
     /// CreateProjectileOnBlockerCollideModel: only when the shot meets a map blocker.
     #[serde(default)]
     pub map_only: bool,
@@ -1993,6 +2078,29 @@ pub struct Contact {
     /// EmitOnPopModel: only on hits that pop the bloon.
     #[serde(default)]
     pub on_pop: bool,
+}
+
+/// AddTagToBloonModel: `tag` on the bloon's model for `frames`, `layers` layers, mutator id `id`.
+#[derive(Deserialize, Clone)]
+pub struct AddTag {
+    pub tag: String,
+    #[serde(default)]
+    pub id: String,
+    pub frames: i32,
+    #[serde(default)]
+    pub layers: u32,
+}
+
+/// FootprintModel: a rectangle's (xWidth, yWidth) (else a circle of the tower's radius),
+/// doesntBlockTowerPlacement, ignoresTowerOverlap.
+#[derive(Deserialize, Clone, Default)]
+pub struct Footprint {
+    #[serde(default)]
+    pub rect: Option<[f32; 2]>,
+    #[serde(default)]
+    pub no_block: bool,
+    #[serde(default)]
+    pub ignore_overlap: bool,
 }
 
 /// RetargetOnContactModel (Bouncing Bullet): after each hit, jump to the closest bloon within
@@ -2018,9 +2126,9 @@ pub struct Proj {
     /// damage on (non-MOAB, MOAB-class) bloons.
     #[serde(skip)]
     pub unstable_add: Option<(f32, f32)>,
-    /// TravelStraitSlowdownModel: (slowdownSpeed, minSpeed, maxDistance).
+    /// TravelStraitSlowdownModel: (slowdownSpeed, minSpeed, maxDistance, lifespan).
     #[serde(default)]
-    pub slowdown: Option<[f32; 3]>,
+    pub slowdown: Option<[f32; 4]>,
     /// TravelCurvyModel: travels straight here, but draws a syncedRandom Next() as it's made.
     #[serde(default)]
     pub curvy: bool,
@@ -2034,9 +2142,18 @@ pub struct Proj {
     pub cleanse_fortified: bool,
     #[serde(default)]
     pub cleanse_lead: bool,
+    /// RemoveBloonModifiersModel.bloonTagExcludeList / bloonTagExplicitList.
+    #[serde(default)]
+    pub cleanse_exclude: Vec<String>,
+    #[serde(default)]
+    pub cleanse_require: Vec<String>,
     /// ProjectileModel.id ("Collidable" for a Bloon Trap).
     #[serde(default)]
     pub pid: String,
+    /// BrickellFreezeOtherMinesModel.freezeDuration: its collision freezes every mine of its
+    /// tower (BrickellFreezeOtherMines.Collide @0x180c88a10).
+    #[serde(default)]
+    pub freeze_others: Option<f32>,
     /// RandomRangeTravelStraitModel (minRange, maxRange, speed): its lifespan is drawn when made.
     #[serde(default)]
     pub random_range: Option<[f32; 3]>,
@@ -2068,6 +2185,10 @@ pub struct Proj {
     /// KnockbackModel: hit bloons go backwards for a while.
     #[serde(default)]
     pub knockback: Option<Knockback>,
+    /// BloonSlapModel [valueForNormalBloons, valueForCeramicBloons]: what each slap counts
+    /// against the projectile's pierce (maxPiercedAmount).
+    #[serde(default)]
+    pub slap: Option<[i32; 2]>,
     /// WindlashModel (Skywarden): see `Windlash`.
     #[serde(default)]
     pub windlash: Option<Box<Windlash>>,
@@ -2170,9 +2291,27 @@ pub struct Proj {
     /// CollideExtraPierceReductionModel: pierce each hit uses (1 + extraAmount).
     #[serde(default = "one")]
     pub pierce_cost: f32,
+    /// ProjectileModel.usePointCollisionWithBloons: a bloon is met when its position is inside the
+    /// projectile's radius (no bloon radius, no collision circles).
+    #[serde(default)]
+    pub point_collision: bool,
+    /// DamagePercentOfMaxModel: (uint)(maxHealth x percent) more damage on bloons with all of
+    /// `tags`; `offscreen`: only in the hit OnBloonSpawned makes as a bloon spawns.
+    #[serde(default)]
+    pub pct_max: Option<PctMax>,
+    /// PierceUpTowers / HeatItUpDamageBuff: timed mutators for nearby towers as it expires.
+    #[serde(default)]
+    pub tower_buffs: Vec<TowerBuffOnExpire>,
+    /// AddTagToBloonModel: a tag mutator put on each bloon it meets (before the damage).
+    #[serde(default)]
+    pub add_tags: Vec<AddTag>,
     /// MorphBloonModel.bloonId: what a hit bloon becomes.
     #[serde(default)]
     pub morph_to: Option<String>,
+    /// CollideExtraPierceReduction without destroyProjectileIfPierceNotEnough: (tag, extra):
+    /// such a bloon is only met while pierce >= extra + 1.
+    #[serde(default)]
+    pub pierce_tags_need: Vec<(String, f32)>,
     /// CollideExtraPierceReductionModel with a bloonTag: (tag, extra) on hits on such bloons.
     #[serde(default)]
     pub pierce_tags: Vec<(String, f32)>,
@@ -2299,6 +2438,10 @@ pub struct Proj {
     /// SlowModifierForTagModel / FreezeModifierForTagsModel.
     #[serde(default)]
     pub effect_mods: Vec<EffectMod>,
+    /// AddBehaviorModifierForTagModel: an AddBehaviorToBloon mutator's lifespan x mult on a
+    /// bloon with the tag (mutatorId equal to its mutationId).
+    #[serde(default)]
+    pub ab_mods: Vec<AbMod>,
     /// TrackTargetModel / TrackTargetWithinTimeModel: homes in on its target (Seeking Shuriken).
     #[serde(default)]
     pub seek: Option<Seek>,
@@ -2508,6 +2651,12 @@ pub struct Ability {
     /// AbilityModel.activateOnPreLeak: it goes off (if ready) when a bloon is about to leak.
     #[serde(default)]
     pub pre_leak: bool,
+    /// AbilityModel.activateOnLivesLost: Ability.OnLivesLost activates it (Retaliation).
+    #[serde(default)]
+    pub on_lives_lost: bool,
+    /// The tower's attacks listed before it in the model's behaviours.
+    #[serde(default = "big_usize")]
+    pub attack_pos: usize,
     /// AbilityModel.maxActivationsPerRound (0 or less: no limit).
     #[serde(default)]
     pub per_round: i32,
@@ -2528,6 +2677,10 @@ pub struct Ability {
     pub activate: Vec<ActivateAttack>,
     #[serde(default)]
     pub turbo: Option<Turbo>,
+    /// BrickellFreezeMinesAbilityBuffModel (Blast Chain): [multiplier (freeze duration),
+    /// projectileSpeedMultiplier (SeaMineSeeking), lifespan].
+    #[serde(default)]
+    pub freeze_mines: Option<[f32; 3]>,
     /// AbilityDamageAllModel (Bomb Blitz's Bomb Storm): damage to every bloon with (inclusive) or
     /// without one of the tags.
     #[serde(default)]
@@ -2759,6 +2912,21 @@ pub struct Stance {
     pub lifespan: f32,
 }
 
+/// StatePoppedBasedPierceModel: OnBloonDamaged on a bloon in one of `states` puts PierceMutator
+/// on the tower (and its sub-towers) for `duration`.
+#[derive(Deserialize, Clone)]
+pub struct StatePierce {
+    /// bloonStates: a damaged bloon with a mutator whose id contains one of these.
+    pub states: Vec<String>,
+    /// buffDuration (s).
+    pub duration: f32,
+    pub mult: f32,
+    pub add: f32,
+    pub cap: f32,
+    /// mustBeModified: the mutator must also have mutated the bloon's model.
+    pub must_mod: bool,
+}
+
 /// DamageBasedAttackSpeedModel: +`increase` attack speed per `threshold` damage dealt, up to
 /// `max_stacks`; all lost after `idle_frames` frames without damage.
 #[derive(Deserialize, Clone)]
@@ -2911,6 +3079,11 @@ pub struct AirPattern {
 
 #[derive(Deserialize, Clone)]
 pub struct SubTowerSpec {
+    /// TowerModel.radius and footprint, for Map.OverlapsOtherEntity.
+    #[serde(default)]
+    pub place_radius: f32,
+    #[serde(default)]
+    pub foot: Option<Footprint>,
     /// BeastHandlerPetModel's merge numbers (a Beast Handler pet).
     #[serde(default)]
     pub power: Option<PetPower>,
@@ -3260,7 +3433,11 @@ pub struct Seek {
     pub lifetime: bool,
     /// constantlyAquireNewTarget: a new pick on every look, not only once it has none.
     #[serde(default)]
-    pub constantly: bool,    /// TrackTargetWithinTimeModel.timeInFrames: the clamped turn is divided by this / elapsed.
+    pub constantly: bool,
+    /// TrackTarget before TravelStrait in the behaviours: it turns before the first move too
+    /// (recording brickell_l10_r40: a SeaMineSeeking's first step already at its MOAB).
+    #[serde(default)]
+    pub before_travel: bool,    /// TrackTargetWithinTimeModel.timeInFrames: the clamped turn is divided by this / elapsed.
     #[serde(default)]
     pub within: Option<f32>,
 }
@@ -3338,6 +3515,17 @@ pub struct PetPower {
     /// display only.
     #[serde(default)]
     pub steps: Vec<(Option<String>, f32, Option<String>)>,
+}
+
+/// AddBehaviorModifierForTagModel (see `Proj::ab_mods`).
+#[derive(Deserialize, Clone)]
+pub struct AbMod {
+    #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub mult: f32,
 }
 
 /// A bloon effect: "slow" (mult = speed multiplier; glue level), "freeze", "dot" or "brittle"
@@ -3427,6 +3615,12 @@ pub struct EffectSpec {
     pub bloon_ids: Vec<String>,
     #[serde(default)]
     pub excluding: bool,
+    /// From an AddBehaviorToBloonModel (its lifespan takes `Proj::ab_mods`).
+    #[serde(default)]
+    pub abtb: bool,
+    /// From a SlowForBloonModel (its own Collide: see `for_bloon` in the export).
+    #[serde(default)]
+    pub for_bloon: bool,
     #[serde(default)]
     pub moabs: bool,
     #[serde(default)]
@@ -3853,4 +4047,32 @@ pub struct ScaleFx {
 pub struct IncomeSet {
     pub thresholds: Vec<(i32, f32)>,
     pub final_mult: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PctMax {
+    pub percent: f32,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub offscreen: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TowerBuffOnExpire {
+    pub kind: String,
+    #[serde(default)]
+    pub value: f32,
+    #[serde(default)]
+    pub frames: i64,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub tower_pos: bool,
+    #[serde(default)]
+    pub closest: bool,
+}
+
+fn big_usize() -> usize {
+    usize::MAX
 }

@@ -1,6 +1,6 @@
 {
   "_how": "Edit the numbers, then run: python website/build_progress.py. Towers: recorded scenarios that match the real game frame by frame / all recorded. Areas: rough estimates out of 10.",
-  "updated": "2026-11-20",
+  "updated": "2026-11-21",
   "towers": [
     [
       "Dart Monkey",
@@ -138,14 +138,39 @@
       14
     ],
     [
+      "Gwendolin",
+      5,
+      5
+    ],
+    [
+      "Striker Jones",
+      3,
+      3
+    ],
+    [
+      "Sauda",
+      3,
+      3
+    ],
+    [
+      "Obyn Greenfoot",
+      3,
+      3
+    ],
+    [
+      "Ezili",
+      3,
+      3
+    ],
+    [
       "Paragons",
       12,
       12
     ],
     [
       "Tower combos",
-      12,
-      17
+      17,
+      19
     ]
   ],
   "areas": [
@@ -163,7 +188,7 @@
     ],
     [
       "Heroes",
-      2
+      4
     ],
     [
       "Bosses",

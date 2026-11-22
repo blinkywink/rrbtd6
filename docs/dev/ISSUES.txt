@@ -7,6 +7,46 @@ or "CAN'T FIX YET" (with why). A screenshot of the real game next to ours helps 
 
 OPEN
 ----
+Reported by the owner 2026-11-21 (play-testing), one per line:
+- Super Monkey Fan Club (and the towers it affects): shoot plain darts at tier 4; at tier 5 they should shoot plasma like the Plasma Super Monkey.
+- Burn effect on MOABs (e.g. from Boomerang Monkey) should be a little animated, not a flat sprite (owner not sure).
+- Bomb Blitz: no effect shows when it activates.
+- Passive "abilities" (Bomb Blitz, Legend of the Night...) don't show in the ability bar at the bottom; they are hidden cooldowns. They should appear like in the game.
+- Tack Shooter 5-0-0 (top path tier 5): crashed the game once on upgrade; couldn't reproduce.
+- Tack Shooter middle path: doesn't shoot the blades.
+- Tack Shooter paragon looks like a 0-0-0 Tack Shooter (wrong model).
+- Ice Monkey middle path: flashbangs the whole screen on every attack; the ability's on-screen effect and animation are missing.
+- Ice Monkey paragon: ability visually broken; the paragon teleports around and doesn't face the camera like it should.
+- Glue Gunner: Glue Storm ability effect is wrong.
+- Glue Gunner bottom path: the stun effect on bloons looks wrong (the stars don't look right); one of its animations looks like an explosion.
+- Crit text may be wrong (owner not sure).
+- Sniper Monkey paragon: missing models; its cash generation (and the middle path's supply drops?) may be wrong too.
+- Monkey Ace: pineapples are giant; they should show a 3-2-1 countdown.
+- Monkey Ace Tsar Bomba ability: the bomb animation is missing.
+- Monkey Ace paragon: model missing entirely.
+- Heli Pilot Special Poperations ability doesn't work.
+- Heli Pilot: no heli's blades spin.
+- Heli Pilot Comanche: the extra helis don't follow the main heli in the different modes, and stay after selling.
+- Mortar Monkey: asks to set a target right after placing; the game auto-picks a spot unless you choose one.
+- Wall of Fire (Mortar and Wizard): right place, but the angle of the wall is wrong.
+- Dartling Gunner Ray of Doom (and its tier 4): the ray isn't drawn; bottom path animations aren't in sync with where it aims.
+- Dartling Gunner middle path ability: wrong icons.
+- Wizard Wizard Lord Phoenix: the birds fly oddly, not facing where they fly.
+- Set-target markers (the little circle on the map): look similar to the game but something is off.
+- Super Monkey Anti-Bloon: doesn't turn properly when aiming.
+- Super Monkey Sun Temple: missing animations and its avatar children.
+- Ninja Bloon Sabotage: ability animation missing.
+- Ninja paragon: many animation issues.
+- Global-range towers (e.g. Bloon Master Alchemist): range isn't shown as global, only some attacks are global.
+- Alchemist middle path: his eyes are always closed.
+- Druid Superstorm: attack models right but displayed oddly.
+- Druid Spirit of the Forest vines: artifacting, and upside down.
+- Druid middle path: missing the vine sprite wrapped around a bloon the vine has grabbed.
+- Druid paragon looks like a base Druid (wrong model).
+- Mermonkey Popseidon ability effect is wrong.
+- Mermonkey top path: tentacles roughly right but displayed wrong; the black hole around it is too small.
+- Engineer XXL Trap: shows 2 traps.
+- Beast Handler: merging and a lot of logic and animations aren't right.
 - In-game Powers button (shop) does nothing: it's shown but has no click handler, and game.json has no Power data.
   Needs the game's PowersMenu, a Powers export, and placing/using them in game.rs. docs/dev/NOT_BUILT.md has the plan.
 - Sandbox: double-clicking with the bloon menu open selected the tower behind it. -> Fixed 2026-11-01, please check:
