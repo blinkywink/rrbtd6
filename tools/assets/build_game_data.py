@@ -2093,6 +2093,11 @@ def main():
                     # in the sim frame; recorder ATE line, brickell_l10_r40: (-9, 2.49, 18.2) for a
                     # tower at (-9, 9) with offsetY 4).
                     "offset_z": af.get("offsetZ", 0.0),
+                    # RotateToTargetAttackOffsetModel.ignoreParentRotationTime: after a throw the
+                    # attack's transform ignores the tower's rotation this long (SetRotation
+                    # @0x180ddb500), then turns with it again (Process @0x180ddb390).
+                    "offset_ignore": next((x["f"].get("ignoreParentRotationTime", 0.0) for x in items(af["behaviors"])
+                                           if x and x["type"] == "RotateToTargetAttackOffsetModel"), 0.0),
                     # FilterTargetAngleModel in the attack's filter (not a carrier plane's pattern):
                     # [fieldOfView, baseTowerRotationOffset, ignoreTowerRotation].
                     "target_angle": (None if any(y and y["type"].startswith("FighterPilotPattern") for y in items(af["behaviors"])) else

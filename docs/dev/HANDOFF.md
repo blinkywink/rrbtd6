@@ -128,7 +128,7 @@ Ground rules follow.
 Current (2026-11-20): every set full (merge 17; spike 28, sub 35, mortar 26, bomb 35, dartling 26, sniper 35, bucc 36, dart 71, tack 26, alch 35, druid 35, ninja 35, ice 26, wizard 36, ace 26, spike 29, super 35, heli 27, boomerang 100, dart 72, mortar 27, desperado 35, dartling 27 after the 2026-11-20 additions). Run all of: `sh tools/rec/compare.sh ninja wizard alch bomb glue ice
 sniper tack sub beast engineer desperado dartling mortar bucc druid super ace heli spike farm mermonkey village
 paragon sky quincy gwen jones sauda obyn ezili adora brickell pat moab logs maps maptowers merge village_std farm_std` and `sh tools/rec/compare.sh --root dart boomerang` (maps 82, maptowers 95, village_std 4, farm_std 1, sky 39, quincy 14, moab 5,
-logs 3, dart 72, boomerang 100, paragon 12, adora 2, brickell 1, pat 2).
+logs 3, dart 72, boomerang 100, paragon 12, adora 2, brickell 2, pat 2).
 
 Last full run (2026-11-07): dart 70/70, boomerang 99/99, wizard 35/35, ninja 34/34, bomb 34/34,
 glue 34/34, ice 25/25, sniper 34/34, tack 25/25, sub 32/32, beast 34/34, engineer 34/34, desperado 34/34
@@ -3382,3 +3382,9 @@ Open (pending/hero_open):
   transform ignore its parent's rotation for ignoreParentRotationFrames (Brickell 2 s) after a throw;
   Process (@0x180ddb390) then clears it (or, alwaysIgnoreParentRotation, RotateToStartingPoint each
   frame): the turret's angle the base reads is probably the local one riding the base again. `DBGBASE`.
+- (2026-11-22) Brickell l03 exact (brickell 2/2): ChurchillBaseRotation.Process (@0x180d07d20) pauses with
+  rotateToTarget cleared and, unpaused (GetGlobalBest within 99999), reads the turret display's rotation;
+  the pistol's aim counts only for ignoreParentRotationFrames after its throw (`offset_aim_until`, exported
+  `offset_ignore`), then the turret reads the base's own angle. Open: brickell_l10 rt 1009, a sea mine's
+  start x 1 ulp off (-15.368752 vs game -15.3687525): plain f32 c*x - s*y with correctly rounded sin / cos
+  gives the game's value, so the clone's sin or cos of 32.46 deg is an ulp off here (or its angle input).

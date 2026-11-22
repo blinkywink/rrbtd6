@@ -1984,6 +1984,9 @@ pub struct Tower {
     /// RotateToTargetAttackOffset on a ChurchillBaseRotation tower (Brickell): its attack's
     /// rotation at its last throw (what the base turns to).
     pub offset_aim: Option<f32>,
+    /// When `offset_aim` was set (sim_elapsed) and until when it holds against the base
+    /// (ignoreParentRotationFrames later).
+    pub offset_aim_until: u64,
     /// Per attack: its last aim (radians) and target (display only): each of Robo Monkey's
     /// arms aims on its own (attack displays), the body at the middle of their targets.
     pub aims: Vec<(f32, Option<[f32; 2]>)>,
@@ -9628,6 +9631,7 @@ impl Game {
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
             offset_aim: None,
+            offset_aim_until: 0,
             aims: Vec::new(),
             attack_t: f32::MAX,
             idle_t: 0.0,
@@ -12386,6 +12390,7 @@ impl Game {
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
             offset_aim: None,
+            offset_aim_until: 0,
             aims: Vec::new(),
             attack_t: f32::MAX,
             idle_t: 0.0,
@@ -18966,7 +18971,17 @@ impl Game {
         }
         if !tw.base_state.2 {
             // (Brickell: her pistol attack's rotation as its last throw left it.)
-            let Some(disp) = tw.offset_aim.or(tw.game_rot) else { return };
+            // ChurchillBaseRotation.Process (VERIFIED-DECOMP @0x180d07d20) reads the turret display's
+            // rotation; the pistol's transform ignores the base only for ignoreParentRotationFrames
+            // after its throw (RotateToTargetAttackOffset.SetRotation), then turns with it, so past
+            // that it reads the base's own angle: nothing to turn to (recording brickell_l03_r20 rt
+            // 1107, the base still after its pause until the next throw at 1112).
+            let disp = match tw.offset_aim {
+                Some(a) if now <= tw.offset_aim_until => Some(a),
+                Some(_) => Some(tw.base_rot),
+                None => tw.game_rot,
+            };
+            let Some(disp) = disp else { return };
             if disp == tw.base_rot {
                 return;
             }
@@ -21958,6 +21973,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 if let Some(r) = attack_rot {
                                     if env_flag!("DBGE") { eprintln!("DBGOFF aim {} target {:?} tpos {:?}", r, target, tw.pos); }
                                     tw.offset_aim = Some(r);
+                                    tw.offset_aim_until = self.sim_elapsed + (attack.offset_ignore * 60.0) as i64 as u64;
                                 }
                             }
                             // (RotateToTargetAttackOffset turns only its attack: rotateTower off.)

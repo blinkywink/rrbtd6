@@ -1161,6 +1161,9 @@ pub struct Attack {
     /// AttackModel.offsetZ.
     #[serde(default)]
     pub offset_z: f32,
+    /// RotateToTargetAttackOffsetModel.ignoreParentRotationTime (seconds).
+    #[serde(default)]
+    pub offset_ignore: f32,
     #[serde(default)]
     pub exclude_tags: Vec<String>,
     /// AttackModel.fireWithoutTarget: fires on its own timer, target or not (Glaive Lord's orbit hits).
