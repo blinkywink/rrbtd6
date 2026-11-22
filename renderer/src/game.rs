@@ -164,6 +164,9 @@ pub struct Track {
     /// Path.pointInfos: the point every CACHE_DISTANCE along the path, where a distance is
     /// looked up (empty: interpolate `pts`).
     quick: Vec<[f32; 2]>,
+    /// `quick_point(dists, d)` by quick-table index ((d / CACHE_DISTANCE) as u32), over the
+    /// path's length: speed_mult's segment without a search per bloon per frame.
+    seg_of: std::sync::Arc<[u32]>,
 }
 
 /// Path.CacheDistance.
@@ -176,7 +179,7 @@ impl Track {
             let d = ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt();
             cum.push(cum.last().unwrap() + d);
         }
-        Self { pts, cum, dists: Vec::new(), speeds: Vec::new(), quick: Vec::new() }
+        Self { pts, cum, dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), seg_of: std::sync::Arc::from(Vec::new()) }
     }
 
     /// With the game's own point distances and speed multipliers.
@@ -186,6 +189,11 @@ impl Track {
         if dists.len() == t.pts.len() && speeds.len() == t.pts.len() {
             t.dists = dists.to_vec();
             t.speeds = speeds.to_vec();
+            if let Some(&last) = t.dists.last() {
+                let n = ((last / CACHE_DISTANCE).max(0.0) as usize + 2).min(1 << 22);
+                // (Entry q is quick_point's own search at q x CACHE_DISTANCE, the distance it rounds to.)
+                t.seg_of = (0..n).map(|q| t.dists.partition_point(|&d| d <= q as u32 as f32 * CACHE_DISTANCE).saturating_sub(1) as u32).collect::<Vec<_>>().into();
+            }
         }
         t
     }
@@ -200,7 +208,11 @@ impl Track {
         // (The segment is the quick table's, quick_point: just past a point the entry can still
         // name the one before, so t runs a little over 1; recording map_midnightmansion_dart_205_r40
         // rt 81, a MOAB 0.0026 past the 10x -> 1x point steps at x 0.999825.)
-        let i = quick_point(&self.dists, d);
+        let q = (d / CACHE_DISTANCE) as u32 as usize;
+        let i = match self.seg_of.get(q) {
+            Some(&i) => i as usize,
+            None => quick_point(&self.dists, d),
+        };
         if i + 1 >= self.dists.len() {
             return self.speeds[self.speeds.len() - 1];
         }
@@ -5106,7 +5118,7 @@ macro_rules! collide_pass {
                 }
             } else {
                 let t = $s.projectiles[$p].target;
-                if let Some(i) = $s.bloons.iter().position(|b| Some(b.id) == t) {
+                if let Some(i) = t.and_then(|t| bloon_idx(&$s.bloons, &$s.bidx, t)) {
                     $cand.push(i as _);
                 }
             }
@@ -5761,7 +5773,7 @@ macro_rules! collide_pass {
                 let hit_moab = $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Moabs");
                 let pre_state = ($s.bloons[i].pos, $s.bloons[i].kind, $s.bloons[i].frozen(), $s.bloons[i].layer);
                 // (StatePoppedBasedPierce's key test: mutator ids, not the effect kind.)
-                let pre_ids: Vec<String> = $s.bloons[i].effects.iter().map(|e| e.id.to_string()).collect();
+                let pre_ids: Vec<std::sync::Arc<str>> = $s.bloons[i].effects.iter().map(|e| e.id.clone()).collect();
                 let own_chain = $s.chain_health(i);
                 $s.distribute = ($s.projectiles[$p].spec.distribute, $s.projectiles[$p].spec.distribute_override);
                 $s.dist_set = $s.projectiles[$p].spec.distribute_set.as_ref().is_some_and(|tags| tags.is_empty() || $s.defs[$s.bloons[i].kind].tags.iter().any(|t| tags.contains(t)));
@@ -11895,7 +11907,7 @@ impl Game {
     /// String.Contains on the mutator ids the bloon had as the hit began: IceShardFreeze counts
     /// (recording sky_205_village_r102 rt 1053), the x-x-2 freeze's empty id doesn't (sky_025:
     /// no boost after hitting frozen Reds).
-    fn state_pierce_hit(&mut self, t: usize, ids: &[String]) {
+    fn state_pierce_hit(&mut self, t: usize, ids: &[std::sync::Arc<str>]) {
         let Some(sp) = self.tier(t).and_then(|tr| tr.state_pierce.as_ref()) else { return };
         if self.towers[t].state_pierce.is_none() && sp.states.iter().any(|s| ids.iter().any(|i| i.contains(s.as_str()))) {
             self.towers[t].state_pierce = Some(self.round_clock);
@@ -22889,12 +22901,37 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 let len = emission.line_from_target.unwrap_or(if emission.line_target_end { to_target } else { 400.0 });
                                 let line_start = if emission.line_from_target.is_some() { target } else { from };
                                 let mut found: Vec<(f32, u64)> = Vec::new();
-                                if r > 0.0 {
+                                if r > 0.0 && r <= len {
+                                    // Only bloons near the line can be found: grid_hit needs the bloon within
+                                    // r + its radius of a point, or its cell position within a cell diagonal
+                                    // (a big query: its box, under 1.5 r) of it; the points lie on the
+                                    // segment r..len. (Same order, same tests: a bloon further from the whole
+                                    // segment than that fails them at every point.)
+                                    let (p0, dir) = ([(line_start[0] + lc * r) as f64, (line_start[1] + ls * r) as f64], [lc as f64, ls as f64]);
+                                    let span = (len - r) as f64;
+                                    let seg_d2 = |p: [f32; 2]| {
+                                        let (dx, dy) = (p[0] as f64 - p0[0], p[1] as f64 - p0[1]);
+                                        let along = (dx * dir[0] + dy * dir[1]).clamp(0.0, span);
+                                        let (ex, ey) = (dx - along * dir[0], dy - along * dir[1]);
+                                        ex * ex + ey * ey
+                                    };
+                                    let cell_reach = 16.0 + 1.5 * r as f64;
+                                    let cand: Vec<usize> = (0..self.bloons.len())
+                                        .filter(|&i| {
+                                            let b = &self.bloons[i];
+                                            let reach = (r as f64 + self.defs[b.kind].radius as f64 + 1.0).max(cell_reach);
+                                            !(b.pos[0].is_finite() && b.pos[1].is_finite() && b.cell_pos[0].is_finite() && b.cell_pos[1].is_finite())
+                                                || seg_d2(b.pos) <= reach * reach
+                                                || seg_d2(b.cell_pos) <= cell_reach * cell_reach
+                                        })
+                                        .collect();
+                                    let mut taken = vec![false; cand.len()];
                                     let mut t = r;
                                     while t <= len {
                                         let c = [line_start[0] + lc * t, line_start[1] + ls * t];
-                                        for (i, b) in self.bloons.iter().enumerate() {
-                                            if found.iter().any(|f| f.1 == b.id) {
+                                        for (k, &i) in cand.iter().enumerate() {
+                                            let b = &self.bloons[i];
+                                            if taken[k] {
                                                 continue;
                                             }
                                             let d = &self.defs[b.kind];
@@ -22909,9 +22946,34 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                                 && circles_hit(c, r, b.pos, self.mrot(b), &d.circles)
                                             {
                                                 found.push(((b.pos[0] - line_start[0]).hypot(b.pos[1] - line_start[1]), b.id));
+                                                taken[k] = true;
                                             }
                                         }
                                         t = r + r + t;
+                                    }
+                                    // RRBTD6_LINE_CHECK: the full scan over every bloon finds the same, in order.
+                                    if env_flag!("RRBTD6_LINE_CHECK") {
+                                        let mut all: Vec<(f32, u64)> = Vec::new();
+                                        let mut t = r;
+                                        while t <= len {
+                                            let c = [line_start[0] + lc * t, line_start[1] + ls * t];
+                                            for (i, b) in self.bloons.iter().enumerate() {
+                                                if all.iter().any(|f| f.1 == b.id) {
+                                                    continue;
+                                                }
+                                                let d = &self.defs[b.kind];
+                                                let spawn_seen = b.unplaced && b.spawner && b.born / 4 < self.sim_elapsed;
+                                                if (grid_hit(c, r, b.pos, b.cell_pos, d.radius)
+                                                    && (!self.has_grid_rank || self.ggrid.visits(c, r, i, b.cell_pos))
+                                                    || spawn_seen && grid_hit(c, r, b.pos, b.pos, d.radius))
+                                                    && circles_hit(c, r, b.pos, self.mrot(b), &d.circles)
+                                                {
+                                                    all.push(((b.pos[0] - line_start[0]).hypot(b.pos[1] - line_start[1]), b.id));
+                                                }
+                                            }
+                                            t = r + r + t;
+                                        }
+                                        assert!(all.len() == found.len() && all.iter().zip(&found).all(|(x, y)| x.1 == y.1 && x.0.to_bits() == y.0.to_bits()), "line prefilter: {} found, full scan {}", found.len(), all.len());
                                     }
                                 }
                                 // (OrderBy distance is stable over GetInLine's enumeration: bloons at the
@@ -28842,6 +28904,45 @@ mod tests {
         let rate: usize = std::env::var("RRBTD6_BENCH_RATE").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
         let cap: usize = std::env::var("RRBTD6_BENCH_BLOONS").ok().and_then(|v| v.parse().ok()).unwrap_or(6000);
         late_game_load(rate, cap, 3000, true);
+    }
+
+    /// The 500-BAD stress scene headless: the round-200 bench's four degree-20 paragons, 500 BADs
+    /// sent at spacing 0, stepped until everything is popped. Prints the total sim time, steps and
+    /// the worst step. `RRBTD6_BENCH_SPAWN=Bad:500` (default).
+    #[test]
+    #[ignore]
+    fn bad_bench() {
+        let (name, n) = std::env::var("RRBTD6_BENCH_SPAWN").ok().and_then(|v| { let (a, b) = v.split_once(':')?; Some((a.to_string(), b.parse::<usize>().ok()?)) }).unwrap_or(("Bad".into(), 500));
+        let mut g = game();
+        crate::round_bench::setup(&mut g, 200, 20);
+        g.round = 0;
+        g.start_round();
+        assert!(g.debug_spawn(&name, n, 0.0));
+        let (mut total, mut worst, mut steps, mut peak) = (0.0f64, 0.0f64, 0usize, 0usize);
+        while !g.bloons.is_empty() && steps < 40000 {
+            let t0 = std::time::Instant::now();
+            g.step();
+            let dt = t0.elapsed().as_secs_f64();
+            total += dt;
+            worst = worst.max(dt);
+            steps += 1;
+            if g.bloons.len() > peak {
+                peak = g.bloons.len();
+                if std::env::var_os("RRBTD6_BENCH_EFFECTS").is_some() {
+                    let mut ids: std::collections::BTreeMap<String, usize> = Default::default();
+                    for b in &g.bloons {
+                        for e in &b.effects {
+                            *ids.entry(e.id.to_string()).or_default() += 1;
+                        }
+                    }
+                    eprintln!("peak {peak}: effects {:?}", ids);
+                }
+            }
+        }
+        let t = super::sim_profile::TIMES.with(|v| v.get());
+        eprintln!("bad_bench phases (ms): pops/bloons {:.0}, towers {:.0}, projectiles {:.0}; target {:.0}", g.prof[0] * 1e3, g.prof[1] * 1e3, g.prof[2] * 1e3, g.perf_detail[2] * 1e3);
+        eprintln!("bad_bench timers (ms): damage {:.0}, closest {:.0}, remap {:.0}, gather {:.0}, spawn {:.0}, destroy {:.0}", t[0] * 1e3, t[1] * 1e3, t[2] * 1e3, t[3] * 1e3, t[4] * 1e3, t[5] * 1e3);
+        eprintln!("bad_bench: {n} {name}: {steps} steps, total {:.0} ms, avg {:.3} ms, worst {:.2} ms, peak {peak} bloons, popped {}", total * 1e3, total * 1e3 / steps as f64, worst * 1e3, g.popped);
     }
 
     /// Performance guard, run with every `cargo test --profile game`: the late-game load must

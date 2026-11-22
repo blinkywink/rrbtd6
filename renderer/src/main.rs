@@ -6,6 +6,10 @@
 //! Space / Go button = start next round, F = toggle 1x/3x speed, A = auto-start,
 //! gear button / Esc = pause screen, Esc = cancel placement, V = toggle 3D / 2D view.
 
+#[cfg(windows)]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod boss_logic;
 mod mem_guard;
 mod map_routes;
