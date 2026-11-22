@@ -251,7 +251,7 @@ mod tests {
             g.step();
         }
         let last = g.bloons.last().unwrap();
-        assert!(last.effects.iter().any(|e| e.id == "DartTime"));
+        assert!(last.effects.iter().any(|e| *e.id == *"DartTime"));
         g.round_clock += 600;
         assert_eq!(g.dart_time_rate(), 1.0);
     }

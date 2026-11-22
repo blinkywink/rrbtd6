@@ -3724,7 +3724,7 @@ pub struct EffectSpec {
     /// "emit": ProjectileOverTimeModel, fired at the bloon every `interval` (Sticky Bomb splash).
     /// "pop_emit": EmitOnPopModel, fired (with `emission`) where the bloon pops.
     #[serde(default)]
-    pub projectile: Option<Box<Proj>>,
+    pub projectile: Option<std::sync::Arc<Proj>>,
     #[serde(default)]
     pub emission: Option<Emission>,
     /// "trance": orbit radius, the speed factor for MOAB-class bloons (`mult` for the rest),

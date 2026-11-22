@@ -851,7 +851,7 @@ pub struct WlState {
 #[derive(Clone)]
 pub struct Effect {
     pub kind: EffectKind,
-    pub id: String,
+    pub id: std::sync::Arc<str>,
     pub frames_left: f32,
     /// Layers left including this one; children inherit it while this is above 1.
     pub layers: u32,
@@ -947,17 +947,17 @@ pub enum EffectKind {
     Dot { damage: f32, interval: f32, tick: f32, immune: u32, mods: std::sync::Arc<[TagMod]>, start: Option<f32> },
     Brittle { damage: f32 },
     /// `on_destroy`: ProjectileOverTimeModel.emitOnDestroy.
-    Emit { interval: f32, tick: f32, proj: Box<Proj>, on_destroy: bool },
+    Emit { interval: f32, tick: f32, proj: std::sync::Arc<Proj>, on_destroy: bool },
     /// EmitOnPopModel: fired where the bloon pops.
     /// EmitOnPop: `ignore` its model's ignoreSameFrameDegrade, `skip` the behaviour's
     /// ignoringSameFrameDegrade (set by Initialise, cleared by Process and the first PreDegrade).
-    PopEmit { proj: Box<Proj>, emission: Box<Emission>, ignore: bool, skip: bool, unstable: Option<Box<crate::data::UnstableDmg>> },
+    PopEmit { proj: std::sync::Arc<Proj>, emission: std::sync::Arc<Emission>, ignore: bool, skip: bool, unstable: Option<Box<crate::data::UnstableDmg>> },
     /// CarryProjectile: the projectiles it made (uids; empty until Attatched emits them), which
     /// sit where the bloon is and go with the mutator.
-    Carry { proj: Box<Proj>, emission: Box<Emission>, uids: Vec<u64> },
+    Carry { proj: std::sync::Arc<Proj>, emission: std::sync::Arc<Emission>, uids: Vec<u64> },
     /// EmitOnDestroy: its projectile where the bloon is destroyed; `dont_copy`: not passed to a
     /// degrade's other children.
-    DestroyEmit { proj: Box<Proj>, emission: Box<Emission>, dont_copy: bool },
+    DestroyEmit { proj: std::sync::Arc<Proj>, emission: std::sync::Arc<Emission>, dont_copy: bool },
     /// DesperadoMarkModel: x `damage_mult` damage from Desperados, x `cash_mult` pop cash.
     Mark { damage_mult: f32, cash_mult: f32 },
     /// GiveCashOnPop (Lead to Gold, Rubber to Gold): its model's flatCashAmount, cashMultiplier,
@@ -1058,7 +1058,7 @@ impl Bloon {
             return true;
         }
         self.effects.iter().any(|e| {
-            let id = e.id.as_str();
+            let id = &*e.id;
             if id == s {
                 return true;
             }
@@ -1099,7 +1099,7 @@ impl Bloon {
     }
 
     pub fn has_effect(&self, id: &str) -> bool {
-        self.effects.iter().any(|e| e.id == id)
+        self.effects.iter().any(|e| &*e.id == id)
     }
 
     /// offTrackCount > 0: carried by wind, held, or in a Mermonkey trance (MermonkeyTrance
@@ -1114,7 +1114,7 @@ impl Bloon {
         self.effects.iter().any(|e| {
             let mut parts = e.id.split(':');
             let major = parts.next().unwrap_or("");
-            e.id == id || major == id || parts.next().is_some_and(|minor| id.strip_prefix(major).and_then(|r| r.strip_prefix(':')) == Some(minor))
+            &*e.id == id || major == id || parts.next().is_some_and(|minor| id.strip_prefix(major).and_then(|r| r.strip_prefix(':')) == Some(minor))
         })
     }
 
@@ -3548,7 +3548,7 @@ impl Projectile {
 
 /// A due DamageOverTime tick: (bloon id, damage, immunities, owner, distribute, mutation id,
 /// its lastTick before this tick).
-type DotTick = (u64, f32, u32, u64, (bool, bool), String, f32, u64);
+type DotTick = (u64, f32, u32, u64, (bool, bool), std::sync::Arc<str>, f32, u64);
 
 /// DamageOverTime.DealDamage (VERIFIED-DISASM @0x1003cb0): damage plus each modifier's
 /// additive for the bloon's tags, times every modifier's multiplier (recording glue_500: Bloon
@@ -3802,6 +3802,7 @@ impl Buff {
                         e.tag_mods.extend(mods.iter().cloned());
                     }
                     if let Some(ep) = e.projectile.as_mut() {
+                        let ep = std::sync::Arc::make_mut(ep);
                         if ep.damage > 0.0 {
                             ep.tag_mods.extend(mods.iter().cloned());
                         }
@@ -4353,7 +4354,7 @@ pub struct Game {
     /// EmitOnPopModel shots from bloons that popped: (where, projectile, emission, owner).
     /// (where, projectile, emission, owner, the bloon's rotation in degrees, its layer, its
     /// height).
-    pop_emits: Vec<([f32; 2], Box<Proj>, Box<Emission>, u64, f32, u64, f32)>,
+    pop_emits: Vec<([f32; 2], std::sync::Arc<Proj>, std::sync::Arc<Emission>, u64, f32, u64, f32)>,
     pub hooks: Vec<Hook>,
     /// Live GreatWhiteEffects (Beast Handler grabs), in creation order.
     pub gw_effects: Vec<GwEffect>,
@@ -5454,9 +5455,9 @@ macro_rules! collide_pass {
                 let now = $s.sim_elapsed;
                 let b = &mut $s.bloons[i];
                 for at in tags {
-                    b.effects.retain(|e| !(e.id == at.id && matches!(e.kind, EffectKind::Tag { .. })));
+                    b.effects.retain(|e| !(*e.id == *at.id && matches!(e.kind, EffectKind::Tag { .. })));
                     let f = at.frames as f32;
-                    b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Tag { tag: at.tag.as_str().into() }, id: at.id.clone(), frames_left: f, total: f, added: now, layers: at.layers.max(1), owner: 0, distribute: (true, false), keep: false });
+                    b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Tag { tag: at.tag.as_str().into() }, id: at.id.as_str().into(), frames_left: f, total: f, added: now, layers: at.layers.max(1), owner: 0, distribute: (true, false), keep: false });
                 }
             }
             // EmitOnDamage.Collide (VERIFIED-DISASM @0xcbb8c0) asks Bloon.WillDamageBloon rather
@@ -5760,7 +5761,7 @@ macro_rules! collide_pass {
                 let hit_moab = $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Moabs");
                 let pre_state = ($s.bloons[i].pos, $s.bloons[i].kind, $s.bloons[i].frozen(), $s.bloons[i].layer);
                 // (StatePoppedBasedPierce's key test: mutator ids, not the effect kind.)
-                let pre_ids: Vec<String> = $s.bloons[i].effects.iter().map(|e| e.id.clone()).collect();
+                let pre_ids: Vec<String> = $s.bloons[i].effects.iter().map(|e| e.id.to_string()).collect();
                 let own_chain = $s.chain_health(i);
                 $s.distribute = ($s.projectiles[$p].spec.distribute, $s.projectiles[$p].spec.distribute_override);
                 $s.dist_set = $s.projectiles[$p].spec.distribute_set.as_ref().is_some_and(|tags| tags.is_empty() || $s.defs[$s.bloons[i].kind].tags.iter().any(|t| tags.contains(t)));
@@ -5780,7 +5781,7 @@ macro_rules! collide_pass {
                 if n > 0 {
                     for kid in std::iter::once(id).chain($kids.iter().copied()).collect::<Vec<_>>() {
                         if let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, kid) {
-                            for e in $s.bloons[j].effects.iter_mut().filter(|e| e.id == "Skywarden:Chilled" || e.id == "Skywarden:ChilledRadius") {
+                            for e in $s.bloons[j].effects.iter_mut().filter(|e| *e.id == *"Skywarden:Chilled" || *e.id == *"Skywarden:ChilledRadius") {
                                 e.layers = 2;
                             }
                         }
@@ -11005,7 +11006,7 @@ impl Game {
                         b.dist = d.1;
                     }
                     b.held = true;
-                    if !b.effects.iter().any(|e| e.id == "BeastGrab") {
+                    if !b.effects.iter().any(|e| *e.id == *"BeastGrab") {
                         b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Slow { mult: 0.0, glue: 0 }, id: "BeastGrab".into(), frames_left: 2.0, total: 2.0, added: 0, layers: 1, owner: 0, distribute: (true, false), keep: false });
                     }
                 }
@@ -11023,7 +11024,7 @@ impl Game {
     fn bird_release_ex(&mut self, held: &mut Vec<u64>, st: &mut GyrState, rt: i64, destroyed: bool) {
         for h in held.drain(..) {
             if let Some(b) = bloon_idx(&self.bloons, &self.bidx, h).map(|j| &mut self.bloons[j]) {
-                b.effects.retain(|e| e.id != "BeastGrab");
+                b.effects.retain(|e| *e.id != *"BeastGrab");
                 b.held = false;
                 b.held_at = 0;
                 let off = st.dists.iter().find(|d| d.0 == h).map_or([0.0; 2], |d| d.2);
@@ -11279,7 +11280,7 @@ impl Game {
             return;
         }
         self.projectiles[p].galv_hit = true;
-        if stage > 2 && first && !self.bloons[j].effects.iter().any(|e| e.id == "GalvanizedStun") {
+        if stage > 2 && first && !self.bloons[j].effects.iter().any(|e| *e.id == *"GalvanizedStun") {
             // (mutatorDurations: the first entry whose bloon id the bloon is, else stunDuration;
             // recording sky_040 rt 304-422, a MOAB stopped 2 s, not 3.)
             self.damage(j, g[2].round() as i32, kids);
@@ -11308,7 +11309,7 @@ impl Game {
                 for &kid in kids.iter() {
                     if kid != id && self.copies_now.contains(&kid) {
                         if let Some(x) = self.bloons.iter().position(|b| b.id == kid && b.lineage == lin) {
-                            if !self.bloons[x].effects.iter().any(|e| e.id == "GalvanizedStun") {
+                            if !self.bloons[x].effects.iter().any(|e| *e.id == *"GalvanizedStun") {
                                 self.bloons[x].effects.push(e.clone());
                             }
                         }
@@ -16663,7 +16664,7 @@ impl Game {
         // Hex.ModifyDamageResult (VERIFIED-DECOMP @0x180ff7980): a hit that pops a hexed bloon
         // goes through every layer (UpdateDamageResult 999999999): nothing comes out (recording
         // ezili_l10_r40 rt 463: the hexed MOAB popped by a DoT tick, no Ceramics).
-        let hexed = self.pop_depth == 0 && dmg >= self.bloons[i].hp as i32 && self.bloons[i].effects.iter().any(|e| e.id == "EziliHex");
+        let hexed = self.pop_depth == 0 && dmg >= self.bloons[i].hp as i32 && self.bloons[i].effects.iter().any(|e| *e.id == *"EziliHex");
         let k0 = out_children.len();
         let n = self.damage_body(i, dmg, out_children);
         if hexed && n > 0 {
@@ -16964,7 +16965,7 @@ impl Game {
                             let md = u.moab_map.iter().find(|(k, _)| k == base).map_or(if boss { u.boss_moab } else { u.moab }, |x| x.1);
                             let mut q = (**proj).clone();
                             q.unstable_add = Some((bd, md));
-                            Box::new(q)
+                            std::sync::Arc::new(q)
                         }
                         None => proj.clone(),
                     };
@@ -17052,13 +17053,13 @@ impl Game {
             .iter()
             // (A Trance outlasts its layer count: recording map_peninsula_mermonkey_204_r40 rt
             // 1584, a tranced Green's two Yellows both orbit on, the copy a frame behind.)
-            .filter(|e| (e.layers > 1 || matches!(e.kind, EffectKind::Trance(_))) && (!moab_pop || e.keep || KEPT_ON_MOAB_POP.contains(&e.id.as_str())))
+            .filter(|e| (e.layers > 1 || matches!(e.kind, EffectKind::Trance(_))) && (!moab_pop || e.keep || KEPT_ON_MOAB_POP.contains(&&*e.id)))
             .map(|e| Effect { layers: e.layers.saturating_sub(1).max(1), ..e.clone() })
             .collect();
         // (A MOAB-class pop drops its other mutators at once, CarryProjectile.OnDestroy taking
         // their projectiles: recording ice_paragon_r40 rt 189, the Icicles X destroy at age 0.)
         let dropped_carry: Vec<u64> = if moab_pop {
-            b.effects.iter().filter(|e| !(e.keep || KEPT_ON_MOAB_POP.contains(&e.id.as_str()))).flat_map(|e| match &e.kind { EffectKind::Carry { uids, .. } => uids.clone(), _ => Vec::new() }).collect()
+            b.effects.iter().filter(|e| !(e.keep || KEPT_ON_MOAB_POP.contains(&&*e.id))).flat_map(|e| match &e.kind { EffectKind::Carry { uids, .. } => uids.clone(), _ => Vec::new() }).collect()
         } else {
             Vec::new()
         };
@@ -17071,7 +17072,7 @@ impl Game {
             b.effects
                 .iter()
                 .enumerate()
-                .filter(|(k, e)| !(e.keep || KEPT_ON_MOAB_POP.contains(&e.id.as_str())) && !b.effects[..*k].iter().any(|x| x.id == e.id))
+                .filter(|(k, e)| !(e.keep || KEPT_ON_MOAB_POP.contains(&&*e.id)) && !b.effects[..*k].iter().any(|x| x.id == e.id))
                 .filter_map(|(_, e)| match e.kind {
                     EffectKind::Dot { damage, interval, tick, immune, ref mods, .. } if clock - tick as i64 >= interval as i32 as i64 => {
                         Some((dot_damage(damage, mods, &self.defs[kind].tags), immune, e.owner, e.distribute))
@@ -17094,7 +17095,7 @@ impl Game {
         // the stuck MOAB's StickyBombExplosion 972, then its Ceramics 982 ...).
         let on_destroy: Vec<(Box<Proj>, u64)> = if moab_pop || strip || self.child_kinds[kind].is_empty() {
             b.effects.iter().enumerate().filter(|(k, e)| !b.effects[..*k].iter().any(|x| x.id == e.id))
-                .filter_map(|(_, e)| match &e.kind { EffectKind::Emit { proj, on_destroy: true, .. } => Some((proj.clone(), e.owner)), _ => None }).collect()
+                .filter_map(|(_, e)| match &e.kind { EffectKind::Emit { proj, on_destroy: true, .. } => Some((Box::new(Proj::clone(proj)), e.owner)), _ => None }).collect()
         } else {
             Vec::new()
         };
@@ -17675,7 +17676,7 @@ impl Game {
                 for i in only.map_or(0..self.bloons.len(), |i| i..i + 1) {
                     let b = &self.bloons[i];
                     let inside = (b.pos[0] - c[0]).powi(2) + (b.pos[1] - c[1]).powi(2) <= r * r;
-                    let has = b.effects.iter().any(|e| e.id == *id && e.owner == owner);
+                    let has = b.effects.iter().any(|e| *e.id == **id && e.owner == owner);
                     let was = set.contains(&b.id);
                     if inside && !was {
                         set.insert(b.id);
@@ -17688,7 +17689,7 @@ impl Game {
                     // rt 154, a copy entering is [Far, Medium, Close, Far, Close] and its copies
                     // [Medium, Far, Close, Close, Far].)
                     if inside && !was && has {
-                        let old = self.bloons[i].effects.iter().find(|e| e.id == *id && e.owner == owner).cloned().unwrap();
+                        let old = self.bloons[i].effects.iter().find(|e| *e.id == **id && e.owner == owner).cloned().unwrap();
                         let at = mutator_slot(&self.bloons[i].effects);
                         self.bloons[i].effects.insert(at, old);
                     } else if inside && !was {
@@ -17702,7 +17703,7 @@ impl Game {
                             overlay: Default::default(),
                             seq,
                             kind: EffectKind::Dot { damage: z.damage, interval: z.interval * FPS, tick: -999999999.0, immune: z.immune, mods: mods.clone(), start: None },
-                            id: id.clone(),
+                            id: id.as_str().into(),
                             frames_left: f32::INFINITY,
                             total: f32::INFINITY,
                             added: self.sim_elapsed,
@@ -17724,7 +17725,7 @@ impl Game {
                         // zones takes their due ticks, 3 layers, and its Red then steps 0.52). Only
                         // the first mutator of an id has a behaviour (ApplyMutation's limiter).
                         let rc = self.round_clock;
-                        let first = self.bloons[i].effects.iter().position(|e| e.id == *id);
+                        let first = self.bloons[i].effects.iter().position(|e| *e.id == **id);
                         if let Some(e) = first.map(|f| &self.bloons[i].effects[f]).filter(|e| e.owner == owner && e.added != self.sim_elapsed) {
                             if let EffectKind::Dot { damage, interval, tick, immune, ref mods, .. } = e.kind {
                                 if rc - tick as i64 >= interval as i32 as i64 {
@@ -17732,7 +17733,7 @@ impl Game {
                                 }
                             }
                         }
-                        self.bloons[i].effects.retain(|e| !(e.id == *id && e.owner == owner));
+                        self.bloons[i].effects.retain(|e| !(*e.id == **id && e.owner == owner));
                     }
                 }
                 if only.is_none() {
@@ -18616,7 +18617,7 @@ impl Game {
                 // slowed; recording beast_merge_h300_max rt 452, follow 574 on the MOAB 484 left.)
                 if let Some(bid) = bid.filter(|&bid| !self.projectiles.iter().any(|q| q.latch_on.is_some_and(|l| l.0 == bid))) {
                     if let Some(b) = bloon_idx(&self.bloons, &self.bidx, bid).map(|j| &mut self.bloons[j]) {
-                        b.effects.retain(|e| e.id != "LatchToBloon");
+                        b.effects.retain(|e| *e.id != *"LatchToBloon");
                     }
                 }
             }
@@ -24150,7 +24151,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                 let prev = s.last_explosion as f32;
                 s.last_explosion = t;
                 s.explosion_count += 1;
-                dots.push((id, s.damage, s.immune, s.owner, (true, false), "MoabBarrage".to_string(), prev, 0));
+                dots.push((id, s.damage, s.immune, s.owner, (true, false), "MoabBarrage".into(), prev, 0));
             }
         }
     }
@@ -24168,7 +24169,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
         // ((int)(interval x 60), 57) after lastTick (Initialise: the time it went on), Bloon.Damage of
         // (int)(maxHealth x damagePercentOfMax) + 1 (recording ezili_l10_r40 rt 458: a hexed MOAB
         // 10 -> 1).
-        if let Some(k) = self.bloons[i].effects.iter().position(|e| e.id == "EziliHex") {
+        if let Some(k) = self.bloons[i].effects.iter().position(|e| *e.id == *"EziliHex") {
             let (owner, added, seq) = (self.bloons[i].effects[k].owner, self.bloons[i].effects[k].added, self.bloons[i].effects[k].seq);
             let d = &self.defs[self.bloons[i].kind];
             let moab = d.tags.iter().any(|t| t == "Moabs");
@@ -24182,7 +24183,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                 if now as i64 - b.hex_last >= (interval * 60.0) as i64 {
                     let prev = b.hex_last as f32;
                     b.hex_last = now as i64;
-                    dots.push((b.id, amount, 0, owner, (true, false), "EziliHex".to_string(), prev, seq));
+                    dots.push((b.id, amount, 0, owner, (true, false), "EziliHex".into(), prev, seq));
                 }
             }
         }
@@ -24224,12 +24225,12 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                     *tick += 1.0;
                     if *tick >= *interval * FPS {
                         *tick = 0.0;
-                        emits.push((b.pos, proj.clone(), e.owner, b.id, b.layer));
+                        emits.push((b.pos, Box::new(Proj::clone(proj)), e.owner, b.id, b.layer));
                     }
                     // ProjectileOverTime.OnDestroy (VERIFIED-DECOMP @0x181004b20): going with its
                     // mutator, emitOnDestroy sets lastTick far back, so CheckTick emits once more.
                     if *on_destroy && !behind && e.frames_left <= 0.0 {
-                        emits.push((b.pos, proj.clone(), e.owner, b.id, b.layer));
+                        emits.push((b.pos, Box::new(Proj::clone(proj)), e.owner, b.id, b.layer));
                     }
                 }
                 _ => {}
@@ -25597,7 +25598,7 @@ impl Game {
             let mut gone_carried: Vec<u64> = Vec::new();
             self.bloons[i].effects.retain(|e| {
                 let keep = !keys.iter().any(|k| {
-                    k.strip_prefix('=').map_or_else(|| e.id.contains(k.as_str()), |x| e.id == x)
+                    k.strip_prefix('=').map_or_else(|| e.id.contains(k.as_str()), |x| &*e.id == x)
                         || (k == "Ice" && matches!(e.kind, EffectKind::Freeze { .. }))
                         || (k == "Glue" && matches!(e.kind, EffectKind::Slow { glue: 1.., .. }))
                 });
@@ -25667,7 +25668,7 @@ impl Game {
                                 self.effect_seq += 1;
                                 let e = Effect { overlay: Default::default(), seq: self.effect_seq, kind: EffectKind::Slow { mult, glue: 0 }, id: "Skywarden:ChilledRadius".into(), frames_left: f, total: f, added: now, layers: 2, owner: 0, distribute: (true, false), keep: false };
                                 let b = &mut self.bloons[k];
-                                b.effects.retain(|x| x.id != "Skywarden:ChilledRadius");
+                                b.effects.retain(|x| *x.id != *"Skywarden:ChilledRadius");
                                 b.effects.push(e);
                             }
                         }
@@ -25728,7 +25729,7 @@ impl Game {
                 // the MOAB one sharing it; recording sky_004 rt 259, one 0.9 slow from rt 79 that
                 // ends after 3 s though the MOAB was hit again meanwhile.)
                 let b = &self.bloons[i];
-                spec.effects.retain(|e| !(e.first_hit_only && b.effects.iter().any(|x| x.id == e.id)));
+                spec.effects.retain(|e| !(e.first_hit_only && b.effects.iter().any(|x| *x.id == *e.id)));
             }
             self.apply_effects(i, &spec, owner, dmg, false);
         }
@@ -25912,7 +25913,7 @@ impl Game {
                 "destroy_emit" => match &e.projectile {
                     Some(p) => EffectKind::DestroyEmit {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
+                        emission: std::sync::Arc::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
                         dont_copy: e.dont_copy,
                     },
                     None => continue,
@@ -25920,7 +25921,7 @@ impl Game {
                 "carry" => match &e.projectile {
                     Some(p) => { self.carry_pending.set(true); EffectKind::Carry {
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
+                        emission: std::sync::Arc::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
                         uids: Vec::new(),
                     } },
                     None => continue,
@@ -25935,7 +25936,7 @@ impl Game {
                         ignore: e.ignore_same_frame,
                         skip: e.ignore_same_frame,
                         proj: p.clone(),
-                        emission: Box::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
+                        emission: std::sync::Arc::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
                     },
                     None => continue,
                 },
@@ -25958,7 +25959,7 @@ impl Game {
             // Bloon.AddMutatorForNumLayers (VERIFIED-DISASM @0xfb01f0) gives layer charges only
             // for layers > 0: one with 0 is never depleted and goes to the children
             // (CopyMutatorsFrom; recording engineer_032, a foamed Black's pinned Pink half speed).
-            add.push((Effect { kind, id: e.id.clone(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: if e.layers == 0 { u32::MAX } else { e.layers }, owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into(), seq: 0 }, e.refresh, (e.replace && !e.for_bloon, e.kind == "slow" && e.unique && !e.cascade && e.only_if_pop, e.kind == "slow" && !e.cascade && !e.only_if_pop)));
+            add.push((Effect { kind, id: e.id.as_str().into(), frames_left: lf, total: lf, added: self.sim_elapsed, layers: if e.layers == 0 { u32::MAX } else { e.layers }, owner, distribute: (e.distribute, e.distribute_override), keep: e.keep_on_degrade, overlay: e.overlay.as_str().into(), seq: 0 }, e.refresh, (e.replace && !e.for_bloon, e.kind == "slow" && e.unique && !e.cascade && e.only_if_pop, e.kind == "slow" && !e.cascade && !e.only_if_pop)));
         }
         let kind = self.bloons[i].kind;
         add.retain(|(e, _, _)| !self.bad_immune_to(kind, &e.id));
@@ -26113,7 +26114,7 @@ impl Game {
     /// bloon's, which every child has in its lineage (recording ice_005: an Icicles Rainbow's
     /// Blacks and Whites don't pop each other).
     fn attach_carries_as(&mut self, i: usize, layer_as: Option<u64>) {
-        let todo: Vec<(usize, Box<Proj>, Box<Emission>, u64)> = self.bloons[i]
+        let todo: Vec<(usize, std::sync::Arc<Proj>, std::sync::Arc<Emission>, u64)> = self.bloons[i]
             .effects
             .iter()
             .enumerate()
@@ -28055,7 +28056,7 @@ impl Game {
                 continue;
             }
             if let Some(b) = bloon_idx(&self.bloons, &self.bidx, bid).map(|j| &mut self.bloons[j]) {
-                b.effects.retain(|e| e.id != "LatchToBloon");
+                b.effects.retain(|e| *e.id != *"LatchToBloon");
             }
         }
         for (mut held, mut st) in std::mem::take(&mut self.late_release) {
@@ -28168,12 +28169,12 @@ impl Game {
             }
             // The bloon's later DamageOverTime behaviours haven't run yet: their lastTick is still
             // the old one while this one's damage lands (what PostDegrade hands on).
-            let later: Vec<(String, f32)> = dots[k + 1..].iter().filter(|d| d.0 == id).map(|d| (d.5.clone(), d.6)).collect();
+            let later: Vec<(std::sync::Arc<str>, f32)> = dots[k + 1..].iter().filter(|d| d.0 == id).map(|d| (d.5.clone(), d.6)).collect();
             let set_ticks = |g: &mut Self, from: bool| {
                 let Some(b) = bloon_idx(&g.bloons, &g.bidx, id).map(|j| &mut g.bloons[j]) else { return };
                 for (eid, prev) in &later {
                     let (a, z) = if from { (clock, *prev) } else { (*prev, clock) };
-                    if let Some(EffectKind::Dot { tick, .. }) = b.effects.iter_mut().map(|e| (e.id == *eid, &mut e.kind)).find(|(m, k)| *m && matches!(k, EffectKind::Dot { tick, .. } if *tick == a)).map(|(_, k)| k) {
+                    if let Some(EffectKind::Dot { tick, .. }) = b.effects.iter_mut().map(|e| (*e.id == **eid, &mut e.kind)).find(|(m, k)| *m && matches!(k, EffectKind::Dot { tick, .. } if *tick == a)).map(|(_, k)| k) {
                         *tick = z;
                     }
                 }
@@ -28915,7 +28916,7 @@ mod tests {
         (g.popped,g.cash.to_bits(),g.lives.to_bits(),g.round,g.round_frame,g.next_id,g.rng).hash(&mut h);
         for b in &g.bloons{
             (b.id,b.kind,b.hp,b.born,b.order,b.path,b.dist.to_bits(),b.pos.map(f32::to_bits),b.fresh).hash(&mut h);
-            for e in &b.effects{(e.id.as_str(),e.frames_left.to_bits(),e.owner).hash(&mut h);}
+            for e in &b.effects{(&*e.id,e.frames_left.to_bits(),e.owner).hash(&mut h);}
         }
         for p in &g.projectiles{
             (p.uid,p.owner,p.born,p.pos.map(f32::to_bits),p.vel.map(f32::to_bits),p.pierce.to_bits(),p.frames_left.to_bits(),p.target,p.spec.damage.to_bits()).hash(&mut h);
