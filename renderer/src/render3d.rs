@@ -1249,7 +1249,7 @@ pub fn upload_bct(png: &std::path::Path, mip: bool) -> Option<Texture2D> {
     Some(texture)
 }
 
-/// RRBTD6_BCT_CHECK: every texture with a `.bct` under the models drawn 1:1 (nearest) from its
+/// RRBTD6_BCT_CHECK: every texture with a `.bct` under the models and effects drawn 1:1 (nearest) from its
 /// compressed upload and from its PNG, read back and compared.
 pub async fn verify_bct(root: &std::path::Path) {
     fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -1264,6 +1264,7 @@ pub async fn verify_bct(root: &std::path::Path) {
     }
     let mut pngs = Vec::new();
     walk(&root.join("models"), &mut pngs);
+    walk(&root.join("effects"), &mut pngs);
     let (mut same, mut differ, mut px_differ, mut worst, mut total, mut over_one) = (0, 0, 0usize, 0u8, 0usize, 0usize);
     for png in &pngs {
         let Ok(bytes) = std::fs::read(png) else { continue };

@@ -813,13 +813,16 @@ impl EffectDef {
             let j:EffectJson=serde_json::from_slice(&std::fs::read(worker_dir.join("effect.json")).ok()?).ok()?;
             let mut names:Vec<_>=j.nodes.iter().filter_map(|n|n.renderer.as_ref()).filter_map(|r|r.texture.clone()).collect();
             names.sort();names.dedup();
-            let paths:Vec<_>=names.iter().map(|name|worker_dir.join(name)).collect();
-            let images=crate::render3d::decode_batch(&paths);
+            // (One with the game's compressed data (.bct) uploads that: not decoded here.)
+            let paths:Vec<_>=names.iter().map(|name|worker_dir.join(name)).filter(|p|crate::render3d::bct_path(p).is_none()).collect();
+            let mut decoded=crate::render3d::decode_batch(&paths).into_iter();
+            let images:Vec<Option<Image>>=names.iter().map(|name|if crate::render3d::bct_path(&worker_dir.join(name)).is_some(){None}else{decoded.next().flatten()}).collect();
             Some((j,names,images))
         }).await?;
         let mut textures=HashMap::new();let mut budget=crate::load_work::Budget::new();
         for (name,image) in names.into_iter().zip(images){
-            if let Some(image)=image{textures.insert(name,crate::render3d::upload_cooperative(&image,false).await);}
+            if let Some(t)=crate::render3d::upload_bct(&dir.join(&name),false){textures.insert(name,t);}
+            else if let Some(image)=image{textures.insert(name,crate::render3d::upload_cooperative(&image,false).await);}
             budget.checkpoint().await;
         }
         Self::from_json(&dir,j,true,textures)
@@ -837,9 +840,15 @@ impl EffectDef {
             if let Some(t) = textures.get(name) {
                 return Some(t.clone());
             }
-            let b = std::fs::read(dir.join(name)).ok()?;
-            let t = Texture2D::from_file_with_format(&b, None);
-            t.set_filter(FilterMode::Linear);
+            let t = match crate::render3d::upload_bct(&dir.join(name), false) {
+                Some(t) => t,
+                None => {
+                    let b = std::fs::read(dir.join(name)).ok()?;
+                    let t = Texture2D::from_file_with_format(&b, None);
+                    t.set_filter(FilterMode::Linear);
+                    t
+                }
+            };
             textures.insert(name.to_string(), t.clone());
             Some(t)
         };
