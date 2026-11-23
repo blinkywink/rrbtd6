@@ -1877,6 +1877,10 @@ pub struct Alternate {
 #[derive(Deserialize, Clone)]
 pub struct Emission {
     pub kind: String,
+    /// SingleEmissionAtTrackExitModel.distanceFromEdge: the shot goes at each path's leak point
+    /// less this along the path (SingleEmissionAtTrackExit.Emit @0x180c4c320, one per position).
+    #[serde(default)]
+    pub track_exit: Option<f32>,
     /// AdoraEmissionModel.angleBetween: the bolts' own spacing rule (AdoraEmission.GetDirection).
     #[serde(default)]
     pub adora_between: Option<f32>,

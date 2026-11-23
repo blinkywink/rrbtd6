@@ -11628,7 +11628,7 @@ impl Game {
                 continue;
             }
             let rot = self.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).unwrap_or(0.0);
-            let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+            let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
             let start = self.projectiles.len();
             self.emit_z = 20.0;
             self.emit_as(by, at, (rot - 90.0) * DEG2RAD, &single, &se.projectile, None, tiers, owner);
@@ -11685,7 +11685,7 @@ impl Game {
                 .map(|(_, _, r)| (r.zap.clone(), r.zap_cd));
             let Some((Some(zap), cd)) = rod else { continue };
             let tiers = self.towers[t].tiers;
-            let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+            let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
             let start = self.projectiles.len();
             self.emit_target = Some(id);
             self.emit(bp, 0.0, &single, &zap, None, tiers, tid);
@@ -11721,7 +11721,7 @@ impl Game {
             return;
         }
         let rot = self.towers.iter().find(|t| t.id == owner).and_then(|t| t.game_rot).unwrap_or(0.0);
-        let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+        let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
         let start = self.projectiles.len();
         self.emit_rot = Some(rot);
         self.emit_z = z;
@@ -11795,7 +11795,7 @@ impl Game {
         // (Vector2 rotation in the game's frame (its y is the clone's -y); a zero line keeps 0:
         // recording sky_050 rt 193, a rod to itself.)
         let rot = if dx == 0.0 && dy == 0.0 { 0.0 } else { 90.0 - RAD2DEG * crt_atan2(-dy, dx) };
-        let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+        let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
         let start = self.projectiles.len();
         self.emit_rot = Some(rot);
         self.emit_z = z;
@@ -11911,7 +11911,7 @@ impl Game {
                     let pr = &self.projectiles[p];
                     let rot = pr.grot.unwrap_or_else(|| pr.dir_rot());
                     let (tiers, owner, by) = (pr.tiers, pr.owner, pr.emitted_by);
-                    let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+                    let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
                     for n in 0..(cnt.max(1.0) as usize) {
                         let d0 = (centre - n as f32 * spacing).max(0.0);
                         // (Made at the bloon: it joins its track spot on its first move; recording
@@ -12328,7 +12328,7 @@ impl Game {
                     }
                 }
             }
-            let single = Emission { kind: "Single".into(), count: 1, ..emission.clone() };
+            let single = Emission { track_exit: None, kind: "Single".into(), count: 1, ..emission.clone() };
             let s0 = self.projectiles.len();
             self.emit_z = 2.0;
             self.emit_target = None;
@@ -14285,7 +14285,7 @@ impl Game {
     /// the projectile at the location, each turned to the current rotation.
     fn place_emit(&mut self, t: usize, proj: Proj) {
         let (tiers, owner, p) = (self.towers[t].tiers, self.towers[t].id, self.towers[t].place_loc);
-        let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+        let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
         let start = self.projectiles.len();
         self.emit(p, 0.0, &single, &proj, None, tiers, owner);
         for pr in &mut self.projectiles[start..] {
@@ -17427,7 +17427,7 @@ impl Game {
         };
         for (proj, owner) in on_destroy {
             let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
-            let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+            let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
             let start = self.projectiles.len();
             self.emit(pp0, 0.0, &single, &proj, None, tiers, owner);
             // (Its bloon in the blast's collidedWith, as for the timed splash: the children are in
@@ -18198,7 +18198,9 @@ impl Game {
         // draws come out the same, so a tower with such an ability list doesn't take it again
         // here; obyn_l10 / l20 match either way only like this.)
         let ability_twice = self.tier(t).is_some_and(|tr| tr.abilities.iter().flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter()).any(|a| a.track_fallback && !a.track_closest));
-        if fresh && only_bloons && self.towers[t].placed_step == 0 && !ability_twice {
+        // (Only an attack there when the round was set: one made later, as by DanDMonke's
+        // Transform at rt 400 in recording dand_l20_r80, shuffles once.)
+        if fresh && only_bloons && self.towers[t].placed_step == 0 && self.round_clock <= 1 && !ability_twice {
             self.towers[t].track_sets[k].sig = 0;
             if let Some(sp) = self.towers[t].track_sets[k].supply.as_mut() {
                 sp.2 = [9; 3];
@@ -19072,7 +19074,7 @@ impl Game {
         let Some(moab) = bloon_idx(&self.bloons, &self.bidx, target).map(|j| &self.bloons[j]).map(|b| self.defs[b.kind].tags.iter().any(|t| t == "Moabs")) else {
             return;
         };
-        let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+        let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
         for t in 0..self.towers.len() {
             // (Not a Paragon still paused by its sacrifice: recording sub_paragon_r40, bought at
             // 60, no strike for the MOAB entering at rt 82.)
@@ -19250,7 +19252,7 @@ impl Game {
     /// projectile's rotation set to 0, landAt = -1; at finishAt, Finish (@0x180e38070): the
     /// attacks' pauseCount - 1, the displays shown again (createFinishingEffectAt: display only).
     fn leap_step(&mut self) {
-        let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+        let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
         for t in 0..self.towers.len() {
             let Some(st) = self.towers[t].leap.clone() else { continue };
             if let Some(p) = st.pending {
@@ -19440,7 +19442,7 @@ impl Game {
         let Some(st) = self.towers[t].charge.as_ref() else { return };
         let proj = st.spec.projectile.clone();
         let (tiers, owner) = (self.towers[t].tiers, self.towers[t].id);
-        let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+        let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
         let p0 = self.tracks[k].pos(d);
         let start = self.projectiles.len();
         self.emit(p0, 0.0, &single, &proj, None, tiers, owner);
@@ -20067,6 +20069,11 @@ impl Game {
                     for st in &mut tw.weapons {
                         st.emits = 0;
                     }
+                    // HYPOTHESIS P-MORPHONESHOT: a one-shot ability support's mutator on the tower
+                    // (Battlecry's oneShotInRange rate) doesn't carry over to the morphed model
+                    // (recording dand_l20_r80 rt 581: the Macaque's weapon at x0.75 turbo only,
+                    // 34 frames, not 41). MorphTower.FinishActivation (@0x180e3f240) not traced.
+                    tw.temp_supports.retain(|(sp, _, _)| !sp.instant);
                 }
             }
             let waiting: Vec<bool> = self.towers[t].temp.iter().map(|x| x.delay > 0.0).collect();
@@ -22881,7 +22888,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 // point (recording ice_250: Absolute Zero's pierce-999 pulse with
                                 // the blast, both at z 7).
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+                                    let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
                                     self.emit(from, dir, &single, sec, None, tiers, owner);
                                 }
                                 self.emit_z = 0.0;
@@ -23084,7 +23091,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 self.emit_aim = None;
                                 // MultiEmissionModel: its secondary projectile from the tower too.
                                 if let Some(sec) = &emission.secondary {
-                                    let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+                                    let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
                                     self.emit(pos, dir, &single, sec, None, tiers, owner);
                                 }
                                 if ambient {
@@ -25903,7 +25910,7 @@ impl Game {
         let pool = stored.floor() as i64;
         let (min, max_wave) = (nc.min_per_wave as i64, nc.max_per_wave as i64);
         let owner = self.towers[t].id;
-        let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+        let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
         // Each undead bloon in turn: its pierce share, its spot on the track (the segment's
         // centre, less Random.Next(maxPathRandomRange) + half of it unless the player chose the
         // segment), then its offset (Vector3.GetOffsetFromRadius) as it is emitted.
@@ -26668,7 +26675,7 @@ impl Game {
                 "destroy_emit" => match &e.projectile {
                     Some(p) => EffectKind::DestroyEmit {
                         proj: p.clone(),
-                        emission: std::sync::Arc::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
+                        emission: std::sync::Arc::new(e.emission.clone().unwrap_or(Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
                         dont_copy: e.dont_copy,
                     },
                     None => continue,
@@ -26676,7 +26683,7 @@ impl Game {
                 "carry" => match &e.projectile {
                     Some(p) => { self.carry_pending.set(true); EffectKind::Carry {
                         proj: p.clone(),
-                        emission: std::sync::Arc::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
+                        emission: std::sync::Arc::new(e.emission.clone().unwrap_or(Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
                         uids: Vec::new(),
                     } },
                     None => continue,
@@ -26691,7 +26698,7 @@ impl Game {
                         ignore: e.ignore_same_frame,
                         skip: e.ignore_same_frame,
                         proj: p.clone(),
-                        emission: std::sync::Arc::new(e.emission.clone().unwrap_or(Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
+                        emission: std::sync::Arc::new(e.emission.clone().unwrap_or(Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()})),
                     },
                     None => continue,
                 },
@@ -27592,6 +27599,21 @@ impl Game {
     }
 
     fn emit(&mut self, from: [f32; 2], dir: f32, em: &Emission, spec: &Proj, crit: Option<f32>, tiers: [u8; 3], owner: u64) {
+        // SingleEmissionAtTrackExit: its positions are each path's leakDistance less
+        // distanceFromEdge along it (recording dand_l20_r80 rt 399: Magic Barrier and Quick
+        // Thinking at Tutorial's 1068.22). HYPOTHESIS P-TRACKEXIT: every path with a leakDist.
+        if let Some(edge) = em.track_exit {
+            let mut one = em.clone();
+            one.track_exit = None;
+            let mut at: Vec<[f32; 2]> = (0..self.tracks.len()).filter_map(|i| self.track_ends.get(i).and_then(|e| e.1).map(|l| self.tracks[i].pos(l - edge))).collect();
+            if at.is_empty() && !self.tracks.is_empty() {
+                at.push(self.tracks[0].pos(self.leak_dist(0) - edge));
+            }
+            for q in at {
+                self.emit(q, dir, &one, spec, crit, tiers, owner);
+            }
+            return;
+        }
         let start = self.projectiles.len();
         // RangeSupport's MutatorTower.Mutate (VERIFIED-DECOMP @0x180d795b0) stretches the attack
         // model's GetDescendant<TravelStraitModel>: when the weapons' own shots have none (an
@@ -28717,7 +28739,7 @@ impl Game {
                 self.tick_bloon_effects(i, round_clock, &mut dots, &mut emits);
             }
         }
-        let single = Emission { kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
+        let single = Emission { track_exit: None, kind: "Single".into(), adora_between: None, cone: 0.0, main_rot: false, line_grow: None, line_end: None, line_target_end: false, line_initial: None, line_fx: None, eject_random: 0.0, use_speed: false, speed_min: 1.0, speed_max: 1.0, count: 1, angle: 0.0, spread: 0.0, offset_start: 0.0, target_spread: 0.0, markers: Vec::new(), secondary: None, random_angle: 0.0, offset: 0.0, dir_off: None, arc_off: None, line_plain: false, line_tower_rot: false, line_ignore_blockers: false, line_from_target: None, pool_every: 0, with_tower: true, air_rot: false, proj_rot: false, towards: false, over_time: None, supply: Vec::new(), closest: Vec::new()};
         let mut emitted: Vec<(std::ops::Range<usize>, u64)> = Vec::new();
         for (pos, proj, owner, from, layer) in emits {
             let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);

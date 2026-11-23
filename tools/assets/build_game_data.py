@@ -1645,6 +1645,10 @@ def main():
             return {"kind": "Single", "count": 1,
                     "closest": [[m.get("ejectX", 0.0), m.get("ejectY", 0.0), m.get("ejectZ", 0.0), m.get("rotation", 0.0)] for m in ms],
                     "with_tower": bool(f.get("rotateProjectileWithTower", True))}
+        # SingleEmissionAtTrackExitModel (DanDMonke's Magic Barrier / Quick Thinking): one shot at
+        # each track exit, distanceFromEdge back along the path from its leak point.
+        if e["type"] == "SingleEmissionAtTrackExitModel":
+            return {"kind": "Single", "count": 1, "track_exit": f.get("distanceFromEdge", 0.0)}
         return {"kind": "Single", "count": 1}
 
     def tap_fx(xf):
@@ -2626,7 +2630,10 @@ def main():
                                             "id": xf.get("mutatorId") or x["type"], "global": glob,
                                             "radius": None if glob or use_tower else rng,
                                             "self": x["type"] != "CallToArmsModel" and bool(xf.get("canEffectThisTower", xf.get("canAffectThisTower", True))),
-                                            "instant": x["type"] == "CallToArmsModel",
+                                            # (oneShotInRange: the zone mutates the towers in range once, inside
+                                            # Activate, as Call to Arms does: recording dand_l20_r80, Battlecry's
+                                            # x1.2 rate on its own tower in the activation frame with the turbo.)
+                                            "instant": x["type"] == "CallToArmsModel" or bool(xf.get("oneShotInRange")),
                                             "stacks": 1, "sets": sets, "bases": bases, "area_types": area_types, "tier_cap": 5,
                                             "lifespan": xf.get("lifespan", 0.0),
                                             "icon": xf.get("buffIconName") if xf.get("showBuffIcon") else None,

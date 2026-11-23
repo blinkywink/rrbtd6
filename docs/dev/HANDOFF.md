@@ -3578,3 +3578,13 @@ Open (pending/hero_open):
   (GeneratePositions @0x180e33470: every (spacing % 7)-th segment, farthest first; Process
   @0x180e33d60: a wall every timePerIcewall + 1 frames from activation + delay + 1, nearest first).
   silas_l20_r80 MATCHES as well: Silas 3/3 DONE.
+  (2026-11-23) dand_l20_r80 (bloons already exact; positions): now weapons-exact and positions to
+  rt 650 (was 400). SingleEmissionAtTrackExitModel ported (Emit @0x180c4c320: one shot per position,
+  each path's leakDist - distanceFromEdge along it; Magic Barrier / Quick Thinking at 1068.22 on
+  Tutorial); ability support zones with oneShotInRange (Battlecry's rate) mutate in Activate like
+  Call to Arms (`instant`: the x1.2 lands with the Transform turbo, one Net Trap reshuffle);
+  HYPOTHESIS P-MORPHONESHOT: such one-shot supports are dropped when MorphTower finishes (the
+  Macaque's weapon at 34 frames = 45 x 0.75, not 41); trace MorphTower.FinishActivation
+  (@0x180e3f240; it RemoveMutator's at line ~155 and calls MorphTowerModel.UpdateMutatorAndSaveAbilityData)
+  to verify. The OnRoundSet double shuffle only for lists made in frame 1 (the morph's are made
+  later). Next: dand_l20 rt 650 (three game shots at (-127.11, -31.37), one clone shot elsewhere).
