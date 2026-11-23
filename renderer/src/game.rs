@@ -4460,6 +4460,11 @@ pub struct Game {
     pub start_round: usize,
     /// Frames of Syphon Funding left (P-SYPHON).
     pub syphon: f32,
+    /// Running FrozenCascades: (activating tower id, activation frame, towers still to explode,
+    /// the model).
+    cascades: Vec<(u64, u64, Vec<u64>, std::sync::Arc<crate::data::Cascade>)>,
+    /// Running FrozenBurials: (tower id, startedAt (round time), positions left, the model).
+    burials: Vec<(u64, i64, Vec<[f32; 2]>, std::sync::Arc<crate::data::Burial>)>,
     /// Seconds spent per step phase (effects + movement, towers, projectiles), for profiling.
     pub prof: [f64; 3],
     pub prof_max: [f64; 3],
@@ -5868,7 +5873,7 @@ macro_rules! collide_pass {
                 if let Some(det) = $s.projectiles[$p].spec.detonate.clone() {
                     for tag in &det.tags {
                         let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, id) else { break };
-                        let k = $s.bloons[j].effects.iter().position(|e| if tag == "Freeze" { matches!(e.kind, EffectKind::Freeze { .. }) } else { e.id.split(':').next() == Some(tag.as_str()) });
+                        let k = $s.bloons[j].effects.iter().position(|e| if tag == "Freeze" { matches!(e.kind, EffectKind::Freeze { .. }) || e.id.ends_with(":Freeze") } else { e.id.split(':').next() == Some(tag.as_str()) });
                         let Some(k) = k else { continue };
                         let left = $s.bloons[j].effects[k].frames_left as i32;
                         let d = $s.round_damage(det.dps * (left as f32 / 60.0));
@@ -7096,6 +7101,8 @@ impl Game {
             gw_effects: Vec::new(),
             prof: [0.0; 3],
             syphon: 0.0,
+            cascades: Vec::new(),
+            burials: Vec::new(),
             paragon_degree: d.paragon_degree.clone(),
             buff_order: d.buff_order.clone().into(),
             discount_keys: std::sync::Mutex::new(Vec::new()),
@@ -8805,9 +8812,12 @@ impl Game {
         // 211, shot 508 heads for the newer 549's rt 210 place; rt 43, shot 457 for the older
         // 450's moved one.)
         let born = self.projectiles[p].born;
+        // (Target.Position adds its aimed collision circle's offset.)
+        let off = self.projectiles[p].seek_off.unwrap_or([0.0; 2]);
         let target = self.projectiles[p].aim.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id)).map(|j| {
             let b = &self.bloons[j];
-            (b.id, if b.born > born { b.prev } else { b.pos }, b.height, b.hit_by(&self.projectiles[p].hit))
+            let at = if b.born > born { b.prev } else { b.pos };
+            (b.id, [at[0] + off[0], at[1] + off[1]], b.height, b.hit_by(&self.projectiles[p].hit))
         });
         let pr = &mut self.projectiles[p];
         // OnEmit: velocity at its minimum, accelerating, the shot's own direction.
@@ -14591,6 +14601,64 @@ impl Game {
             }
             self.emit(pos, face, &c.emission, &c.projectile, None, tiers, id);
         }
+        // FrozenCascade.Activate (VERIFIED-DECOMP @0x180e34270): towersToExplode from
+        // FindTowersToAffect (<FindTowersToAffect>d__10.MoveNext @0x180e43870: the tower itself,
+        // then TowerManager.GetTowersByBaseId for each towerId entry), ordered by distance from
+        // the tower (Vector2, stable), at most maxExplosions; then its Process (below).
+        // HYPOTHESIS P-CASCADETIER: MoveNext also tests the towers' tiers (index 2); not ported.
+        if let Some(fc) = a.cascade.clone() {
+            let p = self.towers[t].pos;
+            let mut list: Vec<(f32, u64)> = vec![(0.0, id)];
+            for base in &fc.bases {
+                for o in 0..self.towers.len() {
+                    if o != t && self.tower_defs[self.towers[o].def].0 == *base {
+                        let q = self.towers[o].pos;
+                        list.push(((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2), self.towers[o].id));
+                    }
+                }
+            }
+            list.sort_by(|x, y| x.0.total_cmp(&y.0));
+            list.truncate(fc.max);
+            self.cascades.push((id, self.sim_elapsed, list.into_iter().map(|e| e.1).collect(), fc));
+        }
+        // FrozenBurial.Activate (VERIFIED-DECOMP @0x180e33420): GeneratePositions (@0x180e33470:
+        // each path's segments from 0 in steps of icewallSpacing % 7 (at least 1), those not
+        // invulnerable and on the map; then ordered farthest from the tower first, by repeated
+        // selection, ties to the first), startedAt = icewallDelay - timePerIcewall + roundTime.
+        // HYPOTHESIS P-BURIALINV: the segment's invulnerable flag as track_seg_ok.
+        if let Some(fb) = a.burial.clone() {
+            let p = self.towers[t].pos;
+            let step = (fb.spacing % 7).max(1) as usize;
+            let mut found: Vec<[f32; 2]> = Vec::new();
+            for (pi, segs) in self.track_segs.iter().enumerate() {
+                let mut k = 0;
+                while k < segs.len() {
+                    let ok = self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false);
+                    if ok && on_map(segs[k], 0.0) {
+                        found.push(segs[k]);
+                    }
+                    k += step;
+                }
+            }
+            let mut used = vec![false; found.len()];
+            let mut order = Vec::with_capacity(found.len());
+            for _ in 0..found.len() {
+                let mut best: Option<(usize, f32)> = None;
+                for (j, q) in found.iter().enumerate() {
+                    if used[j] {
+                        continue;
+                    }
+                    let d = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt();
+                    if best.is_none_or(|b| b.1 < d) {
+                        best = Some((j, d));
+                    }
+                }
+                let (j, _) = best.unwrap();
+                used[j] = true;
+                order.push(found[j]);
+            }
+            self.burials.push((id, fb.delay - fb.per + self.round_clock, order, fb));
+        }
         // ActivateAbilitiesOnAbilityModel: the named ability goes too (on its own cooldown).
         if let Some(other) = a.also.as_ref().filter(|o| **o != a.name) {
             self.activate_ability(other);
@@ -18118,8 +18186,25 @@ impl Game {
     /// by NextDouble x maxOffset - maxOffset x 0.5 in x, then y (recording ninja_002: the
     /// first Caltrops at rt 1).
     /// `base`: the attack's own range (the tower's buffs at the time apply).
-    fn supplied_track_point(&mut self, t: usize, key: &str, c: [f32; 2], base: f32, off: f32, no_moab: bool, through_walls: bool) -> Option<(f32, [f32; 2], u64)> {
+    fn supplied_track_point(&mut self, t: usize, key: &str, c: [f32; 2], base: f32, off: f32, no_moab: bool, through_walls: bool, only_bloons: bool) -> Option<(f32, [f32; 2], u64)> {
+        let fresh = !self.towers[t].track_sets.iter().any(|x| x.key == key && x.supply.is_some());
         let k = self.track_supply_touch(t, key, c, base, no_moab, through_walls);
+        // TargetTrack with onlyTargetPathsWithBloons (Initialise @0x180e07c50) also listens for
+        // OnRoundSet (@0x180db23b0: GeneratePoints): a tower placed before the game sets its round
+        // has its points made (shuffled) twice before the first frame (recording silas_l10_r40:
+        // two 12-point shuffles, then the Ice Wall's offset draws; as Obyn's ability lists).
+        // (INFERRED: Obyn's track_sets_init "shuffles twice" rule (recording obyn_l20_r80) is
+        // likely this same OnRoundSet shuffle, the Totem's made before the Brambles list: the
+        // draws come out the same, so a tower with such an ability list doesn't take it again
+        // here; obyn_l10 / l20 match either way only like this.)
+        let ability_twice = self.tier(t).is_some_and(|tr| tr.abilities.iter().flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter()).any(|a| a.track_fallback && !a.track_closest));
+        if fresh && only_bloons && self.towers[t].placed_step == 0 && !ability_twice {
+            self.towers[t].track_sets[k].sig = 0;
+            if let Some(sp) = self.towers[t].track_sets[k].supply.as_mut() {
+                sp.2 = [9; 3];
+            }
+            self.track_supply_refresh_one(t, k);
+        }
         let (pts, cur, _) = self.towers[t].track_sets[k].supply.as_ref().unwrap();
         if pts.is_empty() {
             return None;
@@ -21172,7 +21257,7 @@ impl Game {
                                 }
                                 None => None,
                             },
-                            TargetMode::First | TargetMode::Last | TargetMode::Close | TargetMode::Strong | TargetMode::Track if !attack.track_closest && !attack.track_default => self.supplied_track_point(t, &attack.model_name, pos, attack.range, off, no_moab, attack.through_walls),
+                            TargetMode::First | TargetMode::Last | TargetMode::Close | TargetMode::Strong | TargetMode::Track if !attack.track_closest && !attack.track_default => self.supplied_track_point(t, &attack.model_name, pos, attack.range, off, no_moab, attack.through_walls, attack.track_only_bloons),
                             _ => self.track_point(pos, range, off),
                         }
                     };
@@ -23550,6 +23635,13 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                     None => self.tracers.push((from, to)),
                                 }
                             }
+                            // (SilasTrackTarget's Target too: recording silas_l10_r40 rt 105, a shot
+                            // faces the MOAB's aimed circle.)
+                            if proj.silas.is_some() && !ambient {
+                                for pr in &mut self.projectiles[start..] {
+                                    pr.seek_off = aim_circle.map(|_| aim_off);
+                                }
+                            }
                             if (proj.seek.is_some() || proj.adora.is_some()) && !ambient {
                                 for pr in &mut self.projectiles[start..] {
                                     // (A throw whose target died keeps that Target, invalid, until its first
@@ -23560,7 +23652,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             }
                             // HYPOTHESIS P-ARRIVE: ArriveAtTargetModel flies straight to where the target
                             // was when fired (its Curve only eases the motion), then expires.
-                            if let Some(ar) = proj.arrive.as_ref().filter(|a| a.time > 0.0 || a.alt_speed > 0.0) {
+                            // (timeToTake and altSpeed both 0: perc is time / 0, infinite, so it arrives on
+                            // its first Process; recording silas_l10_r40 rt 2, the Ice Wall at its track
+                            // point.)
+                            if let Some(ar) = proj.arrive.as_ref() {
                                 let now = self.sim_elapsed;
                                 let bheight = bloon_idx(&self.bloons, &self.bidx, target_id).map(|j| &self.bloons[j]).map(|b| b.height);
                                 // (A throw whose bloon died before the release goes at its spot with no
@@ -23593,6 +23688,8 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                     // 0.916 of the way).
                                     let t_take = if ar.time > 0.0 {
                                         ar.time
+                                    } else if ar.alt_speed <= 0.0 {
+                                        0.0
                                     } else {
                                         // (A segment point stands 2 up: recording engineer_032, Cleansing
                                         // Foam eases in 0.662 / 0.974 of the way from 10.7 to 2.)
@@ -23610,7 +23707,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                         let (dx, dy, dz) = (target[0] - pr.pos[0], target[1] - pr.pos[1], pr.z - tz);
                                         (dx * dx + dy * dy + dz * dz).sqrt() / ar.alt_speed
                                     };
-                                    if t_take > 0.0 && !ar.samples.is_empty() {
+                                    if t_take >= 0.0 && !ar.samples.is_empty() {
                                         pr.arrive_at = Some((now, pr.pos, target));
                                         // (Its Target holds the aimed collision circle: Target.Position adds it;
                                         // recording sky_040 rt 47.)
@@ -25110,6 +25207,79 @@ impl Game {
         }
     }
 
+    /// FrozenCascade.Process (VERIFIED-DECOMP @0x180e348b0): radius = frames since Activate x
+    /// timeScale; in list order each tower within it (DistanceSquared2 <= radius squared) explodes,
+    /// the projectile through its emission at the tower, owned by the activating tower (recording
+    /// silas_l10_r40: activated at rt 399, Silas's own Explosion made at 400, the next frame's
+    /// Process); the first one further away waits.
+    /// FrozenBurial.Process (VERIFIED-DECOMP @0x180e33d60): once more than timePerIcewall since
+    /// startedAt (round time), startedAt = now and an Ice Wall goes at the last position (the
+    /// nearest left), its Target that point, through the emission (recording silas_l10_r40: at
+    /// rt 399 + 31 the first, nearest Silas).
+    fn burial_step(&mut self) {
+        let now = self.round_clock;
+        let mut k = 0;
+        while k < self.burials.len() {
+            let owner = self.burials[k].0;
+            let Some(t) = self.towers.iter().position(|w| w.id == owner) else { self.burials.remove(k); continue };
+            if self.burials[k].2.is_empty() {
+                self.burials.remove(k);
+                continue;
+            }
+            let fb = self.burials[k].3.clone();
+            if now - self.burials[k].1 <= fb.per {
+                k += 1;
+                continue;
+            }
+            self.burials[k].1 = now;
+            let q = self.burials[k].2.pop().unwrap();
+            let (tiers, face) = (self.towers[t].tiers, self.towers[t].angle);
+            let start = self.projectiles.len();
+            // (A segment point stands 2 up; ArriveAtTarget at its own spot arrives on its first
+            // Process, colliding from the frame after, as an attack's point throw.)
+            self.emit_z = 2.0;
+            self.emit(q, face, &fb.emission, &fb.projectile, None, tiers, owner);
+            self.emit_z = 0.0;
+            let at = self.sim_elapsed;
+            for pr in &mut self.projectiles[start..] {
+                if pr.spec.arrive.is_some() {
+                    pr.arrive_at = Some((at, pr.pos, q));
+                    pr.arrive_time = 0.0;
+                    pr.vel = [0.0, 0.0];
+                    pr.moving = 2.0;
+                }
+            }
+            k += 1;
+        }
+    }
+
+    fn cascade_step(&mut self) {
+        let now = self.sim_elapsed;
+        let mut k = 0;
+        while k < self.cascades.len() {
+            let (owner, start) = (self.cascades[k].0, self.cascades[k].1);
+            if start >= now {
+                k += 1;
+                continue;
+            }
+            let Some(t) = self.towers.iter().position(|w| w.id == owner) else { self.cascades.remove(k); continue };
+            let fc = self.cascades[k].3.clone();
+            let r = (now - start) as f32 * fc.time_scale;
+            let centre = self.towers[t].pos;
+            while let Some(&first) = self.cascades[k].2.first() {
+                let Some(o) = self.towers.iter().position(|w| w.id == first) else { self.cascades[k].2.remove(0); continue };
+                let q = self.towers[o].pos;
+                if r * r < (q[0] - centre[0]).powi(2) + (q[1] - centre[1]).powi(2) {
+                    break;
+                }
+                self.cascades[k].2.remove(0);
+                let (tiers, face) = (self.towers[t].tiers, self.towers[t].angle);
+                self.emit(q, face, &fc.emission, &fc.projectile, None, tiers, owner);
+            }
+            if self.cascades[k].2.is_empty() { self.cascades.remove(k); } else { k += 1; }
+        }
+    }
+
     fn synced_double(&mut self) -> f64 {
         let seed = self.freeplay_seed;
         let d = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
@@ -26271,7 +26441,7 @@ impl Game {
         if !b.effects.iter().any(|e| *e.id == *sr.rime_id.as_str()) {
             return;
         }
-        let frozen = b.effects.iter().any(|e| matches!(e.kind, EffectKind::Freeze { .. }));
+        let frozen = b.effects.iter().any(|e| matches!(e.kind, EffectKind::Freeze { .. }) || *e.id == *sr.freeze_id.as_str());
         if frozen {
             if let Some(c) = &sr.explosion {
                 let (pos, z, id) = (b.pos, b.height, b.id);
@@ -26285,8 +26455,9 @@ impl Game {
         }
         let b = &self.bloons[i];
         let d = &self.defs[b.kind];
-        // (BloonModel.isImmuneToSlow isn't exported; STAND-IN: MOAB-class bloons by canFreezeMoabs.)
-        if b.properties(d) & sr.immune != 0 || (d.is_moab && !sr.moabs) {
+        // (BloonModel.isImmuneToSlow isn't exported: STAND-IN, none immune. Collide has no
+        // canFreezeMoabs test: recording silas_l10_r40 rt 157, "Ice:Regular:Freeze" on a MOAB.)
+        if b.properties(d) & sr.immune != 0 {
             return;
         }
         let mut frames = sr.frames as f32;
@@ -26299,9 +26470,18 @@ impl Game {
         let frames = frames as i32 as f32;
         let now = self.sim_elapsed;
         for &k in std::iter::once(&i).chain(kids) {
+            // (Without canFreezeMoabs the freeze mutator holds no MOAB-class bloon (its speed
+            // unchanged: rt 157-307, the frozen MOAB at full speed) but is there, keyed "Freeze":
+            // a ×1 slow under its id.)
+            let moab = self.defs[self.bloons[k].kind].is_moab && !sr.moabs;
             let b = &mut self.bloons[k];
             b.effects.retain(|e| *e.id != *sr.freeze_id.as_str());
-            b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Freeze { immune: sr.immune }, id: sr.freeze_id.as_str().into(), frames_left: frames, total: frames, added: now, layers: sr.layers, owner, distribute: (true, false), keep: false });
+            let kind = if moab { EffectKind::Slow { mult: 1.0, glue: 0, bonus: 0.0 } } else { EffectKind::Freeze { immune: sr.immune } };
+            // (The hit bloon gets the freezeLayers charges (AddMutatorForNumLayers); a copy it
+            // cascades to has none, never depleted: recording silas_l10_r40, copy 1510 frozen at
+            // 2788 stays put after losing 3 layers at 2821 (its source 1419 moves on after 3).)
+            let layers = if k == i { sr.layers } else { u32::MAX };
+            b.effects.push(Effect { overlay: Default::default(), seq: 0, kind, id: sr.freeze_id.as_str().into(), frames_left: frames, total: frames, added: now, layers, owner, distribute: (true, false), keep: false });
         }
     }
 
@@ -26369,6 +26549,11 @@ impl Game {
                 continue;
             }
             let (mut mult, mut lifespan) = (e.mult, e.lifespan);
+            // (SilasApplyRimeModel.Mutator keeps the five speed modifiers: recording silas_l10_r40
+            // rt 98, a rimed MOAB at x0.95. HYPOTHESIS P-RIMEBAD: a BAD takes speedModifier.)
+            if let Some(m) = moab_class(&self.names[self.bloons[i].kind]).and_then(|k| e.mult_by_class.get(k)) {
+                mult = *m;
+            }
             if !e.by_class.is_empty() {
                 lifespan = moab_class(&self.names[self.bloons[i].kind]).and_then(|k| e.by_class.get(k)).copied().unwrap_or(0.0);
                 if lifespan <= 0.0 {
@@ -28641,6 +28826,14 @@ impl Game {
         for (mut held, mut st) in std::mem::take(&mut self.late_release) {
             let rt = self.round_clock;
             self.bird_release_ex(&mut held, &mut st, rt, true);
+        }
+        // (FrozenCascade.Process each frame after Activate. HYPOTHESIS P-CASCADEORDER: here in the
+        // frame; only the activating tower's own explosion (at Activate) is in a recording.)
+        if !self.cascades.is_empty() {
+            self.cascade_step();
+        }
+        if !self.burials.is_empty() {
+            self.burial_step();
         }
         self.fly_birds();
         self.hold_bird_bloons();

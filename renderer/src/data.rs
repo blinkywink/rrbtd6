@@ -2733,6 +2733,12 @@ pub struct Ability {
     /// CreateProjectileOnAbilityActivateModel: fired from the tower when it's used.
     #[serde(default)]
     pub on_activate: Vec<Contact>,
+    /// FrozenCascadeModel (Silas's Frozen Cascade).
+    #[serde(default)]
+    pub cascade: Option<std::sync::Arc<Cascade>>,
+    /// FrozenBurialModel (Silas's Frozen Burial: Ice Walls along the track).
+    #[serde(default)]
+    pub burial: Option<std::sync::Arc<Burial>>,
     /// ActivateAbilitiesOnAbilityModel.abilityToFind: used along with this one.
     #[serde(default)]
     pub also: Option<String>,
@@ -2971,6 +2977,27 @@ pub struct Morph {
     pub tier: std::sync::Arc<Tier>,
     #[serde(default)]
     pub display: Option<String>,
+}
+
+/// FrozenCascadeModel: towers of these baseIds (towerId, comma separated) explode with
+/// `projectile` as a ring grows from the activating tower at `time_scale` a frame.
+#[derive(Deserialize)]
+pub struct Cascade {
+    pub bases: Vec<String>,
+    pub max: usize,
+    pub time_scale: f32,
+    pub projectile: Proj,
+    pub emission: Emission,
+}
+
+/// FrozenBurialModel: icewallSpacing, icewallDelay, timePerIcewall (frames), the wall.
+#[derive(Deserialize)]
+pub struct Burial {
+    pub spacing: i32,
+    pub delay: i64,
+    pub per: i64,
+    pub projectile: Proj,
+    pub emission: Emission,
 }
 
 #[derive(Deserialize, Clone)]
@@ -3823,6 +3850,10 @@ pub struct EffectSpec {
     /// replacing `lifespan`.
     #[serde(default)]
     pub by_class: HashMap<String, f32>,
+    /// A slow's multiplier by MOAB class (SilasApplyRimeModel's moab / ddt / bfb / zomg
+    /// SpeedModifier); other bloons take `mult`.
+    #[serde(default)]
+    pub mult_by_class: HashMap<String, f32>,
     /// "emit": ProjectileOverTimeModel, fired at the bloon every `interval` (Sticky Bomb splash).
     /// "pop_emit": EmitOnPopModel, fired (with `emission`) where the bloon pops.
     #[serde(default)]

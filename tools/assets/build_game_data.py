@@ -1163,7 +1163,9 @@ def main():
                     type_bonus[rid] = {"masks": sorted({dtypes[t] for t in items(xf.get("damageTypes")) if isinstance(t, str) and t in dtypes}),
                                        "original": bool(xf.get("useOriginalType"))}
             effects.append({"kind": "slow", "id": rid, "mult": sf.get("speedModifier", 1.0), "lifespan": 9999.0,
-                            "layers": 2147483647, "glue": 0, "refresh": True, "tags": [], "bonus": bonus})
+                            "layers": 2147483647, "glue": 0, "refresh": True, "tags": [], "bonus": bonus,
+                            "mult_by_class": {k.upper(): sf.get(k + "SpeedModifier", sf.get("speedModifier", 1.0))
+                                              for k in ("moab", "ddt", "bfb", "zomg")}})
             # (Rimed already: the freeze and the explosion, Game::silas_rime_hit.)
             dm = deref(sf.get("damageModel"))
             out["silas_rime"] = {"rime_id": rid, "freeze_id": sf.get("freezeMutationId") or "Ice:Regular:Freeze",
@@ -2506,6 +2508,18 @@ def main():
                                                               "emission": emission(deref(xf.get("emission"))),
                                                               "act_chance": float(xf.get("chance", 0.0) or 0.0),
                                                               "follow_tower": bool(xf.get("followTower"))})
+                # FrozenCascadeModel (Silas's Frozen Cascade; FrozenCascade.Activate / Process).
+                if x["type"] == "FrozenCascadeModel" and deref(xf.get("projectile")):
+                    out["cascade"] = {"bases": [b.strip() for b in str(xf.get("towerId") or "").split(",") if b.strip()],
+                                      "max": int(xf.get("maxExplosions", 0)), "time_scale": float(xf.get("timeScale", 1.0)),
+                                      "projectile": projectile(deref(xf["projectile"])),
+                                      "emission": emission(deref(xf.get("emission")))}
+                # FrozenBurialModel (Silas's Frozen Burial; FrozenBurial.Activate / Process).
+                if x["type"] == "FrozenBurialModel" and deref(xf.get("icewallProjectile")):
+                    out["burial"] = {"spacing": int(xf.get("icewallSpacing", 0)), "delay": int(xf.get("icewallDelay", 0)),
+                                     "per": int(xf.get("timePerIcewall", 0)),
+                                     "projectile": projectile(deref(xf["icewallProjectile"])),
+                                     "emission": emission(deref(xf.get("emission")))}
                 # ActivateAbilitiesOnAbilityModel (Support Drop -> Supply Drop): uses that one too.
                 if x["type"] == "ActivateAbilitiesOnAbilityModel" and xf.get("abilityToFind"):
                     out["also"] = xf["abilityToFind"]
@@ -2690,7 +2704,12 @@ def main():
                               "inclusive": zf.get("inclusive", False),
                               "exclude_tags": [x["f"]["tag"] for x in items(zf.get("filters"))
                                                if x and x["type"] == "FilterOutTagModel"]
-                              + ["Moabs" for x in items(zf.get("filters")) if x and x["type"] == "FilterMoabModel" and x["f"].get("flip")],
+                              + ["Moabs" for x in items(zf.get("filters")) if x and x["type"] == "FilterMoabModel" and x["f"].get("flip")]
+                              # (An inclusive FilterWithTagsModel leaves those out, as on attacks:
+                              # Silas's SlowAura skips White / Moabs / Zebra; recording silas_l10_r40
+                              # rt 98, a MOAB 29.2 from him at full speed.)
+                              + [t for x in items(zf.get("filters")) if x and x["type"] == "FilterWithTagsModel" and x["f"].get("inclusive")
+                                 for t in (deref(x["f"].get("tags")) or []) if isinstance(t, str)],
                               "camo": not any(x and x["type"] == "FilterInvisibleModel" and x["f"].get("isActive", True)
                                               for x in items(zf.get("filters")))})
         orbit = None
