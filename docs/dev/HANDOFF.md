@@ -3540,3 +3540,22 @@ Open (pending/hero_open):
     layers); Rimed -> freeze lifespan (model getter @0x1811fccf0, freezeModifierForTagsModels scale it
     per tag) and AddMutatorForNumLayers(freeze mutator, freezeLayers); then the explosion
     (+0xb8 explosionProjectileModel) through its emission. To port next.
+  (2026-11-23, later) Silas PORTED (Game::silas_step, silas_rime_hit, effect_type_bonus): silas_l03_r20
+  now matches to rt 468 (was rt 96); l10 / l20 not looked at yet. Verified:
+  - Collide order (decomp): not rimed -> Rime only; rimed, not frozen -> freeze (+ Rime again); rimed
+    and frozen ("Freeze" keyed mutator) -> the explosion first, then the freeze. Runs after the damage
+    on what the hit bloon is now (one the damage destroyed: only a Rime, rt 463); the freeze cascades to
+    the copies the hit made (rt 95's 487, no M add of its own). "Rimed" is from before the hit.
+  - Rime's IncreaseDamageFromType (GetModifiedDamage @0x180ff8630): + amount (1 at levels 1-17, 5 from
+    18) when the hit's immuneBloonPropertiesOriginal (useOriginalType) is a listed type's
+    (Cold 5 / Frigid 12 / Shatter 1 / Glacier 4); Silas's shot is Frigid, so its 0 damage pops a rimed
+    bloon. One per mutator id (a re-added slow is a 2nd TimedMutator; only the first applies). Proj
+    keeps `immune_orig` when a buff's mask strips `immune`. Armour not modelled.
+  - H lines with unchanged pierce are not collisions (lineage already hit).
+  - Homing: Target.Position by creation order (a newer bloon's frame-start spot, an older one's moved
+    spot), FilterBloon = hit_by (lineage; not ids against layer ids); ...Frames = speed x (1/60f) in
+    f32 (600 -> 10.000001; rt 287 one ulp).
+  OPEN silas_l03 rt 468: shot 678 on the frozen rimed Pink 611: "M deplete 611 1", "R d 0.99918"
+  (a random draw), Rime add, "HB 611 Yellow True" (the Yellow destroyed in the same hit, no
+  explosion). The clone pops it to Yellow and explodes. Find what draws and destroys (rimeModel
+  +0x84 chance flag / +0x80 chance in the freeze path? a frozen-pop rule?).

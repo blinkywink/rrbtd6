@@ -76,7 +76,7 @@ impl Game{
             for e in &b.effects{
                 feed!(h,e.id,e.frames_left,e.layers,e.owner);
                 match &e.kind{
-                    EffectKind::Slow{mult,glue}=>{feed!(h,0u8,mult,glue);},EffectKind::Freeze{immune}=>{feed!(h,1u8,immune);},
+                    EffectKind::Slow{mult,glue,bonus}=>{feed!(h,0u8,mult,glue,bonus);},EffectKind::Freeze{immune}=>{feed!(h,1u8,immune);},
                     EffectKind::Dot{damage,interval,tick,immune,..}=>{feed!(h,2u8,damage,interval,tick,immune);},
                     EffectKind::Brittle{damage}=>{feed!(h,3u8,damage);},
                     EffectKind::Emit{interval,tick,..}=>{feed!(h,4u8,interval,tick);},EffectKind::PopEmit{..}=>5u8.feed(h),EffectKind::DestroyEmit{..}=>13u8.feed(h),

@@ -32,6 +32,10 @@ pub struct GameData {
     /// query visits them (from a SimRecorder dump; empty: storage order).
     #[serde(default)]
     pub grid_offsets: Vec<i32>,
+    /// Bloon mutators' IncreaseDamageFromTypeModel damage types by mutator id (Silas's Rime): its
+    /// amount (the effect's `bonus`, per model) more on a hit whose immunity mask is one of `masks`.
+    #[serde(default)]
+    pub effect_type_bonus: HashMap<String, TypeBonus>,
     pub start: Start,
     pub bloons: HashMap<String, BloonDef>,
     pub towers: HashMap<String, TowerDef>,
@@ -2354,6 +2358,10 @@ pub struct Proj {
     pub ignore_nontarget: bool,
     pub damage: f32,
     pub immune: u32,
+    /// DamageModel.immuneBloonPropertiesOriginal: `immune` before a buff's immunity mask
+    /// stripped it (None: never stripped).
+    #[serde(skip)]
+    pub immune_orig: Option<u32>,
     /// DamageModel.ignoreImmunityDestroy: survives hitting a bloon it can't damage (else that
     /// hit destroys it: Damage.Collide passes !ignoreImmunityDestroy to Bloon.Damage).
     #[serde(default)]
@@ -2602,6 +2610,13 @@ pub struct Proj {
     /// PsiEffectModel: [damagePerTick, tickRate, superCeramicPenalty, maxDurationFrames].
     #[serde(default)]
     pub psi: Option<[f32; 4]>,
+    /// SilasTrackTargetModel: [minSpeedFrames, maxSpeedFrames, accelerationFrames, lifespanFrames,
+    /// waitFrames].
+    #[serde(default)]
+    pub silas: Option<[f32; 5]>,
+    /// SilasApplyRimeModel's freeze and explosion (on a bloon already rimed).
+    #[serde(default)]
+    pub silas_rime: Option<std::sync::Arc<SilasRime>>,
     /// PsiEffectModel.projectileOnBloonDestroyModel / emissionOnBloonDestroy.
     #[serde(default)]
     pub psi_destroy: Option<std::sync::Arc<Contact>>,
@@ -2941,6 +2956,27 @@ pub struct Morph {
     pub tier: std::sync::Arc<Tier>,
     #[serde(default)]
     pub display: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct TypeBonus {
+    pub masks: Vec<u32>,
+    /// useOriginalType: the hit's immuneBloonPropertiesOriginal, else its current mask.
+    #[serde(default)]
+    pub original: bool,
+}
+
+#[derive(Deserialize)]
+pub struct SilasRime {
+    pub rime_id: String,
+    pub freeze_id: String,
+    pub frames: i32,
+    pub layers: u32,
+    pub immune: u32,
+    #[serde(default)]
+    pub moabs: bool,
+    #[serde(default)]
+    pub explosion: Option<Contact>,
 }
 
 #[derive(Deserialize)]
@@ -3666,6 +3702,10 @@ pub struct EffectSpec {
     pub fx: Option<(String, f32)>,
     #[serde(default = "one")]
     pub mult: f32,
+    /// A slow mutator's IncreaseDamageFromTypeModel amount (Silas's Rime: 1 at level 3, more
+    /// later), for hits of GameData.effect_type_bonus's masks.
+    #[serde(default)]
+    pub bonus: f32,
     pub lifespan: f32,
     /// Layers it lasts through: 1 = only the bloon hit, 2 = also its children, ...
     pub layers: u32,

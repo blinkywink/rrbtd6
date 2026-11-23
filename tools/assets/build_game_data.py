@@ -41,6 +41,8 @@ TAP_BANNED = {"EnergisingTotem", "Wizard-LordPhoenix", "Wizard-Phoenix", "TechBo
 
 def main():
     root, map_key, root_idx = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    # Bloon mutators' IncreaseDamageFromTypeModel by mutator id (filled while exporting projectiles).
+    type_bonus = {}
     objs = {}
     for line in open(os.path.join(root, "decoded", "named", "objects.jsonl"), encoding="utf-8"):
         r = json.loads(line)
@@ -391,7 +393,8 @@ def main():
         if not ts and hero_track:
             # (AdoraTrackTarget moves the shot itself (Game::adora_step): with no TravelStrait of
             # its own nothing else does; recording adora_l03_r20, Adora's bolt 6 a frame at 360.)
-            ts = {"speed": 0.0 if pb.get("AdoraTrackTargetModel") else hero_track.get("maximumSpeed", 300.0),
+            # (SilasTrackTarget likewise: Game::silas_step.)
+            ts = {"speed": 0.0,
                   "lifespan": hero_track.get("lifespan") or age.get("lifespan") or 3.0}
         random_range = None
         if not ts and pb.get("RandomRangeTravelStraitModel"):
@@ -971,7 +974,7 @@ def main():
                             "accel_in": af.get("accelerateInAngle", 0.0), "decel_gt": af.get("startDeceleratingIfAngleGreaterThan", 0.0),
                             "lifespan": af.get("lifespan", 0.0), "after_delay": af.get("delay", 0.0),
                             "target_type": af.get("targetType") or "First"}
-        if hero_track and "seek" not in out and not pb.get("AdoraTrackTargetModel"):
+        if hero_track and "seek" not in out and not pb.get("AdoraTrackTargetModel") and not pb.get("SilasTrackTargetModel"):
             out["seek"] = {"distance": 9999.0, "turn_rate": hero_track.get("rotation", 9.0) * 60.0,
                            "max_angle": 360.0, "new_targets": True}
         # GalvanizedModel (Skywarden x-3+-x blasts; Galvanized.Collide @0x180cbf710, Stun @0x180cc0270):
@@ -1141,11 +1144,35 @@ def main():
         for s2 in pb.get("SilasApplyRimeModel", []):
             sf = s2["f"]
             rid = sf.get("rimeMutationId") or "Silas:Rime"
-            effects.append({"kind": "slow", "id": rid, "mult": sf.get("speedModifier", 1.0), "lifespan": 9999.0,
-                            "layers": 1, "glue": 0, "refresh": True, "tags": []})
+            # (SilasApplyRime.Collide @0x180cdb8c0: AddMutatorForNumLayers(rime mutator, every layer):
+            # recording silas_l03_r20 rt 43, "Silas:Rime time -1 layers 2147483647".)
+            # The Rime mutator's IncreaseDamageFromTypeModel (IncreaseDamageFromType.GetModifiedDamage,
+            # VERIFIED-DECOMP @0x180ff8630): a hit whose immuneBloonProperties (useOriginalType: the
+            # model's own) equals GetImmunitiesFromDamageType of one of its damageTypes does `amount`
+            # more, on a bloon without armour. Silas's own shot is Frigid (12): recording
+            # silas_l03_r20 rt 95, shot 476's 0 damage pops its rimed Black (the shot's first
+            # collision at rt 43 met it unrimed; its later H lines at 44-58 keep pierce 9: no
+            # collisions). Top-level effect_type_bonus by mutator id.
+            dtypes = {"Sharp": 0x11, "Shatter": 1, "Explosion": 2, "Fire": 8, "Cold": 5, "Glacier": 4,
+                      "Energy": 0x49, "Plasma": 0x48, "Frigid": 0xC, "Acid": 0x40, "Normal": 0}
+            bonus = 0.0
             for x in items(sf.get("behaviors")):
                 if x and x["type"] == "IncreaseDamageFromTypeModel":
-                    out["state_mods"].append({"states": [rid], "mult": 1.0, "add": x["f"].get("amount", 0.0)})
+                    xf = x["f"]
+                    bonus += xf.get("amount", 0.0)
+                    type_bonus[rid] = {"masks": sorted({dtypes[t] for t in items(xf.get("damageTypes")) if isinstance(t, str) and t in dtypes}),
+                                       "original": bool(xf.get("useOriginalType"))}
+            effects.append({"kind": "slow", "id": rid, "mult": sf.get("speedModifier", 1.0), "lifespan": 9999.0,
+                            "layers": 2147483647, "glue": 0, "refresh": True, "tags": [], "bonus": bonus})
+            # (Rimed already: the freeze and the explosion, Game::silas_rime_hit.)
+            dm = deref(sf.get("damageModel"))
+            out["silas_rime"] = {"rime_id": rid, "freeze_id": sf.get("freezeMutationId") or "Ice:Regular:Freeze",
+                                 "frames": int(sf.get("freezeLifespan", 0.0) * 60), "layers": int(sf.get("freezeLayers", 1)),
+                                 "immune": int(dm["f"].get("immuneBloonProperties", 0)) if dm else 0,
+                                 "moabs": bool(sf.get("canFreezeMoabs")),
+                                 "explosion": ({"projectile": projectile(deref(sf["explosionProjectileModel"]), depth + 1),
+                                                "emission": emission(deref(sf.get("explosionEmissionModel")))}
+                                               if deref(sf.get("explosionProjectileModel")) and depth < 3 else None)}
         if pb.get("RetargetOnContactModel"):
             rf = pb["RetargetOnContactModel"][0]["f"]
             # (Behaviours Process in model order: a TravelStrait listed before it has moved the
@@ -1229,6 +1256,20 @@ def main():
         out["psi_destroy"] = next(({"projectile": projectile(deref(x["f"]["projectileOnBloonDestroyModel"]), depth + 1),
                                     "emission": emission(deref(x["f"].get("emissionOnBloonDestroy")))}
                                    for x in pb.get("PsiEffectModel", []) if deref(x["f"].get("projectileOnBloonDestroyModel")) and depth < 3), None)
+        # SilasTrackTargetModel: [minimumSpeedFrames, maximumSpeedFrames, accelerationFrames,
+        # lifespanFrames, projectileWaitTime frames] (SilasTrackTarget, VERIFIED-DECOMP @0x180cdc970).
+        # (The model's ...Frames are speed x (1 / 60f) in float32: 600 -> 10.000001; recording
+        # silas_l03_r20 rt 287, shot 508 at its top speed one ulp past 10.)
+        def per_frame(v):
+            import struct
+            f32 = lambda z: struct.unpack("<f", struct.pack("<f", z))[0]
+            return f32(f32(v) * f32(1.0 / 60.0))
+        out["silas"] = next(([float(x["f"].get("minimumSpeedFrames") or per_frame(x["f"].get("minimumSpeed", 0.0))),
+                              float(x["f"].get("maximumSpeedFrames") or per_frame(x["f"].get("maximumSpeed", 0.0))),
+                              float(x["f"].get("accelerationFrames") or per_frame(x["f"].get("acceleration", 0.0))),
+                              float(x["f"].get("lifespanFrames") or int(round(x["f"].get("lifespan", 0.0) * 60))),
+                              float(int(x["f"].get("projectileWaitTime", 0.0) * 60))]
+                             for x in pb.get("SilasTrackTargetModel", [])), None)
         # LatchToBloonModel (the Great White's BloonFollowProjectile; LatchToBloon.Process
         # @0x180cc7200, SetTarget @0x180cc7670, OnDestroy @0x180cc7110): it rides its bloon,
         # slowing it, until the bloon is lost or it ages out.
@@ -3824,6 +3865,7 @@ def main():
 
     # Kept from the previous game.json: what tools/mod/import_paths.py adds from the real game's
     # map dump (CollisionGrid.orderedNeighborOffsets), and export_overlays.py's overlay table.
+    out["effect_type_bonus"] = type_bonus
     gp = os.path.join(root, "game", "game.json")
     if os.path.exists(gp):
         prev = json.load(open(gp, encoding="utf-8"))

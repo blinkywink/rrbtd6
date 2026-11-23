@@ -957,7 +957,8 @@ const KEPT_ON_MOAB_POP: [&str; 19] = [
 
 #[derive(Clone)]
 pub enum EffectKind {
-    Slow { mult: f32, glue: u32 },
+    /// bonus: IncreaseDamageFromType amount on this mutator (GameData.effect_type_bonus masks).
+    Slow { mult: f32, glue: u32, bonus: f32 },
     /// FreezeModel.Mutator; `immune`: its damageModel's immuneBloonProperties.
     Freeze { immune: u32 },
     /// DamageOverTime: `interval` in frames; `tick` is lastTick on the round clock (whole frames).
@@ -2987,6 +2988,9 @@ pub struct Projectile {
     /// AdoraTrackTarget: (currentVelocity, accelerating, movementDirection (game frame),
     /// lastTargetSearchElapsed).
     pub adora: Option<(f32, bool, [f32; 2], i64)>,
+    /// SilasTrackTarget: (phase 0 first Process / 1 waiting / 2 flying, endWaitingAt, velocity,
+    /// accelerating, movementDirection (game frame, 3D)).
+    pub silas: Option<(u8, i64, f32, bool, [f32; 3])>,
     /// FallToGround: (speed, groundHeight) from SetStartPosition.
     pub fall: Option<(f32, f32)>,
     /// ScaleProjectileOverTime.timePassed (frames) and the model radius it scales.
@@ -3868,6 +3872,7 @@ impl Buff {
         }
         if let Some(im) = self.immune {
             fn strip(p: &mut Proj, im: u32) {
+                p.immune_orig.get_or_insert(p.immune);
                 p.immune &= im;
                 for c in &mut p.on_contact {
                     strip(&mut c.projectile, im);
@@ -4004,6 +4009,8 @@ pub struct Game {
     has_grid_rank: bool,
     /// CollisionGrid.orderedNeighborOffsets, and the game's bloon grid built from it.
     grid_offsets: Vec<i32>,
+    /// GameData.effect_type_bonus (IncreaseDamageFromType on a bloon's mutator).
+    type_bonus: HashMap<String, crate::data::TypeBonus>,
     ggrid: GameGrid,
     /// The furthest any bloon moves in a frame (the broad phase looks at frame-start positions).
     max_bloon_step: f32,
@@ -5402,11 +5409,31 @@ macro_rules! collide_pass {
             let hit_z = b.height;
             let mut popped_now = 0u64;
             let mut dmg = pr.crit.unwrap_or(pr.spec.damage);
+            // (Whether SilasApplyRime finds its Rime: from before this hit, whose own Rime the
+            // effects put on first.)
+            let silas_rimed = pr.spec.silas_rime.as_ref().is_some_and(|sr| b.effects.iter().any(|e| *e.id == *sr.rime_id.as_str()));
             for m in &pr.spec.state_mods {
                 // (Its own behaviours before the DamageModel collide first: recording mermonkey_050
                 // rt 121, the Snowstorm's slow "Freeze:Popseidon:Normal" makes its own hit +70.)
                 if m.states.iter().any(|s| b.in_state(s) || (s != "Ice" && s != "Frozen" && s != "Glue" && pr.spec.effects.iter().any(|e| !e.after_damage && e.kind != "freeze" && e.id.contains(s.as_str())))) {
                     dmg = dmg * m.mult + m.add;
+                }
+            }
+            // IncreaseDamageFromType.GetModifiedDamage (VERIFIED-DECOMP @0x180ff8630), one per such
+            // mutator on the bloon: + amount when the model's own immunity mask is one of its damage
+            // types' (Silas's Rime: recording silas_l03_r20 rt 95, his Frigid shot pops the rimed
+            // Black). (Bloon armour isn't modelled: none in these recordings.)
+            // (A slow put on again is a second TimedMutator; only the first of an id applies, as
+            // speed_mult: recording silas_l03_r20 rt 179, a twice-rimed Pink loses one layer.)
+            // (useOriginalType: the model's immuneBloonPropertiesOriginal, before a buff's
+            // immunity mask; rt 463, a stripped Frigid shot still pops a rimed Red.)
+            if !$s.type_bonus.is_empty() {
+                for (k, e) in b.effects.iter().enumerate() {
+                    if let (EffectKind::Slow { bonus, .. }, Some(tb)) = (&e.kind, $s.type_bonus.get(&*e.id)) {
+                        if tb.masks.contains(&if tb.original { pr.spec.immune_orig.unwrap_or(pr.spec.immune) } else { pr.spec.immune }) && !b.effects[..k].iter().any(|x| x.id == e.id) {
+                            dmg += *bonus;
+                        }
+                    }
                 }
             }
             // DesperadoMarkModel: marked bloons take extra damage from Desperados.
@@ -5972,6 +5999,17 @@ macro_rules! collide_pass {
                                 $s.apply_effects(j, &kid_spec, owner, dmg, true);
                             }
                         }
+                    }
+                }
+                // SilasApplyRime.Collide (collisionPass 1): after the damage, on what the hit bloon
+                // is now (not its copies); one the damage destroyed has no Rime left, only a new
+                // one goes on (recording silas_l03_r20 rt 463: the frozen rimed Red popped, no
+                // freeze, no explosion; rt 95: the Black's Pink frozen, its copy not).
+                if silas_rimed {
+                    if let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, id).filter(|&j| $s.bloons[j].hp > 0) {
+                        let (spec, owner) = (Proj::clone(&$s.projectiles[$p].spec), $s.projectiles[$p].owner);
+                        let kids: Vec<usize> = $kids.iter().filter(|&&k| k != id).filter_map(|&k| bloon_idx(&$s.bloons, &$s.bidx, k)).collect();
+                        $s.silas_rime_hit(j, &spec, owner, &kids);
                     }
                 }
                 let self_tally_dealt = $s.damage_tally - tally0;
@@ -6788,6 +6826,7 @@ impl Game {
             last_destroyed: 0,
             has_grid_rank: !d.grid_offsets.is_empty(),
             grid_offsets: d.grid_offsets.clone(),
+            type_bonus: d.effect_type_bonus.clone(),
             mutator_data: d.bloon_mutator_data.clone(),
             ggrid: GameGrid::default(),
             grid_rank: {
@@ -8723,6 +8762,91 @@ impl Game {
     /// too), the position + movementDirection x velocity, and it expires at lifespanFrames
     /// (OnEmit: velocity maximumSpeedFrames, the shot's direction; recording ace_003 rt 2, 3 +
     /// 5.833 a frame).
+    /// SilasTrackTarget (VERIFIED-DECOMP OnEmit @0x180cdc750, Process @0x180cdc970, UpdateVelocity
+    /// @0x180cdd060, UpdateRotation @0x180cdcd40): its first Process faces the Target (2D) and waits
+    /// projectileWaitTime (colliding all the while); then each Process drops a Target that is gone or
+    /// filtered (already hit), velocity +- acceleration within [min, max], direction =
+    /// Normalize3D(Target.Position - Position) while it has one, Position += direction x velocity
+    /// (z too), and it expires lifespanFrames after it was made (recording silas_l03_r20: shot 457
+    /// waits at its marker 11-42, then (-0.311, 0.541, 0.782) at 0.5, 0.667 ...).
+    fn silas_step(&mut self, p: usize) {
+        let Some([vmin, vmax, acc_f, life, wait]) = self.projectiles[p].spec.silas else { return };
+        let rc = self.round_clock;
+        let now = self.sim_elapsed;
+        // (Simulation.Simulate runs the process list in creation order: a bloon made after the
+        // shot hasn't moved yet when it looks, its frame-start spot; recording silas_l03_r20 rt
+        // 211, shot 508 heads for the newer 549's rt 210 place; rt 43, shot 457 for the older
+        // 450's moved one.)
+        let born = self.projectiles[p].born;
+        let target = self.projectiles[p].aim.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id)).map(|j| {
+            let b = &self.bloons[j];
+            (b.id, if b.born > born { b.prev } else { b.pos }, b.height, b.hit_by(&self.projectiles[p].hit))
+        });
+        let pr = &mut self.projectiles[p];
+        // OnEmit: velocity at its minimum, accelerating, the shot's own direction.
+        let st = pr.silas.get_or_insert_with(|| {
+            let d = pr.dir.unwrap_or([0.0, 1.0]);
+            (0, 0, vmin, true, [d[0], d[1], 0.0])
+        });
+        match st.0 {
+            0 => {
+                st.0 = 1;
+                st.1 = rc + wait as i64;
+                if let Some((_, tp, _, _)) = target {
+                    let (dx, dy) = (tp[0] - pr.pos[0], -(tp[1] - pr.pos[1]));
+                    let l = (dx * dx + dy * dy).sqrt();
+                    if l > 0.0 {
+                        st.4 = [dx / l, dy / l, 0.0];
+                    }
+                }
+                pr.vel = [0.0, 0.0];
+                return;
+            }
+            1 => {
+                // (It collides while it waits: recording silas_l03_r20 rt 95, shot 476 on a Black
+                // that came within reach of its marker.)
+                pr.vel = [0.0, 0.0];
+                if rc < st.1 {
+                    return;
+                }
+                st.0 = 2;
+                st.3 = true;
+                return;
+            }
+            _ => {}
+        }
+        // (Projectile.FilterBloon: one it has hit (HaveAlreadyCollidedWithBloonInLineage) is no
+        // Target; recording silas_l03_r20 rt 231, the retarget's 469 kept, a sibling of the 539 hit.)
+        let target = target.filter(|t| !t.3);
+        if target.is_none() {
+            pr.aim = None;
+        }
+        st.2 = if st.3 { acc_f + st.2 } else { st.2 - acc_f };
+        if st.2 < vmin {
+            st.2 = vmin;
+        } else if vmax < st.2 {
+            st.2 = vmax;
+        }
+        if let Some((_, tp, h, _)) = target {
+            let d = [tp[0] - pr.pos[0], -(tp[1] - pr.pos[1]), h - pr.z];
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if l > 1e-5 {
+                st.4 = [d[0] / l, d[1] / l, d[2] / l];
+            }
+        }
+        let (dir, v) = (st.4, st.2);
+        pr.dir = Some([dir[0], dir[1]]);
+        pr.grot = Some(RAD2DEG * crt_atan2(dir[0], dir[1]));
+        pr.prev = pr.pos;
+        pr.pos = [pr.pos[0] + dir[0] * v, pr.pos[1] - dir[1] * v];
+        pr.z += dir[2] * v;
+        // (It moves itself here: nothing else does, so no velocity for the generic move.)
+        pr.vel = [0.0, 0.0];
+        if life <= (now - pr.born / 4) as f32 {
+            pr.frames_left = 0.0;
+        }
+    }
+
     fn adora_step(&mut self, p: usize) {
         let Some(sp) = self.projectiles[p].spec.adora.clone() else { return };
         let f = |v: f32| v * FRAME_TIME;
@@ -11100,7 +11224,7 @@ impl Game {
                     }
                     b.held = true;
                     if !b.effects.iter().any(|e| *e.id == *"BeastGrab") {
-                        b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Slow { mult: 0.0, glue: 0 }, id: "BeastGrab".into(), frames_left: 2.0, total: 2.0, added: 0, layers: 1, owner: 0, distribute: (true, false), keep: false });
+                        b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Slow { mult: 0.0, glue: 0, bonus: 0.0 }, id: "BeastGrab".into(), frames_left: 2.0, total: 2.0, added: 0, layers: 1, owner: 0, distribute: (true, false), keep: false });
                     }
                 }
             }
@@ -11391,7 +11515,7 @@ impl Game {
                 self.effect_seq += 1;
                 let f = (secs * 60.0).floor();
                 let seq = self.effect_seq;
-                let e = Effect { overlay: Default::default(), seq, kind: EffectKind::Slow { mult: g[3], glue: 0 }, id: "GalvanizedStun".into(), frames_left: f, total: f, added: now, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false };
+                let e = Effect { overlay: Default::default(), seq, kind: EffectKind::Slow { mult: g[3], glue: 0, bonus: 0.0 }, id: "GalvanizedStun".into(), frames_left: f, total: f, added: now, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false };
                 // (Stun puts it on with Mutable.AddMutator, no layer count: the children of a
                 // degrade keep it (recording sky_050 rt 346: the stunned Ceramics' Rainbows stay
                 // put).)
@@ -18660,7 +18784,7 @@ impl Game {
         self.projectiles[p].target = Some(id);
         let now = self.sim_elapsed;
         let b = &mut self.bloons[i];
-        b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Slow { mult: latch.speed, glue: 0 }, id: "LatchToBloon".into(), frames_left: 999_999_999.0, total: 999_999_999.0, added: now, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
+        b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Slow { mult: latch.speed, glue: 0, bonus: 0.0 }, id: "LatchToBloon".into(), frames_left: 999_999_999.0, total: 999_999_999.0, added: now, layers: u32::MAX, owner: 0, distribute: (true, false), keep: false });
     }
 
     /// LatchToBloon.Process (VERIFIED-DECOMP @0x180cc7200), each latched projectile, after the
@@ -26021,7 +26145,7 @@ impl Game {
                                 }
                                 let mult = if d.is_moab { cn.moab_mult } else { cn.mult };
                                 self.effect_seq += 1;
-                                let e = Effect { overlay: Default::default(), seq: self.effect_seq, kind: EffectKind::Slow { mult, glue: 0 }, id: "Skywarden:ChilledRadius".into(), frames_left: f, total: f, added: now, layers: 2, owner: 0, distribute: (true, false), keep: false };
+                                let e = Effect { overlay: Default::default(), seq: self.effect_seq, kind: EffectKind::Slow { mult, glue: 0, bonus: 0.0 }, id: "Skywarden:ChilledRadius".into(), frames_left: f, total: f, added: now, layers: 2, owner: 0, distribute: (true, false), keep: false };
                                 let b = &mut self.bloons[k];
                                 b.effects.retain(|x| *x.id != *"Skywarden:ChilledRadius");
                                 b.effects.push(e);
@@ -26087,6 +26211,57 @@ impl Game {
                 spec.effects.retain(|e| !(e.first_hit_only && b.effects.iter().any(|x| *x.id == *e.id)));
             }
             self.apply_effects(i, &spec, owner, dmg, false);
+        }
+    }
+
+    /// SilasApplyRime.Collide (VERIFIED-DECOMP @0x180cdb8c0) on a bloon already rimed (not rimed:
+    /// the Rime alone, the `effects` entry): already frozen (a "Freeze" keyed mutator), first the
+    /// explosion through its emission at the bloon, the bloon its Target (recording silas_l03_r20 rt
+    /// 179: deplete, freeze, then the blast's 3 layers at 180); then, unless immune to the shot's
+    /// damage (IsImmuneByProperty) or to slows (isImmuneToSlow), the freeze mutator for
+    /// freezeLifespan (x its FreezeModifierForTags) over freezeLayers, and the Rime again. Rimed but
+    /// not frozen: the freeze only, no explosion (rt 95: "Freeze time 150 layers 3", the Black
+    /// popped by the Rime's damage bonus, its children Pinks whole).
+    /// `kids`: the copies the hit made, which the freeze cascades to (AddMutatorForNumLayers; no M
+    /// add of their own: recording silas_l03_r20, the Black's copy 487 frozen from rt 95, 67 frames
+    /// left at 179).
+    fn silas_rime_hit(&mut self, i: usize, spec: &Proj, owner: u64, kids: &[usize]) {
+        let Some(sr) = spec.silas_rime.clone() else { return };
+        let b = &self.bloons[i];
+        if !b.effects.iter().any(|e| *e.id == *sr.rime_id.as_str()) {
+            return;
+        }
+        let frozen = b.effects.iter().any(|e| matches!(e.kind, EffectKind::Freeze { .. }));
+        if frozen {
+            if let Some(c) = &sr.explosion {
+                let (pos, z, id) = (b.pos, b.height, b.id);
+                let tiers = self.towers.iter().find(|w| w.id == owner).map_or([0; 3], |w| w.tiers);
+                self.emit_z = z;
+                self.emit_target = Some(id);
+                self.emit(pos, -std::f32::consts::FRAC_PI_2, &c.emission, &c.projectile, None, tiers, owner);
+                self.emit_target = None;
+                self.emit_z = 0.0;
+            }
+        }
+        let b = &self.bloons[i];
+        let d = &self.defs[b.kind];
+        // (BloonModel.isImmuneToSlow isn't exported; STAND-IN: MOAB-class bloons by canFreezeMoabs.)
+        if b.properties(d) & sr.immune != 0 || (d.is_moab && !sr.moabs) {
+            return;
+        }
+        let mut frames = sr.frames as f32;
+        for m in spec.effect_mods.iter().filter(|m| m.freeze && m.tags.iter().any(|t| d.tags.contains(t))) {
+            if m.prevent {
+                return;
+            }
+            frames *= m.time_mult;
+        }
+        let frames = frames as i32 as f32;
+        let now = self.sim_elapsed;
+        for &k in std::iter::once(&i).chain(kids) {
+            let b = &mut self.bloons[k];
+            b.effects.retain(|e| *e.id != *sr.freeze_id.as_str());
+            b.effects.push(Effect { overlay: Default::default(), seq: 0, kind: EffectKind::Freeze { immune: sr.immune }, id: sr.freeze_id.as_str().into(), frames_left: frames, total: frames, added: now, layers: sr.layers, owner, distribute: (true, false), keep: false });
         }
     }
 
@@ -26208,7 +26383,7 @@ impl Game {
                 }
             }
             let kind = match e.kind.as_str() {
-                "slow" => EffectKind::Slow { mult, glue: e.glue },
+                "slow" => EffectKind::Slow { mult, glue: e.glue, bonus: e.bonus },
                 "freeze" => EffectKind::Freeze { immune: e.immune },
                 // DamageOverTime.Initialise (VERIFIED-DISASM @0x1003e50): lastTick = the clock +
                 // initialDelayFrames, or -999999999 with triggerImmediate (recording glue_005: Super
@@ -26322,7 +26497,7 @@ impl Game {
         let b = &mut self.bloons[i];
         // The same model's mutator: a slow is told by its multiplier, glue level and lifespan.
         let same_model = |x: &Effect, e: &Effect| match (&x.kind, &e.kind) {
-            (EffectKind::Slow { mult: a, glue: g }, EffectKind::Slow { mult: m, glue: h }) => a == m && g == h && x.total == e.total,
+            (EffectKind::Slow { mult: a, glue: g, bonus: p }, EffectKind::Slow { mult: m, glue: h, bonus: q }) => a == m && g == h && p == q && x.total == e.total,
             _ => true,
         };
         for (eff, refresh, (replace, unique, dup_slow)) in add {
@@ -27730,6 +27905,7 @@ impl Game {
                 clear_t: self.sim_elapsed as f32,
                 age: 0.0,
                 seek: None,
+                silas: None,
                 emit_index: 0,
                 pool_emit: self.proj_obj_emit.get(obj as usize).copied().unwrap_or(0),
                 tad: None,
@@ -28670,6 +28846,10 @@ impl Game {
             let ad: Vec<usize> = (0..self.projectiles.len()).filter(|&p| self.projectiles[p].spec.adora.is_some() && self.projectiles[p].born < self.sim_elapsed * 4).collect();
             for p in ad {
                 self.adora_step(p);
+            }
+            let sl: Vec<usize> = (0..self.projectiles.len()).filter(|&p| self.projectiles[p].spec.silas.is_some() && self.projectiles[p].born < self.sim_elapsed * 4).collect();
+            for p in sl {
+                self.silas_step(p);
             }
             // (Still in process-list order: recording druid_502 rt 1569, Superstorm 1205's ball
             // spawn draws before Ball Lightning 2252's bolt.)
