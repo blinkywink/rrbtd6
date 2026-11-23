@@ -22,7 +22,10 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 - Sniper Monkey paragon: its cash generation (and the middle path's supply drops?) may be wrong. (Models checked
   2026-11-22: the five paragon levels and platforms are exported and the visuals audit finds nothing missing;
   if a part still looks absent in play, say which.)
-- Monkey Ace: pineapples are giant; they should show a 3-2-1 countdown.
+- Monkey Ace: pineapples are giant (2026-11-22: the game shrinks them to 0.59x and tumbles them as they fall,
+  with its CustomScaleAnimator / CustomRotationAnimator scripts; the clone draws the mesh still at full size.
+  Next: those tween scripts for every projectile that has them, 127 rotation animators: potions, bombs,
+  mines, bananas, rockets...). The 3-2-1 countdown is done, see DONE.
 - Monkey Ace Tsar Bomba ability: the bomb animation is missing.
 - Heli Pilot Special Poperations ability doesn't work.
 - Heli Pilot Comanche: the extra helis don't follow the main heli in the different modes, and stay after selling.
@@ -125,6 +128,10 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 
 DONE
 ----
+- Monkey Ace pineapple countdown and explosion (2026-11-22): CreateEffectOnExhaustFractionModel effects play at a
+  fraction of the projectile's lifespan; the clone played them only if its pierce ran out, which a pineapple's
+  never does, so neither showed. Now the 3-2-1 PineappleCountdown starts at 70% of its fall (and goes with
+  it) and the explosion plays at the end; 603 projectiles have such effects. Please check in game.
 - Heli Pilot: blades didn't spin (2026-11-22). The game turns rotors in code (RotateDisplayModel: 2 turns a
   second at game speed, the Chinook's rear rotor backwards), not by animation, so the export had them still.
   tools/assets/export_spin.py finds those parts (65 models: every Heli tier, Comanches, Chinook, Apache, and

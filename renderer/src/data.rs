@@ -2425,6 +2425,10 @@ pub struct Proj {
     pub contact_fx: Vec<(String, f32)>,
     #[serde(default)]
     pub exhaust_fx: Vec<(String, f32)>,
+    /// CreateEffectOnExhaustFractionModel: (effect, scale, fraction of the lifespan, ends with the
+    /// projectile) (display only; main.rs plays them).
+    #[serde(default)]
+    pub fraction_fx: Vec<(String, f32, f32, bool)>,
     #[serde(default)]
     pub expire_fx: Vec<(String, f32)>,
     /// ProjectileCreateEffectOnEmitModel: effects where it's emitted (display only).

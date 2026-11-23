@@ -951,6 +951,7 @@ async fn game_main() {
     fn projectile_effects(tier:&data::Tier)->Vec<&str>{
         fn visit<'a>(p:&'a data::Proj,out:&mut Vec<&'a str>){
             for list in [&p.contact_fx,&p.exhaust_fx,&p.expire_fx,&p.emit_fx]{out.extend(list.iter().map(|(n,_)|n.as_str()));}
+            out.extend(p.fraction_fx.iter().map(|f|f.0.as_str()));
             for child in &p.on_contact{visit(&child.projectile,out);}
             for child in &p.on_exhaust{visit(&child.projectile,out);}
         }
@@ -967,6 +968,8 @@ async fn game_main() {
     let mut warm_projectiles=Vec::<String>::new();
     let mut projectile_upload:Option<(String,std::pin::Pin<Box<dyn std::future::Future<Output=Option<ProjDisplay>>>>)>=None;
     let mut warm_effects=Vec::<String>::new();
+    // Projectiles' fraction effects already played: (uid, index in fraction_fx).
+    let mut fraction_fired=std::collections::HashSet::<(u64,u8)>::new();
     let mut effect_upload:Option<(String,std::pin::Pin<Box<dyn std::future::Future<Output=Option<particles::EffectDef>>>>)>=None;
     // Pop flipbook (Assets/Bloons/Graphics/Effects/Pop.prefab).
     let pop_dir = root.join("effects").join("pop");
@@ -1072,6 +1075,8 @@ const ZONE_FX_TAG: u64 = 1 << 54;
 const IMMUNE_FX_TAG: u64 = (1 << 53) | 1;
 /// Spirit of the Forest's vines (tower id).
 const SPIRIT_FX_TAG: u64 = 1 << 52;
+/// A projectile's CreateEffectOnExhaustFractionModel effect that ends with it (| its uid).
+const FRACTION_FX_TAG: u64 = 1 << 51;
 /// The vines' End clips (JungleVineWrapEnd 0.25 s, JungleVineGrowEnd 0.367 s): frames they
 /// stay after the grab ends.
 const VINE_END_FRAMES: i32 = 23;
@@ -3110,6 +3115,35 @@ const VINE_END_FRAMES: i32 = 23;
             // runs, the tower's weapons' projectiles are made with its projectileDisplay; ones
             // already flying keep theirs.
             macroquad::set_draw_tag("projectiles");
+            // CreateEffectOnExhaustFractionModel (display only): each effect once a projectile's age
+            // reaches that fraction of its lifespan (age + frames left), where it is; one marked
+            // destroyOnTransformDestroy ends with it (the Exploding Pineapple's 3-2-1 countdown at
+            // 0.7 of its fall, its explosion at the end).
+            for p in game.projectiles.iter().filter(|p| !p.spec.fraction_fx.is_empty()) {
+                let total = p.age + p.frames_left;
+                if !total.is_finite() || total <= 0.0 {
+                    continue;
+                }
+                for (k, (fx, scale, fraction, follow)) in p.spec.fraction_fx.iter().enumerate() {
+                    if p.age + 1.0 >= fraction * total && fraction_fired.insert((p.uid, k as u8)) {
+                        if *follow {
+                            particles.spawn_tagged(fx, [p.pos[0], p.z, p.pos[1]], FRACTION_FX_TAG | p.uid);
+                        } else {
+                            particles.spawn(fx, [p.pos[0], 0.0, p.pos[1]], *scale);
+                        }
+                    }
+                }
+            }
+            if !fraction_fired.is_empty() {
+                let live: std::collections::HashSet<u64> = game.projectiles.iter().filter(|p| !p.spec.fraction_fx.is_empty()).map(|p| p.uid).collect();
+                fraction_fired.retain(|&(uid, _)| {
+                    let alive = live.contains(&uid);
+                    if !alive {
+                        particles.kill(FRACTION_FX_TAG | uid);
+                    }
+                    alive
+                });
+            }
             proj_look.retain(|uid, _| game.projectiles.iter().any(|p| p.uid == *uid));
             for p in &game.projectiles {
                 proj_look.entry(p.uid).or_insert_with(|| {

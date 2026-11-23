@@ -900,10 +900,19 @@ def main():
             # DestroyProjectileIfTowerDestroyedModel: Process (@0x180cb8430) destroys it once its
             # emitting tower is gone.
             "tower_bound": bool(pb.get("DestroyProjectileIfTowerDestroyedModel")),
-            # Effects (visual only): CreateEffectOnContactModel at each hit, CreateEffectOnExhausted /
-            # ExhaustFraction when its pierce runs out, CreateEffectOnExpireModel when it goes.
+            # Effects (visual only): CreateEffectOnContactModel at each hit, CreateEffectOnExhausted
+            # when its pierce runs out, CreateEffectOnExpireModel when it goes.
             "contact_fx": fx_list(items(f["behaviors"]), "CreateEffectOnContactModel"),
-            "exhaust_fx": fx_list(items(f["behaviors"]), "CreateEffectOnExhaustedModel", "CreateEffectOnExhaustFractionModel"),
+            "exhaust_fx": fx_list(items(f["behaviors"]), "CreateEffectOnExhaustedModel"),
+            # CreateEffectOnExhaustFractionModel: [name, scale, fraction, goes with it]: its effect
+            # once the projectile's age reaches that fraction of its lifespan, ended with the
+            # projectile when its EffectModel has destroyOnTransformDestroy (Exploding Pineapple:
+            # the 3-2-1 PineappleCountdown at 0.7, gone with it; its ExplosionMedium at 1.0).
+            "fraction_fx": [e + [float(b["f"].get("fraction", 1.0)),
+                                 bool(((deref(b["f"].get("effectModel")) or {}).get("f") or {}).get("destroyOnTransformDestroy"))]
+                            for b in items(f["behaviors"])
+                            if b and (b["type"] == "CreateEffectOnExhaustFractionModel" or b["type"].endswith("_CreateEffectOnExhaustFractionModel"))
+                            for e in fx_list([b], "CreateEffectOnExhaustFractionModel")],
             "expire_fx": fx_list(items(f["behaviors"]), "CreateEffectOnExpireModel"),
             # ProjectileCreateEffectOnEmitModel: an effect where it's emitted. Display only.
             "emit_fx": fx_list(items(f["behaviors"]), "ProjectileCreateEffectOnEmitModel"),
