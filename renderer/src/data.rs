@@ -1434,6 +1434,10 @@ pub struct Weapon {
     /// AlternateProjectileModel: every `interval`-th shot fires this instead (Flash Bomb).
     #[serde(default)]
     pub alternate: Option<Alternate>,
+    /// Every AlternateProjectileModel when the weapon has more than one (DanDMonke's forms), in
+    /// behaviour order (`alternate` is the last).
+    #[serde(default)]
+    pub alternates: Vec<Alternate>,
     /// BonusProjectileAfterIntervalModel: every `interval`-th emission, `cooldown` frames of round
     /// time after the last, `projectile` too (from the tower's position with `tower_pos`).
     #[serde(default)]
@@ -1872,6 +1876,9 @@ pub struct Alternate {
     pub interval: u32,
     pub projectile: Proj,
     pub emission: Emission,
+    /// AlternateProjectileModel.priority (with several on a weapon).
+    #[serde(default)]
+    pub priority: i32,
 }
 
 #[derive(Deserialize, Clone)]

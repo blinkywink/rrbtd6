@@ -858,7 +858,9 @@ def main():
             "slap": next(([b["f"].get("valueForNormalBloons", 1), b["f"].get("valueForCeramicBloons", 1)] for b in pb.get("BloonSlapModel", [])), None),
             "filters": filters,
             "filter_chance": filter_chance,
-            "no_hit": "FilterAllModel" in filters,
+            # (Or canCollideWithBloons off: recording dand_l20_r80, the Macaque's BasePlusLightning
+            # never collides, its pierce kept, so it stays for good.)
+            "no_hit": "FilterAllModel" in filters or f.get("canCollideWithBloons") is False,
             # ProjectileModel.dontUseCollisionChecker: CollisionChecker.Process skips it.
             "no_checker": bool(f.get("dontUseCollisionChecker")),
             # FilterAllExceptTargetModel: hits only the bloon it was aimed at.
@@ -1807,6 +1809,7 @@ def main():
                 if not w:
                     continue
                 crit, alternate, spread, per_round, burst = None, None, 0.0, None, None
+                alternates = []
                 # EmissionOverTimeModel (Monkey Ace pineapples): `count` shots `timeBetween` apart.
                 # STAND-IN P-OVERTIME: initialFireDelay isn't modelled.
                 eot = deref(w["f"].get("emission"))
@@ -1836,7 +1839,9 @@ def main():
                         # emissionModel only when it has one; else the weapon's (the Sun Temple
                         # plane's bombs go at their target: recording super_400 rt 252).
                         alternate = {"interval": x["f"]["interval"], "projectile": projectile(deref(x["f"]["projectile"])),
-                                     "emission": emission(deref(x["f"].get("emissionModel")) or deref(w["f"].get("emission")))}
+                                     "emission": emission(deref(x["f"].get("emissionModel")) or deref(w["f"].get("emission"))),
+                                     "priority": int(x["f"].get("priority", 0) or 0)}
+                        alternates.append(alternate)
                     if x and x["type"] == "RandomAngleOffsetModel":
                         spread = max(abs(x["f"].get("minOffset", 0)), abs(x["f"].get("maxOffset", 0)))
                 # LimitProjectileModel (Bloon Trap): at most `limit` live traps that aren't full.
@@ -2004,7 +2009,7 @@ def main():
                                                       "tower_pos": bool(x["f"].get("useTowerPosition")),
                                                       "projectile": projectile(deref(x["f"]["projectileModel"])), "emission": emission(deref(x["f"]["emissionModel"]))}
                                                      for x in items(w["f"].get("behaviors")) if x and x["type"] == "BonusProjectileAfterIntervalModel"), None),
-                                "alternate": alternate, "spread": spread, "per_round": per_round, "mana": next((int(x["f"].get("graveyardManaChange", 0)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "MagusPerfectusGraveyardModel"), 0), "burst": burst,
+                                "alternate": alternate, "alternates": alternates if len(alternates) > 1 else [], "spread": spread, "per_round": per_round, "mana": next((int(x["f"].get("graveyardManaChange", 0)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "MagusPerfectusGraveyardModel"), 0), "burst": burst,
                                 # PsiLimitProjectileModel: FilterEmission only once canFireAt <= roundTime.
                                 "psi_limit": any(x and x["type"] == "PsiLimitProjectileModel" for x in items(w["f"].get("behaviors"))),
                                 # RandomRateModel: after each throw lastEmission += (int)(offsetRateFrames x

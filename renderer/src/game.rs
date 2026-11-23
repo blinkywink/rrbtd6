@@ -1663,6 +1663,8 @@ pub struct WeaponState {
     /// Its throws (EmissionWithOffsets takes its markers in turn per weapon: recording sub_052,
     /// a Sub's twin guns keep their order through its Ballistic Missile's launches).
     pub emits: u32,
+    /// Each AlternateProjectile's own count (Weapon::alternates).
+    pub alt_counts: Vec<u32>,
     /// CritMultiplier: (current, nextCritAt); (0, 0) until the weapon has a crit.
     pub crit: (u32, u32),
     /// Weapon.fractionalPierce: the projectiles' fractional pierce adds up here.
@@ -1698,6 +1700,7 @@ impl WeaponState {
             aim_circle: None,
             aim_obj: None,
             emits: 0,
+            alt_counts: Vec::new(),
             rate_frames: 1,
             missed: 0.0,
             bonus_count: 0,
@@ -20068,6 +20071,7 @@ impl Game {
                     // the second throw after the morph a plain sword, not the 4th-throw lightning.)
                     for st in &mut tw.weapons {
                         st.emits = 0;
+                        st.alt_counts.clear();
                     }
                     // HYPOTHESIS P-MORPHONESHOT: a one-shot ability support's mutator on the tower
                     // (Battlecry's oneShotInRange rate) doesn't carry over to the morphed model
@@ -22483,6 +22487,18 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             if !double {
                                 tw.shots += 1;
                                 tw.weapons[w].emits += 1;
+                                // AlternateProjectile.GetAnimation (VERIFIED-DECOMP @0x180c690c0), each
+                                // of them: count + 1, back to 1 past interval.
+                                if weapon.alternates.len() > 1 {
+                                    let st = &mut tw.weapons[w];
+                                    st.alt_counts.resize(weapon.alternates.len(), 0);
+                                    for (c, a) in st.alt_counts.iter_mut().zip(&weapon.alternates) {
+                                        *c += 1;
+                                        if *c > a.interval {
+                                            *c = 1;
+                                        }
+                                    }
+                                }
                             }
                             if weapon.pause_others.is_some() {
                                 tw.pause_others = Some((ai, round_clock));
@@ -22562,9 +22578,37 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             // @0xc69510): the weapon's own count + 1 each throw, back to 1 past interval;
                             // the throw where it equals interval is the alternate (recording ninja_003:
                             // Flash Bomb every 2nd shuriken of that weapon, not of the tower).
-                            let (proj, emission) = match weapon.alternate.as_ref().filter(|a| a.interval > 0 && emits % a.interval == 0) {
-                                Some(a) => (&a.projectile, &a.emission),
-                                None => (&weapon.projectile, &weapon.emission),
+                            let (proj, emission) = if weapon.alternates.len() > 1 {
+                                // AlternateProjectile.GetProjectile (VERIFIED-DECOMP @0x180c69510), in
+                                // behaviour order, each passing the projectile on: at its count's
+                                // interval its own, unless another one is at its interval with a higher
+                                // priority, when its count steps back one (it waits a throw); recording
+                                // dand_l20_r80, the Macaque's BasePlusLightning every 3rd, Stomp every 20th.
+                                let st = &mut self.towers[t].weapons[w];
+                                let n = weapon.alternates.len();
+                                st.alt_counts.resize(n, 0);
+                                let mut pick: Option<usize> = None;
+                                for i in 0..n {
+                                    let a = &weapon.alternates[i];
+                                    if st.alt_counts[i] != a.interval {
+                                        continue;
+                                    }
+                                    let beaten = (0..n).any(|j| j != i && st.alt_counts[j] == weapon.alternates[j].interval && a.priority < weapon.alternates[j].priority);
+                                    if beaten {
+                                        st.alt_counts[i] -= 1;
+                                    } else {
+                                        pick = Some(i);
+                                    }
+                                }
+                                match pick {
+                                    Some(i) => (&weapon.alternates[i].projectile, &weapon.alternates[i].emission),
+                                    None => (&weapon.projectile, &weapon.emission),
+                                }
+                            } else {
+                                match weapon.alternate.as_ref().filter(|a| a.interval > 0 && emits % a.interval == 0) {
+                                    Some(a) => (&a.projectile, &a.emission),
+                                    None => (&weapon.projectile, &weapon.emission),
+                                }
                             };
                             // MonkeyFanClub's Mutator: every ArcEmission a single shot, the weapon
                             // ejecting from the fan club's point.
@@ -28100,6 +28144,10 @@ impl Game {
                             None if (spec.instant || spec.fall.is_some()) && spec.lifespan <= 0.0 => f32::INFINITY,
                             // (TrackTargetAfterDelay ends it itself, at its own lifespanFrames.)
                             None if spec.adora.as_ref().is_some_and(|a| a.after_delay.is_some()) && spec.lifespan <= 0.0 => f32::INFINITY,
+                            // (Neither a TravelStrait nor an AgeModel: nothing ends it; recording
+                            // dand_l20_r80, the Macaque's BasePlusLightning, which can't collide, kept
+                            // from rt 648 to the end after spawning its lightning and sword.)
+                            None if !spec.travel_strait && spec.lifespan <= 0.0 && spec.age_lifespan.is_none() && spec.on_exhaust.iter().all(|e| e.fraction <= 0.0) && !spec.on_exhaust.is_empty() => f32::INFINITY,
                             None => ts_frames(spec.lifespan),
                         };
                         f

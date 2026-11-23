@@ -3587,4 +3587,10 @@ Open (pending/hero_open):
   Macaque's weapon at 34 frames = 45 x 0.75, not 41); trace MorphTower.FinishActivation
   (@0x180e3f240; it RemoveMutator's at line ~155 and calls MorphTowerModel.UpdateMutatorAndSaveAbilityData)
   to verify. The OnRoundSet double shuffle only for lists made in frame 1 (the morph's are made
-  later). Next: dand_l20 rt 650 (three game shots at (-127.11, -31.37), one clone shot elsewhere).
+  later). Then: several AlternateProjectileModels on one weapon (26 DanD weapons; `alternates`):
+  GetAnimation (@0x180c690c0) counts each, wrapping past interval; GetProjectile (@0x180c69510) in
+  behaviour order gives its own at its interval unless another at its interval has a higher priority
+  (then its count steps back one); canCollideWithBloons false exported as no_hit; a projectile with
+  neither TravelStrait nor AgeModel and only fraction-0 exhausts lives for good (the Macaque's
+  BasePlusLightning, every 3rd throw, from rt 648 to the end). dand_l20 positions now differ in 348
+  frames, first rt 651 (a game shot at (-144.6, -22.9)).
