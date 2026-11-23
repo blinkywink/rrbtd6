@@ -4101,7 +4101,18 @@ const VINE_END_FRAMES: i32 = 23;
                     let at = [p.pos[0], 10.0, p.pos[1] - 10.0 * tilt];
                     seen.insert(p.uid);
                     if proj_fx_live.insert(p.uid) {
-                        particles.spawn_tagged(fx, at, tag);
+                        // A projectile at rest (Wall of Fire on its track point) shows its effect turned
+                        // to its rotation, the way it was fired (its direction, game space), as the
+                        // game's display takes the projectile's rotation (a moving one's trail keeps
+                        // the plain spawn).
+                        match p.dir.filter(|_| p.vel == [0.0, 0.0]) {
+                            Some(d) => {
+                                particles.spawn_display(fx, at, 1.0, d[1].atan2(d[0]).to_degrees(), false, Some(tag));
+                            }
+                            None => {
+                                particles.spawn_tagged(fx, at, tag);
+                            }
+                        }
                     } else {
                         particles.set_pos(tag, at);
                     }

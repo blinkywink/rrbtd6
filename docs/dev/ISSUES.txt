@@ -26,7 +26,9 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 - Heli Pilot Special Poperations ability doesn't work.
 - Heli Pilot Comanche: the extra helis don't follow the main heli in the different modes, and stay after selling.
 - Mortar Monkey: asks to set a target right after placing; the game auto-picks a spot unless you choose one.
-- Wall of Fire (Mortar and Wizard): right place, but the angle of the wall is wrong.
+- Wall of Fire (Mortar and Wizard): right place, but the angle of the wall is wrong. (2026-11-22: its effect was
+  always spawned unturned; it now takes the projectile's rotation, the way it was fired from the tower, as the
+  game's displays do. Not verified against the game: please check, and say if it's now turned the wrong way.)
 - Dartling Gunner bottom path: animations aren't in sync with where it aims.
 - Dartling Gunner middle path ability: wrong icons.
 - Wizard Wizard Lord Phoenix: the birds fly oddly, not facing where they fly.
