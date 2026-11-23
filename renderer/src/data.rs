@@ -1145,6 +1145,9 @@ pub struct Attack {
     #[serde(default)]
     pub necro: Option<Necro>,
     pub weapons: Vec<Weapon>,
+    /// targetProvider RandomTargetModel: a random visible bloon (RandomTarget.GetTarget).
+    #[serde(default)]
+    pub random_target: bool,
     /// FilterWithTagModel / FilterOutTagModel tags (MOAB Press only targets "Moabs", never "Bad").
     #[serde(default)]
     pub require_tags: Vec<String>,
@@ -1480,6 +1483,10 @@ pub struct Weapon {
     /// BurstWeaponBehaviorModel: each shot is `count` shots, `frames` apart.
     #[serde(default)]
     pub burst: Option<BurstFire>,
+    /// RandomRateModel.offsetRateFrames: lastEmission + (int)(this x syncedRandom.NextDouble())
+    /// after each throw.
+    #[serde(default)]
+    pub random_rate: Option<i32>,
     /// CreateSoundOnProjectileCreatedModel: one of these per shot.
     #[serde(default)]
     pub fire_sounds: Vec<String>,
@@ -1851,6 +1858,9 @@ pub struct Alternate {
 #[derive(Deserialize, Clone)]
 pub struct Emission {
     pub kind: String,
+    /// AdoraEmissionModel.angleBetween: the bolts' own spacing rule (AdoraEmission.GetDirection).
+    #[serde(default)]
+    pub adora_between: Option<f32>,
     /// EmissionOverTimeModel: [count, timeBetween x 60, initialFireDelay x 60].
     #[serde(default)]
     pub over_time: Option<[f32; 3]>,
@@ -2108,6 +2118,12 @@ pub struct Exhaust {
 
 #[derive(Deserialize, Clone)]
 pub struct Contact {
+    /// CreateProjectileOnAbilityActivateModel.chance (> 0: one syncedRandom draw, fired when it is
+    /// >= 1 - chance) and followTower.
+    #[serde(default)]
+    pub act_chance: f32,
+    #[serde(default)]
+    pub follow_tower: bool,
     pub projectile: Proj,
     pub emission: Emission,
     /// A map-only one made this far back along the shot's direction (ScaleProjectileOverTime

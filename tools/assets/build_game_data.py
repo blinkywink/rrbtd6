@@ -1517,11 +1517,13 @@ def main():
             return {"kind": "Single", "count": 1}
         f = e["f"]
         # AdoraEmissionModel (Adora 10+): `count` bolts angleBetween apart, centred on the aim
-        # (recording adora_l10_r40 rt 31: four at -121.45 / -91.45 / -61.45 / -31.45). INFERRED as
-        # an arc of (count - 1) x angleBetween; AdoraEmission.GetDirection (@0x180c36770) not read through.
+        # (recording adora_l10_r40 rt 31: four at -121.45 / -91.45 / -61.45 / -31.45).
+        # AdoraEmission.GetDirection (VERIFIED-DISASM @0x180c36770): bolt k at
+        # (k x angleBetween + (0 - (count - 1) x (angleBetween x 0.5))) + the rotation (`adora_between`).
         if e["type"] == "AdoraEmissionModel":
             n = int(f.get("count", 1) or 1)
-            return {"kind": "Arc", "count": n, "angle": f.get("angleBetween", 0.0) * (n - 1), "offset": 0.0, "air_rot": False}
+            return {"kind": "Arc", "count": n, "angle": f.get("angleBetween", 0.0) * (n - 1), "offset": 0.0, "air_rot": False,
+                    "adora_between": f.get("angleBetween", 0.0)}
         if e["type"] == "ArcEmissionModel":
             return {"kind": "Arc", "count": f.get("SliceSize", 1), "angle": f.get("angle", 0.0), "offset": f.get("offset", 0.0),
                     "air_rot": bool(f.get("useAirUnitRotation"))}
@@ -1945,7 +1947,12 @@ def main():
                                                       "tower_pos": bool(x["f"].get("useTowerPosition")),
                                                       "projectile": projectile(deref(x["f"]["projectileModel"])), "emission": emission(deref(x["f"]["emissionModel"]))}
                                                      for x in items(w["f"].get("behaviors")) if x and x["type"] == "BonusProjectileAfterIntervalModel"), None),
-                                "alternate": alternate, "spread": spread, "per_round": per_round, "mana": next((int(x["f"].get("graveyardManaChange", 0)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "MagusPerfectusGraveyardModel"), 0), "burst": burst, "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "gw_limit": gw_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
+                                "alternate": alternate, "spread": spread, "per_round": per_round, "mana": next((int(x["f"].get("graveyardManaChange", 0)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "MagusPerfectusGraveyardModel"), 0), "burst": burst,
+                                # RandomRateModel: after each throw lastEmission += (int)(offsetRateFrames x
+                                # syncedRandom.NextDouble()) (RandomRate.ProjectilesCreated, VERIFIED-DECOMP
+                                # @0x180c901a0; Benjamin's Bloon Trojan).
+                                "random_rate": next((round(float(x["f"].get("offsetRateFrames") or x["f"].get("offsetRate", 0.0) * 60)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "RandomRateModel"), None),
+                                "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "gw_limit": gw_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
                                 # the emission is laid out on the tower's rotation, each shot then sent at
@@ -2098,6 +2105,8 @@ def main():
                     "prio_camo": prio_camo, "desperado_camo": any(d.get("canPrioritiseCamo") for d in desperado),
                     "desperado_marked": any(d.get("canTargetMarked") for d in desperado), "skip_effects": skip_effects, "need_effects": need_effects, "mtp_filter": mtp_filter, "if_target_attack": if_target_attack, "fixed_range": bool(af.get("fixedRange")), "track_target": track_target, "track_only_bloons": track_only_bloons, "track_closest": track_closest, "track_default": track_default, "track_fallback": track_fallback,
                     "require_tags": require_tags, "exclude_tags": exclude_tags, "only_camo": only_camo,
+                    # RandomTargetModel targetProvider (Benjamin's Bloon Trojan): RandomTarget.GetTarget.
+                    "random_target": bool(deref(af.get("targetProvider")) and deref(af.get("targetProvider"))["type"] == "RandomTargetModel"),
                     # RotateToTargetAttackOffsetModel: the attack turns itself from its offset spot,
                     # [offsetX, offsetY, additionalRotation, startRotation].
                     "offset_rot": next(([af.get("offsetX", 0.0), af.get("offsetY", 0.0), float(x["f"].get("additionalRotation", 0)), x["f"].get("startRotation", 0.0)]
@@ -2432,9 +2441,14 @@ def main():
                                        "fan_fx": prefab_name(xf.get("effectId")),
                                        "leader_fx": prefab_name(xf.get("effectLeaderId"))}
                 # CreateProjectileOnAbilityActivateModel: a projectile fired from the tower on use.
-                if x["type"] == "CreateProjectileOnAbilityActivateModel" and deref(xf.get("projectile")) and xf.get("chance", 1.0) >= 1.0:
+                # (Activate, VERIFIED-DECOMP @0x180e1f640: chance > 0 draws syncedRandom.NextDouble()
+                # and fires only when it is >= 1 - chance; 0 fires with no draw. DanDMonke's
+                # LightningSpawner has 0.)
+                if x["type"] == "CreateProjectileOnAbilityActivateModel" and deref(xf.get("projectile")):
                     out.setdefault("on_activate", []).append({"projectile": projectile(deref(xf["projectile"])),
-                                                              "emission": emission(deref(xf.get("emission")))})
+                                                              "emission": emission(deref(xf.get("emission"))),
+                                                              "act_chance": float(xf.get("chance", 0.0) or 0.0),
+                                                              "follow_tower": bool(xf.get("followTower"))})
                 # ActivateAbilitiesOnAbilityModel (Support Drop -> Supply Drop): uses that one too.
                 if x["type"] == "ActivateAbilitiesOnAbilityModel" and xf.get("abilityToFind"):
                     out["also"] = xf["abilityToFind"]
