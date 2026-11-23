@@ -14,16 +14,16 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 - Passive "abilities" (Bomb Blitz, Legend of the Night...) don't show in the ability bar at the bottom; they are hidden cooldowns. They should appear like in the game.
 - Tack Shooter 5-0-0 (top path tier 5): crashed the game once on upgrade; couldn't reproduce.
 - Tack Shooter middle path: doesn't shoot the blades.
-- Tack Shooter paragon looks like a 0-0-0 Tack Shooter (wrong model).
 - Ice Monkey middle path: flashbangs the whole screen on every attack; the ability's on-screen effect and animation are missing.
 - Ice Monkey paragon: ability visually broken; the paragon teleports around and doesn't face the camera like it should.
 - Glue Gunner: Glue Storm ability effect is wrong.
 - Glue Gunner bottom path: the stun effect on bloons looks wrong (the stars don't look right); one of its animations looks like an explosion.
 - Crit text may be wrong (owner not sure).
-- Sniper Monkey paragon: missing models; its cash generation (and the middle path's supply drops?) may be wrong too.
+- Sniper Monkey paragon: its cash generation (and the middle path's supply drops?) may be wrong. (Models checked
+  2026-11-22: the five paragon levels and platforms are exported and the visuals audit finds nothing missing;
+  if a part still looks absent in play, say which.)
 - Monkey Ace: pineapples are giant; they should show a 3-2-1 countdown.
 - Monkey Ace Tsar Bomba ability: the bomb animation is missing.
-- Monkey Ace paragon: model missing entirely.
 - Heli Pilot Special Poperations ability doesn't work.
 - Heli Pilot: no heli's blades spin.
 - Heli Pilot Comanche: the extra helis don't follow the main heli in the different modes, and stay after selling.
@@ -42,7 +42,6 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 - Druid Superstorm: attack models right but displayed oddly.
 - Druid Spirit of the Forest vines: artifacting, and upside down.
 - Druid middle path: missing the vine sprite wrapped around a bloon the vine has grabbed.
-- Druid paragon looks like a base Druid (wrong model).
 - Mermonkey Popseidon ability effect is wrong.
 - Mermonkey top path: tentacles roughly right but displayed wrong; the black hole around it is too small.
 - Engineer XXL Trap: shows 2 traps.
@@ -127,6 +126,9 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 
 DONE
 ----
+- Tack Shooter, Druid and Monkey Ace paragons showed the tier-5 / base model or nothing (2026-11-22): their
+  paragon models (Cyclone of Fire and Metal, Root of All Nature, Goliath Doomship, all five display levels)
+  had never been exported. Exported now (tools/assets/export_tower_assets.py); please check in game.
 - Sandbox round control now reaches generated late rounds (including round 200)
   and restores early-round bloon stats when returning to round 1. Custom round
   sets without a generator retain their fixed upper bound.
