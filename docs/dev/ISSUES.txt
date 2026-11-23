@@ -44,7 +44,9 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 - Druid middle path: missing the vine sprite wrapped around a bloon the vine has grabbed.
 - Mermonkey Popseidon ability effect is wrong.
 - Mermonkey top path: tentacles roughly right but displayed wrong; the black hole around it is too small.
-- Engineer XXL Trap: shows 2 traps.
+- Engineer XXL Trap: shows 2 traps. (2026-11-22: not the model: XXLBloonTrap is one trap (its Bottom mesh has two
+  materials, exported as two parts). So it's likely a second trap placed while the first is still out: a
+  simulation question for the matching work, not a visual one.)
 - Beast Handler: merging and a lot of logic and animations aren't right.
 - In-game Powers button (shop) does nothing: it's shown but has no click handler, and game.json has no Power data.
   Needs the game's PowersMenu, a Powers export, and placing/using them in game.rs. docs/dev/NOT_BUILT.md has the plan.
