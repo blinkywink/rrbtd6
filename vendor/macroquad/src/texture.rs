@@ -721,6 +721,14 @@ impl Texture2D {
         Texture2D::from_rgba8(image.width, image.height, &image.bytes)
     }
 
+    /// (rrbtd6) Takes ownership of a miniquad texture (deleted when the last handle drops).
+    pub fn from_owned_miniquad_texture(texture: miniquad::TextureId) -> Texture2D {
+        let ctx = get_context();
+        let texture = Texture2D { texture: ctx.textures.store_texture(texture) };
+        ctx.texture_batcher.add_unbatched(&texture);
+        texture
+    }
+
     /// Creates a Texture2D from a miniquad
     /// [Texture](https://docs.rs/miniquad/0.3.0-alpha/miniquad/graphics/struct.Texture.html)
     pub const fn from_miniquad_texture(texture: miniquad::TextureId) -> Texture2D {

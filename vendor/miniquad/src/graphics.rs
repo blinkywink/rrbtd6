@@ -9,6 +9,7 @@ use std::{error::Error, fmt::Display};
 mod gl;
 
 pub use gl::raw_gl;
+pub use gl::compressed;
 
 #[cfg(target_vendor = "apple")]
 mod metal;
@@ -1187,6 +1188,12 @@ pub trait RenderingBackend {
         data: TextureSource,
         params: TextureParams,
     ) -> TextureId;
+    /// (rrbtd6) A texture of block-compressed levels ((width, height, data), level 0 first) in GL
+    /// `format`, linear and clamped, with no uncompressed storage made first; None where the
+    /// backend can't.
+    fn new_texture_compressed(&mut self, _format: u32, _levels: &[(u32, u32, &[u8])]) -> Option<TextureId> {
+        None
+    }
     fn new_render_texture(&mut self, params: TextureParams) -> TextureId {
         self.new_texture(TextureAccess::RenderTarget, TextureSource::Empty, params)
     }

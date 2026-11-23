@@ -641,6 +641,7 @@ async fn game_main() {
     let mark = |what: &str| if std::env::var("RRBTD6_TIMING").is_ok() { eprintln!("load: {what} at {:.0} ms, {} MB", load_t0.elapsed().as_secs_f64() * 1e3, private_mb()) };
     let root = root();
     uitree::set_loc(menus::load_loc(&root.join("text").join("English.xml")));
+    render3d::init_compressed_textures();
     mark("json");
     let json = std::sync::Arc::new(std::fs::read_to_string(simulation_path(&root,"game/game.json"))
         .expect("local_extracted/game/game.json missing: run tools/assets/build_game_data.py"));
@@ -1142,6 +1143,7 @@ const VINE_END_FRAMES: i32 = 23;
     if std::env::var_os("RRBTD6_MAP_BATCH_CHECK").is_some(){render3d::verify_map_batching(&root).await;}
     if std::env::var_os("RRBTD6_STATIC_MAP_CHECK").is_some(){render3d::verify_static_maps(&root).await;}
     if std::env::var_os("RRBTD6_MESH_INSTANCE_CHECK").is_some(){render3d::verify_mesh_instancing(&root).await;}
+    if std::env::var_os("RRBTD6_BCT_CHECK").is_some(){render3d::verify_bct(&root).await;}
     let mortar_target = tex(root.join("sprites").join("IngameUi").join("MortarTarget.png")).await;
     let mut speed = 1u32;
     let mut coop_config:Option<rrbtd6_coop::MatchStart>=None;

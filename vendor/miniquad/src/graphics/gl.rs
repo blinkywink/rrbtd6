@@ -915,6 +915,29 @@ impl RenderingBackend for GlContext {
         TextureId(TextureIdInner::Managed(self.textures.0.len() - 1))
     }
 
+    fn new_texture_compressed(&mut self, format: u32, levels: &[(u32, u32, &[u8])]) -> Option<TextureId> {
+        let &(w, h, _) = levels.first()?;
+        let mut raw: GLuint = 0;
+        unsafe {
+            glGenTextures(1, &mut raw as *mut _);
+            self.cache.store_texture_binding(0);
+            self.cache.bind_texture(0, GL_TEXTURE_2D, raw);
+            for (k, (lw, lh, data)) in levels.iter().enumerate() {
+                glCompressedTexImage2D(GL_TEXTURE_2D, k as _, format, *lw as _, *lh as _, 0, data.len() as _, data.as_ptr() as _);
+            }
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels.len().saturating_sub(1) as _);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE as _);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE as _);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR as _);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR as _);
+            self.cache.restore_texture_binding(0);
+        }
+        let params = TextureParams { width: w, height: h, ..Default::default() };
+        crate::gpu_mem::texture(raw, levels.iter().map(|l| l.2.len()).sum(), w, h);
+        self.textures.0.push(Texture { raw: TextureOrRenderbuffer::Texture(raw), params });
+        Some(TextureId(TextureIdInner::Managed(self.textures.0.len() - 1)))
+    }
+
     fn delete_texture(&mut self, texture: TextureId) {
         //self.cache.clear_texture_bindings();
 
@@ -1771,5 +1794,48 @@ impl RenderingBackend for GlContext {
                 num_instances,
             );
         }
+    }
+}
+
+/// (rrbtd6) Block-compressed (S3TC) texture uploads: the game's own DXT1 / DXT5 data with its mip
+/// chain, into a texture miniquad already made (its storage is respecified level by level).
+pub mod compressed {
+    use super::*;
+    pub const DXT1_RGB: u32 = 0x83F0;
+    pub const DXT5_RGBA: u32 = 0x83F3;
+
+    /// Whether the context takes S3TC textures (desktop GL; not GLES / iOS).
+    pub fn supported() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| unsafe {
+            if std::env::var_os("RRBTD6_NO_COMPRESSED_TEXTURES").is_some() {
+                return false;
+            }
+            let mut n = 0;
+            glGetIntegerv(GL_NUM_EXTENSIONS, &mut n);
+            (0..n.max(0) as u32).any(|i| {
+                let p = glGetStringi(GL_EXTENSIONS, i);
+                !p.is_null() && {
+                    let e = std::ffi::CStr::from_ptr(p as *const _).to_bytes();
+                    e == b"GL_EXT_texture_compression_s3tc"
+                }
+            })
+        })
+    }
+
+    /// Respecifies texture `raw` as `format` with these levels ((width, height, blocks), level 0
+    /// first), keeping whatever texture the active unit had bound.
+    pub unsafe fn upload(raw: GLuint, format: u32, levels: &[(u32, u32, &[u8])]) {
+        let mut prev = 0;
+        glGetIntegerv(0x8069 /* GL_TEXTURE_BINDING_2D */, &mut prev);
+        glBindTexture(GL_TEXTURE_2D, raw);
+        for (k, (w, h, data)) in levels.iter().enumerate() {
+            glCompressedTexImage2D(GL_TEXTURE_2D, k as _, format, *w as _, *h as _, 0, data.len() as _, data.as_ptr() as _);
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels.len().saturating_sub(1) as _);
+        glBindTexture(GL_TEXTURE_2D, prev as GLuint);
+        let bytes: usize = levels.iter().map(|l| l.2.len()).sum();
+        crate::gpu_mem::texture(raw, bytes, levels.first().map_or(0, |l| l.0), levels.first().map_or(0, |l| l.1));
+        crate::gpu_mem::mipmapped(raw);
     }
 }

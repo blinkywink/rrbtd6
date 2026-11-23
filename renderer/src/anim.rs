@@ -555,7 +555,8 @@ impl AnimModel {
         let mut budget=crate::load_work::Budget::new();let mut parts=Vec::with_capacity(st.parts.len());
         for p in st.parts{
             let tex=if let Some(mut t)=p.tex{
-                if let Some(texture)=crate::render3d::cached_tex(&t.key){Some(texture)}else{
+                if let Some(texture)=crate::render3d::cached_tex(&t.key){Some(texture)}
+                else if let Some(texture)=crate::render3d::cache_tex_bct(&t.key,&t.path){Some(texture)}else{
                     let img=match t.img.take(){Some(img)=>Some(img),None=>{let path=t.path.clone();crate::load_work::spawn(move||decode(&path)).await}};
                     if let Some(img)=img{Some(crate::render3d::cache_tex_cooperative(&t.key,&img).await)}else{None}
                 }
@@ -607,7 +608,8 @@ impl AnimModel {
                 let path = dir.join(t);
                 let key = crate::render3d::tex_key(&path, true)?;
                 let claimed=crate::render3d::claim_tex(&key);
-                let img = if claimed { decode(&path) } else { None };
+                // (A texture with the game's compressed data (.bct) isn't decoded: it uploads that.)
+                let img = if claimed && crate::render3d::bct_path(&path).is_none() { decode(&path) } else { None };
                 Some(StagedTex { key, path, img, claimed })
             });
             // STAND-IN: untextured quads are effect planes (glows) whose particle / additive

@@ -310,10 +310,11 @@ impl Model {
         let share = !dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with("map_"));
         let cache: std::collections::HashMap<String, Option<Texture2D>> = if share {
             let keys: Vec<Option<TexKey>> = paths.iter().map(|p| tex_key(p, false)).collect();
+            // (One with the game's compressed data uploads that here instead of being decoded.)
             let todo: Vec<std::path::PathBuf> = paths
                 .iter()
                 .zip(&keys)
-                .filter(|(_, k)| k.as_ref().is_some_and(|k| cached_tex(k).is_none()))
+                .filter(|(p, k)| k.as_ref().is_some_and(|k| cached_tex(k).is_none() && cache_tex_bct(k, p).is_none()))
                 .map(|(p, _)| p.clone())
                 .collect();
             let worker_paths=todo.clone();let decoded=crate::load_work::spawn(move||decode_batch(&worker_paths)).await;
@@ -332,13 +333,17 @@ impl Model {
             // full-size level is never what the game's trilinear sampling shows, so it's
             // uploaded as its 2x box-filtered mip (a quarter of the memory).
             let half = screen_width() * screen_dpi_scale() <= 2048.0 && !FULL_TEXTURES.load(std::sync::atomic::Ordering::Relaxed);
-            let worker_paths=paths.clone();let imgs=crate::load_work::spawn(move||decode_batch(&worker_paths)
+            // (One uploaded at full size, with the game's compressed data, uploads that: the
+            // halved ones keep their box-filtered mip.)
+            let compressed: Vec<bool> = paths.iter().map(|p| bct_size(p).is_some_and(|(w, h)| !(half && w > 2048 && h > 1024))).collect();
+            let worker_paths: Vec<std::path::PathBuf> = paths.iter().zip(&compressed).filter(|(_, c)| !**c).map(|(p, _)| p.clone()).collect();
+            let mut imgs=crate::load_work::spawn(move||decode_batch(&worker_paths)
                 .into_iter()
                 .map(|i| i.map(|i| if half && i.width > 2048 && i.height > 1024 { half_size(&i) } else { i }))
-                .collect::<Vec<_>>()).await;
+                .collect::<Vec<_>>()).await.into_iter();
             let mut cache=std::collections::HashMap::new();
-            for (name,img) in names_t.into_iter().zip(imgs){
-                let texture=if let Some(img)=img{Some(upload_cooperative(&img,false).await)}else{None};
+            for ((name,path),c) in names_t.into_iter().zip(&paths).zip(compressed){
+                let texture=if c{upload_bct(path,false)}else if let Some(img)=imgs.next().flatten(){Some(upload_cooperative(&img,false).await)}else{None};
                 cache.insert(name,texture);budget.checkpoint().await;
             }
             cache
@@ -1182,6 +1187,130 @@ pub fn half_size(img: &Image) -> Image {
     Image { bytes: out, width: w as u16, height: h as u16 }
 }
 
+/// Whether block-compressed textures (`.bct`, tools/assets/export_compressed.py) are used: the
+/// GPU takes S3TC (set once on the main thread, read by the decode workers).
+static COMPRESSED_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn init_compressed_textures() {
+    COMPRESSED_OK.store(macroquad::miniquad::compressed::supported(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The `.bct` beside a texture PNG, when there is one and it can be used.
+pub fn bct_path(png: &std::path::Path) -> Option<std::path::PathBuf> {
+    if !COMPRESSED_OK.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let p = png.with_extension("bct");
+    p.exists().then_some(p)
+}
+
+/// The size a texture's usable `.bct` holds.
+pub fn bct_size(png: &std::path::Path) -> Option<(u32, u32)> {
+    use std::io::Read;
+    let mut head = [0u8; 20];
+    std::fs::File::open(bct_path(png)?).ok()?.read_exact(&mut head).ok()?;
+    (&head[0..4] == b"RBCT").then(|| (u32::from_le_bytes(head[12..16].try_into().unwrap()), u32::from_le_bytes(head[16..20].try_into().unwrap())))
+}
+
+/// The game's own DXT1 / DXT5 data for a texture PNG (`.bct`: its mip chain, top row first like
+/// the PNG), uploaded as is: 4-8x less GPU memory than the decoded RGBA. `mip`: with its mip
+/// levels (export_compressed.py --mips: the PNG's 2x2 means DXT encoded, as glGenerateMipmap
+/// makes them for a PNG; level 0 stays the game's blocks), else level 0 alone.
+pub fn upload_bct(png: &std::path::Path, mip: bool) -> Option<Texture2D> {
+    let bytes = std::fs::read(bct_path(png)?).ok()?;
+    let u = |at: usize| bytes.get(at..at + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    if bytes.get(0..4)? != b"RBCT" || u(4)? != 1 {
+        return None;
+    }
+    let format = match u(8)? {
+        1 => macroquad::miniquad::compressed::DXT1_RGB,
+        5 => macroquad::miniquad::compressed::DXT5_RGBA,
+        _ => return None,
+    };
+    let (w, h, n) = (u(12)?, u(16)?, u(20)? as usize);
+    let mut at = 24 + n * 12;
+    let mut levels = Vec::with_capacity(n);
+    for k in 0..n {
+        let (lw, lh, len) = (u(24 + k * 12)?, u(28 + k * 12)?, u(32 + k * 12)? as usize);
+        levels.push((lw, lh, bytes.get(at..at + len)?));
+        at += len;
+    }
+    if !mip {
+        levels.truncate(1);
+    }
+    let _ = (w, h);
+    let ctx = unsafe { get_internal_gl() }.quad_context;
+    let id = ctx.new_texture_compressed(format, &levels)?;
+    let texture = Texture2D::from_owned_miniquad_texture(id);
+    if mip && levels.len() > 1 {
+        ctx.texture_set_min_filter(id, macroquad::miniquad::FilterMode::Linear, macroquad::miniquad::MipmapFilterMode::Linear);
+        ctx.texture_set_mag_filter(id, macroquad::miniquad::FilterMode::Linear);
+    }
+    Some(texture)
+}
+
+/// RRBTD6_BCT_CHECK: every texture with a `.bct` under the models drawn 1:1 (nearest) from its
+/// compressed upload and from its PNG, read back and compared.
+pub async fn verify_bct(root: &std::path::Path) {
+    fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "bct") {
+                out.push(p.with_extension("png"));
+            }
+        }
+    }
+    let mut pngs = Vec::new();
+    walk(&root.join("models"), &mut pngs);
+    let (mut same, mut differ, mut px_differ, mut worst, mut total, mut over_one) = (0, 0, 0usize, 0u8, 0usize, 0usize);
+    for png in &pngs {
+        let Ok(bytes) = std::fs::read(png) else { continue };
+        let Ok(img) = Image::from_file_with_format(&bytes, None) else { continue };
+        let Some(c) = upload_bct(png, false) else { continue };
+        let p = upload(&img);
+        let (w, h) = (img.width as u32, img.height as u32);
+        let mut shots = Vec::new();
+        for t in [&c, &p] {
+            t.set_filter(FilterMode::Nearest);
+            let rt = render_target(w, h);
+            let mut cam = Camera2D::from_display_rect(Rect::new(0.0, 0.0, w as f32, h as f32));
+            cam.render_target = Some(rt.clone());
+            set_camera(&cam);
+            clear_background(Color::from_rgba(0, 0, 0, 0));
+            gl_use_default_material();
+            draw_texture_ex(t, 0.0, 0.0, WHITE, DrawTextureParams { dest_size: Some(vec2(w as f32, h as f32)), ..Default::default() });
+            set_default_camera();
+            shots.push(rt.texture.get_texture_data());
+        }
+        // (DXT1 is opaque: alpha is compared only where the PNG has it.)
+        let mut tex_worst = 0u8;
+        let n = shots[0].bytes.chunks_exact(4).zip(shots[1].bytes.chunks_exact(4)).filter(|(a, b)| {
+            let d = a.iter().zip(b.iter()).take(3).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+            tex_worst = tex_worst.max(d);
+            d > 0
+        }).count();
+        worst = worst.max(tex_worst);
+        if tex_worst > 2 {
+            over_one += 1;
+            if over_one <= 12 {
+                eprintln!("bct check: {} differs by up to {tex_worst} ({n} pixels, {w}x{h})", png.display());
+            }
+        }
+        total += (w * h) as usize;
+        let out = std::path::PathBuf::from(std::env::var_os("RRBTD6_BCT_CHECK").unwrap_or_default());
+        if n > 0 && differ == 0 && out.is_dir() {
+            shots[0].export_png(&out.join("bct-compressed.png").to_string_lossy());
+            shots[1].export_png(&out.join("bct-png.png").to_string_lossy());
+            eprintln!("bct check: first difference {}", png.display());
+        }
+        if n == 0 { same += 1 } else { differ += 1; px_differ += n }
+        next_frame().await;
+    }
+    eprintln!("bct check: {} textures, {same} identical, {differ} differ ({px_differ} of {total} pixels, largest channel difference {worst}); {over_one} by more than 2", pngs.len());
+}
+
 /// Uploads a decoded image as a linearly filtered texture (what `load_texture` gives).
 pub fn upload(img: &Image) -> Texture2D {
     let t = Texture2D::from_image(img);
@@ -1271,18 +1400,32 @@ pub fn cache_tex(key: &TexKey, img: Option<&Image>, path: &std::path::Path) -> O
     if let Some(t) = cached_tex(key) {
         return Some(t);
     }
-    let decoded;
-    let img = match img {
-        Some(i) => i,
+    let t = match upload_bct(path, key.2) {
+        Some(t) => t,
         None => {
-            decoded = Image::from_file_with_format(&std::fs::read(path).ok()?, None).ok()?;
-            &decoded
+            let decoded;
+            let img = match img {
+                Some(i) => i,
+                None => {
+                    decoded = Image::from_file_with_format(&std::fs::read(path).ok()?, None).ok()?;
+                    &decoded
+                }
+            };
+            let t = upload(img);
+            if key.2 {
+                crate::anim::mipmapped(&t);
+            }
+            t
         }
     };
-    let t = upload(img);
-    if key.2 {
-        crate::anim::mipmapped(&t);
-    }
+    TEX_CACHE.with(|c| c.borrow_mut().insert(key.clone(), t.clone()));
+    mark_uploaded(key);
+    Some(t)
+}
+
+/// `cache_tex` from the texture's `.bct` alone (None: no usable one).
+pub fn cache_tex_bct(key: &TexKey, path: &std::path::Path) -> Option<Texture2D> {
+    let t = upload_bct(path, key.2)?;
     TEX_CACHE.with(|c| c.borrow_mut().insert(key.clone(), t.clone()));
     mark_uploaded(key);
     Some(t)
