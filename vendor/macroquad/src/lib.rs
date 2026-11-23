@@ -45,7 +45,7 @@ use std::pin::Pin;
 
 mod exec;
 mod quad_gl;
-pub use quad_gl::take_draw_stats;
+pub use quad_gl::{set_draw_tag, take_draw_stats, take_draw_tags};
 mod tobytes;
 
 pub mod audio;

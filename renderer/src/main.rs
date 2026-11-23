@@ -1742,6 +1742,7 @@ const VINE_END_FRAMES: i32 = 23;
             continue;
         }
         let cpu_t0 = get_time();
+        macroquad::set_draw_tag("other");
         if background_assets&&view3d {
             let round_key=(game.round,game.round_active);
             if warm_kinds.len()!=game.defs.len(){warm_kinds=vec![false;game.defs.len()];}
@@ -2577,9 +2578,11 @@ const VINE_END_FRAMES: i32 = 23;
             if let (Some(m), Some(motion)) = (&mut map_model, &mut map_motion) {
                 motion.update(m, map_motion_clock);
             }
+            macroquad::set_draw_tag("map");
             if let Some(m) = &map_model {
                 m.draw_map(if scaled{None}else{cam.viewport});
             }
+            macroquad::set_draw_tag("towers");
             // ParagonTower.SetTowerActive (Steam build @0xd53930): a Paragon not yet active (its
             // purchase playing) has its display scaled to zero, shadow and attack displays with it
             // (recording dart_paragon_fx: scale 0 from the purchase until Finish).
@@ -2911,6 +2914,7 @@ const VINE_END_FRAMES: i32 = 23;
                 let px_per_unit = vh / cam.fovy.max(1.0);
                 particles.draw_back(vec3(1.0, 0.0, 0.0), render3d::gl(0.0, a.cos(), a.sin()), px_per_unit, vh);
             }
+            macroquad::set_draw_tag("bloons");
             let bloon_t0 = get_time();
             // One pose time for every MOAB-class model this frame: a run's flush (one per regular
             // bloon between MOABs) reading the clock itself re-posed and re-uploaded every model
@@ -3105,6 +3109,7 @@ const VINE_END_FRAMES: i32 = 23;
             // TurboMutator.Mutate (VERIFIED-DECOMP @0x180e7ac90): while Turbo Charge / Perma Charge
             // runs, the tower's weapons' projectiles are made with its projectileDisplay; ones
             // already flying keep theirs.
+            macroquad::set_draw_tag("projectiles");
             proj_look.retain(|uid, _| game.projectiles.iter().any(|p| p.uid == *uid));
             for p in &game.projectiles {
                 proj_look.entry(p.uid).or_insert_with(|| {
@@ -4120,6 +4125,7 @@ const VINE_END_FRAMES: i32 = 23;
                 particles.update(get_frame_time().min(0.1) * speed as f32);
                 map_motion_clock += get_frame_time().min(0.1) * speed as f32;
             }
+            macroquad::set_draw_tag("particles");
             {
                 let a = render3d::PITCH_DEG.to_radians();
                 let px_per_unit = vh / cam.fovy.max(1.0);
@@ -4297,6 +4303,7 @@ const VINE_END_FRAMES: i32 = 23;
                 }
             }
 
+            macroquad::set_draw_tag("2d");
             // Towers.
             for t in &game.towers {
                 let c = view.to_screen(t.pos);
@@ -4457,6 +4464,7 @@ const VINE_END_FRAMES: i32 = 23;
             h.show_placement_buttons(placing.is_some() || ability_pick.is_some() || merge_pick.is_some(), placing.is_some() && !h.menus.drag_and_drop);
             if selected.is_some() || placing.is_some() { selected_removeable = None; }
             h.removeable = selected_removeable.and_then(|i| game.removeable(i)).map(|r| (r.cost, game.cash >= r.cost as f64));
+            macroquad::set_draw_tag("hud");
             let mut actions = h.draw(&game, selected, placing, speed, auto_start);
             if coop_blocked{uitree::block_input(false);actions.clear();}
             h.draw_coop(&game,coop_config.as_ref(),front.coop_slot(),coop_runtime.as_ref().map(|r|&r.replica.requests),coop_runtime.as_ref().map_or(0,|r|r.replica.frame),&mut actions);
@@ -4844,6 +4852,9 @@ const VINE_END_FRAMES: i32 = 23;
                 let (draws, verts, flushes) = macroquad::take_draw_stats();
                 let (gn, gv) = render3d::GEOM_STATS.with(|c| c.replace((0, 0)));
                 eprintln!("autotest: frame {frames} draws/frame {} verts/frame {} flushes/frame {} geometry-calls/frame {} geometry-verts/frame {}", draws / 100, verts / 100, flushes / 100, gn / 100, gv / 100);
+                let mut tags = macroquad::take_draw_tags();
+                tags.sort_by(|a, b| b.1.cmp(&a.1));
+                eprintln!("autotest: frame {frames} draw calls by part: {}", tags.iter().map(|(t, n)| format!("{t} {}", n / 100)).collect::<Vec<_>>().join(", "));
                 let (tex_mb, buf_mb, tex_n) = macroquad::miniquad::gpu_mem::totals();
                 eprintln!("autotest: frame {frames} memory private {} MB, gpu textures {tex_mb} MB ({tex_n}), gpu buffers {buf_mb} MB", private_mb());
                 // RRBTD6_GPU_MEM: the textures by size, every 1000 frames.

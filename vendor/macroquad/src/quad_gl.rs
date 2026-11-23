@@ -24,6 +24,33 @@ thread_local! {
     pub static DRAW_STATS: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
 }
 
+thread_local! {
+    /// (rrbtd6) Draw calls started under each tag (`set_draw_tag`) since `take_draw_tags`.
+    static DRAW_TAG: std::cell::Cell<&'static str> = const { std::cell::Cell::new("") };
+    static DRAW_TAGS: std::cell::RefCell<Vec<(&'static str, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// (rrbtd6) Names the part of the frame the next draw calls belong to (diagnostics).
+pub fn set_draw_tag(tag: &'static str) {
+    DRAW_TAG.with(|t| t.set(tag));
+}
+
+/// (rrbtd6) Draw calls started per tag since the last call.
+pub fn take_draw_tags() -> Vec<(&'static str, usize)> {
+    DRAW_TAGS.with(|t| std::mem::take(&mut *t.borrow_mut()))
+}
+
+fn count_draw_tag() {
+    let tag = DRAW_TAG.with(|t| t.get());
+    DRAW_TAGS.with(|t| {
+        let mut t = t.borrow_mut();
+        match t.iter_mut().find(|e| e.0 == tag) {
+            Some(e) => e.1 += 1,
+            None => t.push((tag, 1)),
+        }
+    });
+}
+
 /// (rrbtd6) Returns and resets the draw counters.
 pub fn take_draw_stats() -> (usize, usize, usize) {
     DRAW_STATS.with(|c| c.replace((0, 0, 0)))
@@ -1151,6 +1178,7 @@ impl QuadGl {
 
             self.draw_calls_count += 1;
             self.state.break_batching = false;
+            count_draw_tag();
         };
         let dc = &mut self.draw_calls[self.draw_calls_count - 1];
 
@@ -1225,6 +1253,7 @@ impl QuadGl {
         list.push(inst);
         dc.instanced = Some((vb, ib, icount, list));
         self.draw_calls_count += 1;
+        count_draw_tag();
         self.state.break_batching = false;
         true
     }
