@@ -27,7 +27,7 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 - Heli Pilot Comanche: the extra helis don't follow the main heli in the different modes, and stay after selling.
 - Mortar Monkey: asks to set a target right after placing; the game auto-picks a spot unless you choose one.
 - Wall of Fire (Mortar and Wizard): right place, but the angle of the wall is wrong.
-- Dartling Gunner Ray of Doom (and its tier 4): the ray isn't drawn; bottom path animations aren't in sync with where it aims.
+- Dartling Gunner bottom path: animations aren't in sync with where it aims.
 - Dartling Gunner middle path ability: wrong icons.
 - Wizard Wizard Lord Phoenix: the birds fly oddly, not facing where they fly.
 - Set-target markers (the little circle on the map): look similar to the game but something is off.
@@ -124,6 +124,9 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 
 DONE
 ----
+- Dartling Gunner Ray of Doom and Plasma Accelerator: the beam wasn't drawn (2026-11-22). Their lines grow over
+  time (useLengthSpeed) and that branch never queued the beam for drawing; it does now, with the start / hit
+  effects (display only; dartling 27/27). Please check in game.
 - Monkey Ace pineapples were giant and still (2026-11-22): the game turns them once and shrinks them to 0.59x
   as they fall (CustomRotationAnimator / CustomScaleAnimator, decompiled). Those tweens now play for every
   mesh projectile that has them (tools/assets/export_tweens.py: 23 models: the pineapple, Juggernaut balls,

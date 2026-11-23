@@ -23054,6 +23054,19 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                     }
                                 }
                                 let len = if len < 0.0 { len } else { (end[0] - from[0]).hypot(end[1] - from[1]) };
+                                // LineEffectModel (Plasma Accelerator, Ray of Doom): its beam along the line
+                                // and, every few frames while it fires, its start / end effects (visual
+                                // only, as the swept lines below).
+                                if let Some(lf) = &weapon.line_fx {
+                                    if self.steps % 12 == 0 {
+                                        for (fx, at) in [(&lf.start, from), (&lf.end, end)] {
+                                            if let Some(fx) = fx {
+                                                self.place_fx.push((at, fx.clone(), 1.0));
+                                            }
+                                        }
+                                    }
+                                    self.beams.push((from, end, lf.clone()));
+                                }
                                 let a = (end[1] - from[1]).atan2(end[0] - from[0]);
                                 let (ls, lc) = a.sin_cos();
                                 let r = proj.radius;
