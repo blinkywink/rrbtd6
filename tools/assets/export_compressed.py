@@ -2,7 +2,7 @@
 model and map textures, so the renderer can upload them compressed: 4-8x less GPU memory than the
 decoded RGBA PNGs, which stay (other platforms, CPU uses, every export kept).
 
-    python tools/assets/export_compressed.py [--dirs models maps ...] [--force]
+    python tools/assets/export_compressed.py [--dirs models maps ...] [--force] [--game <install>]
     python tools/assets/export_compressed.py --mips      (adds mip levels to .bct files without)
 
 Every texture PNG under local_extracted/<dirs> (tex/ and shared_textures/) is matched by its pixels:
@@ -37,7 +37,8 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "local_extracted"
-AA = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Steam/steamapps/common/BloonsTD6/BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64"
+GAME = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Steam/steamapps/common/BloonsTD6"
+AA = GAME / "BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64"
 DXT1, DXT5 = 10, 12
 BLOCK = {DXT1: 8, DXT5: 16}
 CODE = {DXT1: 1, DXT5: 5}
@@ -223,7 +224,11 @@ def main():
     ap.add_argument("--dirs", nargs="*", default=["models"])
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--mips", action="store_true")
+    ap.add_argument("--game", help="the BTD6 install (default: Steam's)")
     args = ap.parse_args()
+    global AA
+    if args.game:
+        AA = Path(args.game) / "BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64"
     if args.mips:
         files = [b for d in args.dirs for b in (OUT / d).rglob("*.bct")]
         done = sum(add_mips(b) for b in files)

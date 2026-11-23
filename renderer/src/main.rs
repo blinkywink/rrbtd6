@@ -4124,6 +4124,7 @@ const VINE_END_FRAMES: i32 = 23;
             if menu.is_none() {
                 particles.update(get_frame_time().min(0.1) * speed as f32);
                 map_motion_clock += get_frame_time().min(0.1) * speed as f32;
+                anim::set_spin_clock(map_motion_clock);
             }
             macroquad::set_draw_tag("particles");
             {

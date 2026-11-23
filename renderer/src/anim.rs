@@ -201,6 +201,18 @@ struct Part<T = Texture2D> {
     /// A material drawn with the game's translated shader (meta "shader_file": Apex Plasma
     /// Master's lightning flipbook): the model dir and the part's meta, made into an Fx at upload.
     fx_spec: Option<std::sync::Arc<(std::path::PathBuf, serde_json::Value)>>,
+    /// RotateDisplayModel (spin.json, tools/assets/export_spin.py): (rotationsPerSecond,
+    /// startingRotation) of a part the game turns in code about the vertical (helicopter rotors,
+    /// Etienne's drone fans).
+    spin: Option<(f32, f32)>,
+}
+
+/// Game time for spinning parts (`Part::spin`): seconds, at game speed, paused behind menus (the
+/// game's Time.deltaTime). Set each frame by main.rs.
+static SPIN_CLOCK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_spin_clock(t: f32) {
+    SPIN_CLOCK.store(t.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The prefab's ground shadow (`RadialShadow` SpriteRenderer, MonkeyRadialShadow sprite).
@@ -544,6 +556,7 @@ impl AnimModel {
                 blink_only: p.blink_only,
                 cull: p.cull,
                 fx_spec: p.fx_spec,
+                spin: p.spin,
             })
             .collect::<Vec<_>>();
         let fx = parts.iter().map(|p| p.fx_spec.as_ref().and_then(|s| make_fx(s))).collect();
@@ -564,7 +577,7 @@ impl AnimModel {
             parts.push(Part{
                 tex,
                 voff:p.voff,vcount:p.vcount,uv:p.uv,chunks:p.chunks,outline:p.outline,
-                outline_color:p.outline_color,vout:p.vout,blink_only:p.blink_only,cull:p.cull,fx_spec:p.fx_spec,
+                outline_color:p.outline_color,vout:p.vout,blink_only:p.blink_only,cull:p.cull,fx_spec:p.fx_spec,spin:p.spin,
             });budget.checkpoint().await;
         }
         let fx=parts.iter().map(|p|p.fx_spec.as_ref().and_then(|s|make_fx(s))).collect();
@@ -597,7 +610,12 @@ impl AnimModel {
         let f = |b: &[u8], o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         let nverts = meta["vertex_count"].as_u64()? as usize;
         let mut parts = Vec::new();
-        for p in meta["parts"].as_array()? {
+        // Spinning parts by their meta.json index (spin.json).
+        let spins: std::collections::HashMap<usize, (f32, f32)> = std::fs::read_to_string(dir.join("spin.json")).ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v["parts"].as_array().map(|a| a.iter().filter_map(|e| Some((e["index"].as_u64()? as usize, (e["rps"].as_f64()? as f32, e["start"].as_f64()? as f32)))).collect()))
+            .unwrap_or_default();
+        for (part_index, p) in meta["parts"].as_array()?.iter().enumerate() {
             let (voff, vcount) = (p["voff"].as_u64()? as usize, p["vcount"].as_u64()? as usize);
             let (ioff, icount) = (p["ioff"].as_u64()? as usize, p["icount"].as_u64()? as usize);
             let uv = (0..vcount).map(|k| vec2(f(&vb, (voff + k) * 20 + 12), 1.0 - f(&vb, (voff + k) * 20 + 16))).collect();
@@ -665,6 +683,7 @@ impl AnimModel {
                 vout,
                 cull: cull_face(&p["cull"]),
                 fx_spec,
+                spin: spins.get(&part_index).copied(),
             });
         }
         let clips = anims
@@ -996,8 +1015,34 @@ impl AnimModel {
             let (mut vertices,mut outline_vertices)=if reuse{
                 (take_pose_vertices(part.vcount),if part.outline>0.0{take_pose_vertices(part.vcount)}else{Vec::new()})
             }else{let (mut v,mut o)=self.legacy_scratch.take().unwrap_or_default();v.clear();o.clear();(v,o)};
+            // RotateDisplayModel.Update: startingRotation + game seconds x rotationsPerSecond x 360
+            // degrees about the vertical (Unity's yaw), here through the part's centre this frame
+            // (the rotor's hub; the game turns its transform, which bobs with the rig). (The game
+            // also takes off the grandparent's world yaw so the rotor's world angle doesn't follow
+            // the heli's turns: a symmetric rotor looks the same either way.)
+            let spin = part.spin.map(|(rps, start)| {
+                let t = f32::from_bits(SPIN_CLOCK.load(std::sync::atomic::Ordering::Relaxed));
+                let a = (start + t * rps * 360.0).rem_euclid(360.0).to_radians();
+                let mut c = [0.0f32; 3];
+                for k in 0..part.vcount {
+                    let (vp, _) = self.frames.lerp(base0 + part.voff + k, base1 + part.voff + k, u);
+                    for i in 0..3 {
+                        c[i] += vp[i];
+                    }
+                }
+                let n = part.vcount.max(1) as f32;
+                (a.sin_cos(), [c[0] / n, c[1] / n, c[2] / n])
+            });
             for k in 0..part.vcount {
                 let (mut vp, mut vn) = self.frames.lerp(base0 + part.voff + k, base1 + part.voff + k, u);
+                if let Some(((s, c), o)) = spin {
+                    let (x, z) = (vp[0] - o[0], vp[2] - o[2]);
+                    vp[0] = o[0] + x * c + z * s;
+                    vp[2] = o[2] - x * s + z * c;
+                    let (x, z) = (vn[0], vn[2]);
+                    vn[0] = x * c + z * s;
+                    vn[2] = -x * s + z * c;
+                }
                 if mirror {
                     vp[0] = -vp[0];
                     vn[0] = -vn[0];
@@ -1462,5 +1507,24 @@ mod state_clip_tests {
             }
             assert_eq!(st.state_flags.len(), st.states.len(), "{d}: state_flags.json");
         }
+    }
+}
+
+#[cfg(test)]
+mod spin_tests {
+    /// spin.json (tools/assets/export_spin.py) reaches the staged parts: a Chinook's two rotors
+    /// turn (the rear one backwards), its body doesn't. Skipped without the local assets.
+    #[test]
+    fn heli_rotors_are_staged_spinning() {
+        let dir = crate::root().join("models/air/041-HeliPilot");
+        if !dir.join("spin.json").exists() {
+            eprintln!("skipped: no {}", dir.display());
+            return;
+        }
+        let st = super::AnimModel::stage(&dir).expect("stages");
+        let spins: Vec<Option<(f32, f32)>> = st.parts.iter().map(|p| p.spin).collect();
+        let rps: Vec<f32> = spins.iter().flatten().map(|s| s.0).collect();
+        assert!(rps.contains(&2.0) && rps.contains(&-2.0), "{spins:?}");
+        assert!(spins.iter().any(|s| s.is_none()), "the body doesn't spin: {spins:?}");
     }
 }

@@ -606,6 +606,14 @@ def finish(c):
     c.py("tools/assets/compact_json.py", c.out)
 
 
+def gpu_assets(c):
+    """The game's own DXT data beside model / effect textures (uploaded compressed), with mips; and
+    the parts the game spins in code (helicopter rotors, drone fans)."""
+    c.py("tools/assets/export_compressed.py", "--game", c.game, "--dirs", "models", "effects")
+    c.py("tools/assets/export_compressed.py", "--dirs", "models", "effects", "--mips")
+    c.py("tools/assets/export_spin.py", "--game", c.game, "air")
+
+
 def dedupe(c):
     """Byte-identical runtime assets stored once (hard links; paths and bytes unchanged)."""
     c.py("tools/assets/link_duplicates.py", c.out)
@@ -616,7 +624,7 @@ def prune_achievements(c):
 
 
 STEPS = [prune_achievements, metadata, sim_model, cab_index, catalogs, container_index, rounds_maps, sprites, mapset, tower_models, misc_art, upgrade_art,
-         ingame_ui, core_menus, game_data, extended_towers, tower_indices, particles, audio, bloon_models, frontend, startup, home, social, menu_additions, profile_menu, builtin_ui_sprites, map_mechanics, pending_models, anim_states, finish, dedupe]
+         ingame_ui, core_menus, game_data, extended_towers, tower_indices, particles, audio, bloon_models, frontend, startup, home, social, menu_additions, profile_menu, builtin_ui_sprites, map_mechanics, pending_models, anim_states, finish, gpu_assets, dedupe]
 
 
 def install_hook(root):

@@ -25,7 +25,6 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 - Monkey Ace: pineapples are giant; they should show a 3-2-1 countdown.
 - Monkey Ace Tsar Bomba ability: the bomb animation is missing.
 - Heli Pilot Special Poperations ability doesn't work.
-- Heli Pilot: no heli's blades spin.
 - Heli Pilot Comanche: the extra helis don't follow the main heli in the different modes, and stay after selling.
 - Mortar Monkey: asks to set a target right after placing; the game auto-picks a spot unless you choose one.
 - Wall of Fire (Mortar and Wizard): right place, but the angle of the wall is wrong.
@@ -126,6 +125,10 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
 
 DONE
 ----
+- Heli Pilot: blades didn't spin (2026-11-22). The game turns rotors in code (RotateDisplayModel: 2 turns a
+  second at game speed, the Chinook's rear rotor backwards), not by animation, so the export had them still.
+  tools/assets/export_spin.py finds those parts (65 models: every Heli tier, Comanches, Chinook, Apache, and
+  Etienne's drone fans) and the renderer turns them. Please check in game.
 - Tack Shooter, Druid and Monkey Ace paragons showed the tier-5 / base model or nothing (2026-11-22): their
   paragon models (Cyclone of Fire and Metal, Root of All Nature, Goliath Doomship, all five display levels)
   had never been exported. Exported now (tools/assets/export_tower_assets.py); please check in game.
