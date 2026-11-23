@@ -13,8 +13,10 @@ frame. A session can run out of context at any moment, so progress is saved in s
    (file:line, decompile address, recording + roundTime) and gets checkpointed.
 
 Work directly in `C:\Users\Admin\Desktop\rrbtd6` on `master`. No worktrees, no new branches,
-no pushing (the `public` remote is the published release repo; the owner decides what goes
-there).
+no `git push` of branches. Every commit is published to the public repo (owner, 2026-11-23: "we are
+committed to the public repo, not just the local machine"): `tools/checkpoint.sh` runs
+`tools/publish.sh` after committing; after a plain `git commit`, run `sh tools/publish.sh`. The
+iOS IPA is never published.
 
 ## Asset formats changed (2026-11-01)
 
@@ -3517,3 +3519,24 @@ Open (pending/hero_open):
   20-600, acceleration 10, lifespan 2.5, spawnMarker, projectileWaitTime 0.5: silas_l03 shows a shot
   sitting on its bloon, hitting it every frame), SilasApplyRimeModel (Rime slow x0.5 for all layers,
   x0.95 on MOABs; a Rimed bloon hit again freezes for freezeLayers 3, 150 frames, plus an Explosion).
+  (2026-11-23) SilasTrackTarget decoded (VERIFIED-DECOMP; silas_l03 shot 457 made at rt 10):
+  - OnEmit (@0x180cdc750): movingToStartingPosition, movementDirection = the shot's Direction,
+    currentVelocity = model +0x38 (minimumSpeed / 60), accelerating.
+  - Process (@0x180cdc970) 1st: endWaitingAt = roundTime + (int)(projectileWaitTime x 60) (0.5 s: the
+    shot sits at its eject (spawnMarker) from 11 to 42), waitingToAttack, movementDirection =
+    Normalized2D(Target.Position - Position) (z 0). Waiting: until roundTime >= endWaitingAt, then
+    Projectile +0x1a4 = true (collisions on from then: none while waiting) and accelerating; return.
+    After: Target bloon destroyed, Projectile.FilterBloon false (e.g. already collided) or (model +0x44
+    off) Map.IsTargetLineClear false -> Target cleared; first time a random sound (display); then
+    UpdateVelocity (@0x180cdd060): velocity +- acceleration (+0x48 frames) clamped to [+0x38, +0x40];
+    UpdateRotation (@0x180cdcd40): Target valid -> movementDirection = Normalize3D(Target.Position -
+    Position) (bloons at z 20 on Tutorial: D (-0.311, 0.541, 0.782) at rt 43), Direction set, rotation =
+    Vector2.get_Rotation; Position += movementDirection x velocity; Expire once lifespanFrames (+0x50)
+    <= roundTime - Projectile +0xb4 (creation time). Steps 0.5, 0.667, ... (20/60 + 10/60 per frame).
+  - After its first hit the bloon is in collidedWith, so FilterBloon clears the Target and the shot
+    flies on along its last direction (D constant from rt 44).
+  - SilasApplyRime.Collide (@0x180cdb8c0, collisionPass 1): reads the bloon's rime mutator
+    (rimeMutationId) / a freeze by key; no Rime yet -> AddMutatorForNumLayers(rime mutator, all
+    layers); Rimed -> freeze lifespan (model getter @0x1811fccf0, freezeModifierForTagsModels scale it
+    per tag) and AddMutatorForNumLayers(freeze mutator, freezeLayers); then the explosion
+    (+0xb8 explosionProjectileModel) through its emission. To port next.

@@ -5,7 +5,8 @@
 #
 # Commits every tracked change plus docs/dev/HANDOFF.md and any new files under renderer/src, tools/
 # and research/*.md, on the current branch (master). Run it after every verified step, with
-# docs/dev/HANDOFF.md's "Now" and "Log" sections already updated. Nothing is pushed.
+# docs/dev/HANDOFF.md's "Now" and "Log" sections already updated. Then publishes it to the public
+# repo (tools/publish.sh): every commit goes there, not just this machine.
 set -e
 cd "$(dirname "$0")/.."
 msg="${1:?usage: sh tools/checkpoint.sh \"what changed\"}"
@@ -22,3 +23,4 @@ if git diff --cached --quiet; then
 fi
 git commit -q -m "$msg" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git log --oneline -1
+sh tools/publish.sh 2>&1 | tail -1
