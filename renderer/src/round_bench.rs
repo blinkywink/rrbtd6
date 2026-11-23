@@ -20,6 +20,7 @@ pub fn setup(game:&mut Game,round:usize,degree:u32){
             }if placed{break;}}
             assert!(placed,"cannot place benchmark {name}");
             let t=game.towers.last_mut().unwrap();t.tiers=tiers;ids.push(t.id);
+            eprintln!("round-bench: placed {name} {tiers:?} at {:?}",t.pos);
         }
         let t=game.towers.iter().position(|t|t.id==ids[0]).unwrap();
         assert!(game.buy_paragon(t,0.0),"cannot create benchmark paragon {name}");

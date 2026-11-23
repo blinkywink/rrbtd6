@@ -64,7 +64,7 @@ record_one() {
     sleep 1
   done
   for i in $(seq 1 20); do
-    rm -f "$UD/$name.rec" "$UD/$name.fx" "$UD/${name}_"*.png "$GAME/MelonLoader/Latest.log" 2>/dev/null && break
+    rm -f "$UD/$name.rec" "$UD/$name.fx" "$UD/$name.perf" "$UD/${name}_"*.png "$GAME/MelonLoader/Latest.log" 2>/dev/null && break
     sleep 1
   done
   sleep 2
@@ -80,7 +80,8 @@ record_one() {
     [ -n "$started" ] || break
     if grep -q "SimRecorder done" "$GAME/MelonLoader/Latest.log" 2>/dev/null; then ok=1; break; fi
     running || break
-    size=$(stat -c %s "$UD/$name.rec" 2>/dev/null || echo 0)
+    # (A performance run stops writing its recording once it measures: its .perf grows instead.)
+    size=$(( $(stat -c %s "$UD/$name.rec" 2>/dev/null || echo 0) + $(stat -c %s "$UD/$name.perf" 2>/dev/null || echo 0) ))
     if [ "$size" = "$last" ]; then still=$((still + 3)); else still=0; last=$size; fi
     if [ "$still" -ge "$STALL" ]; then echo "$name: stalled ${STALL}s, killing the game"; kill_game; break; fi
     sleep 3
@@ -93,6 +94,8 @@ record_one() {
     cp "$UD"/*.map "$OUT/" 2>/dev/null || true
     # Effect captures (Scenario.fx / shots): <name>.fx and <name>_<frame>.png.
     cp "$UD/$name.fx" "$OUT/" 2>/dev/null || true
+    # Performance runs (Scenario.perf): <name>.perf.
+    cp "$UD/$name.perf" "$OUT/" 2>/dev/null || true
     cp "$UD/${name}_"*.png "$OUT/" 2>/dev/null || true
     echo "$name: $result"
     return 0

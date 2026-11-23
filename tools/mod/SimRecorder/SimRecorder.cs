@@ -164,6 +164,21 @@ public class Scenario
     /// Objects to press one second after the menu opens, by GameObject name (its Button's
     /// onClick, else its Toggle switched on), in order, half a second apart.
     public List<string> menu_clicks { get; set; } = new();
+    /// Performance run: once `perf_after` frames are recorded (towers placed, upgrades and the
+    /// paragon investment done), every patch of this mod comes off (each patched call crosses into
+    /// managed code: with thousands of bloons that alone would slow the game), the frame cap and
+    /// vsync go, and each rendered frame writes "<frame> <ms> <bloons> <private MB or -1>" to
+    /// <name>.perf. `perf_spawn` (a BloonModel id) x `perf_spawn_count` is sent at once
+    /// (UnityToSimulation.SpawnBloons, what the sandbox's send does) `perf_spawn_frame` frames in;
+    /// the run ends 60 frames after they are all popped, or after `perf_frames` frames.
+    public bool perf { get; set; } = false;
+    public int perf_after { get; set; } = 150;
+    public int perf_frames { get; set; } = 3000;
+    public string perf_spawn { get; set; } = "";
+    public int perf_spawn_count { get; set; } = 0;
+    public int perf_spawn_frame { get; set; } = 60;
+    /// Lives kept at this (Simulation.SetHealth, past the soft cap); negative leaves them.
+    public double lives { get; set; } = -1;
 }
 
 public class Recorder : MelonMod
@@ -492,6 +507,11 @@ public class Recorder : MelonMod
                 phase = 2;
                 break;
             case 2:
+                if (Sc.perf && Recorded >= Sc.perf_after)
+                {
+                    PerfFrame();
+                    break;
+                }
                 if (Recorded == 60 || Recorded == 600)
                 {
                     var sim2 = InGame.instance.bridge.simulation;
@@ -1100,6 +1120,50 @@ public class Recorder : MelonMod
         float t1 = Time.realtimeSinceStartup;
         while (Time.realtimeSinceStartup - t1 < 1) yield return null;
         Done("ok");
+    }
+
+    bool perfStarted, perfSpawned;
+    int perfFrames, perfEmpty;
+    StreamWriter PerfOut;
+
+    // One rendered frame of a performance run (Scenario.perf).
+    void PerfFrame()
+    {
+        var ig = InGame.instance;
+        if (ig == null || ig.bridge == null || ig.bridge.simulation == null) return;
+        var sim = ig.bridge.simulation;
+        if (!perfStarted)
+        {
+            perfStarted = true;
+            HarmonyInstance.UnpatchSelf();
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = -1;
+            PerfOut = new StreamWriter(Path.Combine(dir, Sc.name + ".perf"));
+            PerfOut.WriteLine("# frame ms bloons private_mb");
+            LoggerInstance.Msg($"perf: patches removed at recorded frame {Recorded}, measuring");
+        }
+        perfFrames++;
+        if (Sc.lives > 0 && sim.Health < Sc.lives / 2) sim.SetHealth((float)Sc.lives, true);
+        if (!perfSpawned && !string.IsNullOrEmpty(Sc.perf_spawn) && perfFrames >= Sc.perf_spawn_frame)
+        {
+            perfSpawned = true;
+            var arr = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<Il2CppAssets.Scripts.Models.Rounds.BloonEmissionModel>(Sc.perf_spawn_count);
+            for (int i = 0; i < Sc.perf_spawn_count; i++)
+                arr[i] = new Il2CppAssets.Scripts.Models.Rounds.BloonEmissionModel(Sc.perf_spawn, 0f, Sc.perf_spawn, false, (Il2CppAssets.Scripts.Models.TowerSets.TowerSet)0);
+            ig.bridge.SpawnBloons(arr, sim.GetCurrentRound(), 0);
+            LoggerInstance.Msg($"perf: sent {Sc.perf_spawn_count} {Sc.perf_spawn} at frame {perfFrames}");
+        }
+        int nb = sim.factory.GetFactory<Bloon>().up.list.Count;
+        long mb = perfFrames % 30 == 0 ? System.Diagnostics.Process.GetCurrentProcess().PrivateMemorySize64 >> 20 : -1;
+        PerfOut.WriteLine($"{perfFrames} {(Time.unscaledDeltaTime * 1000f).ToString("F3", CultureInfo.InvariantCulture)} {nb} {mb}");
+        perfEmpty = perfSpawned && nb == 0 ? perfEmpty + 1 : 0;
+        if (perfEmpty > 60 || perfFrames >= Sc.perf_frames)
+        {
+            PerfOut.Flush();
+            PerfOut.Dispose();
+            PerfOut = null;
+            Done(perfEmpty > 60 ? "ok: all popped" : "ok: frames");
+        }
     }
 
     internal void Done(string why)
