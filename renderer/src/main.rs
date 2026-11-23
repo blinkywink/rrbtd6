@@ -1436,6 +1436,8 @@ const VINE_END_FRAMES: i32 = 23;
         }
         speed = std::env::var("RRBTD6_SPEED").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
     }
+    // RRBTD6_BENCH_SPEED: a frame bench's game speed (with real-time stepping).
+    if let Some(s)=std::env::var("RRBTD6_BENCH_SPEED").ok().and_then(|v|v.parse().ok()){speed=s;}
 
     loop {
         // A transition is captured on the frame that requested it, before any clear.
@@ -2338,9 +2340,25 @@ const VINE_END_FRAMES: i32 = 23;
 
         // Fixed-step simulation (P-TIME).
         if coop_runtime.is_none(){
-            if let Some(steps)=bench_steps{acc=if bench_round.is_some()&&frames<bench_warmup{0.0}else{(steps as f32+0.01)/FPS};}else{acc += get_frame_time().min(0.25) * speed as f32;}
+            // (RRBTD6_BENCH_REALTIME: a bench stepped like play, from the frame's real time.)
+            let realtime=bench_steps.is_some()&&std::env::var_os("RRBTD6_BENCH_REALTIME").is_some();
+            if let Some(steps)=bench_steps.filter(|_|!realtime){acc=if bench_round.is_some()&&frames<bench_warmup{0.0}else{(steps as f32+0.01)/FPS};}
+            else if realtime&&bench_round.is_some()&&frames<bench_warmup{acc=0.0;}
+            else{acc += get_frame_time().min(0.25) * speed as f32;}
         }
+        // Under load (a huge pop: one step can take 40 ms) a frame runs steps for at most
+        // STEP_BUDGET, at least one, and lets the time it couldn't get to go: the game slows for a
+        // moment instead of the next frame owing more steps (each as heavy), the frame after more
+        // still. The steps and their order are the same; only how many fit in a frame. Co-op keeps
+        // its lockstep timing. RRBTD6_NO_STEP_BUDGET: every owed step, as before.
+        const STEP_BUDGET: f64 = 0.010;
+        let budget = coop_runtime.is_none() && (bench_steps.is_none() || std::env::var_os("RRBTD6_BENCH_REALTIME").is_some()) && std::env::var_os("RRBTD6_NO_STEP_BUDGET").is_none();
+        let frame_sim_t0 = std::time::Instant::now();
         while acc >= 1.0 / FPS {
+            if budget && frame_sim_t0.elapsed().as_secs_f64() >= STEP_BUDGET {
+                acc = acc.min(1.0 / FPS);
+                break;
+            }
             let t_step = std::time::Instant::now();
             let completed_before=game.round;
             game.step();

@@ -166,11 +166,13 @@ def main():
     parser.add_argument('--baseline-only',action='store_true',help='Repeat current build without cache-off comparisons')
     parser.add_argument('--suite',action='store_true',help='Run rounds 98/140/200 with 1/2/4 paragons')
     parser.add_argument('--trace-loads',action='store_true',help='Log first-use loading work taking at least 2 ms')
-    parser.add_argument('--ab-feature',choices=['frame-pacing','text-cache','pose-reuse','sprite-storage','shadow-textures','map-batching','render-storage','static-maps','background-assets','fallback-models','prediction-retirement','pass-merge','mesh-instance','compressed-textures'],default='text-cache',help='Feature disabled in same-build reference runs')
+    parser.add_argument('--ab-feature',choices=['frame-pacing','text-cache','pose-reuse','sprite-storage','shadow-textures','map-batching','render-storage','static-maps','background-assets','fallback-models','prediction-retirement','pass-merge','mesh-instance','compressed-textures','step-budget'],default='text-cache',help='Feature disabled in same-build reference runs')
     parser.add_argument('--same-build-ab',action='store_true',help='Compare feature off/on when running the suite without a previous executable')
     parser.add_argument('--spawn',default='',help='Round benchmarks: e.g. Bad:500, sent at spacing 0 after the warm-up; the run lasts until all are popped')
     parser.add_argument('--crowd',type=int,default=0,help='Round benchmarks: this many extra tier-5 towers')
     parser.add_argument('--env',action='append',default=[],help='Extra KEY=VALUE for the game (kept through the RRBTD6_ strip), repeatable')
+    parser.add_argument('--real-time',action='store_true',help='Step the sim from real elapsed time (the game loop accumulator) instead of a fixed 2 steps a frame')
+    parser.add_argument('--speed',type=int,default=None,help='With --real-time: game speed (3 = fast forward)')
     parser.add_argument('--window',default='1600x900',help='Window size, e.g. 800x450 (GPU fill-rate check)')
     parser.add_argument('--profile-lines',default='',help='With --profile: inclusive samples per source line of this function')
     parser.add_argument('--profile',action='store_true',help='Sample each run with tools/sample_prof.py (report: <label>.prof; timings then include the sampler)')
@@ -238,10 +240,12 @@ def main():
                     env.pop('RRBTD6_FLOOD',None);env.pop('RRBTD6_NOSELECT',None)
                     env.update(RRBTD6_TOWERS='DartMonkey,SuperMonkey',RRBTD6_PLACE='300,520',RRBTD6_PATHS='',RRBTD6_CASH='1000000',RRBTD6_UPGRADE_CASE='1:40:1:100')
                 if args.trace_loads:env['RRBTD6_TIMING']='1'
+                if args.real_time:env['RRBTD6_BENCH_REALTIME']='1'
+                if args.speed:env['RRBTD6_BENCH_SPEED']=str(args.speed)
                 for kv in args.env:
                     k,_,v=kv.partition('=');env[k]=v
                 if not enabled and not args.reference_exe:
-                    feature_env={'frame-pacing':'RRBTD6_LEGACY_FRAME_PACING','prediction-retirement':'RRBTD6_NO_PREDICTIVE_RETIRE','fallback-models':'RRBTD6_KEEP_FALLBACK_MODELS','background-assets':'RRBTD6_NO_BACKGROUND_ASSETS','pose-reuse':'RRBTD6_NO_POSE_REUSE','text-cache':'RRBTD6_NO_TEXT_CACHE','sprite-storage':'RRBTD6_KEEP_SPRITE_DUPLICATES','shadow-textures':'RRBTD6_NO_SHARED_SHADOWS','map-batching':'RRBTD6_NO_MAP_BATCHING','render-storage':'RRBTD6_LEGACY_RENDER_STORAGE','static-maps':'RRBTD6_NO_STATIC_MAP_GPU','pass-merge':'RRBTD6_NO_PASS_MERGE','mesh-instance':'RRBTD6_NO_MESH_INSTANCE','compressed-textures':'RRBTD6_NO_COMPRESSED_TEXTURES'}
+                    feature_env={'frame-pacing':'RRBTD6_LEGACY_FRAME_PACING','prediction-retirement':'RRBTD6_NO_PREDICTIVE_RETIRE','fallback-models':'RRBTD6_KEEP_FALLBACK_MODELS','background-assets':'RRBTD6_NO_BACKGROUND_ASSETS','pose-reuse':'RRBTD6_NO_POSE_REUSE','text-cache':'RRBTD6_NO_TEXT_CACHE','sprite-storage':'RRBTD6_KEEP_SPRITE_DUPLICATES','shadow-textures':'RRBTD6_NO_SHARED_SHADOWS','map-batching':'RRBTD6_NO_MAP_BATCHING','render-storage':'RRBTD6_LEGACY_RENDER_STORAGE','static-maps':'RRBTD6_NO_STATIC_MAP_GPU','pass-merge':'RRBTD6_NO_PASS_MERGE','mesh-instance':'RRBTD6_NO_MESH_INSTANCE','compressed-textures':'RRBTD6_NO_COMPRESSED_TEXTURES','step-budget':'RRBTD6_NO_STEP_BUDGET'}
                     env[feature_env[args.ab_feature]]='1'
                 run_exe=exe if enabled or not args.reference_exe else args.reference_exe.resolve()
                 startup=None; flags=0
