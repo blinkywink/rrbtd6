@@ -31,7 +31,9 @@ Reported by the owner 2026-11-21 (play-testing), one per line:
   game's displays do. Not verified against the game: please check, and say if it's now turned the wrong way.)
 - Dartling Gunner bottom path: animations aren't in sync with where it aims.
 - Dartling Gunner middle path ability: wrong icons.
-- Wizard Wizard Lord Phoenix: the birds fly oddly, not facing where they fly.
+- Wizard Wizard Lord Phoenix: the birds fly oddly, not facing where they fly. (2026-11-22: the bird was drawn
+  turned to its target, not its rotation; it now faces its flight direction, the circling rotation. Not
+  checked in game.)
 - Set-target markers (the little circle on the map): look similar to the game but something is off.
 - Super Monkey Anti-Bloon: doesn't turn properly when aiming.
 - Super Monkey Sun Temple: missing animations and its avatar children.

@@ -2693,7 +2693,9 @@ const VINE_END_FRAMES: i32 = 23;
                 }
                 if let Some(s) = &t.sub {
                     // The stand keeps its placement facing; the turret turns to aim.
-                    let aim_yaw = std::f32::consts::FRAC_PI_2 - t.aim;
+                    // (A circling sub-tower, the Wizard Lord Phoenix: its rotation is its flight
+                    // direction, game.rs circle_subs; the display follows the tower's rotation.)
+                    let aim_yaw = std::f32::consts::FRAC_PI_2 - if s.spec.circle.is_some() { t.angle } else { t.aim };
                     // ContributionMutator.Mutate (VERIFIED-DECOMP @0x181208b50): a merged pet's
                     // look, the display step with the highest percent at or under
                     // (power - basePower) / (maxPower - basePower) once that is above 0.
