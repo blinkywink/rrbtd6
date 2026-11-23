@@ -2789,6 +2789,9 @@ pub struct Ability {
     /// MorphTowerModel (Total Transformation).
     #[serde(default)]
     pub morph: Option<Morph>,
+    /// MorphTowerModel with mutateSelf: the tower pauses for `delay` frames, then becomes `tier`.
+    #[serde(default)]
+    pub morph_self: Option<std::sync::Arc<MorphSelf>>,
     /// OverclockModel: the ability is used on a tower the player picks.
     #[serde(default)]
     pub overclock: Option<Overclock>,
@@ -2927,6 +2930,17 @@ pub struct Morph {
     pub max_cost: f32,
     pub lifespan: f32,
     pub tier: std::sync::Arc<Tier>,
+    #[serde(default)]
+    pub display: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MorphSelf {
+    pub tier: std::sync::Arc<Tier>,
+    /// morphDelayFrames.
+    pub delay: i64,
+    /// Seconds; -1: for good.
+    pub lifespan: f32,
     #[serde(default)]
     pub display: Option<String>,
 }

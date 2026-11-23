@@ -2004,6 +2004,8 @@ pub struct Tower {
     /// by RotateToTarget.ApplyRotation: aim - Tower.Rotation; the turret turns with the base), and
     /// (pausedRotation, elapsedPaused, rotateToTarget, rotationTargetAngle).
     pub base_rot: f32,
+    /// MorphTower (mutateSelf) waiting out its morphDelay: the morph and morphDelayStartTime.
+    pub morph_wait: Option<(std::sync::Arc<crate::data::MorphSelf>, u64)>,
     /// A projectile-made sub-tower's rotation (CreateTowerModel.useProjectileRotation).
     pub sub_base: Option<f32>,
     pub turret_rel: f32,
@@ -8140,6 +8142,15 @@ impl Game {
         // rt 2135, 5220 bounced on to a Zebra a dart popped first.)
         let live: FastSet<u64> = self.bloons.iter().map(|b| b.id).collect();
         let sim_now0 = self.sim_elapsed;
+        // (A lightning shot made with no Target (CreateProjectileOnExhaust: DanDMonke's BasePlusLightning)
+        // starts with hitTarget off: its first Process searches (Lightning.Process VERIFIED-DECOMP
+        // @0x180cc84d0, currentDelayFrames 0), as a bounce does; recording dand_l03_r20 rt 1497,
+        // LightningProj 789 on to the Blue it hits at 1498.)
+        for pr in self.projectiles.iter_mut() {
+            if pr.spec.lightning && pr.uid < bound && pr.born < now4 && pr.lt_hit_at.is_none() && pr.target.is_none() && pr.spec.lightning_split.is_some() {
+                pr.lt_hit_at = Some(0);
+            }
+        }
         self.projectiles.retain(|pr| !(pr.spec.lightning && pr.uid < bound && pr.born < now4 && pr.lt_hit_at.is_none() && pr.lt_ready <= sim_now0 && !pr.target.is_some_and(|id| live.contains(&id))));
         // Lightning.Process once delayFrames have passed since its hit: BloonManager.GetTargets
         // from where it is, splitRange, First (or Last with targetLast), what it hasn't hit; the
@@ -9681,6 +9692,7 @@ impl Game {
             spin: Vec::new(),
             randpos: Vec::new(),
             base_rot: 0.0,
+            morph_wait: None,
             sub_base: None,
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
@@ -12440,6 +12452,7 @@ impl Game {
             spin: Vec::new(),
             randpos: Vec::new(),
             base_rot: 0.0,
+            morph_wait: None,
             sub_base: None,
             turret_rel: 0.0,
             base_state: (false, 0, false, 0.0),
@@ -14378,6 +14391,11 @@ impl Game {
         let (pos, id) = (self.towers[t].pos, self.towers[t].id);
         for spec in &a.create_tower {
             self.spawn_sub(spec.clone(), pos, id, false);
+        }
+        // MorphTower.Activate (VERIFIED-DECOMP @0x180e3e900), mutateSelf: PauseTower and the delay's
+        // start time.
+        if let Some(ms) = &a.morph_self {
+            self.towers[t].morph_wait = Some((ms.clone(), self.sim_elapsed));
         }
         // CreateProjectileOnAbilityActivateModel.
         let tiers = self.towers[t].tiers;
@@ -19756,10 +19774,28 @@ impl Game {
             // (FinalStrike.StartCountdown pauses the tower's Attacks till EndCountdown: recording
             // map_lotusisland_sub_paragon_040_r40, the Navarch throws nothing from rt 700.)
             let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some() || self.towers[t].leap_paused
+                || self.towers[t].morph_wait.is_some()
                 // ParagonTower's pause starts after its first frame: an attack with a target in range
                 // then throws once (recordings boomerang_paragon_r63 / r90: at the purchase, then
                 // 120 frames later).
                 || (self.sim_elapsed > self.towers[t].paragon_first && self.sim_elapsed <= self.towers[t].paragon_active_at);
+            // MorphTower.Process (VERIFIED-DECOMP @0x180e412e0): FinishActivation once morphDelayFrames
+            // have passed since Activate, and the tower unpaused (recording dand_l03_r20: Transform at
+            // 400, nothing thrown till the morph at 580, the weapon at the new model's rate there;
+            // dand_l20_r80: its first throw at 581, so after this frame's attacks).
+            if let Some((ms, start)) = self.towers[t].morph_wait.clone() {
+                if self.sim_elapsed as i64 - start as i64 >= ms.delay {
+                    let tw = &mut self.towers[t];
+                    tw.morph_wait = None;
+                    tw.morph = Some((ms.tier.clone(), ms.display.clone(), if ms.lifespan < 0.0 { f32::INFINITY } else { ms.lifespan * FPS + 1.0 }));
+                    // (The new model's weapon behaviours are new objects: an AlternateProjectile counts
+                    // from 0 again, the Weapon keeps its lastEmission; recording dand_l03_r20 rt 1436,
+                    // the second throw after the morph a plain sword, not the 4th-throw lightning.)
+                    for st in &mut tw.weapons {
+                        st.emits = 0;
+                    }
+                }
+            }
             let waiting: Vec<bool> = self.towers[t].temp.iter().map(|x| x.delay > 0.0).collect();
             let base_weapons: usize = tier.attacks.iter().map(|a| a.weapons.len()).sum();
             let nweap: usize = base_weapons + extra.iter().map(|a| a.weapons.len()).sum::<usize>();

@@ -3475,6 +3475,23 @@ Open (pending/hero_open):
   Process (@0x180e412e0) calls FinishActivation (@0x180e3f240) once morphDelayFrames (+0xb4) have passed
   (the self morph: a mutator with towerModel for lifespan +0xac). The game's DanD doesn't fire from rt 400
   (weapon 0 next at 1376); the clone fires at 403.
+  (2026-11-23) PORTED (`Ability::morph_self`, `Tower::morph_wait`): the tower's attacks paused from
+  Activate, FinishActivation after this frame's attacks once morphDelayFrames have passed (first throw
+  at 581 in dand_l20), the morph for good (lifespan -1), AlternateProjectile counts restarting (new
+  behaviour objects; rt 1436). dand_l03 weapons now all match; first difference rt 1498: the morphed
+  sword's 4th-throw BasePlusLightning (CreateProjectileOnExhaustFraction fraction 0: Lightning + sword
+  on its first Process) makes a LightningProj with no Target. Lightning.Process (@0x180cc84d0) starts
+  with hitTarget off and currentDelayFrames 0, so its first Process searches (now ported: a Target-less
+  lightning searches instead of being dropped). OPEN: the game takes only Blue 758 (240.99, LG "1 3"),
+  the clone's search takes 3 and the least progressed first (215.27): the TargetType static the search
+  uses without targetLast (+0xa8: random by the struct layout?) and whether this first search hits in
+  the same frame (LG and H both in the rt-1497 block) need the decompile of the GetTargets call.
+  TargetType's statics (field_offsets.json): none 0, first 0x18, last 0x30, close 0x48, far 0x60,
+  strong 0x78, strongExceptMoab 0x90, random 0xa8, any 0xc0. So Lightning.Process passes Random
+  without targetLast and Last with it (the clone's lightning comments call both Last; druid matches
+  with that, so Random's GetTargets order must coincide there). The game's search here skipped a Yellow
+  16.3 away (215.27) and took only Blue 758: check BloonManager.GetTargets for Random (and the
+  Lightning BloonFilter / HaveAlreadyCollidedWithBloonInLineage @0x180cc80a0) before porting.
   Silas (not ported): EmitFromSharedTowersModel emission, SilasTrackTargetModel (rotation 9, speeds
   20-600, acceleration 10, lifespan 2.5, spawnMarker, projectileWaitTime 0.5: silas_l03 shows a shot
   sitting on its bloon, hitting it every frame), SilasApplyRimeModel (Rime slow x0.5 for all layers,

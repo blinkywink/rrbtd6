@@ -2466,6 +2466,14 @@ def main():
                                     "max_cost": xf.get("maxCost", 9999999.0),
                                     "lifespan": xf.get("lifespan", 0.0), "tier": tier(st),
                                     "display": prefab_name(st["f"].get("display"))}
+                # MorphTowerModel with mutateSelf (DanDMonke's Transform): MorphTower.Activate
+                # (VERIFIED-DECOMP @0x180e3e900) pauses the tower; Process (@0x180e412e0) runs
+                # FinishActivation once morphDelayFrames have passed: the tower becomes towerModel for
+                # lifespan (-1: for good).
+                if x["type"] == "MorphTowerModel" and xf.get("mutateSelf") and deref(xf.get("towerModel")):
+                    st = deref(xf["towerModel"])
+                    out["morph_self"] = {"tier": tier(st), "delay": int(round(xf.get("morphDelay", 0.0) * 60)),
+                                         "lifespan": xf.get("lifespan", -1.0), "display": prefab_name(st["f"].get("display"))}
                 if x["type"] == "AbilityDamageAllModel":
                     out.setdefault("damage_all", []).append(
                         {"damage": xf.get("damage", 0), "tags": [s for s in (deref(xf.get("tags")) or []) if isinstance(s, str)],
