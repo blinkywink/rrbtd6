@@ -1669,6 +1669,18 @@ pub struct ProjBoost {
     /// damage and tag modifiers (Armor Piercing Shells: the cannon's Explosion).
     #[serde(default)]
     pub proj_id: Option<String>,
+    /// Its projectileBehaviorModel when a DetonateEffectModel (Silas's Frostbite).
+    #[serde(default)]
+    pub detonate: Option<Detonate>,
+}
+
+/// DetonateEffectModel (DetonateEffect.Collide, VERIFIED-DECOMP @0x180cb8d70): on a bloon with a
+/// timed mutator of one of these keys, Bloon.Damage(damagePerSecondRemaining x its frames left /
+/// 60), then the mutator goes.
+#[derive(Deserialize, Clone)]
+pub struct Detonate {
+    pub tags: Vec<String>,
+    pub dps: f32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -2358,6 +2370,9 @@ pub struct Proj {
     pub ignore_nontarget: bool,
     pub damage: f32,
     pub immune: u32,
+    /// DetonateEffect (an ability's MutateProjectileOnAbility: Frostbite).
+    #[serde(default)]
+    pub detonate: Option<Detonate>,
     /// DamageModel.immuneBloonPropertiesOriginal: `immune` before a buff's immunity mask
     /// stripped it (None: never stripped).
     #[serde(skip)]

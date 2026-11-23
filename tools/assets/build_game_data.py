@@ -2335,6 +2335,10 @@ def main():
                     out.setdefault("boosts", []).append({
                         "frames": xf.get("lifespanFrames", 0), "damage": xf.get("damageIncrease", 0),
                         "tag_mods": [tag_mod(pbm)] if pbm and pbm["type"] == "DamageModifierForTagModel" else [],
+                        # DetonateEffectModel (Frostbite): effectMutationIds split as effectTagsArray.
+                        "detonate": ({"tags": [t for t in str(pbm["f"].get("effectMutationIds") or "").split(",") if t],
+                                      "dps": pbm["f"].get("damagePerSecondRemaining", 0.0)}
+                                     if pbm and pbm["type"] == "DetonateEffectModel" else None),
                         # ProjectileMutator.Mutate matches projectileModel by name (one-to-one with id).
                         "proj_id": (deref(xf.get("projectileModel")) or {"f": {}})["f"].get("id")})
                 # BiohackModel (Benjamin): the affectedCount nearest towers deal +damageIncrease

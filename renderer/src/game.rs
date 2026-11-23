@@ -3468,7 +3468,7 @@ pub struct Buff {
     pub damage_add: f32,
     pub tag_mods: Vec<TagMod>,
     /// Ability boosts naming one projectile (`ProjBoost::proj_id`): (id, damage, tag modifiers).
-    pub pid_boosts: Vec<(String, f32, Vec<TagMod>)>,
+    pub pid_boosts: Vec<(String, f32, Vec<TagMod>, Option<crate::data::Detonate>)>,
     /// An acid brew's DamageModifierForTag models (AddAcidicMixtureToProjectileMutator), which
     /// also go on the tower's DamageOverTime models and the projectiles of its effects (recording
     /// combo7_lotus rt 753: the Master Bomber's sticky ticks 3001 on a Zomg, its splash 601 on a
@@ -3830,22 +3830,25 @@ impl Buff {
         // tower whose name is the mutator's projectileModel's gets damageIncrease on its DamageModel
         // and the DamageModifierForTag added (recording churchill_l10_r40 rt 413: the machine gun's
         // 4 on a Ceramic is unchanged by Armor Piercing Shells).
-        for (id, add, mods) in &self.pid_boosts {
-            fn named(p: &mut Proj, id: &str, add: f32, mods: &[TagMod]) {
+        for (id, add, mods, det) in &self.pid_boosts {
+            fn named(p: &mut Proj, id: &str, add: f32, mods: &[TagMod], det: &Option<crate::data::Detonate>) {
                 if p.pid == id {
                     if p.damage_model && add > 0.0 {
                         p.damage += add;
                     }
                     p.tag_mods.extend(mods.iter().cloned());
+                    if det.is_some() {
+                        p.detonate = det.clone();
+                    }
                 }
                 for c in &mut p.on_contact {
-                    named(&mut c.projectile, id, add, mods);
+                    named(&mut c.projectile, id, add, mods, det);
                 }
                 for e in &mut p.on_exhaust {
-                    named(&mut e.projectile, id, add, mods);
+                    named(&mut e.projectile, id, add, mods, det);
                 }
             }
-            named(&mut q, id, *add, mods);
+            named(&mut q, id, *add, mods, det);
         }
         if !self.acid_mods.is_empty() {
             fn deep(p: &mut Proj, mods: &[TagMod]) {
@@ -5853,7 +5856,31 @@ macro_rules! collide_pass {
                 let galv_pre = { let b = &$s.bloons[i]; (b.galv.0 > 0 && b.galv.1 > $s.sim_elapsed).then(|| b.galv_chain.clone()).flatten().map(|c| (c, b.pos, b.id)) };
                 $s.hit_cash = $s.hit_cash_for($s.projectiles[$p].owner);
                 $s.hit_tower = Some($s.projectiles[$p].emitted_by);
-                let n = $s.damage(i, dmg.round() as i32, &mut $kids);
+                // (Bloon.ExecuteDamageTask rounds a fraction with a synced draw (`round_damage`);
+                // here still .round(): with the draw, druid 32/35 and mermonkey 34/35, whose clone
+                // damage has fractions the game's doesn't. OPEN P-DMGROUND.)
+                let mut n = $s.damage(i, dmg.round() as i32, &mut $kids);
+                // DetonateEffect.Collide (VERIFIED-DECOMP @0x180cb8d70; collisionPass 0, added after
+                // the DamageModel by the ability's mutator): for each key a timed mutator of it on
+                // what the bloon is now, Bloon.Damage(dps x its frames left / 60) rounded as
+                // ExecuteDamageTask does, then the mutator goes (recording silas_l03_r20 rt 468:
+                // Frostbite on a frozen Pink, 13.5, the synced draw 0.999, the bloon gone).
+                if let Some(det) = $s.projectiles[$p].spec.detonate.clone() {
+                    for tag in &det.tags {
+                        let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, id) else { break };
+                        let k = $s.bloons[j].effects.iter().position(|e| if tag == "Freeze" { matches!(e.kind, EffectKind::Freeze { .. }) } else { e.id.split(':').next() == Some(tag.as_str()) });
+                        let Some(k) = k else { continue };
+                        let left = $s.bloons[j].effects[k].frames_left as i32;
+                        let d = $s.round_damage(det.dps * (left as f32 / 60.0));
+                        let eid = $s.bloons[j].effects[k].id.clone();
+                        n += $s.damage(j, d, &mut $kids);
+                        if let Some(j) = bloon_idx(&$s.bloons, &$s.bidx, id) {
+                            if let Some(k) = $s.bloons[j].effects.iter().position(|e| e.id == eid) {
+                                $s.bloons[j].effects.remove(k);
+                            }
+                        }
+                    }
+                }
                 $s.hit_cash = (1.0, 0.0);
                 $s.hit_tower = None;
                 $s.distribute = (true, false);
@@ -14473,7 +14500,7 @@ impl Game {
                 for k in 0..self.towers.len() {
                     let child = self.towers[k].sub.as_ref().is_some_and(|s| s.parent == pid && !s.spec.no_parent_mutators);
                     if k == o || child {
-                        let boost = crate::data::ProjBoost { frames: life, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0, adora_mult: 1.0, pierce_mult: 1.0, proj_id: None };
+                        let boost = crate::data::ProjBoost { frames: life, immune: None, damage: bh.damage, tag_mods: Vec::new(), radius_mult: 1.0, adora_mult: 1.0, pierce_mult: 1.0, proj_id: None, detonate: None };
                         self.towers[k].boosts.push((boost, life));
                         self.towers[k].biohacked = self.towers[k].biohacked.max(hacked);
                     }
@@ -16669,7 +16696,7 @@ impl Game {
                 // Ability projectile boosts (Armor Piercing Shells, Frostbite).
                 for (pb, _) in &self.towers[t].boosts {
                     if let Some(id) = &pb.proj_id {
-                        b.pid_boosts.push((id.clone(), pb.damage, pb.tag_mods.clone()));
+                        b.pid_boosts.push((id.clone(), pb.damage, pb.tag_mods.clone(), pb.detonate.clone()));
                         continue;
                     }
                     b.damage_add += pb.damage;
@@ -25070,6 +25097,19 @@ impl Game {
     }
 
     #[track_caller]
+    /// Bloon.ExecuteDamageTask's rounding (VERIFIED-DECOMP @0x180fb29a0): the integer part, plus
+    /// one when a synced NextDouble is at most the fraction (any fraction above float.Epsilon
+    /// draws; recording silas_l03_r20 rt 468 / 473).
+    fn round_damage(&mut self, f: f32) -> i32 {
+        let whole = f as i32;
+        let frac = f - whole as f32;
+        if frac > f32::from_bits(1) && self.synced_double() <= frac as f64 {
+            whole + 1
+        } else {
+            whole
+        }
+    }
+
     fn synced_double(&mut self) -> f64 {
         let seed = self.freeplay_seed;
         let d = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
