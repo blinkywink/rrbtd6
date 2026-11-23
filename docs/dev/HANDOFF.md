@@ -3462,7 +3462,28 @@ Open (pending/hero_open):
   - PsiBloonBehavior (Initialise @0x181004ed0, addedAt = roundTime; OnBloonDamaged hook; Process /
     UpdateTremble @0x181005920 / 0x181005930: display tremble; OnBloonDegrade @0x1810050b0) - where the
     damagePerTick every tickRate is dealt is still to find (not in Process).
-  - Model (level 3): damagePerTick 1, tickRate 0.2, maxDuration 15, tremble 24 / 0.4-1.6 / 300-900 frames.
+  - Model (level 3): damagePerTick 1, tickRate 0.15 (0.2 on level 1), maxDuration 15, tremble 24 /
+    0.4-1.6 / 300-900 frames.
+  - (2026-11-23) PORTED (`Proj::psi`, `Weapon::psi_limit`, `Bloon::psi`, per-weapon
+    `WeaponState::psi_can_fire`, `Projectile::weapon_slot`): total health = health - maxHealth +
+    BloonDegradeStepper.GetTotalHealthForBloonModel (VERIFIED-DECOMP @0x180fc7ee0: maxHealth + per
+    SpawnChildren its FIRST child's total, once: Black 6, Yellow 4); frames = (int)(total / ((1 /
+    tickRate) x damagePerTick) x 60) capped; canFireAt = roundTime + Weapon.rateFrames (Projectile
+    +0x1e0 is its Weapon, +0xa0 rateFrames) + frames; the bloon held (speed 0), invulnerable, its
+    mutators removed, and PsiBloonBehavior.OnDestroy (@0x181005390) at frames - 1 after the hit
+    (STAND-IN offset, fits every hold in psi_l03) does Bloon.Damage(ceil(total)) distributed: every layer
+    pops (+11 cash for a Black). psi_l03 throws match to rt 696, where the gate is one frame earlier
+    than the formula after the held Black had been stunned by Psychic Blast (OPEN). psi_l10: its second
+    attack (Attack2, TargetEliteTargetting) has its own PsiLimitProjectile (now per weapon). psi_l20 rt
+    490: a ZOMG one step off in distance (some slow, not looked at).
+    Also ported: a held bloon is invulnerable for targeting and collisions (Bloon.get_IsInvulnerable
+    @0x180fb8bc0, vtable slot 100, checked by Targetting.GetTargets / Target.IsValid /
+    Projectile.IsCollisionValid): psi_l10's second attack waits (rt 1869); the hold stops the bloon
+    from the frame after the hit (it moves once more: psi_l03 rt 126, psi_l10 rt 1956); Psi 10+'s
+    projectileOnBloonDestroy (DestructiveResonance) emitted at the bloon before the end-of-hold Damage.
+    psi_l10 now to rt 1956 (OPEN: the BaseProjectileSplash made on contact with held Pink 565 at 1954
+    "hits" 565 each frame for no pierce and takes copy 588 only at 1956, the clone at 1955, though 588 is
+    within 6 + 8 both frames).
   DanDMonke: exact to rt 400 (dand_l03), where the Transform ability's CreateProjectileOnAbilityActivate
   (LightningSpawner: AgeModel 3 s + CreateProjectileOnInterval 30 frames, range 30, onlyIfHasTarget)
   wasn't exported: the exporter kept only chance >= 1. Activate (VERIFIED-DECOMP @0x180e1f640): chance > 0

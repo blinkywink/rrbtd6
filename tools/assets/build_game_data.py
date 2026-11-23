@@ -1219,6 +1219,16 @@ def main():
         out["remove_effects"] = [k.strip() for r in pb.get("RemoveMutatorsFromBloonModel", [])
                                  for k in (r["f"].get("key") or "").split(",") if k.strip()] +                                 ["=" + k.strip() for r in pb.get("RemoveMutatorsFromBloonModel", [])
                                  for k in (r["f"].get("mutatorIds") or "").split(",") if k.strip()]
+        # PsiEffectModel (Psi): PsiEffect.Collide (VERIFIED-DECOMP @0x180cd3850): [damagePerTick,
+        # tickRate, superCeramicPenalty, maxDurationFrames].
+        out["psi"] = next(([float(x["f"].get("damagePerTick", 1)), float(x["f"].get("tickRate", 0.2)),
+                            float(x["f"].get("superCeramicPenalty", 0)), float(int(round(x["f"].get("maxDuration", 15.0) * 60)))]
+                           for x in pb.get("PsiEffectModel", [])), None)
+        # (PsiBloonBehavior.OnDestroy @0x181005390: projectileOnBloonDestroyModel through
+        # emissionOnBloonDestroy at the bloon, before its Damage: Psi 10+'s DestructiveResonance.)
+        out["psi_destroy"] = next(({"projectile": projectile(deref(x["f"]["projectileOnBloonDestroyModel"]), depth + 1),
+                                    "emission": emission(deref(x["f"].get("emissionOnBloonDestroy")))}
+                                   for x in pb.get("PsiEffectModel", []) if deref(x["f"].get("projectileOnBloonDestroyModel")) and depth < 3), None)
         # LatchToBloonModel (the Great White's BloonFollowProjectile; LatchToBloon.Process
         # @0x180cc7200, SetTarget @0x180cc7670, OnDestroy @0x180cc7110): it rides its bloon,
         # slowing it, until the bloon is lost or it ages out.
@@ -1948,6 +1958,8 @@ def main():
                                                       "projectile": projectile(deref(x["f"]["projectileModel"])), "emission": emission(deref(x["f"]["emissionModel"]))}
                                                      for x in items(w["f"].get("behaviors")) if x and x["type"] == "BonusProjectileAfterIntervalModel"), None),
                                 "alternate": alternate, "spread": spread, "per_round": per_round, "mana": next((int(x["f"].get("graveyardManaChange", 0)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "MagusPerfectusGraveyardModel"), 0), "burst": burst,
+                                # PsiLimitProjectileModel: FilterEmission only once canFireAt <= roundTime.
+                                "psi_limit": any(x and x["type"] == "PsiLimitProjectileModel" for x in items(w["f"].get("behaviors"))),
                                 # RandomRateModel: after each throw lastEmission += (int)(offsetRateFrames x
                                 # syncedRandom.NextDouble()) (RandomRate.ProjectilesCreated, VERIFIED-DECOMP
                                 # @0x180c901a0; Benjamin's Bloon Trojan).

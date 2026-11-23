@@ -394,6 +394,15 @@ pub struct Bloon {
     pub cseq: u64,
     /// In a Gyrfalcon's claws (MoveWithAirUnit, offTrackCount): not filed on the path's segments.
     pub held: bool,
+    /// PsiBloonMutator (Psi): (the sim frame its hold ends, the tower). Held in place,
+    /// invulnerable, popped through every layer when it ends.
+    pub psi: Option<(u64, u64)>,
+    /// The hold's projectileOnBloonDestroy (Psi 10+).
+    pub psi_destroy: Option<std::sync::Arc<crate::data::Contact>>,
+    /// The frame the hold began, and whether it holds the bloon in this frame's Process (from the
+    /// frame after the hit: recordings psi_l03_r20 rt 126, psi_l10_r40 rt 1956, it moves once more).
+    pub psi_since: u64,
+    pub psi_active: bool,
     /// When a Gyrfalcon snatched it (sim_elapsed x 4 + 3) and where it was carried to as this frame
     /// began: the carrying is processed after projectiles made before the snatch (recording
     /// map_haunted_beast_402_r60 AA lines: bite 848, made before ZebraRegrow 498 was snatched at
@@ -1161,6 +1170,10 @@ impl Bloon {
         if self.holding_freeze(def).is_some() && !def.tags.iter().any(|t| t == "Moabs") {
             return 0.0;
         }
+        // (PsiBloonMutator.Mutate @0x1811f6910: held where it is.)
+        if self.psi.is_some() && self.psi_active {
+            return 0.0;
+        }
         // (Mutable.ApplyMutation: only the first mutator with an id applies.)
         self.effects
             .iter()
@@ -1628,6 +1641,8 @@ pub struct WeaponState {
     pub rand_target: Option<[f32; 2]>,
     /// BurstWeaponBehavior.currentCount: shots left in this burst (Initialise: the model's count).
     pub burst_left: u32,
+    /// PsiLimitProjectile.canFireAt (roundTime): a psi_limit weapon fires only from then.
+    pub psi_can_fire: i64,
     /// The weapon gained its burst with an upgrade: its BurstWeaponBehavior is newer than the
     /// tower's DamageBasedAttackSpeed, so it runs after it in the process list.
     pub burst_late: bool,
@@ -1706,6 +1721,7 @@ impl WeaponState {
             banana_t: i64::MIN,
             rand_target: None,
             burst_left: w.burst.as_ref().map_or(0, |b| b.count),
+            psi_can_fire: i64::MIN,
             burst_late: false,
             empty_pt: None,
             empty_chk: (i64::MIN, false),
@@ -3039,6 +3055,8 @@ pub struct Projectile {
     /// the tower its pop cash is staged on; CreateProjectileOnContact.Collide (@0x180ca2a60)
     /// emits its children with it.
     pub emitted_by: u64,
+    /// The emitting weapon's slot on its tower (u32::MAX: not a weapon's own shot).
+    pub weapon_slot: u32,
     /// Instant projectiles: the only bloon they can hit. Bouncing glaives: the bloon they home in on.
     pub target: Option<u64>,
     /// CollideOnlyWithTarget's Target for a travelling shot (SetTarget at emission and when its
@@ -3996,6 +4014,8 @@ pub struct Game {
     /// The firing tower's rotation (the game's degrees) for the shots `emit` is making, when the
     /// game's own direction math applies.
     emit_rot: Option<f32>,
+    /// The weapon slot emitting now (Projectile::weapon_slot).
+    emit_weapon: Option<usize>,
     /// The emitting projectile's direction as a rotation (EmissionRotationOffProjectileDirection).
     emit_dir_rot: Option<f32>,
     /// Height for the projectiles `emit` makes (Projectile.z).
@@ -6789,6 +6809,7 @@ impl Game {
             grid_on: false,
             grid_cand: Vec::new(),
             emit_rot: None,
+            emit_weapon: None,
             emit_dir_rot: None,
             emit_z: 0.0,
             emit_target: None,
@@ -7721,7 +7742,7 @@ impl Game {
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
         self.bidx.get_mut().insert(id, self.bloons.len() as u32);
-        self.bloons.push(Bloon { barrage: Vec::new(), hex_last: -1, held: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false, spawner: false });
+        self.bloons.push(Bloon { barrage: Vec::new(), hex_last: -1, held: false, psi: None, psi_destroy: None, psi_since: 0, psi_active: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false, spawner: false });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
         if self.defs[kind].rotate_to_follow_path {
@@ -7805,6 +7826,12 @@ impl Game {
 
     /// `bloon_nontarget` with the flags of model `kind` (MOAB-class: moabsInvulnerable).
     fn bloon_nontarget_kind(&self, b: &Bloon, kind: usize, dist: f32) -> bool {
+        // (Bloon.get_IsInvulnerable (@0x180fb8bc0, vtable slot 100): a Psi-held bloon's model
+        // isInvulnerable; Targetting.GetTargets, Target.IsValid and Projectile.IsCollisionValid skip it:
+        // recording psi_l10_r40 rt 1869, the second attack waits for another bloon.)
+        if b.psi.is_some() {
+            return true;
+        }
         if dist.is_nan() {
             return false;
         }
@@ -7820,6 +7847,12 @@ impl Game {
     /// `bloon_nontarget` as Bloon.Process left it at distance `dist` (a bloon that hasn't moved
     /// yet this frame at the asker's turn: its frame-start distance).
     fn bloon_nontarget_at(&self, b: &Bloon, dist: f32) -> bool {
+        // (Bloon.get_IsInvulnerable (@0x180fb8bc0, vtable slot 100): a Psi-held bloon's model
+        // isInvulnerable; Targetting.GetTargets, Target.IsValid and Projectile.IsCollisionValid skip it:
+        // recording psi_l10_r40 rt 1869, the second attack waits for another bloon.)
+        if b.psi.is_some() {
+            return true;
+        }
         let Some((ds, inv, minv)) = self.track_inv.get(b.path as usize) else { return false };
         if ds.is_empty() {
             return false;
@@ -16875,6 +16908,10 @@ impl Game {
             if decision.cancel{return 0;}
             if let Some(damage)=decision.damage{dmg=damage.round() as i32;if dmg==0{return 0;}}
         }
+        // (PsiBloonMutator.Mutate sets BloonModel.isInvulnerable: no damage while held.)
+        if self.pop_depth == 0 && self.bloons[i].psi.is_some() {
+            return 0;
+        }
         let hit_camo = self.pop_depth == 0 && self.bloons[i].camo(&self.defs[self.bloons[i].kind]);
         if self.pop_depth == 0 {
             self.copies_now.clear();
@@ -21528,7 +21565,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                         m if m < 0 => mg_state == 0 && mg_pool >= 0.0,
                         _ => mg_state == 1 && mg_pool < mg_max,
                     };
-                    let decide = empty_clip.or(best).or(ambient.then_some((0.0, pos, 0))).filter(|_| quota_left && rounds_on && grave_ok && magus_ok);
+                    // PsiLimitProjectile.FilterEmission (VERIFIED-DECOMP @0x180c8fb70): canFireAt <= roundTime.
+                    let psi_ok = !weapon.psi_limit || tw.weapons[w].psi_can_fire <= self.round_clock;
+                    let decide = empty_clip.or(best).or(ambient.then_some((0.0, pos, 0))).filter(|_| quota_left && rounds_on && grave_ok && magus_ok && psi_ok);
                     // Weapon.Process (VERIFIED-DISASM @0xc6f800): once lastEmission + rateFrames
                     // <= its clock and the attack has a target, the throw animation starts and
                     // the cooldown restarts there; the projectile leaves animationOffsetFrames
@@ -22663,6 +22702,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 // bucc_upgrades_r30 rt 1306: 3 apart across x, flying at -151.11).
                                 let disp = !weapon.disp_rot && emission.kind == "Parallel" && !body_turns && attack.weapons.iter().any(|w| w.disp_rot);
                                 self.emit_rot = if disp { Some(self.towers[t].game_rot.unwrap_or(0.0)) } else { grot };
+                                self.emit_weapon = Some(w);
                                 self.emit_z = if self.towers[t].weapons[w].empty_throw { 20.0 } else { ez + self.shot_base_z(t, weapon.from_air) };
                                 self.emit_target = (target_id != 0).then_some(target_id);
                                 self.emit_target_off = self.towers[t].weapons[w].aim_off;
@@ -22801,6 +22841,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                     }
                                 }
                                 self.emit_rot = None;
+                                self.emit_weapon = None;
                                 self.emit_z = 0.0;
                                 self.emit_target = None;
                                 self.emit_target_off = [0.0; 2];
@@ -24427,6 +24468,33 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
             }
         }
         self.barrage_tick(i, dots);
+        {
+            let b = &mut self.bloons[i];
+            b.psi_active = b.psi.is_some() && now > b.psi_since;
+        }
+        // PsiBloonBehavior.OnDestroy (VERIFIED-DECOMP @0x181005390), as the PsiBloonMutator runs out:
+        // Bloon.Damage of Math.Ceiling(the current total health), distributed, credited to the tower:
+        // every layer pops (recording psi_l03_r20: a Black hit at 126 gone at 180, +11 cash).
+        if let Some((end, owner)) = self.bloons[i].psi {
+            if now >= end {
+                let b = &self.bloons[i];
+                let d = &self.defs[b.kind];
+                let total = (b.hp - d.max_health as i32 + self.total_health_model(b.kind)) as f32;
+                let (id, pos, z) = (b.id, b.pos, b.height);
+                self.bloons[i].psi = None;
+                // (Its projectileOnBloonDestroy first, emitted at the bloon with it as Target:
+                // recording psi_l10_r40 rt 1902, DestructiveResonance at the held Black, z 20.)
+                if let Some(c) = self.bloons[i].psi_destroy.take() {
+                    let tiers = self.towers.iter().find(|w| w.id == owner).map_or([0; 3], |w| w.tiers);
+                    self.emit_z = z;
+                    self.emit_target = Some(id);
+                    self.emit(pos, -std::f32::consts::FRAC_PI_2, &c.emission, &c.projectile, None, tiers, owner);
+                    self.emit_target = None;
+                    self.emit_z = 0.0;
+                }
+                dots.push((id, total.ceil(), 0, owner, (true, false), "Psi".into(), now as f32, 0));
+            }
+        }
         let b = &mut self.bloons[i];
         // In behaviour order (`Effect::seq`).
         let mut by_seq: Vec<usize> = (0..b.effects.len()).collect();
@@ -25828,7 +25896,55 @@ impl Game {
     /// RemoveMutatorsFromBloon (-50), then the effects that go on before the damage
     /// (AddBehaviorToBloon -1, slows...). They run whether or not the damage can hurt the bloon
     /// (recording ice_004: a blast on a Zebra still draws its Icicles chance).
+    /// BloonDegradeStepper.GetTotalHealthForBloonModel (VERIFIED-DECOMP @0x180fc7ee0): maxHealth plus,
+    /// per SpawnChildren with children, its first child's total (once: a Black is 1 + a Pink's 5).
+    fn total_health_model(&self, kind: usize) -> i32 {
+        let d = &self.defs[kind];
+        let mut t = d.max_health as i32;
+        if let Some(c) = d.children.first().and_then(|n| self.names.iter().position(|x| x == n)) {
+            t += self.total_health_model(c);
+        }
+        t
+    }
+
+    /// PsiEffect.Collide (VERIFIED-DECOMP @0x180cd3850): frames = PsiEffectModel.
+    /// GetFramesUntilBloonCompletelyPopped (@0x1811f6d70): min(maxDurationFrames, (int)(total
+    /// health (health - maxHealth + the model's total) / ((1 / tickRate) x damagePerTick) x 60));
+    /// the emitting weapon's PsiLimitProjectile.SetCanFireAt(roundTime + its rateFrames + frames),
+    /// only ever raised; Bloon.RemoveAllMutators; the PsiBloonMutator for `frames`.
+    fn psi_hit(&mut self, i: usize, p: usize) {
+        let Some([dpt, tick, penalty, max_frames]) = self.projectiles[p].spec.psi else { return };
+        let b = &self.bloons[i];
+        let d = &self.defs[b.kind];
+        let total = (b.hp - d.max_health as i32 + self.total_health_model(b.kind)) as f64;
+        // (Bloon.HasTag(0x20000): the super-ceramic tag; superCeramicPenalty is 0 on every Psi.)
+        let per = if penalty > 0.0 && d.tags.iter().any(|t| t == "Super") { dpt - penalty } else { dpt };
+        let frames = (((total / ((1.0f32 / tick) * per) as f64) * 60.0) as i32).min(max_frames as i32).max(0);
+        let owner = self.projectiles[p].emitted_by;
+        let now = self.sim_elapsed;
+        let rc = self.round_clock;
+        // (The PsiLimitProjectile of the weapon that fired it, + Weapon.rateFrames: Projectile +0x1e0
+        // is its Weapon, +0xa0 rateFrames.)
+        let slot = self.projectiles[p].weapon_slot as usize;
+        if let Some(st) = self.towers.iter_mut().find(|w| w.id == owner).and_then(|tw| tw.weapons.get_mut(slot)) {
+            let at = rc + st.rate_frames + frames as i64;
+            if st.psi_can_fire < at {
+                st.psi_can_fire = at;
+            }
+        }
+        let pd = self.projectiles[p].spec.psi_destroy.clone();
+        let b = &mut self.bloons[i];
+        b.effects.clear();
+        b.psi = Some(((now + frames as u64).saturating_sub(1), owner));
+        b.psi_destroy = pd;
+        b.psi_since = now;
+        b.psi_active = false;
+    }
+
     fn pre_damage_effects(&mut self, i: usize, p: usize, dmg: f32) {
+        if self.projectiles[p].spec.psi.is_some() {
+            self.psi_hit(i, p);
+        }
         let spec = &self.projectiles[p].spec;
         // HYPOTHESIS P-REMOVEMUT: a key removes effects whose mutator id contains it;
         // "Ice" also covers freezes and "Glue" glue slows whatever their id.
@@ -27513,6 +27629,7 @@ impl Game {
                     _ => (0.0, 0.0),
                 },
                 seek_moved: false,
+                weapon_slot: self.emit_weapon.map_or(u32::MAX, |w| w as u32),
                 seek_t: self.sim_elapsed,
                 turn_pf: 0.0,
                 speed_pf: 0.0,

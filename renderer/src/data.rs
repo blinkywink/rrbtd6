@@ -1483,6 +1483,9 @@ pub struct Weapon {
     /// BurstWeaponBehaviorModel: each shot is `count` shots, `frames` apart.
     #[serde(default)]
     pub burst: Option<BurstFire>,
+    /// PsiLimitProjectileModel: fires only once the tower's Psi canFireAt <= roundTime.
+    #[serde(default)]
+    pub psi_limit: bool,
     /// RandomRateModel.offsetRateFrames: lastEmission + (int)(this x syncedRandom.NextDouble())
     /// after each throw.
     #[serde(default)]
@@ -2596,6 +2599,12 @@ pub struct Proj {
     /// RemoveMutatorsFromBloonModel keys: effects whose id starts with one are removed (Tornado).
     #[serde(default)]
     pub remove_effects: Vec<String>,
+    /// PsiEffectModel: [damagePerTick, tickRate, superCeramicPenalty, maxDurationFrames].
+    #[serde(default)]
+    pub psi: Option<[f32; 4]>,
+    /// PsiEffectModel.projectileOnBloonDestroyModel / emissionOnBloonDestroy.
+    #[serde(default)]
+    pub psi_destroy: Option<std::sync::Arc<Contact>>,
     /// CreateProjectileOnIntervalModel: every `frames` frames, a sub-projectile at a random bloon
     /// within `range` (Ball Lightning).
     #[serde(default)]
