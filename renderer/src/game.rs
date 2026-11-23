@@ -1463,6 +1463,18 @@ fn offset_turned(ox: f32, oy: f32, rot: f32) -> (f32, f32) {
     (c * ox - s * oy, c * oy + s * ox)
 }
 
+/// RotateToTargetAttackOffset.GetOrigin (VERIFIED-DECOMP @0x180ddaf70) for an attack transform
+/// at offset (ox, oy) (already turned, game frame) and height oz from tower position `tp` (clone
+/// frame): TransformBehavior.UpdatePositionFromParent (@0x18103ae90) places it at the parent's
+/// position after Vector3.AdjustHeightInCameraSpace(oz) (y - oz / tan60), plus the turned offset
+/// (z + oz); GetOrigin then raises that 10 in display space (`aim_origin_y`). In that order, in
+/// f32 (recording brickell_l10_r40 rt 680: ATE y -1.5968966 and the pistol's aim -32.45754; the
+/// old single (oz + 10) / tan60 add was a float step off).
+fn offset_origin(tp: [f32; 2], ox: f32, oy: f32, oz: f32) -> [f32; 2] {
+    let gy = (-tp[1] - oz / TAN60) + oy;
+    [tp[0] + ox, aim_origin_y(-gy, oz, DISPLAY_TOWER_HEIGHT)]
+}
+
 /// Vector2.Rotate((0, 1), deg) in the clone's frame (the game's y flipped): a projectile's
 /// direction for a rotation in the game's degrees.
 fn game_dir(deg: f32) -> [f32; 2] {
@@ -5558,6 +5570,10 @@ macro_rules! collide_pass {
                 if now.iter().any(|(_, c, _)| c.gap > 0.0) {
                     $s.projectiles[$p].exhaust_made = (clock, made + 1);
                 }
+                // CreateProjectileOnExhaustPierce.Collide (VERIFIED-DECOMP @0x180ca4050): once
+                // creationCount reaches count with destroyProjectile, Projectile.Expire (recording
+                // churchill_l03_r20 rt 393: the shell gone with its third explosion, pierce left).
+                let expire_now = now.iter().any(|(_, c, _)| c.gap > 0.0 && c.destroy_at_count && made + 1 >= c.max_count);
                 for (at, c, skip) in now {
                     // (Blast Chain's mutator: the SeaMineSeeking TravelStrait speed x
                     // projectileSpeedMultiplier.)
@@ -5604,6 +5620,9 @@ macro_rules! collide_pass {
                     if c.pass_dir {
                         $s.contact_dir(start, Some(id));
                     }
+                }
+                if expire_now {
+                    $s.projectiles[$p].frames_left = 0.0;
                 }
             }
             if let Some(at) = crit_text {
@@ -20155,6 +20174,14 @@ impl Game {
                                     let tp = self.towers[t].pos;
                                     let from = [tp[0], aim_origin_y(tp[1], self.stand_z(tp), DISPLAY_TOWER_HEIGHT)];
                                     let r = RAD2DEG * crt_atan2(q[0] - from[0], -(q[1] - from[1])) + attack.extra_rotation;
+                                    // (A turning base: the base's plus aim - base, as in the attack below.)
+                                    let r = if tier.base_rotation {
+                                        let tw = &mut self.towers[t];
+                                        tw.turret_rel = r - tw.base_rot;
+                                        tw.base_rot + tw.turret_rel
+                                    } else {
+                                        r
+                                    };
                                     self.towers[t].game_rot = Some(r);
                                     self.towers[t].angle = (r - 90.0) * DEG2RAD;
                                 }
@@ -21076,6 +21103,18 @@ impl Game {
                             let from = [tp[0], aim_origin_y(tp[1], self.stand_z(tp), DISPLAY_TOWER_HEIGHT)];
                             let q = b.prev;
                             let r = RAD2DEG * crt_atan2(q[0] - from[0], -(q[1] - from[1])) + attack.extra_rotation;
+                            // (On a ChurchillBaseRotation base, ApplyRotation (VERIFIED-DECOMP
+                            // @0x180dd7930) keeps parentRotationOffset = aim - the tower's rotation and
+                            // UpdatePositionFromParent (@0x18103ae90) makes the turret's rotation the
+                            // base's plus that: recording churchill_l03_r20 rt 203, the shell ejected
+                            // along 60.21595 from the rt-202 aim 60.215946.)
+                            let r = if tier.base_rotation {
+                                let tw = &mut self.towers[t];
+                                tw.turret_rel = r - tw.base_rot;
+                                tw.base_rot + tw.turret_rel
+                            } else {
+                                r
+                            };
                             self.towers[t].game_rot = Some(r);
                             self.towers[t].angle = (r - 90.0) * DEG2RAD;
                         }
@@ -21117,7 +21156,7 @@ impl Game {
                     // (On a ChurchillBaseRotation tower the attack's transform turns with the base;
                     // otherwise the tower's rotation is ignored, mermonkey_300.)
                     let (ox, oy) = if tier.base_rotation { offset_turned(ox, oy, self.towers[t].game_rot.unwrap_or(0.0)) } else { (ox, oy) };
-                    let from = [tp[0] + ox, tp[1] - oy + (attack.offset_z + DISPLAY_TOWER_HEIGHT) / TAN60];
+                    let from = offset_origin(tp, ox, oy, attack.offset_z);
                     attack_rot = Some(RAD2DEG * crt_atan2(aim[0] - from[0], -(aim[1] - from[1])) + add);
                     turning = true;
                 }
@@ -21586,6 +21625,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             } else {
                                 tw.game_rot = Some(r);
                                 tw.turret_rel = r - tw.base_rot;
+                                // (A turning base: the base's plus that, as at the throw start below.)
+                                if tier.base_rotation {
+                                    tw.game_rot = Some(tw.base_rot + tw.turret_rel);
+                                }
                             }
                         }
                     } else if st.anim >= 0 && aim_id == 0 && !ambient && attack.rotate && !turning && weapon.aim_offset.is_none() && extra_rot == 0.0 {
@@ -21594,6 +21637,14 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                         let aim_from = [pos[0], aim_origin_y(pos[1], stand_z, DISPLAY_TOWER_HEIGHT)];
                         tw.game_rot = Some(RAD2DEG * crt_atan2(aimed[0] - aim_from[0], -(aimed[1] - aim_from[1])));
                         tw.turret_rel = tw.game_rot.unwrap() - tw.base_rot;
+                        // (On a turning base, ApplyRotation (VERIFIED-DECOMP @0x180dd7930) stores the
+                        // turret's parentRotationOffset = aim - the tower's rotation and
+                        // UpdatePositionFromParent (@0x18103ae90) makes its rotation the base's plus
+                        // that: recording churchill_l03_r20 rt 203, the shell's eject at 60.21595
+                        // from the rt-191 aim, not the aim itself.)
+                        if tier.base_rotation {
+                            tw.game_rot = Some(tw.base_rot + tw.turret_rel);
+                        }
                     }
                     if let (Some(p), false) = (started, ambient) {
                         if attack.rotate && !turning {
@@ -21884,7 +21935,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             // aim - base, and the eject reads base + that back: recording
                             // churchill_l03_r20 rt 203, the shell's eject y 1 ulp off with the base
                             // paused otherwise.)
-                            if let (true, None, None) = (tier.base_rotation && !air_shot && broadside.is_none(), tw.sub_base, attack.offset_rot) {
+                            if let (true, None, None) = (tier.base_rotation && !air_shot, tw.sub_base, attack.offset_rot) {
                                 let b = tw.base_rot;
                                 grot = grot.map(|g| b + (g - b));
                             }
@@ -21896,7 +21947,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             if let Some([ox, oy, add, start]) = attack.offset_rot {
                                 let tp = tw.pos;
                                 let (ox, oy) = if tier.base_rotation { offset_turned(ox, oy, tw.game_rot.unwrap_or(0.0)) } else { (ox, oy) };
-                                let from = [tp[0] + ox, tp[1] - oy + (attack.offset_z + DISPLAY_TOWER_HEIGHT) / TAN60];
+                                let from = offset_origin(tp, ox, oy, attack.offset_z);
                                 // (RotateToStartingPoint @0x180ddb3f0: SetRotation at the origin +
                                 // Vector2.Rotate((0, 1), startRotation): -112.500015 for 247.5.)
                                 let to = if lost { let d = game_dir(start); [from[0] + d[0], from[1] + d[1]] } else { target };
@@ -21999,6 +22050,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             let body_rot = if let Some(fr) = fighter_rot {
                                 Some(fr)
                             } else if let Some(tr) = broadside.filter(|_| body_turns) {
+                                // (A turret on a ChurchillBaseRotation base: the base's plus aim -
+                                // base (ApplyRotation's parentRotationOffset, UpdatePositionFromParent);
+                                // recording churchill_l03_r20 rt 203, the shell's eject along 60.21595
+                                // from the aim 60.215946.)
+                                let tr = if tier.base_rotation { let b = tw.base_rot; b + (tr - b) } else { tr };
                                 if !instant_throw {
                                     tw.game_rot = Some(tr);
                                     tw.turret_rel = tr - tw.base_rot;

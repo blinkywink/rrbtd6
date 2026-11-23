@@ -2134,6 +2134,10 @@ pub struct Contact {
     pub gap: f32,
     #[serde(default)]
     pub max_count: u32,
+    /// CreateProjectileOnExhaustPierceModel.destroyProjectile: the shot Expires once `max_count`
+    /// have been made (Collide @0x180ca4050).
+    #[serde(default)]
+    pub destroy_at_count: bool,
     /// Runs after the hit's damage (a later collisionPass than the DamageModel, or after it in
     /// the same pass): made where the shot is when that destroyed the bloon.
     #[serde(default)]

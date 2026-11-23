@@ -1360,7 +1360,11 @@ def main():
                     out["on_contact"].append({"projectile": projectile(deref(cf["projectile"]), depth + 1),
                                               "emission": emission(deref(cf.get("emission"))),
                                               "at_shot": not cf.get("useBloonPosition", False),
-                                              "gap": float(cf.get("minimumTimeDifferenceInFrames", 0)), "max_count": min(int(cf.get("count", 0)), 4294967295)})
+                                              "gap": float(cf.get("minimumTimeDifferenceInFrames", 0)), "max_count": min(int(cf.get("count", 0)), 4294967295),
+                                              # (Collide: with destroyProjectile, the shot Expires once
+                                              # creationCount reaches count; recording churchill_l03_r20
+                                              # rt 393, a shell gone with its third explosion.)
+                                              "destroy_at_count": bool(cf.get("destroyProjectile"))})
         # CreateTowerModel / CreateTypedTowerModel (Engineer sentries): a sub-tower where it lands.
         subs = []
         for ct in pb.get("CreateTowerModel", []):
