@@ -608,10 +608,11 @@ def finish(c):
 
 def gpu_assets(c):
     """The game's own DXT data beside model / effect textures (uploaded compressed), with mips; and
-    the parts the game spins in code (helicopter rotors, drone fans)."""
+    the parts the game spins in code (helicopter rotors, drone fans) and projectiles' tweens."""
     c.py("tools/assets/export_compressed.py", "--game", c.game, "--dirs", "models", "effects")
     c.py("tools/assets/export_compressed.py", "--dirs", "models", "effects", "--mips")
     c.py("tools/assets/export_spin.py", "--game", c.game, "air")
+    c.py("tools/assets/export_tweens.py", "--game", c.game)
 
 
 def dedupe(c):

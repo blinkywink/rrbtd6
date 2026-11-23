@@ -195,6 +195,120 @@ pub struct Model {
     pub dynamic: Vec<bool>,
     /// Per part: its vertices and indices as static GPU buffers, made on the first instanced draw.
     gpu_parts: std::cell::RefCell<Vec<Option<(miniquad::BufferId, miniquad::BufferId)>>>,
+    /// The prefab's CustomRotationAnimator / CustomScaleAnimator tweens (tweens.json,
+    /// tools/assets/export_tweens.py), deepest first, with the meshes they move.
+    pub tweens: Vec<Tween>,
+}
+
+/// UnityEngine.AnimationCurve: keys (time, value, inSlope, outSlope), Hermite between them, held
+/// at the end values outside.
+#[derive(Clone, Debug, Default)]
+pub struct Curve(Vec<[f32; 4]>);
+
+impl Curve {
+    pub fn eval(&self, t: f32) -> f32 {
+        let k = &self.0;
+        let Some(first) = k.first() else { return 0.0 };
+        if k.len() == 1 || t <= first[0] {
+            return first[1];
+        }
+        let last = k[k.len() - 1];
+        if t >= last[0] {
+            return last[1];
+        }
+        let i = k.windows(2).position(|w| t < w[1][0]).unwrap_or(k.len() - 2);
+        let (a, b) = (k[i], k[i + 1]);
+        let dt = b[0] - a[0];
+        if dt <= 0.0 || !a[3].is_finite() || !b[2].is_finite() {
+            return a[1];
+        }
+        let s = (t - a[0]) / dt;
+        let (s2, s3) = (s * s, s * s * s);
+        let (h00, h10, h01, h11) = (2.0 * s3 - 3.0 * s2 + 1.0, s3 - 2.0 * s2 + s, -2.0 * s3 + 3.0 * s2, s3 - s2);
+        h00 * a[1] + h10 * dt * a[3] + h01 * b[1] + h11 * dt * b[2]
+    }
+}
+
+/// One CustomAnimationComponent: its curve, duration and speed, looping or held at the end.
+#[derive(Clone, Debug)]
+pub struct TweenAnim {
+    curve: Curve,
+    duration: f32,
+    speed: f32,
+    looping: bool,
+    /// Rotation: turns per duration, angle offset (degrees) and the local axis.
+    turns: f32,
+    offset: f32,
+    axis: Vec3,
+}
+
+impl TweenAnim {
+    /// CustomAnimationComponent.Update (@0x1804e2830): progress = seconds / duration x speed from
+    /// when it was enabled; looping, its fraction; else at most 1. Then the curve at it.
+    fn value(&self, seconds: f32) -> f32 {
+        let p = seconds / self.duration.max(1e-6) * self.speed;
+        self.curve.eval(if self.looping { p.rem_euclid(1.0) } else { p.min(1.0) })
+    }
+
+    fn parse(v: &serde_json::Value) -> Option<TweenAnim> {
+        let keys = v["keys"].as_array()?.iter().filter_map(|k| {
+            let k = k.as_array()?;
+            Some([k.first()?.as_f64()? as f32, k.get(1)?.as_f64()? as f32, k.get(2)?.as_f64()? as f32, k.get(3)?.as_f64()? as f32])
+        }).collect();
+        let f = |n: &str, d: f64| v[n].as_f64().unwrap_or(d) as f32;
+        let axis = v["axis"].as_array().map_or(Vec3::Y, |a| vec3(a[0].as_f64().unwrap_or(0.0) as f32, a[1].as_f64().unwrap_or(1.0) as f32, a[2].as_f64().unwrap_or(0.0) as f32));
+        Some(TweenAnim { curve: Curve(keys), duration: f("duration", 1.0), speed: f("speed", 1.0), looping: v["loop"].as_bool().unwrap_or(false), turns: f("turns", 1.0), offset: f("offset", 0.0), axis })
+    }
+}
+
+/// A tweened object of the prefab: its parent chain and position (`p`, export model space), its
+/// own rotation and scale, and the animators that replace them (CustomRotationAnimator: its
+/// localRotation = AngleAxis(curve x turns x 360 + offset, axis); CustomScaleAnimator: its
+/// localScale = the starting scale x curve).
+#[derive(Clone, Debug)]
+pub struct Tween {
+    meshes: Vec<usize>,
+    p: Mat4,
+    p_inv: Mat4,
+    base_inv: Mat4,
+    base_rot: Quat,
+    base_scale: Vec3,
+    rot: Option<TweenAnim>,
+    scale: Option<TweenAnim>,
+}
+
+impl Tween {
+    /// The move from the exported pose to this one, `seconds` after the projectile was made.
+    fn matrix(&self, seconds: f32) -> Mat4 {
+        let r = self.rot.as_ref().map_or(self.base_rot, |a| Quat::from_axis_angle(a.axis.normalize_or_zero(), (a.value(seconds) * a.turns * 360.0 + a.offset).to_radians()));
+        let s = self.scale.as_ref().map_or(self.base_scale, |a| self.base_scale * a.value(seconds));
+        self.p * Mat4::from_scale_rotation_translation(s, r, Vec3::ZERO) * self.base_inv * self.p_inv
+    }
+}
+
+/// tweens.json for a model whose meshes came from meta.json parts `mesh_part` (by mesh).
+fn load_tweens(dir: &Path, mesh_part: &[usize]) -> Vec<Tween> {
+    let Some(v) = std::fs::read_to_string(dir.join("tweens.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else { return Vec::new() };
+    let mut out = Vec::new();
+    for t in v["targets"].as_array().into_iter().flatten() {
+        let parts: Vec<usize> = t["parts"].as_array().into_iter().flatten().filter_map(|x| x.as_u64().map(|x| x as usize)).collect();
+        let meshes: Vec<usize> = (0..mesh_part.len()).filter(|&m| parts.contains(&mesh_part[m])).collect();
+        let p: Vec<f32> = t["p"].as_array().into_iter().flatten().filter_map(|x| x.as_f64().map(|x| x as f32)).collect();
+        let b: Vec<f32> = t["base"].as_array().into_iter().flatten().filter_map(|x| x.as_f64().map(|x| x as f32)).collect();
+        if meshes.is_empty() || p.len() != 16 || b.len() != 7 {
+            continue;
+        }
+        // (Row-major in the file.)
+        let p = Mat4::from_cols_array(&p.try_into().unwrap()).transpose();
+        let (base_rot, base_scale) = (Quat::from_xyzw(b[0], b[1], b[2], b[3]).normalize(), vec3(b[4], b[5], b[6]));
+        let base = Mat4::from_scale_rotation_translation(base_scale, base_rot, Vec3::ZERO);
+        let (rot, scale) = (TweenAnim::parse(&t["rot"]), TweenAnim::parse(&t["scale"]));
+        if base.determinant().abs() < 1e-12 || p.determinant().abs() < 1e-12 || (rot.is_none() && scale.is_none()) {
+            continue;
+        }
+        out.push(Tween { meshes, p, p_inv: p.inverse(), base_inv: base.inverse(), base_rot, base_scale, rot, scale });
+    }
+    out
 }
 
 /// NinjaKiwi/BTD6/Gradient_3Color (DXBC): per pixel, t = mesh UV v; below `_Middle` it blends
@@ -290,6 +404,8 @@ impl Model {
         let mut budget=crate::load_work::Budget::new();
         let f = |o: usize| f32::from_le_bytes(vb[o..o + 4].try_into().unwrap());
         let mut parts = Vec::new();
+        // Each mesh's meta.json part (a part split in pieces gives several): for tweens.json.
+        let mut mesh_part: Vec<usize> = Vec::new();
         let mut part_mats: Vec<String> = Vec::new();
         let mut names = Vec::new();
         let mut scene_paths = Vec::new();
@@ -348,7 +464,7 @@ impl Model {
             }
             cache
         };
-        for p in meta["parts"].as_array()? {
+        for (part_index, p) in meta["parts"].as_array()?.iter().enumerate() {
             let (voff, vcount) = (p["voff"].as_u64()? as usize, p["vcount"].as_u64()? as usize);
             let (ioff, icount) = (p["ioff"].as_u64()? as usize, p["icount"].as_u64()? as usize);
             // Material tint: one colour, or Gradient_3Color's bottom / mid / top ramp.
@@ -393,6 +509,7 @@ impl Model {
             }else{split_indexed_mesh(&idx,verts.len())};
             for (selection,ci) in chunks {
                 let cv=if selection.is_empty(){verts.clone()}else{selection.iter().map(|&i|verts[i as usize]).collect()};
+                mesh_part.push(part_index);
                 parts.push(Mesh { vertices: cv, indices: ci, texture: tex.clone() });
                 names.push(p["name"].as_str().unwrap_or("").to_string());
                 part_mats.push(p["material"].as_str().unwrap_or("").to_string());
@@ -413,7 +530,8 @@ impl Model {
         let mut transparent_order: Vec<usize> = (0..parts.len()).filter(|&i| fxs[i].as_ref().is_some_and(|f| f.shader.transparent)).collect();
         transparent_order.sort_by_key(|&i| fxs[i].as_ref().map_or(0, |f| f.queue));
         let hidden = vec![false; parts.len()];
-        let mut model=Model { parts, names, paths: scene_paths, hidden, grads, fx: fxs, transparent_order,gpu_map:None, blend, dynamic, gpu_parts: Default::default() };
+        let tweens = load_tweens(dir, &mesh_part);
+        let mut model=Model { parts, names, paths: scene_paths, hidden, grads, fx: fxs, transparent_order,gpu_map:None, blend, dynamic, gpu_parts: Default::default(), tweens };
         if dir.file_name().is_some_and(|n|n.to_string_lossy().starts_with("map_")){
             model.gpu_map=crate::static_map::Geometry::build(&model,&mut budget).await;
             if std::env::var_os("RRBTD6_TIMING").is_some(){if let Some(g)=&model.gpu_map{let (runs,bytes)=g.resource_sizes();eprintln!("static-map: {runs} immutable draws, {bytes} buffer bytes");}}
@@ -565,6 +683,45 @@ impl Model {
         static INSTANCE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let instance = *INSTANCE.get_or_init(|| std::env::var_os("RRBTD6_NO_MESH_INSTANCE").is_none() && unsafe { get_internal_gl() }.quad_context.info().backend == miniquad::Backend::OpenGl);
         self.draw_at_with(pos, yaw, scratch, instance);
+    }
+
+    /// `draw_at` for a projectile `seconds` old: a model with tweens is posed on the CPU (each
+    /// tweened mesh moved by its tweens, deepest first), else as `draw_at`.
+    pub fn draw_at_aged(&self, pos: [f32; 3], yaw: f32, seconds: f32, scratch: &mut Vec<Vertex>) {
+        if self.tweens.is_empty() {
+            return self.draw_at(pos, yaw, scratch);
+        }
+        let mut moves: Vec<Option<Mat4>> = vec![None; self.parts.len()];
+        for t in &self.tweens {
+            let m = t.matrix(seconds);
+            for &i in &t.meshes {
+                moves[i] = Some(m * moves[i].unwrap_or(Mat4::IDENTITY));
+            }
+        }
+        let (s, c) = yaw.sin_cos();
+        for (i, m) in self.parts.iter().enumerate() {
+            let mv = moves[i];
+            scratch.clear();
+            scratch.extend(m.vertices.iter().map(|vx| {
+                // (Stored in GL space: z flipped from the export's.)
+                let (mut x, mut y, mut z) = (vx.position.x, vx.position.y, -vx.position.z);
+                let (mut nx, mut ny, mut nz) = (vx.normal.x, vx.normal.y, -vx.normal.z);
+                if let Some(mv) = mv {
+                    let p = mv.transform_point3(vec3(x, y, z));
+                    let n = mv.transform_vector3(vec3(nx, ny, nz)).normalize_or_zero();
+                    (x, y, z, nx, ny, nz) = (p.x, p.y, p.z, n.x, n.y, n.z);
+                }
+                let (rx, rz) = (x * c + z * s, -x * s + z * c);
+                let normal = gl(nx * c + nz * s, ny, -nx * s + nz * c).extend(0.0);
+                Vertex { position: gl(rx + pos[0], y + pos[1], rz + pos[2]), normal, ..*vx }
+            }));
+            if let Some(fx) = self.fx.get(i).and_then(|f| f.as_ref()) {
+                let vp = unsafe { get_internal_gl() }.quad_gl.get_projection_matrix() * Mat4::from_scale(vec3(1.0, 1.0, -1.0));
+                fx.draw(&Mesh { vertices: scratch.clone(), indices: m.indices.clone(), texture: None }, vp, get_time() as f32);
+                continue;
+            }
+            draw_geometry(scratch, &m.indices, m.texture.as_ref());
+        }
     }
 
     /// `draw_at`, instanced on the GPU or (`instance` false) transformed on the CPU.
@@ -736,7 +893,7 @@ pub fn extract_part(m: &Model, name: &str) -> Option<(Model, Vec3)> {
     let tip = v.iter().map(|x| x.position - c).max_by(|a, b| a.length().total_cmp(&b.length()))?;
     let verts = v.iter().map(|x| Vertex { position: x.position - c, ..*x }).collect();
     let part = Mesh { vertices: verts, indices: p.indices.clone(), texture: p.texture.clone() };
-    Some((Model { parts: vec![part], names: vec![name.into()], paths: vec![String::new()], hidden: vec![false], grads: vec![None], fx: vec![None], transparent_order: Vec::new(),gpu_map:None, blend: vec![0], dynamic: vec![false], gpu_parts: Default::default() }, tip.normalize_or_zero()))
+    Some((Model { parts: vec![part], names: vec![name.into()], paths: vec![String::new()], hidden: vec![false], grads: vec![None], fx: vec![None], transparent_order: Vec::new(),gpu_map:None, blend: vec![0], dynamic: vec![false], gpu_parts: Default::default(), tweens: Vec::new() }, tip.normalize_or_zero()))
 }
 
 /// Draws `m` (centred) at GL position `at`, rotating its `axis` onto `dir` (both GL space).
@@ -1569,5 +1726,41 @@ mod atlas_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tween_tests {
+    use super::*;
+    /// The Exploding Pineapple's tweens: once its 0.7 s animations end it has turned a whole turn
+    /// (no net rotation) and stands at 0.593 of its exported size. Skipped without the assets.
+    #[test]
+    fn pineapple_ends_shrunk_and_upright() {
+        let dir = crate::root().join("models/projectiles/Pineapple");
+        if !dir.join("tweens.json").exists() {
+            eprintln!("skipped");
+            return;
+        }
+        let tw = load_tweens(&dir, &[0]);
+        assert_eq!(tw.len(), 2, "container and pineapple");
+        let m = tw.iter().fold(Mat4::IDENTITY, |acc, t| t.matrix(1.0) * acc);
+        let lin = Mat3::from_mat4(m);
+        let k = lin.determinant().cbrt();
+        assert!((k - 0.593).abs() < 0.002, "scale {k}");
+        let off = (lin - Mat3::from_diagonal(Vec3::splat(k))).to_cols_array().iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        assert!(off < 1e-3, "no net rotation: {lin:?}");
+        // Halfway through, it is turning (not the end pose).
+        let h = tw.iter().fold(Mat4::IDENTITY, |acc, t| t.matrix(0.35) * acc);
+        assert!((Mat3::from_mat4(h) - Mat3::from_mat4(m)).to_cols_array().iter().any(|x| x.abs() > 0.05));
+    }
+
+    #[test]
+    fn curve_hermite_hits_its_keys_and_holds_outside() {
+        let c = Curve(vec![[0.0, 1.0, 0.0, 0.0], [1.0, 3.0, 0.0, 0.0]]);
+        assert_eq!(c.eval(-1.0), 1.0);
+        assert_eq!(c.eval(0.0), 1.0);
+        assert_eq!(c.eval(1.0), 3.0);
+        assert_eq!(c.eval(2.0), 3.0);
+        assert!((c.eval(0.5) - 2.0).abs() < 1e-6, "flat slopes: smoothstep midpoint");
     }
 }

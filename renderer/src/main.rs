@@ -3307,7 +3307,8 @@ const VINE_END_FRAMES: i32 = 23;
                         continue;
                     }
                     Some(ProjDisplay::Mesh(m)) => {
-                        m.draw_at([x, y, z], std::f32::consts::FRAC_PI_2 - heading, &mut scratch);
+                        // (Its prefab's tweens play from when it was made: the pineapple's fall.)
+                        m.draw_at_aged([x, y, z], std::f32::consts::FRAC_PI_2 - heading, p.age / FPS, &mut scratch);
                         continue;
                     }
                     // A particle-only prefab (Wall of Fire): its own particle effect is all the game
