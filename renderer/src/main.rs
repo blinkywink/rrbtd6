@@ -788,6 +788,9 @@ async fn game_main() {
     // cooperative GPU uploads share a four-model staging limit.
     let mut warm_round=None;
     let mut warm_bloons=Vec::<String>::new();
+    // Bloon types the warm list already covers (with what they pop into): a sandbox send mid-round
+    // brings new ones (40 BADs: their damage states, ZOMGs, DDTs... each loaded at first sight).
+    let mut warm_kinds=Vec::<bool>::new();
     let bloon_model_root=root.join("models").join("bloons");
     let background_assets=std::env::var_os("RRBTD6_NO_BACKGROUND_ASSETS").is_none();
     if !background_assets{
@@ -940,6 +943,22 @@ async fn game_main() {
         }}
         if let Some(p)=&tier.preempt{visit(p,&mut out);}
         out.extend(tier.orbit.iter().flat_map(|o|o.display.iter().map(String::as_str)));
+        out
+    }
+    /// The particle effects a tier's projectiles make (contact, exhaust, expiry and emission:
+    /// the paragons' ExplosionXL, ~16 ms to load at first use).
+    fn projectile_effects(tier:&data::Tier)->Vec<&str>{
+        fn visit<'a>(p:&'a data::Proj,out:&mut Vec<&'a str>){
+            for list in [&p.contact_fx,&p.exhaust_fx,&p.expire_fx,&p.emit_fx]{out.extend(list.iter().map(|(n,_)|n.as_str()));}
+            for child in &p.on_contact{visit(&child.projectile,out);}
+            for child in &p.on_exhaust{visit(&child.projectile,out);}
+        }
+        let mut out=Vec::new();
+        for attack in &tier.attacks{for weapon in &attack.weapons{
+            visit(&weapon.projectile,&mut out);
+            if let Some(alt)=&weapon.alternate{visit(&alt.projectile,&mut out);}
+        }}
+        if let Some(p)=&tier.preempt{visit(p,&mut out);}
         out
     }
     let mut warm_towers=Vec::<(u64,usize,[u8;3],Option<u32>)>::new();
@@ -1441,7 +1460,7 @@ const VINE_END_FRAMES: i32 = 23;
         // Load on the next frame so the old menu/map remains intact during the fade.
         if let Some(k) = pending_map.take() {
             prediction_key=None;predicted_models.clear();predicted_effects.clear();
-            warm_round=None;warm_towers.clear();warm_projectiles.clear();projectile_upload=None;warm_effects.clear();effect_upload=None;
+            warm_round=None;warm_kinds.clear();warm_towers.clear();warm_projectiles.clear();projectile_upload=None;warm_effects.clear();effect_upload=None;
             while !front.loading_open_done() {
                 if let Some(h) = hud.as_mut() { front.draw_loading(h); }
                 audio.music(get_time());
@@ -1721,7 +1740,12 @@ const VINE_END_FRAMES: i32 = 23;
         let cpu_t0 = get_time();
         if background_assets&&view3d {
             let round_key=(game.round,game.round_active);
-            if warm_round!=Some(round_key){warm_round=Some(round_key);warm_bloons=game.upcoming_bloon_models();}
+            if warm_kinds.len()!=game.defs.len(){warm_kinds=vec![false;game.defs.len()];}
+            let new_kind=game.present_kinds().any(|k|!warm_kinds[k]);
+            if warm_round!=Some(round_key)||new_kind{
+                warm_round=Some(round_key);warm_bloons=game.upcoming_bloon_models();
+                for k in game.present_kinds(){warm_kinds[k]=true;}
+            }
             warm_bloons.retain(|name|!bloon_models.contains_key(name));
             for name in warm_bloons.iter().take(4){prefetch.request(bloon_model_root.join(name));}
             if let Some((path,model))=prefetch.advance(&bloon_model_root){
@@ -1739,7 +1763,8 @@ const VINE_END_FRAMES: i32 = 23;
                 warm_projectiles=game.towers.iter().filter_map(|t|game.tier_of(t)).flat_map(projectile_art)
                     .filter_map(|id|proj_index.get(id)).cloned().collect();
                 warm_projectiles.sort();warm_projectiles.dedup();
-                warm_effects=warm_projectiles.iter().filter_map(|name|proj_fx.get(name)).cloned().collect();
+                warm_effects=warm_projectiles.iter().filter_map(|name|proj_fx.get(name)).cloned()
+                    .chain(game.towers.iter().filter_map(|t|game.tier_of(t)).flat_map(projectile_effects).map(str::to_owned)).collect();
                 warm_effects.sort();warm_effects.dedup();
             }
             // One in-flight display, polled once per frame. The same loader and
@@ -4799,6 +4824,14 @@ const VINE_END_FRAMES: i32 = 23;
                 let (draws, verts, flushes) = macroquad::take_draw_stats();
                 let (gn, gv) = render3d::GEOM_STATS.with(|c| c.replace((0, 0)));
                 eprintln!("autotest: frame {frames} draws/frame {} verts/frame {} flushes/frame {} geometry-calls/frame {} geometry-verts/frame {}", draws / 100, verts / 100, flushes / 100, gn / 100, gv / 100);
+                let (tex_mb, buf_mb, tex_n) = macroquad::miniquad::gpu_mem::totals();
+                eprintln!("autotest: frame {frames} memory private {} MB, gpu textures {tex_mb} MB ({tex_n}), gpu buffers {buf_mb} MB", private_mb());
+                // RRBTD6_GPU_MEM: the textures by size, every 1000 frames.
+                if frames % 1000 == 0 && std::env::var_os("RRBTD6_GPU_MEM").is_some() {
+                    for ((w, h), n, b) in macroquad::miniquad::gpu_mem::by_size().iter().take(15) {
+                        eprintln!("gpu-mem: {w}x{h} x{n}: {} MB", b >> 20);
+                    }
+                }
                 sim_stats = (0.0, 0, 0.0);
                 hud_time = 0.0;
                 bloon_time = 0.0;

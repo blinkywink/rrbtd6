@@ -610,6 +610,11 @@ pub struct QuadGl {
     /// (rrbtd6) Instancing pipelines (no depth, depth) and per-call instance stream buffers.
     inst_pipelines: Option<[miniquad::Pipeline; 2]>,
     inst_buffers: Vec<(miniquad::BufferId, usize)>,
+    /// (rrbtd6) Each draw call's buffers' (vertex, index) capacity: grown to what the calls using
+    /// that slot hold, not max_vertices / max_indices up front (~400 KB a slot, hundreds of slots:
+    /// ~100 MB of GPU buffers mostly empty, and copies of them the driver keeps while in use).
+    /// RRBTD6_FULL_DRAW_BUFFERS: every slot at the maximum, as before.
+    bind_caps: Vec<(usize, usize)>,
     state: GlState,
     start_time: f64,
 
@@ -649,6 +654,7 @@ impl QuadGl {
             draw_calls_count: 0,
             inst_pipelines: None,
             inst_buffers: Vec::new(),
+            bind_caps: Vec::new(),
             start_time: miniquad::date::now(),
 
             white_texture,
@@ -733,16 +739,20 @@ impl QuadGl {
     pub fn draw(&mut self, ctx: &mut dyn miniquad::RenderingBackend, projection: glam::Mat4) {
         let white_texture = self.white_texture;
 
+        static FULL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let full = *FULL.get_or_init(|| std::env::var_os("RRBTD6_FULL_DRAW_BUFFERS").is_some());
         for _ in 0..self.draw_calls.len() - self.draw_calls_bindings.len() {
+            let (vcap, icap) = if full { (self.max_vertices, self.max_indices) } else { (256, 384) };
+            self.bind_caps.push((vcap, icap));
             let vertex_buffer = ctx.new_buffer(
                 BufferType::VertexBuffer,
                 BufferUsage::Stream,
-                BufferSource::empty::<Vertex>(self.max_vertices),
+                BufferSource::empty::<Vertex>(vcap),
             );
             let index_buffer = ctx.new_buffer(
                 BufferType::IndexBuffer,
                 BufferUsage::Stream,
-                BufferSource::empty::<u16>(self.max_indices),
+                BufferSource::empty::<u16>(icap),
             );
             let bindings = Bindings {
                 vertex_buffers: vec![vertex_buffer],
@@ -753,6 +763,21 @@ impl QuadGl {
             self.draw_calls_bindings.push(bindings);
         }
         assert_eq!(self.draw_calls_bindings.len(), self.draw_calls.len());
+        for (k, dc) in self.draw_calls[0..self.draw_calls_count].iter().enumerate() {
+            let (vcap, icap) = self.bind_caps[k];
+            if dc.vertices_count > vcap {
+                let cap = dc.vertices_count.next_power_of_two().min(self.max_vertices).max(dc.vertices_count);
+                ctx.delete_buffer(self.draw_calls_bindings[k].vertex_buffers[0]);
+                self.draw_calls_bindings[k].vertex_buffers[0] = ctx.new_buffer(BufferType::VertexBuffer, BufferUsage::Stream, BufferSource::empty::<Vertex>(cap));
+                self.bind_caps[k].0 = cap;
+            }
+            if dc.indices_count > icap {
+                let cap = dc.indices_count.next_power_of_two().min(self.max_indices).max(dc.indices_count);
+                ctx.delete_buffer(self.draw_calls_bindings[k].index_buffer);
+                self.draw_calls_bindings[k].index_buffer = ctx.new_buffer(BufferType::IndexBuffer, BufferUsage::Stream, BufferSource::empty::<u16>(cap));
+                self.bind_caps[k].1 = cap;
+            }
+        }
 
         // (rrbtd6) RRBTD6_DRAWSTATS: batches and vertices per flush, summed per frame by the game.
         DRAW_STATS.with(|c| {

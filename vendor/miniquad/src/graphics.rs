@@ -326,6 +326,59 @@ pub enum TextureFormat {
     Depth32,
     Alpha,
 }
+/// (rrbtd6) GPU memory the game holds: texture and buffer bytes as allocated (mip chains
+/// counted when generated, multisampled render buffers by their samples), and the textures by size.
+pub mod gpu_mem {
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    pub static TEXTURES: AtomicUsize = AtomicUsize::new(0);
+    pub static BUFFERS: AtomicUsize = AtomicUsize::new(0);
+    static SIZES: std::sync::Mutex<Option<std::collections::HashMap<u32, (usize, u32, u32, bool)>>> = std::sync::Mutex::new(None);
+    pub fn texture(raw: u32, bytes: usize, w: u32, h: u32) {
+        let mut m = SIZES.lock().unwrap();
+        let m = m.get_or_insert_with(Default::default);
+        if let Some(old) = m.insert(raw, (bytes, w, h, false)) {
+            TEXTURES.fetch_sub(old.0, Relaxed);
+        }
+        TEXTURES.fetch_add(bytes, Relaxed);
+    }
+    pub fn mipmapped(raw: u32) {
+        if let Some(e) = SIZES.lock().unwrap().as_mut().and_then(|m| m.get_mut(&raw)).filter(|e| !e.3) {
+            let extra = e.0 / 3;
+            e.0 += extra;
+            e.3 = true;
+            TEXTURES.fetch_add(extra, Relaxed);
+        }
+    }
+    pub fn texture_gone(raw: u32) {
+        if let Some(old) = SIZES.lock().unwrap().as_mut().and_then(|m| m.remove(&raw)) {
+            TEXTURES.fetch_sub(old.0, Relaxed);
+        }
+    }
+    /// (texture MB, buffer MB, texture count)
+    pub fn totals() -> (usize, usize, usize) {
+        (TEXTURES.load(Relaxed) >> 20, BUFFERS.load(Relaxed) >> 20, SIZES.lock().unwrap().as_ref().map_or(0, |m| m.len()))
+    }
+    /// The `n` largest textures: (bytes, width, height, mipmapped).
+    pub fn largest(n: usize) -> Vec<(usize, u32, u32, bool)> {
+        let mut v: Vec<_> = SIZES.lock().unwrap().as_ref().map_or(Vec::new(), |m| m.values().copied().collect());
+        v.sort_by(|a, b| b.0.cmp(&a.0));
+        v.truncate(n);
+        v
+    }
+    /// Texture bytes by size class: (width x height, count, total bytes), largest total first.
+    pub fn by_size() -> Vec<((u32, u32), usize, usize)> {
+        let mut m: std::collections::HashMap<(u32, u32), (usize, usize)> = Default::default();
+        for &(b, w, h, _) in SIZES.lock().unwrap().as_ref().map_or(&Default::default(), |m| m).values() {
+            let e = m.entry((w, h)).or_default();
+            e.0 += 1;
+            e.1 += b;
+        }
+        let mut v: Vec<_> = m.into_iter().map(|(k, (c, b))| (k, c, b)).collect();
+        v.sort_by(|a, b| b.2.cmp(&a.2));
+        v
+    }
+}
+
 impl TextureFormat {
     /// Returns the size in bytes of texture with `dimensions`.
     pub fn size(self, width: u32, height: u32) -> u32 {

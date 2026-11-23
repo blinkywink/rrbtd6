@@ -7235,6 +7235,11 @@ impl Game {
 
     /// Read-only render preparation: includes descendants and every damage state,
     /// without emitting bloons, drawing RNG values or generating freeplay rounds.
+    /// The kinds of the bloons on the map and of those still to be sent this round.
+    pub fn present_kinds(&self)->impl Iterator<Item=usize>+'_{
+        self.pending.iter().map(|p|p.1).chain(self.bloons.iter().map(|b|b.kind))
+    }
+
     pub fn upcoming_bloon_models(&self)->Vec<String>{
         let mut seen=vec![false;self.defs.len()];
         let mut todo:Vec<usize>=self.pending.iter().map(|p|p.1).chain(self.bloons.iter().map(|b|b.kind)).collect();

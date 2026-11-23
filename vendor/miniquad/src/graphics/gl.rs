@@ -906,6 +906,11 @@ impl RenderingBackend for GlContext {
         params: TextureParams,
     ) -> TextureId {
         let texture = Texture::new(self, access, source, params);
+        if let TextureOrRenderbuffer::Texture(raw) = &texture.raw {
+            crate::gpu_mem::texture(*raw, params.format.size(params.width, params.height) as usize, params.width, params.height);
+        } else if let TextureOrRenderbuffer::Renderbuffer(raw) = &texture.raw {
+            crate::gpu_mem::texture(0x8000_0000 | *raw, params.format.size(params.width, params.height) as usize * params.sample_count.max(1) as usize, params.width, params.height);
+        }
         self.textures.0.push(texture);
         TextureId(TextureIdInner::Managed(self.textures.0.len() - 1))
     }
@@ -916,9 +921,11 @@ impl RenderingBackend for GlContext {
         let t = self.textures.get(texture);
         match &t.raw {
             TextureOrRenderbuffer::Texture(raw) => unsafe {
+                crate::gpu_mem::texture_gone(*raw);
                 glDeleteTextures(1, raw as *const _);
             },
             TextureOrRenderbuffer::Renderbuffer(raw) => unsafe {
+                crate::gpu_mem::texture_gone(0x8000_0000 | *raw);
                 glDeleteRenderbuffers(1, raw as *const _);
             },
         }
@@ -1013,6 +1020,9 @@ impl RenderingBackend for GlContext {
         if let TextureIdInner::Managed(tex_id) = texture.0 {
             self.textures.0[tex_id].params = t.params;
         };
+        if let TextureOrRenderbuffer::Texture(raw) = &t.raw {
+            crate::gpu_mem::texture(*raw, t.params.format.size(width, height) as usize, width, height);
+        }
     }
     fn texture_read_pixels(&mut self, texture: TextureId, source: &mut [u8]) {
         let t = self.textures.get(texture);
@@ -1029,6 +1039,7 @@ impl RenderingBackend for GlContext {
         unsafe {
             glGenerateMipmap(t.params.kind.into());
         }
+        crate::gpu_mem::mipmapped(raw);
         self.cache.restore_texture_binding(0);
     }
     fn texture_update_part(
@@ -1382,6 +1393,7 @@ impl RenderingBackend for GlContext {
             size,
             index_type,
         };
+        crate::gpu_mem::BUFFERS.fetch_add(size, std::sync::atomic::Ordering::Relaxed);
 
         BufferId(self.buffers.add(buffer))
     }
@@ -1424,6 +1436,7 @@ impl RenderingBackend for GlContext {
     /// There is no protection against using deleted textures later. However its not an UB in OpenGl and thats why
     /// this function is not marked as unsafe
     fn delete_buffer(&mut self, buffer: BufferId) {
+        crate::gpu_mem::BUFFERS.fetch_sub(self.buffers[buffer.0].size, std::sync::atomic::Ordering::Relaxed);
         unsafe { glDeleteBuffers(1, &self.buffers[buffer.0].gl_buf as *const _) }
         self.cache.clear_buffer_bindings();
         self.cache.clear_vertex_attributes();
