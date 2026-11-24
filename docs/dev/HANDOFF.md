@@ -2390,6 +2390,22 @@ seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
 
+- 2026-11-23: Frame perf (sim bit-exact, regression full; frame-bench population traces identical
+  inline / threaded): the owed steps run on a sim thread while the world is drawn. Where they ran
+  inline, main.rs now takes `Game::view()` (a clone; the display queues the drawing drains move to
+  it), hands the real game to `sim_thread::SimWorker` (ownership moves: no unsafe, nothing can touch
+  it meanwhile) and draws the world from the copy; `join_sim!` takes it back before the HUD (whose
+  actions change the game), at the loop's top and so on, so the real game still sees input, steps,
+  HUD actions, input ... in that order. Co-op and mods with scripts step inline; RRBTD6_SYNC_SIM=1
+  steps inline everywhere. The per-step-static tables are `Shared<T>` (Arc, copy-on-write through
+  DerefMut; SHARED_COPIES / RRBTD6_SHARED_LOG report a write while a copy shares one: none in
+  bad_bench), so the copy is ~0.9 ms at 8.1k bloons (RRBTD6_BENCH_VIEW in bad_bench). Game and its
+  parts derive Clone (mod_runtime::Runtime clones its widgets only; discount_keys is a CloneMutex).
+  Frame bench (BTD6.exe, inline -> threaded): round 200 + 500 BADs 117.8 -> 143.3 fps (1% low 24.1
+  -> 29.6, p95 23.6 -> 18.4 ms); plain round 200 310 -> 337 fps (1% low 112 -> 137); sandbox flood
+  647 -> 655. Pre-existing test failures (also before 3f504752): coop_game
+  targeted_mega_mine_matches_single_player, beast_tests hero_barrage_and_biohack.
+
 - 2026-11-23: Sim perf (bit-exact, regression full; hero_new / hero_open lines unchanged): layers a hit
   pops straight through are no longer stored. 90% of the children a damage cascade makes died in the
   same hit (bad_bench: 6.0 M of 6.7 M), each a full spawn_at / remove_bloon. `spawn_children` (the

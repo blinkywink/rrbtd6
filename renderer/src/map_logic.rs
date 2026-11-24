@@ -108,7 +108,7 @@ struct RemoveableState {
     sold: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct LogicState {
     pub def: LogicDef,
     removeables: Vec<RemoveableState>,
@@ -727,7 +727,7 @@ impl Game {
     /// Map.CreateBlockers / DestroyArea: the blockers of the areas on the map now.
     fn logic_rebuild_blockers(&mut self) {
         self.blockers = self.areas.iter().flat_map(|a| a.blockers.iter().map(move |&c| (c, a.is_disabled))).collect();
-        self.blocker_grid = blocker_grid(&self.areas);
+        self.blocker_grid = (blocker_grid(&self.areas)).into();
     }
 
     /// Map.ChangePathActiveness: the path joins the tracks (existing indices stay) and every
@@ -871,8 +871,8 @@ mod tests {
             let active: Vec<MapPath> = map.paths.iter().filter(|p| p.active && p.points.len() > 1).cloned().collect();
             let live: Vec<Area> = map.areas.iter().filter(|a| !a.is_disabled).cloned().collect();
             g.tracks = active.iter().map(|p| Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick)).collect();
-            g.track_exit = vec![(Vec::new(), 0); active.len()];
-            g.track_entry = vec![(Vec::new(), 0); active.len()];
+            g.track_exit = (vec![(Vec::new(), 0); active.len()]).into();
+            g.track_entry = (vec![(Vec::new(), 0); active.len()]).into();
             g.logic = LogicState::new(&map, active, Vec::new(), false);
             g.areas.extend(live);
             g.logic_start();

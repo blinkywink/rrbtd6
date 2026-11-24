@@ -139,6 +139,10 @@ pub struct Runtime {
     pub intercepts:u8,
     fuel:Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,fuel_tick:u64,
 }
+/// A display copy (`sim_thread::view_of`): the widgets and popup the HUD draws, no script engine.
+impl Clone for Runtime {
+    fn clone(&self)->Self{Self{widgets:self.widgets.clone(),revision:self.revision,session:self.session,popup:self.popup.clone(),last_towers:self.last_towers,..Self::default()}}
+}
 impl Runtime {
     pub fn new(defs:Vec<Definition>)->Self{
         if defs.is_empty(){return Self::default();}

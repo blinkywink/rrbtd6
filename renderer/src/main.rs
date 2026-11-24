@@ -29,6 +29,7 @@ mod mod_maps;
 mod load_work;
 mod frame_bench;
 mod frame_pacer;
+mod sim_thread;
 mod presentation_check;
 mod round_bench;
 mod coop_game;
@@ -1162,8 +1163,33 @@ const VINE_END_FRAMES: i32 = 23;
     let mut moab_rank:HashMap<usize,f32>=HashMap::new();
     let mut moab_order:Vec<usize>=Vec::new();
     let mut sim_stats: (f64, u64, f64) = (0.0, 0, 0.0);
+    let sync_sim = std::env::var_os("RRBTD6_SYNC_SIM").is_some();
+    let mut sim_worker = sim_thread::SimWorker::new();
     let mut acc = 0.0f32;
     let mut auto_start = read_settings(&root)["auto_start"].as_bool().unwrap_or(false);
+    // The real game back from the sim thread (sim_thread): its steps' accumulator and timings, and
+    // expired sentries moving the selection, as after inline steps.
+    macro_rules! join_sim {
+        () => {
+            if sim_worker.running() {
+                let done = sim_worker.finish(&mut game);
+                acc = done.acc;
+                sim_stats.0 += done.stats.0;
+                sim_stats.1 += done.stats.1;
+                sim_stats.2 = sim_stats.2.max(done.stats.2);
+                for (r, moved) in game.removed.drain(..) {
+                    let fix = |s: Option<usize>| match s {
+                        Some(s) if s == r => None,
+                        Some(s) if moved == usize::MAX && s > r => Some(s - 1),
+                        Some(s) if moved != usize::MAX && s == moved => Some(r),
+                        s => s,
+                    };
+                    selected = fix(selected);
+                    picking = fix(picking);
+                }
+            }
+        };
+    }
     let mut show_placement = std::env::var("RRBTD6_PLACEMAP").is_ok();
     // An open full-screen menu (the game is paused behind it) and one requested this frame.
     let mut menu: Option<(menus::Menu, menus::Backdrop)> = None;
@@ -1445,6 +1471,8 @@ const VINE_END_FRAMES: i32 = 23;
     if let Some(s)=std::env::var("RRBTD6_BENCH_SPEED").ok().and_then(|v|v.parse().ok()){speed=s;}
 
     loop {
+        // (Normally joined before the HUD; a frame that ended early still gets its real game back.)
+        join_sim!();
         // A transition is captured on the frame that requested it, before any clear.
         #[cfg(target_os = "windows")]
         if display_pending {
@@ -2352,39 +2380,23 @@ const VINE_END_FRAMES: i32 = 23;
             else if realtime&&bench_round.is_some()&&frames<bench_warmup{acc=0.0;}
             else{acc += get_frame_time().min(0.25) * speed as f32;}
         }
-        // Under load (a huge pop: one step can take 40 ms) a frame runs steps for at most
-        // STEP_BUDGET, at least one, and lets the time it couldn't get to go: the game slows for a
-        // moment instead of the next frame owing more steps (each as heavy), the frame after more
-        // still. The steps and their order are the same; only how many fit in a frame. Co-op keeps
-        // its lockstep timing. RRBTD6_NO_STEP_BUDGET: every owed step, as before.
-        const STEP_BUDGET: f64 = 0.010;
+        // The owed steps (sim_thread::run_steps; STEP_BUDGET under load). Co-op keeps its lockstep
+        // timing (no budget, inline). RRBTD6_NO_STEP_BUDGET: every owed step, as before.
         let budget = coop_runtime.is_none() && (bench_steps.is_none() || std::env::var_os("RRBTD6_BENCH_REALTIME").is_some()) && std::env::var_os("RRBTD6_NO_STEP_BUDGET").is_none();
-        let frame_sim_t0 = std::time::Instant::now();
-        while acc >= 1.0 / FPS {
-            if budget && frame_sim_t0.elapsed().as_secs_f64() >= STEP_BUDGET {
-                acc = acc.min(1.0 / FPS);
-                break;
-            }
-            let t_step = std::time::Instant::now();
-            let completed_before=game.round;
-            game.step();
-            // InGame.RoundEnd -> DrainXpAndCheckLevelUp: the round's Monkey XP into the profile.
-            if game.round!=completed_before && std::env::var_os("RRBTD6_AUTOTEST").is_none() {
-                tower_xp::drain(&root, &mut game);
-            }
-            if game.round!=completed_before && !game.sandbox && std::env::var_os("RRBTD6_AUTOTEST").is_none() && frontend::account_preview::is_local() {
-                let profile_root=root.clone();let completed_round=game.round;let xp=((game.round.saturating_sub(completed_before)) as u64).saturating_mul(100);
-                std::thread::spawn(move||{if local_profile::update(&profile_root,|p|{p.highest_round=p.highest_round.max(completed_round);local_profile::add_experience(p,xp);}).is_ok(){frontend::account_preview::refresh_local(&profile_root);}});
-            }
-            let dt_step = t_step.elapsed().as_secs_f64();
-            sim_stats.0 += dt_step;
-            sim_stats.1 += 1;
-            sim_stats.2 = sim_stats.2.max(dt_step);
-            // Like the BTD6 setting: the first round is started by hand.
-            if auto_start && !game.sandbox && game.round > 0 {
-                game.start_round();
-            }
-            acc -= 1.0 / FPS;
+        let step_job = sim_thread::StepJob { acc, budget, auto_start, root: root.clone() };
+        // Off co-op (and without mod scripts) the owed steps run on the sim thread while the world is
+        // drawn from a copy (`Game::view`); the real game is back before the HUD (join_sim).
+        // RRBTD6_SYNC_SIM=1: here, inline.
+        let threaded_steps = coop_runtime.is_none() && !sync_sim && !game.mod_runtime.active();
+        if threaded_steps && step_job.acc >= 1.0 / FPS {
+            let view = game.view();
+            sim_worker.start(&mut game, view, step_job.clone());
+        } else if !threaded_steps {
+            let done = sim_thread::run_steps(&mut game, &step_job);
+            acc = done.acc;
+            sim_stats.0 += done.stats.0;
+            sim_stats.1 += done.stats.1;
+            sim_stats.2 = sim_stats.2.max(done.stats.2);
         }
         // Expired sentries: the last tower takes the slot (or the later ones shift down).
         for (r, moved) in game.removed.drain(..) {
@@ -4423,6 +4435,8 @@ const VINE_END_FRAMES: i32 = 23;
         }
 
         // HUD: the game's own in-game UI prefabs (see hud.rs).
+        // The HUD's actions change the game: the real one, back from the sim thread.
+        join_sim!();
         if let Some(h) = hud.as_mut() {
             let t0 = get_time();
             h.geraldo.armed = item_pick;

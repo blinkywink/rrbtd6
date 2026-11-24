@@ -284,6 +284,8 @@ impl Track {
     }
 }
 
+#[derive(Clone)]
+
 pub struct Bloon {
     pub id: u64,
     pub kind: usize,
@@ -933,7 +935,7 @@ type FastSet<K> = std::collections::HashSet<K, std::hash::BuildHasherDefault<FxH
 /// The tower phase's target search, made once while no bloon moves (`Game::target_index_mut`)
 /// instead of over every bloon for every attack: each track segment's bloons in storage order, and
 /// each path's lead bloons per attack filter. Speed only: the targets are the same.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct TargetIndex {
     /// [path][segment (distance / 7)] -> bloon indices, ascending.
     segs: Vec<Vec<Vec<u32>>>,
@@ -1010,6 +1012,7 @@ pub enum EffectKind {
 
 /// RandomPosition's state (VERIFIED-DISASM @0x180dd2fa0 ff.): its shuffled offsets (game
 /// frame), the shuffle's draw buffer length, the four lists CheckPositions fills, the index.
+#[derive(Clone)]
 pub struct RandPosState {
     pub model: Option<crate::data::RandomPos>,
     pub offsets: Vec<[f32; 2]>,
@@ -2054,6 +2057,8 @@ pub struct Sacrifice {
     pub degree: u32,
 }
 
+#[derive(Clone)]
+
 pub struct Tower {
     /// Position.z set apart from the terrain where it stands (a tower the recorder forced in with
     /// TowerManager.CreateTower at z 0).
@@ -2410,6 +2415,8 @@ pub struct TrackSet {
     pub supply: Option<(Vec<[f32; 2]>, usize, [u8; 3])>,
 }
 
+#[derive(Clone)]
+
 pub struct TempAttack {
     pub attack: crate::data::Attack,
     pub frames_left: f32,
@@ -2444,6 +2451,8 @@ pub struct AbilityGroup {
     pub frac_left: f32,
     pub secs_left: f32,
 }
+
+#[derive(Clone)]
 
 pub struct ActiveTurbo {
     pub mult: f32,
@@ -2549,6 +2558,8 @@ pub struct RodZapState {
     pub epos: [f32; 2],
 }
 
+#[derive(Clone)]
+
 pub struct OverTime {
     left: u32,
     last: i64,
@@ -2567,6 +2578,8 @@ pub struct OverTime {
     /// EmissionSupplyRandomTargetModels (min, max, mapBorder, spawnProjectilesOnTarget).
     supply: Vec<[f32; 4]>,
 }
+
+#[derive(Clone)]
 
 pub struct AirUnit {
     pub pos: [f32; 2],
@@ -2651,6 +2664,8 @@ impl AirUnit {
 
 const PM_NONE: i32 = -1;
 const PM_TAKEOFF: i32 = -2;
+
+#[derive(Clone)]
 
 pub struct SubTower {
     pub spec: std::sync::Arc<crate::data::SubTowerSpec>,
@@ -2746,7 +2761,7 @@ fn tier_model_key(tiers:[u8;3],buf:&mut [u8;9])->&str{
 /// Uniform grid over bloon positions: the projectile broad phase (the game has its own
 /// CollisionGrid). Built when the projectile phase starts and kept in step with swap-removes and
 /// spawns until it ends; bloon positions don't change inside that phase.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct BloonGrid {
     origin: [f32; 2],
     w: usize,
@@ -2845,7 +2860,7 @@ impl BloonGrid {
 /// projectile phase starts and kept in step with swap-removes and new bloons; slots don't move
 /// (a removed bloon leaves an empty slot, which a degraded bloon's first child takes over, as
 /// the game's bloon stays the same object).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct GameGrid {
     w: i32,
     h: i32,
@@ -4061,19 +4076,104 @@ pub struct Hook {
     pub fx: Option<(String, f32)>,
 }
 
+/// A table the game reads every step but rarely changes (definitions, tracks, rounds): the
+/// world-drawing copy (`Game::view`) shares it instead of cloning it. Reads go straight through;
+/// a write clones it first only while a copy still shares it (`SHARED_COPIES` counts those).
+pub struct Shared<T>(std::sync::Arc<T>);
+pub static SHARED_COPIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+impl<T> Clone for Shared<T> {
+    fn clone(&self) -> Self {
+        Shared(self.0.clone())
+    }
+}
+impl<T: Default> Default for Shared<T> {
+    fn default() -> Self {
+        Shared(std::sync::Arc::new(T::default()))
+    }
+}
+impl<T> From<T> for Shared<T> {
+    fn from(v: T) -> Self {
+        Shared(std::sync::Arc::new(v))
+    }
+}
+impl<T> std::ops::Deref for Shared<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+impl<T: Clone> std::ops::DerefMut for Shared<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        if std::sync::Arc::strong_count(&self.0) > 1 {
+            SHARED_COPIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if env_flag!("RRBTD6_SHARED_LOG") {
+                eprintln!("shared copy: {}", std::any::type_name::<T>());
+            }
+        }
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+impl<T: std::fmt::Debug> std::fmt::Debug for Shared<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl<A, T: FromIterator<A>> FromIterator<A> for Shared<T> {
+    fn from_iter<I: IntoIterator<Item = A>>(iter: I) -> Self {
+        Shared(std::sync::Arc::new(T::from_iter(iter)))
+    }
+}
+impl<'a, T> IntoIterator for &'a Shared<T>
+where
+    &'a T: IntoIterator,
+{
+    type Item = <&'a T as IntoIterator>::Item;
+    type IntoIter = <&'a T as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        (&*self.0).into_iter()
+    }
+}
+impl<'a, T: Clone> IntoIterator for &'a mut Shared<T>
+where
+    &'a mut T: IntoIterator,
+{
+    type Item = <&'a mut T as IntoIterator>::Item;
+    type IntoIter = <&'a mut T as IntoIterator>::IntoIter;
+    fn into_iter(self) -> Self::IntoIter {
+        use std::ops::DerefMut;
+        self.deref_mut().into_iter()
+    }
+}
+
+/// A Mutex that clones its contents (Game's display copy, `sim_thread::view_of`).
+#[derive(Default)]
+pub struct CloneMutex<T>(pub std::sync::Mutex<T>);
+impl<T: Clone> Clone for CloneMutex<T> {
+    fn clone(&self) -> Self {
+        CloneMutex(std::sync::Mutex::new(self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()))
+    }
+}
+impl<T> std::ops::Deref for CloneMutex<T> {
+    type Target = std::sync::Mutex<T>;
+    fn deref(&self) -> &std::sync::Mutex<T> {
+        &self.0
+    }
+}
+
+#[derive(Clone)]
 pub struct Game {
     pub mod_runtime:crate::mod_runtime::Runtime,
-    pub defs: Vec<BloonDef>,
+    pub defs: Shared<Vec<BloonDef>>,
     /// Each bloon's speed and max health before ProgressiveDifficultyManager's late-round
     /// scaling (bloonModelsOriginal).
-    base_defs: Vec<(f32, i32)>,
+    base_defs: Shared<Vec<(f32, i32)>>,
     /// Bloon ids, indexed like `defs`.
-    names: Vec<String>,
-    by_name: HashMap<String, usize>,
+    names: Shared<Vec<String>>,
+    by_name: Shared<HashMap<String, usize>>,
     /// Each bloon type's children as type indices (BloonModel.children resolved once).
-    child_kinds: Vec<Vec<usize>>,
+    child_kinds: Shared<Vec<Vec<usize>>>,
     /// GrowModel: (bloon kind it grows into, frames between growths) per bloon kind.
-    grow_kinds: Vec<Option<(usize, u32)>>,
+    grow_kinds: Shared<Vec<Option<(usize, u32)>>>,
     /// Pops a bloon of each type gives when destroyed down to nothing (itself and every layer
     /// inside it).
     pops_in: Vec<u64>,
@@ -4087,12 +4187,12 @@ pub struct Game {
     last_destroyed: u64,
     /// Rank of each cell offset (dx + 64, dy + 64 in a 129 x 129 table) in the collision
     /// grid's query order; u16::MAX where unknown.
-    grid_rank: Vec<u16>,
+    grid_rank: Shared<Vec<u16>>,
     has_grid_rank: bool,
     /// CollisionGrid.orderedNeighborOffsets, and the game's bloon grid built from it.
-    grid_offsets: Vec<i32>,
+    grid_offsets: Shared<Vec<i32>>,
     /// GameData.effect_type_bonus (IncreaseDamageFromType on a bloon's mutator).
-    type_bonus: HashMap<String, crate::data::TypeBonus>,
+    type_bonus: Shared<HashMap<String, crate::data::TypeBonus>>,
     ggrid: GameGrid,
     /// The furthest any bloon moves in a frame (the broad phase looks at frame-start positions).
     max_bloon_step: f32,
@@ -4175,7 +4275,7 @@ pub struct Game {
     /// Per bloon kind, the kind whose CollisionGroupData it shares (the first of its baseId):
     /// `kind_rot`'s key (recording bucc_050_danger_r102 rt 794: a Zomg's frags meet it by the
     /// ZomgFortified's 90, not its own 37.4).
-    coll_group: Vec<usize>,
+    coll_group: Shared<Vec<usize>>,
     /// The step a bloon's move last set its family's `kind_rot`.
     kind_rot_moved: FastMap<usize, u64>,
     /// The create_seq of the bloon whose move set `kind_rot` this step.
@@ -4313,65 +4413,65 @@ pub struct Game {
     /// Simulation.time.elapsed: frames simulated (the factory flush runs when it is a multiple
     /// of 60).
     pub sim_elapsed: u64,
-    rbe: Vec<f32>,
+    rbe: Shared<Vec<f32>>,
     /// GameData.bloonMutatorData (BadImmunity.FilterMutation's lists).
-    mutator_data: crate::data::BloonMutatorData,
+    mutator_data: Shared<crate::data::BloonMutatorData>,
     /// BloonModel.layerCountOffset per bloon kind: layers credited past the first when it pops.
-    layer_offset: Vec<u64>,
+    layer_offset: Shared<Vec<u64>>,
     /// DistributeCashModel.additionalCash per bloon kind (cash past the $1 a layer).
-    extra_cash: Vec<f64>,
+    extra_cash: Shared<Vec<f64>>,
     /// Cash a bloon of each kind pays when destroyed whole (every layer's $1 + additionalCash).
-    cash_in: Vec<f64>,
+    cash_in: Shared<Vec<f64>>,
     /// The bloon models as they were before ChangeCeramicsAndChildren, while it is applied
     /// (bloonModelsOriginal): children, leak damage, max health and tags per kind.
     pre_super: Option<Vec<(Vec<String>, f32, i32, Vec<String>)>>,
-    pub tower_defs: Vec<(String, TowerDef)>,
-    pub tower_tiers: Vec<Option<TowerTiers>>,
-    pub shop: Vec<crate::data::ShopItem>,
+    pub tower_defs: Shared<Vec<(String, TowerDef)>>,
+    pub tower_tiers: Shared<Vec<Option<TowerTiers>>>,
+    pub shop: Shared<Vec<crate::data::ShopItem>>,
     /// Every hero (the shop holds the chosen one).
-    pub heroes: Vec<crate::data::ShopItem>,
+    pub heroes: Shared<Vec<crate::data::ShopItem>>,
     /// The first track (single-track helpers and tests).
-    pub track: Track,
+    pub track: Shared<Track>,
     /// Every active track. Round bloons spawn on tracks[emissionIndex % count]
     /// (Splitter.SpawnRout); children stay on their parent's. HYPOTHESIS P-MULTIPATH: every
     /// active exported path is a spawn path (splitter routing isn't modelled).
-    pub tracks: Vec<Track>,
+    pub tracks: Shared<Vec<Track>>,
     /// Per track: the tracks its exit splitter routes on to, that splitter's index (into
     /// `routs`), and whether round bloons spawn on it.
-    track_exit: Vec<(Vec<usize>, usize)>,
+    track_exit: Shared<Vec<(Vec<usize>, usize)>>,
     /// Per track: Path.spawnDist and leakDist (None with an entry / exit splitter).
-    track_ends: Vec<(Option<f32>, Option<f32>)>,
+    track_ends: Shared<Vec<(Option<f32>, Option<f32>)>>,
     /// Map.mapWideBloonSpeed (MapMods.bloonSpeed; Workshop 1.5): Bloon.get_TotalSpeedFrames'
     /// map factor (recording map_workshop_dart_205_r40: the MOAB steps 0.78125, not 0.5208).
     map_speed: f32,
     /// Path.maximumDistanceUntilLeak per track, when imported (`leak_dist`).
-    track_until: Vec<Option<f32>>,
+    track_until: Shared<Vec<Option<f32>>>,
     /// Per track: point distances and PointInfo.bloonsInvulnerable / moabsInvulnerable (empty
     /// when the path has none), for Bloon.nonTargetable (`bloon_nontarget`).
-    track_inv: Vec<(Vec<f32>, Vec<bool>, Vec<bool>)>,
+    track_inv: Shared<Vec<(Vec<f32>, Vec<bool>, Vec<bool>)>>,
     /// Per track: each PathSegment's point (the path point at its centre).
-    track_segs: Vec<Vec<[f32; 2]>>,
+    track_segs: Shared<Vec<Vec<[f32; 2]>>>,
     /// Per track, per segment: PathSegment.canTargetSegment (GatherPathInfoData, VERIFIED-DISASM
     /// @0xf8b930: not disablePathTargeting at the segment's centre). Without the imported flags
     /// (other maps) the old stand-in: the segment's point is on the map.
-    track_seg_ok: Vec<Vec<bool>>,
+    track_seg_ok: Shared<Vec<Vec<bool>>>,
     /// Each segment's invulnerable flags (`Game::path_seg_inv`): with cantTargetMoab a bloon-
     /// invulnerable segment isn't listed either (Path.IsSegmentInRange).
-    track_seg_inv: Vec<Vec<u8>>,
+    track_seg_inv: Shared<Vec<Vec<u8>>>,
     /// Per track: Path.pointInfos rotations (every CacheDistance), when imported.
-    track_rot: Vec<Vec<f32>>,
+    track_rot: Shared<Vec<Vec<f32>>>,
     /// Each track's quick-table point.z (`MapPath.quick_z`).
-    track_qz: Vec<Vec<f32>>,
+    track_qz: Shared<Vec<Vec<f32>>>,
     /// Per track: the tracks its entry splitter routes back to, and that splitter's index.
-    track_entry: Vec<(Vec<usize>, usize)>,
-    spawn_tracks: Vec<usize>,
+    track_entry: Shared<Vec<(Vec<usize>, usize)>>,
+    spawn_tracks: Shared<Vec<usize>>,
     /// The map's spawner when it isn't a plain splitter (map_routes.rs).
     spawn_route: Option<crate::map_routes::SpawnRoute>,
     /// Removeables and map events (map_logic.rs).
     pub logic: map_logic::LogicState,
     /// Inactive, not hidden paths' segment centres and targetable flags, by path id (still
     /// targetable segments while the path is in `logic.dormant`).
-    idle_segs: Vec<(i64, Vec<[f32; 2]>, Vec<bool>)>,
+    idle_segs: Shared<Vec<(i64, Vec<[f32; 2]>, Vec<bool>)>>,
     /// Splitter.Rout counters, one per exit splitter.
     routs: Vec<usize>,
     /// `map.areas` in the game's order: the base land area (GatherMapBaseArea runs before
@@ -4381,23 +4481,23 @@ pub struct Game {
     blockers: Vec<([f32; 3], bool)>,
     /// CollisionChecker.MapBlockerGrid: per 10-unit cell (40 x 33, like the bloon grid) its
     /// Bucket.largestCellSpan and the MapBlockers centred in it (game x, game y, radius, height).
-    blocker_grid: Vec<(i32, Vec<[f32; 4]>)>,
+    blocker_grid: Shared<Vec<(i32, Vec<[f32; 4]>)>>,
     pub bounds: ([f32; 2], [f32; 2]),
     /// The bounds come from the map's terrain mesh (else they're the game's world bounds, which
     /// say where things may go, not where the scene ends).
     pub has_terrain: bool,
     /// ImmunityModel (Legend of the Night): frames left with leaks costing no lives.
     pub leak_immune: f32,
-    rounds: Vec<Vec<crate::data::Group>>,
+    rounds: Shared<Vec<Vec<crate::data::Group>>>,
     /// GameModel.freeplayGroups (rounds past the round set) and FreeplayRoundManager's seed.
-    freeplay_groups: Vec<crate::data::FreeplayGroup>,
+    freeplay_groups: Shared<Vec<crate::data::FreeplayGroup>>,
     pub freeplay_seed: i32,
     /// Geraldo's shop items and their stock (filled when Geraldo is first placed).
-    geraldo_items: Vec<crate::data::GeraldoItem>,
+    geraldo_items: Shared<Vec<crate::data::GeraldoItem>>,
     /// GameData.power_projectiles (powers.rs).
-    power_projectiles: HashMap<String, Proj>,
+    power_projectiles: Shared<HashMap<String, Proj>>,
     /// Power id -> the tower def it places (powers.rs), for the ones the clone simulates.
-    power_tower_defs: HashMap<String, usize>,
+    power_tower_defs: Shared<HashMap<String, usize>>,
     /// Geraldo's shop stock per player (Simulation.GetGeraldoShopInventory(inputId)); one in single player.
     geraldo_stock: Vec<Vec<geraldo::ItemStock>>,
     /// Apopalypse (GameModel.isApopalypse): every round comes from the freeplay groups
@@ -4463,7 +4563,7 @@ pub struct Game {
     /// Cash collected since last drained: where and how much (display only).
     pub cash_pops: Vec<([f32; 2], f64)>,
     /// GameData.bloonOverlayData (display only): overlay prefabs by overlayType and class.
-    pub overlays: HashMap<String, crate::data::OverlayDef>,
+    pub overlays: Shared<HashMap<String, crate::data::OverlayDef>>,
     /// ShowTextOnHit texts this frame (the renderer draws "Crit!" there).
     pub hit_texts: Vec<[f32; 2]>,
     /// Upgrades bought this frame, for the upgrade effect: (tower position, effect prefab).
@@ -4503,7 +4603,7 @@ pub struct Game {
     /// TowerManager.discountStacks' keys (stackName) in the order first added: a
     /// Dictionary<string, List<DiscountZone>> kept for the game (GetZoneDiscount only clears the
     /// lists), so GetDiscountMultiplier sums the groups in that order.
-    pub discount_keys: std::sync::Mutex<Vec<String>>,
+    pub discount_keys: CloneMutex<Vec<String>>,
     /// Difficulty: cost multiplier, sell share, round bonus (base, per round), locked towers,
     /// selling disabled (CHIMPS), and its name.
     pub cost_mult: f32,
@@ -4511,7 +4611,7 @@ pub struct Game {
     pub round_bonus: Option<[f64; 2]>,
     pub locked: Vec<String>,
     pub no_sell: bool,
-    pub health_mods: Vec<crate::data::HealthMod>,
+    pub health_mods: Shared<Vec<crate::data::HealthMod>>,
     /// ModifyAllCashModModel multiplier on every income.
     pub cash_mult: f64,
     /// Sandbox mode (the sandbox panel's tools are available).
@@ -4636,6 +4736,8 @@ const IMMUNE_SOUNDS: [(u32, &str, [&str; 4]); 4] = [
 /// (PlayLeakSound).
 const VOICE: &str = "HeroVoice";
 const VOICE_GAP: u32 = 20;
+
+#[derive(Clone)]
 
 pub struct Sfx {
     pub name: String,
@@ -6929,16 +7031,16 @@ impl Game {
         let mut game=Self {
             mod_runtime:crate::mod_runtime::Runtime::new(std::mem::take(&mut d.mod_scripts)),
             base_defs: defs.iter().map(|d| (d.speed, d.max_health)).collect(),
-            defs,
-            names,
+            defs: defs.into(),
+            names: names.into(),
             max_bloon_radius,
             damage_tally: 0,
             destroyed_tally: 0,
             last_destroyed: 0,
             has_grid_rank: !d.grid_offsets.is_empty(),
-            grid_offsets: d.grid_offsets.clone(),
-            type_bonus: d.effect_type_bonus.clone(),
-            mutator_data: d.bloon_mutator_data.clone(),
+            grid_offsets: (d.grid_offsets.clone()).into(),
+            type_bonus: (d.effect_type_bonus.clone()).into(),
+            mutator_data: (d.bloon_mutator_data.clone()).into(),
             ggrid: GameGrid::default(),
             grid_rank: {
                 let mut r = vec![u16::MAX; 129 * 129];
@@ -6949,12 +7051,12 @@ impl Game {
                         }
                     }
                 }
-                r
+                r.into()
             },
             max_bloon_step,
             pops_in,
-            child_kinds,
-            grow_kinds,
+            child_kinds: child_kinds.into(),
+            grow_kinds: grow_kinds.into(),
             grid: BloonGrid::default(),
             grid_on: false,
             grid_cand: Vec::new(),
@@ -6990,7 +7092,7 @@ impl Game {
             grid_rank_pre: None,
             plist_rank_pre: None,
             kind_rot: Default::default(),
-            coll_group,
+            coll_group: coll_group.into(),
             kind_rot_moved: Default::default(),
             kind_rot_cseq: Default::default(),
             spawn_rot: Vec::new(),
@@ -7038,13 +7140,13 @@ impl Game {
             deferred_attack: None,
             instant_out: Default::default(),
             sim_elapsed: 0,
-            by_name,
-            rbe,
-            layer_offset: vec![0; n_defs],
-            extra_cash: vec![0.0; n_defs],
-            cash_in,
+            by_name: by_name.into(),
+            rbe: rbe.into(),
+            layer_offset: (vec![0; n_defs]).into(),
+            extra_cash: (vec![0.0; n_defs]).into(),
+            cash_in: cash_in.into(),
             pre_super: None,
-            tower_defs,
+            tower_defs: tower_defs.into(),
             tower_tiers,
             track_ends: tracks.iter().map(Game::path_ends).collect(),
             map_speed: d.map.bloon_speed,
@@ -7056,19 +7158,20 @@ impl Game {
             track_seg_ok: tracks.iter().map(Game::path_seg_ok).collect(),
             track_seg_inv: tracks.iter().map(Game::path_seg_invs).collect(),
             tracks: tracks.iter().map(|p| Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick)).collect(),
-            track_exit,
-            track_entry,
-            spawn_tracks,
+            track_exit: track_exit.into(),
+            track_entry: track_entry.into(),
+            spawn_tracks: spawn_tracks.into(),
             spawn_route,
             logic,
-            idle_segs,
+            idle_segs: idle_segs.into(),
             routs: vec![0; n_splitters],
             track: match tracks.first() {
                 Some(p) if p.points == d.map.path => Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick),
                 _ => Track::new(d.map.path),
-            },
+            }
+            .into(),
             blockers: d.map.areas.iter().flat_map(|a| a.blockers.iter().map(move |&c| (c, a.is_disabled))).collect(),
-            blocker_grid: blocker_grid(&d.map.areas),
+            blocker_grid: (blocker_grid(&d.map.areas)).into(),
             areas: {
                 // (GatherMapBaseArea's type: water on Erosion, unplaceable on SunkenColumns;
                 // recording map_sunkencolumns_engineer_204_r40, RandomPosition skips a point
@@ -7097,13 +7200,13 @@ impl Game {
             xp_towers: Vec::new(),
             won: false,
             freeplay: false,
-            rounds: d.rounds,
+            rounds: (d.rounds).into(),
             apopalypse: mode.apopalypse && !d.freeplay.is_empty(),
-            geraldo_items: d.geraldo,
-            power_projectiles: d.power_projectiles,
-            power_tower_defs: HashMap::new(),
+            geraldo_items: (d.geraldo).into(),
+            power_projectiles: (d.power_projectiles).into(),
+            power_tower_defs: (HashMap::new()).into(),
             geraldo_stock: Vec::new(),
-            freeplay_groups: d.freeplay,
+            freeplay_groups: (d.freeplay).into(),
             // FreeplayRoundManager.initialSeed: the game's per-game random seed.
             freeplay_seed: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) % 2147483646) as i32 + 1,
             // LockTowerSetModModel (Primary / Military / Magic Only) and LockTowerModModel
@@ -7114,7 +7217,7 @@ impl Game {
                 .filter(|it| it.hero || (!mode.locked_sets.contains(&it.set) && !mode.locked.contains(&it.id)))
                 .cloned()
                 .collect(),
-            heroes: d.heroes,
+            heroes: (d.heroes).into(),
             round_scale: d.round_scale,
             bloons: Vec::with_capacity(4096),
             towers: Vec::new(),
@@ -7165,7 +7268,7 @@ impl Game {
             hit_texts: Vec::new(),
             cash_pops: Vec::new(),
             text_fx: Vec::new(),
-            overlays: d.overlays.clone(),
+            overlays: (d.overlays.clone()).into(),
             upgrade_fx: Vec::new(),
             fan_leaders: Vec::new(),
             pet_moves: HashMap::new(),
@@ -7184,7 +7287,7 @@ impl Game {
             burials: Vec::new(),
             paragon_degree: d.paragon_degree.clone(),
             buff_order: d.buff_order.clone().into(),
-            discount_keys: std::sync::Mutex::new(Vec::new()),
+            discount_keys: CloneMutex(std::sync::Mutex::new(Vec::new())),
             cost_mult: mode.cost_mult,
             sell_mult: mode.sell,
             round_bonus: mode.bonus,
@@ -7206,7 +7309,7 @@ impl Game {
             last_set_health: mode.lives,
             lives_at_step: 0.0,
             no_sell: mode.no_sell,
-            health_mods: mode.health.clone(),
+            health_mods: (mode.health.clone()).into(),
             mode_name: if d.modes.contains_key(&d.mode) { d.mode.clone() } else { "Medium".into() },
             income_set: d.income_set.clone(),
             difficulty: mode.difficulty.clone().unwrap_or_else(|| "Medium".into()),
@@ -7527,6 +7630,19 @@ impl Game {
         let v = tier.vengeance.as_ref()?;
         let w = tier.attacks.iter().flat_map(|a| &a.weapons).find_map(|w| w.projectile.wrath.as_ref())?;
         Some((v.level((self.active_rbe / w.threshold * w.damage).clamp(0.0, w.max)), v))
+    }
+
+    /// A copy to draw the world from while this game steps on the sim thread (`sim_thread`): the
+    /// display queues the frame's drawing drains (pops, bursts, beams, texts, sounds ...) move to
+    /// it, the rest is cloned.
+    pub fn view(&mut self) -> Game {
+        use std::mem::take;
+        let queues = (take(&mut self.pops), take(&mut self.bursts), take(&mut self.tracers), take(&mut self.beams), take(&mut self.bolts), take(&mut self.cash_pops), take(&mut self.hit_texts));
+        let queues2 = (take(&mut self.upgrade_fx), take(&mut self.place_fx), take(&mut self.vine_fx), take(&mut self.text_fx), take(&mut self.sacrifices), take(&mut self.sfx));
+        let mut v = self.clone();
+        (v.pops, v.bursts, v.tracers, v.beams, v.bolts, v.cash_pops, v.hit_texts) = queues;
+        (v.upgrade_fx, v.place_fx, v.vine_fx, v.text_fx, v.sacrifices, v.sfx) = queues2;
+        v
     }
 
     /// The icon sprite ("Bloons/Red", "UiBloonIcons/MoabIcon") of the bloon type called `name`.
@@ -30028,12 +30144,25 @@ mod tests {
         g.start_round();
         assert!(g.debug_spawn(&name, n, 0.0));
         let (mut total, mut worst, mut steps, mut peak) = (0.0f64, 0.0f64, 0usize, 0usize);
+        let mut clone_t = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
         // The worst steps with their phases (ms): step, bloons-and-pops, towers, projectiles, damage, bloons, pops.
         let mut worst_steps: Vec<(f64, [f64; 4], usize, u64, usize)> = Vec::new();
         while !g.bloons.is_empty() && steps < 40000 {
             let (p0, d0, popped0) = (g.prof, super::sim_profile::TIMES.with(|v| v.get())[0], g.popped);
+            // RRBTD6_BENCH_VIEW: Game::view before each step, held through it (as the game's world
+            // drawing holds it while the sim thread steps).
+            let held = std::env::var_os("RRBTD6_BENCH_VIEW").is_some().then(|| {
+                let t = std::time::Instant::now();
+                let v = g.view();
+                let e = t.elapsed().as_secs_f64();
+                clone_t.0 += e;
+                clone_t.1 = clone_t.1.max(e);
+                if v.bloons.len() >= 8000 && clone_t.3 == 0.0 { clone_t.3 = e; eprintln!("view at {} bloons: {:.3} ms", v.bloons.len(), e * 1e3); }
+                v
+            });
             let t0 = std::time::Instant::now();
             g.step();
+            drop(held);
             let dt = t0.elapsed().as_secs_f64();
             let d1 = super::sim_profile::TIMES.with(|v| v.get())[0];
             worst_steps.push((dt, [g.prof[0] - p0[0], g.prof[1] - p0[1], g.prof[2] - p0[2], d1 - d0], g.bloons.len(), g.popped - popped0, steps));
@@ -30060,6 +30189,8 @@ mod tests {
                 }
             }
         }
+        eprintln!("shared copies {}", super::SHARED_COPIES.load(std::sync::atomic::Ordering::Relaxed));
+        if clone_t.0 > 0.0 { eprintln!("view: avg {:.3} ms worst {:.2} ms", clone_t.0 * 1e3 / steps as f64, clone_t.1 * 1e3); }
         eprintln!("bad_bench sizes: Bloon {} bytes, Effect {} bytes, Projectile {} bytes", std::mem::size_of::<Bloon>(), std::mem::size_of::<Effect>(), std::mem::size_of::<Projectile>());
         for (dt, ph, n, pops, at) in &worst_steps {
             eprintln!("bad_bench worst step {at}: {:.1} ms = bloons/pops {:.1} + towers {:.1} + projectiles {:.1} (damage {:.1}); {n} bloons, {pops} layers popped", dt * 1e3, ph[0] * 1e3, ph[1] * 1e3, ph[2] * 1e3, ph[3] * 1e3);
