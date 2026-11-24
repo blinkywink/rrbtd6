@@ -2390,6 +2390,21 @@ seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
 
+- 2026-11-23: Sim perf (bit-exact, regression full; hero_new / hero_open lines unchanged): layers a hit
+  pops straight through are no longer stored. 90% of the children a damage cascade makes died in the
+  same hit (bad_bench: 6.0 M of 6.7 M), each a full spawn_at / remove_bloon. `spawn_children` (the
+  child loop, moved out of damage_inner with its parent as a `PopParent`) now pops such a child
+  without making it when the damage left reaches its health, distribution is on, and its inherited
+  mutators are passive kinds (no wind / Windlash / Dart Time). It keeps every side effect of
+  making and destroying it: next_id / next_layer / create_seq / effect_seq, the factory object
+  (fact_create, `fact_kill_raw` incl. P-POOLBACK and died_after_fill), model rotation, ghost places,
+  copies_now, copy_root_tick, cash / layers / pops / sounds, out_children, and the first child's
+  slot (`PopParent.i`). Path list, bidx and both grids come out as before on their own.
+  bad_bench 5.76 -> 4.36 s (damage 2.95 -> 1.51 s, worst step ~45 -> ~30 ms); sim_bench step
+  0.71 -> 0.63 ms. RRBTD6_NO_VIRTUAL_POP=1 makes every child as before; RRBTD6_BENCH_DIGEST=1
+  prints bad_bench's per-step state hash (`sim_digest`): identical on / off for Bad:500,
+  Zomg:300, RainbowRegrow:3000, CeramicFortified:2000.
+
 - 2026-11-22: Sim perf (bit-exact, regression full): shared Arc tier models, cached env switches, then
   an authoritative bloon id -> index map (`bidx`, updated at spawn_at / every swap_remove / swap /
   clear / the hex retain / the first child taking its parent's id) and a tier-triple model lookup.

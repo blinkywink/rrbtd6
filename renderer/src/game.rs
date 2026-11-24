@@ -1058,6 +1058,18 @@ fn mutator_slot(effects: &[Effect]) -> usize {
     effects.len() / 2
 }
 
+/// What a popped layer's mutators pass on to its children (`moab_pop`: a MOAB-class pop, which
+/// drops all but the kept ones first).
+fn inherit_effects(effects: &[Effect], moab_pop: bool) -> Vec<Effect> {
+    effects
+        .iter()
+        // (A Trance outlasts its layer count: recording map_peninsula_mermonkey_204_r40 rt
+        // 1584, a tranced Green's two Yellows both orbit on, the copy a frame behind.)
+        .filter(|e| (e.layers > 1 || matches!(e.kind, EffectKind::Trance(_))) && (!moab_pop || e.keep || KEPT_ON_MOAB_POP.contains(&&*e.id)))
+        .map(|e| Effect { layers: e.layers.saturating_sub(1).max(1), ..e.clone() })
+        .collect()
+}
+
 /// Bloon.CopyMutatorsFromBloon -> Mutable.CopyMutatorsFrom (VERIFIED-DISASM @0x180f35ac0): the
 /// source's mutators in its order, each through AddMutator (`mutator_slot`) on the new bloon.
 fn copy_order(effects: Vec<Effect>) -> Vec<Effect> {
@@ -1067,6 +1079,70 @@ fn copy_order(effects: Vec<Effect>) -> Vec<Effect> {
         out.insert(at, e);
     }
     out
+}
+
+/// A popped layer as `Game::spawn_children` makes its children from: the bloon as it was
+/// (`damage_inner`), or a layer the same hit pops through without making it (`pop_virtual`).
+/// `i`: where the first child goes (the popped bloon's slot; usize::MAX: where it's appended).
+struct PopParent {
+    kind: usize,
+    n_kids: usize,
+    start_dist: f32,
+    moved: bool,
+    mult: f32,
+    parent_tm: f32,
+    parent_fresh: bool,
+    parent_obj: u32,
+    path: u8,
+    parent_round: u32,
+    parent_lowest: u32,
+    parent_regrown: bool,
+    parent_ign: (bool, Vec<u64>),
+    parent_id: u64,
+    parent_held: (u64, [f32; 2]),
+    lineage: std::sync::Arc<[u64]>,
+    parent_galv: (u8, u64),
+    parent_galv_chain: Option<std::sync::Arc<crate::data::GalvChain>>,
+    parent_galv_zone: (Vec<u64>, u8, u64),
+    parent_chill: (u8, u64),
+    parent_grave: (bool, bool),
+    parent_wl: Option<Box<WlState>>,
+    parent_seg: f32,
+    parent_at: bool,
+    pp0: [f32; 2],
+    parent_prev: [f32; 2],
+    parent_hold: Option<[f32; 2]>,
+    parent_order: u64,
+    parent_born: u64,
+    parent_cseq: u64,
+    parent_wind: Option<f32>,
+    parent_wind_new: bool,
+    parent_wind_seg: Option<f32>,
+    parent_wind_direct: bool,
+    parent_wind_since: u64,
+    parent_wind_model: Option<Box<crate::data::Wind>>,
+    parent_wind_seq: u64,
+    parent_height: f32,
+    src_is_copy: bool,
+    parent_place: (u32, u32),
+    inherited: Vec<Effect>,
+    parent_tick: Option<f32>,
+    parent_unplaced: bool,
+    parent_z: f32,
+    dist: f32,
+    decamo: bool,
+    base: f32,
+    parent_colors: Option<(String, String)>,
+    regrow: bool,
+    ceiling: u32,
+    parent_grow: Option<u32>,
+    parent_cell: [f32; 2],
+    parent_processed: bool,
+    parent_cell_kind: usize,
+    parent_cell_dist: f32,
+    parent_next: Option<[f32; 2]>,
+    i: usize,
+    overflow: i32,
 }
 
 impl Bloon {
@@ -7559,12 +7635,19 @@ impl Game {
     /// A bloon destroyed: its object stays listed, dead, until the next flush.
     fn fact_kill(&mut self, i: usize) {
         let b = &self.bloons[i];
-        if let Some(&k) = self.fact_at.get(b.obj as usize).filter(|&&k| k != u32::MAX) {
+        let at = if b.fresh { b.cell_pos } else { b.prev };
+        self.fact_kill_raw(b.obj, b.fresh, b.kind, b.id, at, b.order);
+    }
+
+    /// `fact_kill` from the bloon's fields (`pop_virtual`'s layers aren't stored); `at`: its
+    /// cell position if fresh, else its frame-start position.
+    fn fact_kill_raw(&mut self, obj: u32, fresh: bool, kind: usize, id: u64, at: [f32; 2], order: u64) {
+        if let Some(&k) = self.fact_at.get(obj as usize).filter(|&&k| k != u32::MAX) {
             // HYPOTHESIS P-POOLBACK: a bloon made this frame and popped for good that frame (no children
             // left) gives its object back at once, unlisted (the recordings' H lines show id 0) (recordings sub_250 / sub_052: the
             // object a new bloon takes after the flush, seen through a Target that still holds it).
-            if b.fresh && self.defs[b.kind].children.is_empty() {
-                let o = b.obj;
+            if fresh && self.defs[kind].children.is_empty() {
+                let o = obj;
                 self.fact.remove(k as usize);
                 for e in k as usize..self.fact.len() {
                     self.fact_at[self.fact[e].0 as usize] = e as u32;
@@ -7577,9 +7660,8 @@ impl Game {
         }
         // The collision grid is filled as the bloons start processing: one that was in it and
         // dies after stays in it.
-        if !self.grid_on && self.fill_first_id.is_some_and(|f| b.id < f) {
-            let at = if b.fresh { b.cell_pos } else { b.prev };
-            self.died_after_fill.push((b.obj, b.id, at, b.order, self.defs[b.kind].radius));
+        if !self.grid_on && self.fill_first_id.is_some_and(|f| id < f) {
+            self.died_after_fill.push((obj, id, at, order, self.defs[kind].radius));
         }
     }
 
@@ -17122,6 +17204,90 @@ impl Game {
         n
     }
 
+    /// A child's mutators from its parent's inherited ones (`inherited`): child `n` of model `c`
+    /// (CopyMutatorsFromBloon for the copies, the first keeping the parent object's).
+    fn child_effects(&mut self, inherited: &[Effect], n: usize, c: usize, src_is_copy: bool, parent_tick: Option<f32>) -> Vec<Effect> {
+        let child_tags = &self.defs[c].tags;
+        let keep: Vec<Effect> = inherited
+            .iter()
+            .filter(|e| !matches!(e.kind, EffectKind::Freeze { .. }) || !child_tags.iter().any(|t| t == "Moabs"))
+            .filter(|e| n == 0 || !matches!(e.kind, EffectKind::DestroyEmit { dont_copy: true, .. }))
+            .cloned()
+            .map(|mut e| {
+                // The other children's mutators are new (CopyMutatorsFromBloon): their
+                // EmitOnPop is initialised again. The first is the parent object, its
+                // behaviour as it was (recording ice_520: a Black's copy made and degraded
+                // again by one hit leaves Reds that don't shatter the next frame).
+                if let EffectKind::PopEmit { ignore, skip, .. } = &mut e.kind {
+                    if n > 0 {
+                        *skip = *ignore;
+                    }
+                }
+                // Mutable.CopyMutatorsFrom (@0x180f35ac0) passes the source TimedMutator's removeAt
+                // (0x18) as the copy's duration, which becomes its totalDuration (0x28); a refresh
+                // (AddMutator: removeAt < new duration -> totalDuration) gives it that back
+                // (recording ice_025: a re-frozen copy thaws when its parent would have).
+                // INFERRED, freezes only: glue_005 / glue_025 need a copy's glue mutators to get
+                // their full lifespan back (see HANDOFF, Ice notes).
+                if n > 0 && matches!(e.kind, EffectKind::Freeze { .. }) {
+                    e.total = e.frames_left;
+                }
+                // A copy's CarryProjectile is new: Attatched makes its own projectiles
+                // (recording ice_005: an Icicles Rainbow's Blacks and Whites each carry one).
+                if let EffectKind::Carry { uids, .. } = &mut e.kind {
+                    if n > 0 {
+                        uids.clear();
+                        self.carry_pending.set(true);
+                    }
+                }
+                e
+            })
+            .collect();
+        // The first child is the parent object, its mutator list as it was; the others copy it.
+        // (Within one Damage, every copy copies the bloon first hit: a copy's own copies made in
+        // the same pop keep its order, which is already the copied one; recording druid_050
+        // rt 2933, a RainbowRegrow's four copies all "from" it, each ticking Close first.)
+        let mut keep = if n == 0 || src_is_copy { keep } else { copy_order(keep) };
+        // Each child's DamageOverTime behaviours are made anew for its model (Initialise:
+        // lastTick = now + initialDelay, or -999999999 with triggerImmediate), then
+        // PostDegrade gives the first the parent's last lastTick (recording
+        // glue_upgrades_r30: a Pink's Dissolver gets Corrosive Glue's old lastTick on every
+        // pop and pops a layer a frame, 968..971).
+        // (The first child is the parent object: it keeps its behaviours, their lastTicks
+        // and order; a new one makes them in its mutator order.)
+        let now = self.round_clock as f32;
+        if n > 0 {
+            for e in &mut keep {
+                e.seq = self.effect_seq;
+                self.effect_seq += 1;
+                if let EffectKind::Dot { tick, start, .. } = &mut e.kind {
+                    *tick = start.map_or(-999999999.0, |s| now + s);
+                }
+            }
+        }
+        let first = (0..keep.len())
+            .filter(|&k| !keep[..k].iter().any(|x| x.id == keep[k].id) && matches!(keep[k].kind, EffectKind::Dot { .. }))
+            .min_by_key(|&k| keep[k].seq);
+        if let (Some(k), Some(t)) = (first, parent_tick) {
+            if let EffectKind::Dot { tick, .. } = &mut keep[k].kind {
+                *tick = t;
+            }
+        }
+        keep
+    }
+
+    /// A layer of model `kind` popped: its pop sound, and the hero's remark on a MOAB-class one
+    /// (CreateSoundOnBloonDestroyed, tag Moabs).
+    fn pop_sounds(&mut self, kind: usize) {
+        if let Some(ps) = self.defs[kind].pop_sound.as_ref().filter(|ps| !ps.names.is_empty() && self.sound_room(&ps.names[0], Some((&ps.group, ps.limit)))) {
+            let ps = ps.clone();
+            self.sound(&ps.names, Some((ps.group, ps.limit, ps.frames, ps.frames_ff)));
+        }
+        if self.defs[kind].tags.iter().any(|t| t == "Moabs") {
+            self.hero_voice(|s| &s.moab_pop, VOICE, VOICE_GAP);
+        }
+    }
+
     fn damage_inner(&mut self, i: usize, mut dmg: i32, out_children: &mut Vec<u64>) -> u64 {
         #[cfg(test)] let _damage_timer=(self.pop_depth==0).then(||sim_profile::Timer::new(0));
         if self.pop_depth==0&&self.mod_runtime.intercepts & crate::mod_runtime::DAMAGE!=0 {
@@ -17150,14 +17316,7 @@ impl Game {
             }
             return 0;
         }
-        if let Some(ps) = self.defs[kind].pop_sound.as_ref().filter(|ps| !ps.names.is_empty() && self.sound_room(&ps.names[0], Some((&ps.group, ps.limit)))) {
-            let ps = ps.clone();
-            self.sound(&ps.names, Some((ps.group, ps.limit, ps.frames, ps.frames_ff)));
-        }
-        // CreateSoundOnBloonDestroyed (tag Moabs): the hero remarks on a popped MOAB-class bloon.
-        if self.defs[kind].tags.iter().any(|t| t == "Moabs") {
-            self.hero_voice(|s| &s.moab_pop, VOICE, VOICE_GAP);
-        }
+        self.pop_sounds(kind);
         // Bloon.Damage works the whole result out first (BloonDegradeStepper: what's left of the
         // damage goes to every child, layer by layer), then SpawnChildren makes only the bloons
         // that are left: here the layers pop one by one and the survivors are placed after.
@@ -17377,14 +17536,7 @@ impl Game {
         if !src_is_copy {
             self.copy_root_tick = parent_tick;
         }
-        let inherited: Vec<Effect> = b
-            .effects
-            .iter()
-            // (A Trance outlasts its layer count: recording map_peninsula_mermonkey_204_r40 rt
-            // 1584, a tranced Green's two Yellows both orbit on, the copy a frame behind.)
-            .filter(|e| (e.layers > 1 || matches!(e.kind, EffectKind::Trance(_))) && (!moab_pop || e.keep || KEPT_ON_MOAB_POP.contains(&&*e.id)))
-            .map(|e| Effect { layers: e.layers.saturating_sub(1).max(1), ..e.clone() })
-            .collect();
+        let inherited = inherit_effects(&b.effects, moab_pop);
         // (A MOAB-class pop drops its other mutators at once, CarryProjectile.OnDestroy taking
         // their projectiles: recording ice_paragon_r40 rt 189, the Icicles X destroy at age 0.)
         let dropped_carry: Vec<u64> = if moab_pop {
@@ -17487,11 +17639,343 @@ impl Game {
         // SpawnChildren.CreatedChildren (VERIFIED-DISASM @0x1027440): the first child is the
         // parent itself (it moves on, at its new speed); child k sits k x min(26.7 / count, 8.6)
         // behind (not below 0) and, being new, waits for the next frame to move.
+        let pop_parent = PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow };
+        popped += self.spawn_children(pop_parent, out_children);
+        self.pop_depth -= 1;
+        if top {
+            self.track_pops(kind, hit_camo, popped);
+            // Bloon.Degrade raises OnBloonDegrade once per Damage, with the DamageResult.
+            if grave_heard {
+                self.grave_last = Some(grave_key);
+                self.necro_gather(popped as i64, pp0);
+            }
+        }
+        if top && self.pop_nested {
+            // SpawnChildren.CreatedChildren over the final list: the first is the parent object
+            // (it moves on at its new speed), the k-th sits k x min(26.7 / count, 8.6) behind.
+            let mut seen = FastSet::default();
+            let ids: Vec<u64> = out_children[oc0..].iter().copied().filter(|id| seen.insert(*id)).collect();
+            // What this pop made sits in the parent's slot or past where storage ended.
+            let at: FastMap<u64, usize> = std::iter::once(i)
+                .chain(len_start.saturating_sub(1)..self.bloons.len())
+                .filter(|&k| k < self.bloons.len() && seen.contains(&self.bloons[k].id))
+                .map(|k| (self.bloons[k].id, k))
+                .collect();
+            let finals: Vec<usize> = ids.iter().filter_map(|id| at.get(id).copied()).collect();
+            let sp = (26.7f32 / finals.len().max(1) as f32).min(8.6);
+            for (k, &j) in finals.iter().enumerate() {
+                let c = self.bloons[j].kind;
+                let d0 = (start_dist - k as f32 * sp).max(0.0);
+                let d1 = if moved && k == 0 { (d0 + speed_frames(self.defs[c].speed) * parent_tm * self.map_speed * mult).max(0.0) } else { d0 };
+                // Not held at the entrance: that waits for the child's first Bloon.Move
+                // (recording dart_400: a Lead's fourth Pink at 169.2, then 173.6).
+                let dist = d1;
+                let tr = &self.tracks[path as usize];
+                let (pos, prev, tm) = (tr.bloon_pos(dist), tr.bloon_pos(d0), if k == 0 { parent_tm } else { tr.speed_mult(dist) });
+                let b = &mut self.bloons[j];
+                // (A bloon MoveWithWind carries keeps its place and distance; it walks to its
+                // track spot.)
+                // (A tranced one keeps its orbit spot too, as a carried one: see damage.)
+                let tranced = b.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq));
+                if b.wind.is_none() && !(k == 0 && parent_at) && !tranced {
+                    b.dist = dist;
+                    b.pos = pos;
+                    b.prev = prev;
+                } else if b.wind.is_none() {
+                    b.dist = dist;
+                    // (The final list's copies are the game's new objects: MermonkeyTrance.Initialise
+                    // takes originalBloonPos at this distance (see damage); recording
+                    // map_peninsula_mermonkey_204_r40 rt 3375, a tranced Zebra's two layers at once,
+                    // its three Pink copies each head for their own track point.)
+                    if k > 0 {
+                        for e in b.effects.iter_mut() {
+                            if let EffectKind::Trance(t) = &mut e.kind {
+                                t.orig = pos;
+                            }
+                        }
+                    }
+                } else if k > 0 {
+                    // (A carried parent's copies: spaced in the final list, where the wind has
+                    // them; their own draws follow. Recording heli_250 rt 2412: a Zebra's two
+                    // layers at once, four Pinks 6.675 apart from the blown parent's 596.33.)
+                    b.dist = d0;
+                }
+                b.prev_dist = d0;
+                b.seg_dist = if b.id == parent_id { parent_seg } else { d0 };
+                b.track_mult = tm;
+            }
+        }
+        if top {
+            for (cid, w) in std::mem::take(&mut self.wind_copy_draws) {
+                let Some(k) = bloon_idx(&self.bloons, &self.bidx, cid) else { continue };
+                let ck = self.bloons[k].kind;
+                // (distanceMax over 99999: its distanceTraveled; MoveWithWind.Attatched.)
+                let wmax = if w.max > 99999.0 { self.bloons[k].dist } else { w.max };
+                let mut back = (self.synced_double() as f32) * (wmax - w.min) + w.min;
+                if w.tag_scale > 0.0 && w.tags.iter().any(|t| self.defs[ck].tags.contains(t)) {
+                    back *= w.tag_scale;
+                }
+                let r = self.defs[ck].radius;
+                let sd = self.track_ends.get(self.bloons[k].path as usize).and_then(|e| e.0);
+                let child = &mut self.bloons[k];
+                child.wind_seg = Some(child.dist);
+                child.dist -= back;
+                if let Some(sd) = sd {
+                    if child.dist <= sd - r * 1.25 {
+                        child.dist = sd - r * 1.25;
+                    }
+                }
+            }
+        }
+        // The copies' carried projectiles, where the degrade put them.
+        if top && self.carry_pending.get() {
+            let pending = |b: &Bloon| b.effects.iter().any(|e| matches!(&e.kind, EffectKind::Carry { uids, .. } if uids.is_empty()));
+            let made: Vec<usize> = (0..self.bloons.len()).filter(|&k| pending(&self.bloons[k])).collect();
+            for k in made {
+                self.attach_carries_as(k, Some(layer));
+            }
+            self.carry_pending.set(self.bloons.iter().any(pending));
+        }
+        // (They come once the degrade has placed its children, each a pop of its own: recording
+        // glue_205, a Corrosive MOAB's tick takes its first Ceramic and the other three stay
+        // spaced as four.)
+        // (The hit's own cash is paid first: its PostDegrade is in the degrade, and each tick is a
+        // Bloon.Damage of its own; recording boomerang_paragon_r98 rt 3318, the BAD's layer pays
+        // 0.1 with the ticks after it.)
+        if top && !destroy_ticks.is_empty() {
+            self.pay_hit();
+        }
+        let hit_ctx = (self.hit_cash, self.hit_tower);
+        for (damage, immune, owner, distribute) in destroy_ticks {
+            let Some(j) = bloon_idx(&self.bloons, &self.bidx, parent_id) else { break };
+            if immune & self.bloons[j].properties(&self.defs[self.bloons[j].kind]) != 0 {
+                continue;
+            }
+            let (tally0, saved) = (self.damage_tally, self.distribute);
+            self.distribute = distribute;
+            self.hit_cash = self.hit_cash_for(owner);
+            self.hit_tower = Some(owner);
+            let n = self.damage(j, damage.round() as i32, out_children);
+            (self.hit_cash, self.hit_tower) = hit_ctx;
+            self.distribute = saved;
+            let dealt = self.damage_tally - tally0;
+            if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
+                tw.pops += n;
+                tw.sun_destroyed(self.last_destroyed);
+                tw.damage += dealt;
+                self.stats.pops += n;
+                self.stats.damage += dealt;
+            }
+        }
+        popped
+    }
+
+    /// SpawnChildren.CreatedChildren for one popped layer: its children, each damaged on with what
+    /// the hit has left (`damage`), or popped through without being made (`pop_virtual`).
+    #[allow(unused_variables)]
+    fn spawn_children(&mut self, p: PopParent, out_children: &mut Vec<u64>) -> u64 {
+        let PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow } = p;
+        let mut popped = 0u64;
         let spacing = (26.7f32 / n_kids.max(1) as f32).min(8.6);
         for n in 0..n_kids {
             let c = self.child_kinds[kind][n];
             let d0 = (start_dist - n as f32 * spacing).max(0.0);
             let d1 = if moved && n == 0 { (d0 + speed_frames(self.defs[c].speed) * parent_tm * self.map_speed * mult).max(0.0) } else { d0 };
+            // Speed only: a child this hit pops straight through (the damage left reaches it and
+            // it would carry nothing on) is never stored; `pop_virtual` leaves every counter, list
+            // and pool as making and destroying it would (RRBTD6_NO_VIRTUAL_POP: make it anyway).
+            let (dist_on, dist_override) = self.distribute;
+            if overflow > 0
+                && overflow >= self.defs[c].max_health
+                && dist_on
+                && (self.defs[kind].distribute_damage_to_children || dist_override || (self.dist_set && self.pop_depth == 1))
+                // (Mutators that do nothing in a layer's own Damage below the hit bloon; the others
+                // (damage over time, emits, carried projectiles, Trance, Strip) take the full path.)
+                && inherited.iter().all(|e| matches!(e.kind, EffectKind::Slow { .. } | EffectKind::Freeze { .. } | EffectKind::Brittle { .. } | EffectKind::Mark { .. } | EffectKind::Gold { .. } | EffectKind::Unarmor { .. } | EffectKind::Knock { .. } | EffectKind::Worth { .. } | EffectKind::Cooldown | EffectKind::Tag { .. } | EffectKind::PopFx { .. } | EffectKind::PopEmit { .. }))
+                && parent_wind.is_none()
+                && parent_wl.is_none()
+                && self.dart_time_left().is_none()
+                && !env_flag!("RRBTD6_NO_VIRTUAL_POP")
+                && !(cfg!(test) && env_flag!("RRBTD6_REC_POPS"))
+            {
+                let first = n == 0;
+                if first {
+                    self.spawn_parent_obj = Some(parent_obj);
+                }
+                self.ghost_cell = None;
+                // spawn_at: the counters, the factory object, the model's rotation; its index,
+                // path list and grid entries would go again with it.
+                let fresh_id = self.next_id;
+                self.next_id += 1;
+                let tr = &self.tracks[path as usize];
+                let (pos1, prev0) = (tr.bloon_pos(d1), tr.bloon_pos(d0));
+                let tm1 = if first { parent_tm } else { tr.speed_mult(d1) };
+                let obj = self.fact_create();
+                self.next_layer += 1;
+                let vlayer = self.next_layer;
+                self.create_seq += 1;
+                let vcseq = self.create_seq;
+                if self.defs[c].rotate_to_follow_path {
+                    if let Some(r) = self.path_rot(path, d1) {
+                        self.kind_rot.insert(self.coll_group[c], r);
+                    }
+                }
+                let mut vplace = (EMPTY, EMPTY);
+                let mut vcell = None;
+                if self.grid_on && self.has_grid_rank {
+                    if let Some((at, cell)) = self.ggrid.ghosts.remove(&obj) {
+                        vplace = at;
+                        vcell = Some(cell);
+                    }
+                }
+                // The child's fields as the loop below sets them.
+                let vid = if first { parent_id } else { fresh_id };
+                let ml = self.defs[c].layer_number;
+                let vlowest = if first { parent_lowest.min(ml) } else if parent_regrown { 0 } else { ml };
+                let vheld = if first { parent_held } else { (0, pos1) };
+                let vgalv_zone = if first { parent_galv_zone.clone() } else { (Vec::new(), 1, self.create_seq) };
+                let vgrave = if first { parent_grave } else { (false, false) };
+                let (vpos, vprev) = if first && parent_at { (pp0, parent_prev) } else { (pos1, prev0) };
+                let vseg = if first { parent_seg } else { d0 };
+                let (vhold, vorder, vborn, vcseq) = if first {
+                    (parent_hold, parent_order, parent_born, parent_cseq)
+                } else {
+                    (None, fresh_id, self.sim_elapsed * 4 + self.phase as u64, vcseq)
+                };
+                let vheight = if first || parent_wind.is_some() { parent_height } else { 0.0 };
+                out_children.push(vid);
+                if !first || src_is_copy {
+                    self.copies_now.insert(vid);
+                }
+                if first && self.grid_on && self.has_grid_rank && parent_place.0 != EMPTY {
+                    vplace = parent_place;
+                }
+                let vkeep = self.child_effects(&inherited, n, c, src_is_copy, parent_tick);
+                let vfresh = self.grid_on && !self.pop_in_process && !self.pop_after_move && (!first || parent_fresh);
+                let vunplaced = (self.in_instant && !first) || ((self.pop_after_move || self.pop_in_process) && (!first || parent_unplaced));
+                let (mut vceil, mut vgrow_t) = (ml, self.grow_kinds[c].map_or(0, |g| g.1));
+                if regrow {
+                    vceil = vceil.max(ceiling);
+                    if let Some(t) = parent_grow {
+                        vgrow_t = t;
+                    }
+                }
+                let vcell_pos = vcell.unwrap_or(parent_cell);
+                let (vcell_kind, vcell_dist, vprocessed) = if first && parent_processed { (parent_cell_kind, parent_cell_dist, true) } else { (c, d0, false) };
+                let vnext = if first { parent_next } else { None };
+                // Its Damage (damage_inner, not the top layer): popped through.
+                let src_v = self.copies_now.contains(&vid);
+                let hp = self.defs[c].max_health;
+                self.damage_tally += overflow.clamp(0, hp.max(0)) as u64;
+                self.pop_sounds(c);
+                self.pop_nested = true;
+                self.pop_depth += 1;
+                let vlineage: std::sync::Arc<[u64]> = {
+                    let mut v = Vec::with_capacity(lineage.len() + 1);
+                    v.extend_from_slice(&lineage);
+                    v.push(vlayer);
+                    v.into()
+                };
+                let vat = {
+                    let tp = self.tracks[path as usize].bloon_pos(d1);
+                    (tp[0] - vpos[0]).abs() > 1e-3 || (tp[1] - vpos[1]).abs() > 1e-3
+                };
+                let inc = self.income_mult_for(parent_round);
+                let raw = (1.0f64 + self.extra_cash[c]) as f32;
+                let vstart = if self.phase == 0 || (self.phase == 1 && self.moved_early.contains(&vid)) { d1 } else { d0 };
+                let (mut vstart_dist, mut vmoved) = (vstart, self.phase >= 2 && d1 != d0);
+                if self.pop_after_move || self.pop_in_process {
+                    (vstart_dist, vmoved) = (d1, false);
+                }
+                let pay_lowest = self.hit_lowest;
+                let vtick = if src_v { self.copy_root_tick } else { None };
+                if !src_v {
+                    self.copy_root_tick = None;
+                }
+                // remove_bloon: only the factory sees it go.
+                self.fact_kill_raw(obj, vfresh, c, vid, if vfresh { vcell_pos } else { vprev }, vorder);
+                if ml <= pay_lowest && !self.no_pop_cash {
+                    self.hit_acc.0 += raw;
+                    self.hit_acc.2 = inc;
+                }
+                if ml <= pay_lowest {
+                    self.hit_layers += 1 + self.layer_offset[c];
+                }
+                let mut vpopped = 1 + self.layer_offset[c];
+                self.popped += 1 + self.layer_offset[c];
+                let pp = self.tracks[path as usize].pos(d1);
+                self.pops.push(pp);
+                let vkids = self.child_kinds[c].len();
+                if vkids == 0 {
+                    self.destroyed_tally += 1;
+                    self.bloon_destroyed(vid, vpos, vheight);
+                }
+                let galv_moab = self.defs[c].is_moab;
+                let q = PopParent {
+                    kind: c,
+                    n_kids: vkids,
+                    start_dist: vstart_dist,
+                    moved: vmoved,
+                    mult: 1.0,
+                    parent_tm: tm1,
+                    parent_fresh: vfresh,
+                    parent_obj: obj,
+                    path,
+                    parent_round,
+                    parent_lowest: vlowest,
+                    parent_regrown: vlowest < ml,
+                    parent_ign: if first { parent_ign.clone() } else { (false, Vec::new()) },
+                    parent_id: vid,
+                    parent_held: vheld,
+                    lineage: vlineage,
+                    parent_galv: if galv_moab { (0, 0) } else { parent_galv },
+                    parent_galv_chain: if galv_moab { None } else { parent_galv_chain.clone() },
+                    parent_galv_zone: vgalv_zone,
+                    parent_chill: if galv_moab { (0, 0) } else { parent_chill },
+                    parent_grave: vgrave,
+                    parent_wl: None,
+                    parent_seg: vseg,
+                    parent_at: vat,
+                    pp0: vpos,
+                    parent_prev: vprev,
+                    parent_hold: vhold,
+                    parent_order: vorder,
+                    parent_born: vborn,
+                    parent_cseq: vcseq,
+                    parent_wind: None,
+                    parent_wind_new: false,
+                    parent_wind_seg: None,
+                    parent_wind_direct: false,
+                    parent_wind_since: 0,
+                    parent_wind_model: None,
+                    parent_wind_seq: 0,
+                    parent_height: vheight,
+                    src_is_copy: src_v,
+                    parent_place: vplace,
+                    inherited: inherit_effects(&vkeep, galv_moab),
+                    parent_tick: vtick,
+                    parent_unplaced: vunplaced,
+                    parent_z: vheight,
+                    dist: d1,
+                    decamo,
+                    base,
+                    parent_colors: parent_colors.clone(),
+                    regrow: self.grow_kinds[c].is_some(),
+                    ceiling: vceil,
+                    parent_grow: (ml < vceil).then_some(vgrow_t),
+                    parent_cell: vcell_pos,
+                    parent_processed: vprocessed,
+                    parent_cell_kind: vcell_kind,
+                    parent_cell_dist: vcell_dist,
+                    parent_next: vnext.or((vpos != vprev).then_some(vprev)),
+                    i: if first { i } else { usize::MAX },
+                    overflow: overflow - hp,
+                };
+                vpopped += self.spawn_children(q, out_children);
+                self.pop_depth -= 1;
+                popped += vpopped;
+                continue;
+            }
             if n == 0 {
                 self.spawn_parent_obj = Some(parent_obj);
             }
@@ -17606,72 +18090,7 @@ impl Game {
                     }
                 }
             }
-            let child_tags = &self.defs[c].tags;
-            let keep: Vec<Effect> = inherited
-                .iter()
-                .filter(|e| !matches!(e.kind, EffectKind::Freeze { .. }) || !child_tags.iter().any(|t| t == "Moabs"))
-                .filter(|e| n == 0 || !matches!(e.kind, EffectKind::DestroyEmit { dont_copy: true, .. }))
-                .cloned()
-                .map(|mut e| {
-                    // The other children's mutators are new (CopyMutatorsFromBloon): their
-                    // EmitOnPop is initialised again. The first is the parent object, its
-                    // behaviour as it was (recording ice_520: a Black's copy made and degraded
-                    // again by one hit leaves Reds that don't shatter the next frame).
-                    if let EffectKind::PopEmit { ignore, skip, .. } = &mut e.kind {
-                        if n > 0 {
-                            *skip = *ignore;
-                        }
-                    }
-                    // Mutable.CopyMutatorsFrom (@0x180f35ac0) passes the source TimedMutator's removeAt
-                    // (0x18) as the copy's duration, which becomes its totalDuration (0x28); a refresh
-                    // (AddMutator: removeAt < new duration -> totalDuration) gives it that back
-                    // (recording ice_025: a re-frozen copy thaws when its parent would have).
-                    // INFERRED, freezes only: glue_005 / glue_025 need a copy's glue mutators to get
-                    // their full lifespan back (see HANDOFF, Ice notes).
-                    if n > 0 && matches!(e.kind, EffectKind::Freeze { .. }) {
-                        e.total = e.frames_left;
-                    }
-                    // A copy's CarryProjectile is new: Attatched makes its own projectiles
-                    // (recording ice_005: an Icicles Rainbow's Blacks and Whites each carry one).
-                    if let EffectKind::Carry { uids, .. } = &mut e.kind {
-                        if n > 0 {
-                            uids.clear();
-                            self.carry_pending.set(true);
-                        }
-                    }
-                    e
-                })
-                .collect();
-            // The first child is the parent object, its mutator list as it was; the others copy it.
-            // (Within one Damage, every copy copies the bloon first hit: a copy's own copies made in
-            // the same pop keep its order, which is already the copied one; recording druid_050
-            // rt 2933, a RainbowRegrow's four copies all "from" it, each ticking Close first.)
-            let mut keep = if n == 0 || src_is_copy { keep } else { copy_order(keep) };
-            // Each child's DamageOverTime behaviours are made anew for its model (Initialise:
-            // lastTick = now + initialDelay, or -999999999 with triggerImmediate), then
-            // PostDegrade gives the first the parent's last lastTick (recording
-            // glue_upgrades_r30: a Pink's Dissolver gets Corrosive Glue's old lastTick on every
-            // pop and pops a layer a frame, 968..971).
-            // (The first child is the parent object: it keeps its behaviours, their lastTicks
-            // and order; a new one makes them in its mutator order.)
-            let now = self.round_clock as f32;
-            if n > 0 {
-                for e in &mut keep {
-                    e.seq = self.effect_seq;
-                    self.effect_seq += 1;
-                    if let EffectKind::Dot { tick, start, .. } = &mut e.kind {
-                        *tick = start.map_or(-999999999.0, |s| now + s);
-                    }
-                }
-            }
-            let first = (0..keep.len())
-                .filter(|&k| !keep[..k].iter().any(|x| x.id == keep[k].id) && matches!(keep[k].kind, EffectKind::Dot { .. }))
-                .min_by_key(|&k| keep[k].seq);
-            if let (Some(k), Some(t)) = (first, parent_tick) {
-                if let EffectKind::Dot { tick, .. } = &mut keep[k].kind {
-                    *tick = t;
-                }
-            }
+            let keep = self.child_effects(&inherited, n, c, src_is_copy, parent_tick);
             let child = self.bloons.last_mut().unwrap();
             // Made in the collision pass, before this frame's movement: new objects, they move
             // from the next frame (the first child is the parent object and moves on, unless that
@@ -17829,132 +18248,6 @@ impl Game {
             let set = self.dist_set && self.pop_depth == 1;
             if overflow > 0 && dist_on && (self.defs[kind].distribute_damage_to_children || dist_override || set) {
                 popped += self.damage(j, overflow, out_children);
-            }
-        }
-        self.pop_depth -= 1;
-        if top {
-            self.track_pops(kind, hit_camo, popped);
-            // Bloon.Degrade raises OnBloonDegrade once per Damage, with the DamageResult.
-            if grave_heard {
-                self.grave_last = Some(grave_key);
-                self.necro_gather(popped as i64, pp0);
-            }
-        }
-        if top && self.pop_nested {
-            // SpawnChildren.CreatedChildren over the final list: the first is the parent object
-            // (it moves on at its new speed), the k-th sits k x min(26.7 / count, 8.6) behind.
-            let mut seen = FastSet::default();
-            let ids: Vec<u64> = out_children[oc0..].iter().copied().filter(|id| seen.insert(*id)).collect();
-            // What this pop made sits in the parent's slot or past where storage ended.
-            let at: FastMap<u64, usize> = std::iter::once(i)
-                .chain(len_start.saturating_sub(1)..self.bloons.len())
-                .filter(|&k| k < self.bloons.len() && seen.contains(&self.bloons[k].id))
-                .map(|k| (self.bloons[k].id, k))
-                .collect();
-            let finals: Vec<usize> = ids.iter().filter_map(|id| at.get(id).copied()).collect();
-            let sp = (26.7f32 / finals.len().max(1) as f32).min(8.6);
-            for (k, &j) in finals.iter().enumerate() {
-                let c = self.bloons[j].kind;
-                let d0 = (start_dist - k as f32 * sp).max(0.0);
-                let d1 = if moved && k == 0 { (d0 + speed_frames(self.defs[c].speed) * parent_tm * self.map_speed * mult).max(0.0) } else { d0 };
-                // Not held at the entrance: that waits for the child's first Bloon.Move
-                // (recording dart_400: a Lead's fourth Pink at 169.2, then 173.6).
-                let dist = d1;
-                let tr = &self.tracks[path as usize];
-                let (pos, prev, tm) = (tr.bloon_pos(dist), tr.bloon_pos(d0), if k == 0 { parent_tm } else { tr.speed_mult(dist) });
-                let b = &mut self.bloons[j];
-                // (A bloon MoveWithWind carries keeps its place and distance; it walks to its
-                // track spot.)
-                // (A tranced one keeps its orbit spot too, as a carried one: see damage.)
-                let tranced = b.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq));
-                if b.wind.is_none() && !(k == 0 && parent_at) && !tranced {
-                    b.dist = dist;
-                    b.pos = pos;
-                    b.prev = prev;
-                } else if b.wind.is_none() {
-                    b.dist = dist;
-                    // (The final list's copies are the game's new objects: MermonkeyTrance.Initialise
-                    // takes originalBloonPos at this distance (see damage); recording
-                    // map_peninsula_mermonkey_204_r40 rt 3375, a tranced Zebra's two layers at once,
-                    // its three Pink copies each head for their own track point.)
-                    if k > 0 {
-                        for e in b.effects.iter_mut() {
-                            if let EffectKind::Trance(t) = &mut e.kind {
-                                t.orig = pos;
-                            }
-                        }
-                    }
-                } else if k > 0 {
-                    // (A carried parent's copies: spaced in the final list, where the wind has
-                    // them; their own draws follow. Recording heli_250 rt 2412: a Zebra's two
-                    // layers at once, four Pinks 6.675 apart from the blown parent's 596.33.)
-                    b.dist = d0;
-                }
-                b.prev_dist = d0;
-                b.seg_dist = if b.id == parent_id { parent_seg } else { d0 };
-                b.track_mult = tm;
-            }
-        }
-        if top {
-            for (cid, w) in std::mem::take(&mut self.wind_copy_draws) {
-                let Some(k) = bloon_idx(&self.bloons, &self.bidx, cid) else { continue };
-                let ck = self.bloons[k].kind;
-                // (distanceMax over 99999: its distanceTraveled; MoveWithWind.Attatched.)
-                let wmax = if w.max > 99999.0 { self.bloons[k].dist } else { w.max };
-                let mut back = (self.synced_double() as f32) * (wmax - w.min) + w.min;
-                if w.tag_scale > 0.0 && w.tags.iter().any(|t| self.defs[ck].tags.contains(t)) {
-                    back *= w.tag_scale;
-                }
-                let r = self.defs[ck].radius;
-                let sd = self.track_ends.get(self.bloons[k].path as usize).and_then(|e| e.0);
-                let child = &mut self.bloons[k];
-                child.wind_seg = Some(child.dist);
-                child.dist -= back;
-                if let Some(sd) = sd {
-                    if child.dist <= sd - r * 1.25 {
-                        child.dist = sd - r * 1.25;
-                    }
-                }
-            }
-        }
-        // The copies' carried projectiles, where the degrade put them.
-        if top && self.carry_pending.get() {
-            let pending = |b: &Bloon| b.effects.iter().any(|e| matches!(&e.kind, EffectKind::Carry { uids, .. } if uids.is_empty()));
-            let made: Vec<usize> = (0..self.bloons.len()).filter(|&k| pending(&self.bloons[k])).collect();
-            for k in made {
-                self.attach_carries_as(k, Some(layer));
-            }
-            self.carry_pending.set(self.bloons.iter().any(pending));
-        }
-        // (They come once the degrade has placed its children, each a pop of its own: recording
-        // glue_205, a Corrosive MOAB's tick takes its first Ceramic and the other three stay
-        // spaced as four.)
-        // (The hit's own cash is paid first: its PostDegrade is in the degrade, and each tick is a
-        // Bloon.Damage of its own; recording boomerang_paragon_r98 rt 3318, the BAD's layer pays
-        // 0.1 with the ticks after it.)
-        if top && !destroy_ticks.is_empty() {
-            self.pay_hit();
-        }
-        let hit_ctx = (self.hit_cash, self.hit_tower);
-        for (damage, immune, owner, distribute) in destroy_ticks {
-            let Some(j) = bloon_idx(&self.bloons, &self.bidx, parent_id) else { break };
-            if immune & self.bloons[j].properties(&self.defs[self.bloons[j].kind]) != 0 {
-                continue;
-            }
-            let (tally0, saved) = (self.damage_tally, self.distribute);
-            self.distribute = distribute;
-            self.hit_cash = self.hit_cash_for(owner);
-            self.hit_tower = Some(owner);
-            let n = self.damage(j, damage.round() as i32, out_children);
-            (self.hit_cash, self.hit_tower) = hit_ctx;
-            self.distribute = saved;
-            let dealt = self.damage_tally - tally0;
-            if let Some(tw) = self.towers.iter_mut().find(|t| t.id == owner) {
-                tw.pops += n;
-                tw.sun_destroyed(self.last_destroyed);
-                tw.damage += dealt;
-                self.stats.pops += n;
-                self.stats.damage += dealt;
             }
         }
         popped
@@ -29690,6 +29983,38 @@ mod tests {
         late_game_load(rate, cap, 3000, true);
     }
 
+    /// The sim state that later steps read (bloons in storage order with their fields, the
+    /// factory, pool, path list and grid places, the counters, cash, projectiles), hashed.
+    fn sim_digest(g: &super::Game) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for b in &g.bloons {
+            (b.id, b.kind, b.dist.to_bits(), b.pos[0].to_bits(), b.pos[1].to_bits(), b.prev[0].to_bits(), b.prev[1].to_bits()).hash(&mut h);
+            (b.hp, b.layer, b.obj, b.fresh, b.order, b.cseq, b.born).hash(&mut h);
+            (b.lowest, b.seg_dist.to_bits(), b.cell_pos[0].to_bits(), b.cell_pos[1].to_bits(), b.cell_kind, b.cell_dist.to_bits(), b.processed).hash(&mut h);
+            (b.unplaced, b.track_mult.to_bits(), b.height.to_bits(), b.grow_t, b.grow_ceiling, b.held_at, b.spawn_round).hash(&mut h);
+            (b.cell_next.map(|p| (p[0].to_bits(), p[1].to_bits())), b.coll_hold.map(|p| (p[0].to_bits(), p[1].to_bits())), b.galv, b.chill, &b.galv_zone, b.galv_zone_skip, b.galv_seq, b.grave_zone, b.ign_added, &b.ign_checked).hash(&mut h);
+            b.lineage.as_deref().hash(&mut h);
+            for e in &b.effects {
+                (&*e.id, e.frames_left.to_bits(), e.layers, e.owner, e.total.to_bits(), e.added, e.seq).hash(&mut h);
+            }
+        }
+        (&g.fact, &g.fact_at, &g.pool, &g.path_lists, g.next_id, g.next_layer, g.create_seq, g.effect_seq, g.popped, g.cash.to_bits(), g.copy_root_tick.map(f32::to_bits)).hash(&mut h);
+        let mut pr: Vec<_> = g.path_rank.iter().map(|(&k, &v)| (k, v)).collect();
+        pr.sort();
+        pr.hash(&mut h);
+        let mut gh: Vec<_> = g.ggrid.ghosts.iter().map(|(&k, v)| (k, v.0)).collect();
+        gh.sort();
+        (gh, &g.ggrid.cells, &g.ggrid.of, &g.ggrid.slot, &g.grid.cells, &g.grid.of, &g.grid.slot).hash(&mut h);
+        let mut kr: Vec<_> = g.kind_rot.iter().map(|(&k, &v)| (k, v.to_bits())).collect();
+        kr.sort();
+        kr.hash(&mut h);
+        for p in &g.projectiles {
+            (p.uid, p.pos[0].to_bits(), p.pos[1].to_bits(), p.pierce.to_bits(), p.frames_left.to_bits()).hash(&mut h);
+        }
+        h.finish()
+    }
+
     /// The 500-BAD stress scene headless: the round-200 bench's four degree-20 paragons, 500 BADs
     /// sent at spacing 0, stepped until everything is popped. Prints the total sim time, steps and
     /// the worst step. `RRBTD6_BENCH_SPAWN=Bad:500` (default).
@@ -29717,6 +30042,11 @@ mod tests {
             total += dt;
             worst = worst.max(dt);
             steps += 1;
+            // RRBTD6_BENCH_DIGEST: a hash of the sim state after every step, to compare two runs
+            // (RRBTD6_NO_VIRTUAL_POP on and off must print the same lines).
+            if std::env::var_os("RRBTD6_BENCH_DIGEST").is_some() {
+                eprintln!("digest {steps} {:016x}", sim_digest(&g));
+            }
             if g.bloons.len() > peak {
                 peak = g.bloons.len();
                 if std::env::var_os("RRBTD6_BENCH_EFFECTS").is_some() {

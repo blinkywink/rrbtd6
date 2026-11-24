@@ -122,7 +122,7 @@ impl Game {
     }
 
     /// The frames Dart Time has left (DartTime.Process @0x180f32900 ends it at endFrame).
-    fn dart_time_left(&self) -> Option<(i64, f32, f32)> {
+    pub(super) fn dart_time_left(&self) -> Option<(i64, f32, f32)> {
         self.dart_time.map(|(end, b, t)| (end - self.round_clock, b, t)).filter(|d| d.0 > 0)
     }
 
