@@ -2397,6 +2397,12 @@ seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
 
+- 2026-11-24: Etienne: a drone's HeliMovement.lastGroupOffset only from GetPursuitDestination with a target (0 after
+  EndCustomMovement); drones keep their repulsion lists while still (P-DRONEREPULSE); supplier targets aimed at the
+  bloon's centre (MOAB circles only for GetTarget); PathMovement with no takeOffModel flies its pattern at once (the
+  UAV); P-DRONESYNC (DroneSupport.SyncMutators strips a drone's mutator the parent lacks: Etienne's own range buff
+  stays only while the drone model hasn't changed since it came). etienne l10 first diff rt 1 -> 400, l20 rt 3 -> 62.
+  Regression full; hero_new 9/18.
 - 2026-11-24: Etienne drones in process order: a drone's turn moves the bloons older than it first (process_bloons_before)
   and its HeliMovement runs in its turn; GetPath runs during custom moves too (lastPositionInsideParent keeps going);
   HYPOTHESIS P-STRONGFILTER (Path.FindBestBloon skips what FilterParentTowerRange refuses), a drone's Last by

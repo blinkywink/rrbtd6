@@ -2672,6 +2672,9 @@ pub struct AirUnit {
     pub drone: DroneIdleState,
     /// PursuitSettingCustom.lastPositionInsideParent (clone frame).
     pub pursuit_inside: Option<[f32; 2]>,
+    /// HeliMovement.lastGroupOffset (game frame) of a drone: GetPursuitDestination sets it while
+    /// it has a target; EndCustomMovement zeroes it.
+    pub hm_last_off: [f32; 2],
 }
 
 /// HeliMovement.CustomMovement (VERIFIED-DECOMP SetCustomMovement @0x180d2cfd0): its position
@@ -2701,11 +2704,14 @@ pub struct DroneIdleState {
     /// PursuitSettingCustom.currentTargetType (initialTargetType First; DroneSupport /
     /// DroneSwarm set it per drone).
     pub ttype: TargetMode,
+    /// The parent's level at the drone's last DroneSupport.SyncMutators (spawn or the parent's
+    /// upgrade).
+    pub sync_level: u8,
 }
 
 impl Default for DroneIdleState {
     fn default() -> Self {
-        Self { inactive: 0, ignore: 0, fsor: 0, fsvt: 0, fsir: 0, force: false, cur_idle: 0, can_end: true, ttype: TargetMode::First }
+        Self { inactive: 0, ignore: 0, fsor: 0, fsvt: 0, fsir: 0, force: false, cur_idle: 0, can_end: true, ttype: TargetMode::First, sync_level: 0 }
     }
 }
 
@@ -10627,6 +10633,7 @@ impl Game {
                 hm_custom: None,
                 drone: DroneIdleState::default(),
                 pursuit_inside: None,
+                hm_last_off: [0.0; 2],
             });
             // A plane takes a pooled FighterMovement if there is one: its timer as it was, its path
             // point (0, 0) (recording bucc_upgrades_r30 rt 1862: the 5-1-0's second plane with the
@@ -11099,10 +11106,10 @@ impl Game {
                 // (Only when ApplyMovement ran: recording heli_005, the Heli still at rt 1 never
                 // listed the Comanches made on it; heli_025, moving at rt 1, did.)
                 let moved = self.heli_move(t, &h, &helis);
-                // (HYPOTHESIS P-DRONEREPULSE: a drone held by DroneIdle.inactiveFrames keeps its
-                // repulsion list; recording etienne_l03_r20 rt 461, the swarm's first move already
-                // pushed apart.)
-                let drone_wait = self.towers[t].sub.as_ref().is_some_and(|s| s.spec.drone.is_some()) && self.towers[t].air.as_ref().is_some_and(|a| a.drone.inactive > 0);
+                // (HYPOTHESIS P-DRONEREPULSE: a drone keeps its repulsion list while it stays put
+                // (DroneIdle.inactiveFrames, nowhere to go); recordings etienne_l03_r20 rt 461, the
+                // swarm's first move already pushed apart; etienne_l10_r40 rt 31, the two drones'.)
+                let drone_wait = self.towers[t].sub.as_ref().is_some_and(|s| s.spec.drone.is_some());
                 if !moved && !drone_wait {
                     return;
                 }
@@ -11205,6 +11212,16 @@ impl Game {
                 self.towers[t].air.as_mut().unwrap().pursuit_last = Some(p);
                 let p = self.drone_final_tweak(t, p, here);
                 self.towers[t].air.as_mut().unwrap().pursuit_last = Some(p);
+                // (A drone: lastGroupOffset, from GetPursuitDestination only while it has a target;
+                // recording etienne_l10_r40 rt 1: the second drone at its spawn spot, offset (0, 0).)
+                let off = if is_drone {
+                    if self.pursuit_target(t, here).is_some() {
+                        self.towers[t].air.as_mut().unwrap().hm_last_off = off;
+                    }
+                    self.towers[t].air.as_ref().unwrap().hm_last_off
+                } else {
+                    off
+                };
                 let p = [p[0] + off[0], p[1] - off[1]];
                 [p[0].clamp(-WORLD_X, WORLD_X), p[1].clamp(-WORLD_Z, WORLD_Z)]
             }
@@ -12880,6 +12897,11 @@ impl Game {
             if a.pm_cur >= 0 && Some(a.pm_cur as usize) == want {
                 return;
             }
+            // (No takeOffModel: no take-off; recording etienne_l10_r40 rt 3, the UAV on its circle
+            // from its first Process.)
+            if spec.takeoff.is_none() {
+                a.pm_takeoff = false;
+            }
             if a.pm_takeoff {
                 if a.pm_cur == PM_NONE {
                     a.on_path = true;
@@ -13239,6 +13261,7 @@ impl Game {
             let e = within([ox + pp[0], oy + -pp[1]]);
             HmCustom { pos: [e[0], -e[1]], pause: false, dont_strafe: true, only_round: true }
         });
+        let plevel = self.towers[pi].tiers[0];
         let Some(a) = self.towers[n].air.as_mut() else { return };
         a.pos = cpos;
         a.touch = cpos;
@@ -13246,6 +13269,7 @@ impl Game {
         a.hm_custom = custom;
         a.drone.inactive = ds.delay_frames;
         a.drone.ignore = ds.ignore_frames;
+        a.drone.sync_level = plevel;
         // DroneSwarm.Process (VERIFIED-DECOMP @0x180e2c420), hasSetTargetTypes: its drones 0 and 1
         // Strong, 2 First, 3 Last. (The pets: DroneSupport.UpdateDroneTargetTypes by Etienne's own
         // type; First keeps First.)
@@ -13304,6 +13328,7 @@ impl Game {
                 let a = self.towers[t].air.as_mut().unwrap();
                 a.pursuit_last = Some(c.pos);
                 a.hm_custom = None;
+                a.hm_last_off = [0.0; 2];
             } else if c.pause {
                 self.towers[t].air.as_mut().unwrap().drone = st;
                 return;
@@ -13326,7 +13351,10 @@ impl Game {
             st.fsvt = 0;
             st.fsir = 0;
             st.fsor = 0;
-            self.towers[t].air.as_mut().unwrap().hm_custom = None;
+            let a = self.towers[t].air.as_mut().unwrap();
+            if a.hm_custom.take().is_some() {
+                a.hm_last_off = [0.0; 2];
+            }
         } else {
             st.fsvt += 1;
         }
@@ -14047,6 +14075,11 @@ impl Game {
                 // keeps flying where it is through its parent's upgrades.)
                 if nt.sub.as_ref().is_some_and(|s| s.spec.drone.is_some()) {
                     nt.air = self.towers[oi].air.take();
+                    // (OnUpgrade: spawnAndUpdateDrones, so SyncMutators at this level.)
+                    let lv = self.towers[t].tiers[0];
+                    if let Some(a) = nt.air.as_mut() {
+                        a.drone.sync_level = lv;
+                    }
                 }
                 if let Some(s) = nt.sub.as_mut() {
                     s.age = age;
@@ -17182,7 +17215,34 @@ impl Game {
                 if std::iter::once(t).chain(parent).any(|o| self.tier(o).is_some_and(|tr| tr.detect_camo)) {
                     b.camo = true;
                 }
+                // (HYPOTHESIS P-SUBTOWERBUFF: a TowerModel.isSubTower tower takes no support of its own,
+                // only its parent's through AddMutatorIncludeSubTowers; recording etienne_l10_r40 rt 59,
+                // Etienne's range buff doesn't stretch his drones' darts.)
                 let mut sups = self.supports_at_ex(self.towers[t].def, self.towers[t].pos, Some(t), self.towers[t].placed_step + 1 >= self.steps as u64);
+                // DroneSupport.SyncMutators (VERIFIED-DECOMP @0x180d20050), at each spawn and upgrade:
+                // a drone's mutator the parent doesn't have goes. HYPOTHESIS P-DRONESYNC: the parent's
+                // own support stays on the drone only while the drone's model hasn't changed since the
+                // level the support came (recordings etienne_l03_r20: darts 32 frames, Range:Etienne
+                // from level 2, the drone model the same to 3; etienne_l10_r40 / l20_r80: 29, the
+                // drone model changes at 4, 5, ...).
+                if let (Some(pt), Some(sync)) = (parent, self.towers[t].sub.as_ref().filter(|s| s.spec.drone.is_some()).and_then(|_| self.towers[t].air.as_ref()).map(|a| a.drone.sync_level)) {
+                    let ps = self.supports_at_ex(self.towers[pt].def, self.towers[pt].pos, Some(pt), self.towers[pt].placed_step + 1 >= self.steps as u64);
+                    let def = self.towers[pt].def;
+                    let intro = |id: &str| -> Option<u8> {
+                        let tt = self.tower_tiers[def].as_ref()?;
+                        (1..=20u8).find(|lv| tt.tiers.get(&format!("{}00", lv)).is_some_and(|tr| tr.supports.iter().any(|x| x.id == id)))
+                    };
+                    let own: Vec<String> = self.tier(pt).map(|tr| tr.supports.iter().map(|x| x.id.clone()).collect()).unwrap_or_default();
+                    // (The drone model's first weapon: rate, damage, pierce; its TowerModel is replaced
+                    // when these change.)
+                    let sig = |lv: u8| -> Option<(u32, u32, u32)> {
+                        let tr = self.tower_tiers[def].as_ref()?.tiers.get(&format!("{}00", lv))?;
+                        let w = tr.pets.iter().find(|p| p.drone.is_some())?.tier.attacks.first()?.weapons.first()?;
+                        Some((w.rate.to_bits(), w.projectile.damage.to_bits(), w.projectile.pierce.to_bits()))
+                    };
+                    let unchanged = |from: u8| (from..=sync).all(|lv| sig(lv) == sig(from));
+                    sups.retain(|(sp, _)| ps.iter().any(|(x, _)| x.id == sp.id) || (own.contains(&sp.id) && intro(&sp.id).is_some_and(unchanged)));
+                }
                 // Tower.AddMutatorIncludeSubTowers (VERIFIED-DECOMP @0x180c0a1c0): a support's
                 // mutator on a tower goes on its child towers too (TowerManager.GetChildTowers),
                 // wherever they stand (recording engineer_502_village_r102 rt 642: a sentry 48 from
@@ -21687,7 +21747,9 @@ impl Game {
                     // (TargetFirst / Last / StrongAirUnit.GetTarget (VERIFIED-DECOMP @0x180de26e0):
                     // BloonManager.GetTarget -> GetTargets (@0x180fcacc0) -> Targetting.GetTargets
                     // the same; recording heli_400 rt 86, the missiles' turn at the MOAB's centre.)
-                    if mode == TargetMode::Elite || attack.air_target {
+                    // (A drone's supplier targets too: PursuitSettingCustom.GetTargets' Target(bloon);
+                    // recording etienne_l10_r40 rt 31, the drones turn to the MOAB's centre.)
+                    if mode == TargetMode::Elite || attack.air_target || supplier {
                         aim_at = b.pos;
                         aim_off = [0.0; 2];
                         aim_circle = None;
