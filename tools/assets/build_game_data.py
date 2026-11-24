@@ -1367,7 +1367,9 @@ def main():
                     out["pierce"] = min(out.get("pierce") or cf["collisionCount"], cf["collisionCount"])
                 if deref(cf.get("subProjectile")):
                     out["on_exhaust"] += [{"projectile": projectile(deref(cf["subProjectile"]), depth + 1),
-                                           "emission": emission(deref(cf.get("projectileEmission")))}]
+                                           "emission": emission(deref(cf.get("projectileEmission"))),
+                                           # only once the contacts are used, not on expiry
+                                           "spent_only": True}]
             # ScaleProjectileOverTimeModel (Mermonkey 0-4-x): its bonusProjectile with its emission
             # once as it goes (Expired / Exhausted / CollideMap, VERIFIED-DECOMP @0x180cda410).
             for ce in pb.get("ScaleProjectileOverTimeModel", []):

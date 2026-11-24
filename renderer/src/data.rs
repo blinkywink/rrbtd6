@@ -2134,6 +2134,11 @@ pub struct Exhaust {
     /// when its pierce does (Projectile.Exhausted).
     #[serde(default)]
     pub expire: bool,
+    /// DestroyWhenCollidingWithModel's subProjectile: only once its collisionCount contacts are
+    /// used (exported as pierce), not when its lifespan runs out (recording dand_l20_r80 rt 2700:
+    /// DanDMonke's net trap expires at 45 s and makes nothing).
+    #[serde(default)]
+    pub spent_only: bool,
     /// CreateProjectileOnExpireModel.useTargetPosition: made where the shot's target is.
     #[serde(default)]
     pub use_target: bool,

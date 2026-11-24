@@ -6833,7 +6833,10 @@ macro_rules! collide_pass {
                 let at = if pr.pierce <= 0.0 { pr.prev } else { pr.pos };
                 ex.src = pr.uid;
                 ex.src_born = pr.born;
-                ex.target_off = pr.inst_off;
+                // (The Target's collision-circle offset: the tower's pick (aim, aim_off) when that
+                // is the Target passed on, else the shot's own (inst_off); recording dand_l20_r80
+                // rt 1479, a bolt on the ZOMG's front circle its parent was thrown at.)
+                ex.target_off = if pr.aim.is_some() && pr.inst_off == [0.0; 2] { pr.aim_off } else { pr.inst_off };
                 $exhausted.push((at, pr.vel[1].atan2(pr.vel[0]), ex, pr.tiers, (pr.owner, pr.emitted_by), pr.aim.or(pr.target), (pr.grot, pr.z, pr.dir_rot()), pr.pierce <= 0.0));
             }
         }
@@ -27546,7 +27549,7 @@ impl Game {
             }
             let order = pr.spec.on_exhaust.iter().enumerate().filter(|e| e.1.expire).chain(pr.spec.on_exhaust.iter().enumerate().filter(|e| !e.1.expire));
             for (k, ex) in order {
-                if pr.exhaust_done & (1 << k) != 0 || (!self.rounds_active() && !ex.between_rounds) || (ex.expire && !expired) {
+                if pr.exhaust_done & (1 << k) != 0 || (!self.rounds_active() && !ex.between_rounds) || (ex.expire && !expired) || (ex.spent_only && pr.pierce > 0.0) {
                     continue;
                 }
                 let mut ex = ex.clone();
@@ -27713,9 +27716,19 @@ impl Game {
             for pr in &mut self.projectiles[start..] {
                 pr.fresh = false;
             }
-            if ex.projectile.only_target {
+            // CreateProjectileOnExhaustFraction.CheckFraction (VERIFIED-DECOMP @0x180ca3500) emits with
+            // the shot's own Target (vfunc 0x7d8): a lightning bolt made so starts on it and hits in
+            // its first Process (recording dand_l20_r80 rt 650: LightningProj 716 made with
+            // BasePlusLightning 709's ZOMG, PT 716 500 at once, hit in the next frame's pass); one
+            // whose shot had none searches first (dand_l03_r20 rt 1497).
+            // (The Target is the whole struct: its collision circle's offset too; recording
+            // dand_l20_r80 rt 1479, LightningProj 1060 on the ZOMG's front circle, 5.1 ahead.)
+            if ex.projectile.only_target || ex.projectile.lightning {
                 for pr in &mut self.projectiles[start..] {
                     pr.target = target;
+                    if pr.spec.lightning && target.is_some() {
+                        pr.inst_off = ex.target_off;
+                    }
                 }
             }
             // CreateProjectileOnExhaustFraction.CheckFraction (VERIFIED-DECOMP @0x180ca3500) with
