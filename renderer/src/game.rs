@@ -2675,6 +2675,9 @@ pub struct AirUnit {
     /// HeliMovement.lastGroupOffset (game frame) of a drone: GetPursuitDestination sets it while
     /// it has a target; EndCustomMovement zeroes it.
     pub hm_last_off: [f32; 2],
+    /// PathMovement.Copy took another plane's currentPathSupplier: its own is found from its next
+    /// Process (FindCurrSupplier: a different supplier, off its path).
+    pub pm_switch: bool,
 }
 
 /// HeliMovement.CustomMovement (VERIFIED-DECOMP SetCustomMovement @0x180d2cfd0): its position
@@ -4311,6 +4314,8 @@ pub struct Game {
     /// them in the parent's next turn (recording etienne_l03_r20: Drone Swarm at rt 400, its drones
     /// from 401).
     drone_queue: Vec<(u64, std::sync::Arc<crate::data::SubTowerSpec>)>,
+    /// UCAV.Activate: (UCAV tower id, the UAV's spec) for Deactivate to make the UAV again.
+    ucav_uav: Vec<(u64, std::sync::Arc<crate::data::SubTowerSpec>)>,
     /// Beast Handler merges, in order: (target handler id, beast base id, contributing handler
     /// id): the target's contributingHandlersByBeast and the source's
     /// beastsLostThroughContribution (BeastHandlerLeash.Contribute @0x180cfadf0).
@@ -7169,6 +7174,7 @@ impl Game {
             ghost_cell: None,
             pending_pets: Vec::new(),
             drone_queue: Vec::new(),
+            ucav_uav: Vec::new(),
             merges: Vec::new(),
             leash_sets: HashMap::new(),
             merge_respawn: Vec::new(),
@@ -10634,6 +10640,7 @@ impl Game {
                 drone: DroneIdleState::default(),
                 pursuit_inside: None,
                 hm_last_off: [0.0; 2],
+                pm_switch: false,
             });
             // A plane takes a pooled FighterMovement if there is one: its timer as it was, its path
             // point (0, 0) (recording bucc_upgrades_r30 rt 1862: the 5-1-0's second plane with the
@@ -12874,6 +12881,12 @@ impl Game {
             let names: Vec<String> = self.tier(t).map(|tr| tr.attacks.iter().map(|a| a.model_name.clone()).collect()).unwrap_or_default();
             self.towers[t].air.as_mut().unwrap().pm_before = names;
         }
+        if let Some(a) = self.towers[t].air.as_mut().filter(|a| a.pm_switch) {
+            // (A copied plane finds its own supplier at its first Process: recording etienne_l10_r40
+            // rt 401, the UCAV off its path, catching up 1.8 a frame, truncated to 3 places.)
+            a.pm_switch = false;
+            a.pm_cur = PM_NONE;
+        }
         let tw = &mut self.towers[t];
         let target = tw.target;
         let (tpos, point, reversed) = ([tw.pos[0], -tw.pos[1]], tw.point.map(|p| [p[0], -p[1]]), tw.air_reverse);
@@ -13289,6 +13302,33 @@ impl Game {
             .filter_map(|o| self.towers[o].air.as_ref().map(|a| (o, a.pos)))
             .collect();
         self.move_one_heli(t, &helis);
+    }
+
+    /// PathMovement.Copy (UCAV.Activate / Deactivate): tower `to`'s plane takes `from`'s path state
+    /// and place.
+    fn ucav_copy_air(&mut self, from: usize, to: usize) {
+        let Some(src) = self.towers[from].air.clone() else { return };
+        let names: Vec<String> = self.tier(to).map(|tr| tr.attacks.iter().map(|a| a.model_name.clone()).collect()).unwrap_or_default();
+        // (Its own speed on the same pattern: tpf = speed / pattern length / 60; recording
+        // etienne_l10_r40 rt 401, the UCAV 1.8 a frame round the UAV's circle.)
+        let (fs, ts) = (self.tier(from).and_then(|tr| tr.air.as_ref()).map_or(0.0, |a| a.speed), self.tier(to).and_then(|tr| tr.air.as_ref()).map_or(0.0, |a| a.speed));
+        if let Some(a) = self.towers[to].air.as_mut() {
+            a.pos = src.pos;
+            a.angle = src.angle;
+            a.on_path = src.on_path;
+            a.bank = src.bank;
+            a.pitch = src.pitch;
+            a.scale = src.scale;
+            a.tt = src.tt;
+            a.pm_t = src.pm_t;
+            a.pm_tpf = if fs > 0.0 && src.pm_cur >= 0 { src.pm_tpf / fs * ts } else { src.pm_tpf };
+            a.pm_takeoff = src.pm_takeoff;
+            a.pm_ttpf = src.pm_ttpf;
+            a.pm_rot = src.pm_rot;
+            a.pm_cur = src.pm_cur;
+            a.pm_before = names;
+            a.pm_switch = true;
+        }
     }
 
     /// EntityModel.radius of tower `t`'s model.
@@ -14346,6 +14386,19 @@ impl Game {
         for &t in &gone {
             self.fire_on_destroy(t, false);
         }
+        // UCAV.Deactivate (VERIFIED-DECOMP @0x180e7c190): the UAV made again on the tower, its
+        // PathMovement copied from the UCAV, the UCAV destroyed.
+        for &t in &gone {
+            let uid = self.towers[t].id;
+            let Some(k) = self.ucav_uav.iter().position(|x| x.0 == uid) else { continue };
+            let (_, spec) = self.ucav_uav.remove(k);
+            let Some(parent) = self.towers[t].sub.as_ref().map(|s| s.parent) else { continue };
+            let Some(pi) = self.towers.iter().position(|o| o.id == parent) else { continue };
+            let p = self.towers[pi].pos;
+            self.spawn_sub(spec, p, parent, false);
+            let n = self.towers.len() - 1;
+            self.ucav_copy_air(t, n);
+        }
         for t in gone.into_iter().rev() {
             {
                 // RootObject.Destroy (VERIFIED-DISASM @0xf414c0) takes it off the Simulation's
@@ -15231,6 +15284,24 @@ impl Game {
         for spec in &a.create_tower {
             if spec.drone.is_some() {
                 self.drone_queue.push((id, spec.clone()));
+                continue;
+            }
+            // UCAV.Activate (VERIFIED-DECOMP @0x180e7bab0): the UCAV made on the tower, its
+            // PathMovement copied from the UAV (PathMovement.Copy), the UAV destroyed (recording
+            // etienne_l10_r40 rt 400: UAV 514 gone, UCAV 670 where it was, t 0.6598 on).
+            if spec.ucav {
+                let uav = self.towers.iter().position(|o| o.sub.as_ref().is_some_and(|s| s.parent == id && !s.spec.ucav && s.spec.id == "UAV"));
+                self.spawn_sub(spec.clone(), pos, id, false);
+                let n = self.towers.len() - 1;
+                if let Some(u) = uav {
+                    self.ucav_copy_air(u, n);
+                    let uid = self.towers[n].id;
+                    if let Some(us) = self.towers[u].sub.as_ref().map(|s| s.spec.clone()) {
+                        self.ucav_uav.push((uid, us));
+                    }
+                    self.towers.remove(u);
+                    self.removed.push((u, usize::MAX));
+                }
                 continue;
             }
             self.spawn_sub(spec.clone(), pos, id, false);

@@ -3298,6 +3298,9 @@ pub struct SubTowerSpec {
     /// DroneSupportModel's spawn and DroneIdle / PursuitSettingCustom (Etienne's drones).
     #[serde(default)]
     pub drone: Option<DroneSpec>,
+    /// UCAVModel's tower: it takes the UAV's place while active.
+    #[serde(default)]
+    pub ucav: bool,
     /// TowerModel.radius and footprint, for Map.OverlapsOtherEntity.
     #[serde(default)]
     pub place_radius: f32,

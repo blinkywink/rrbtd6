@@ -2504,10 +2504,12 @@ def main():
                     sp = sub_tower(dm, None)
                     if sp:
                         out.setdefault("create_tower", []).extend([dict(sp, lifespan=xf.get("duration", 0.0), drone=drone_spec(ds, dm))] * int(ds.get("count", 1)))
+                # UCAV.Activate (VERIFIED-DECOMP @0x180e7bab0) makes the UCAV in place of the UAV
+                # (PathMovement.Copy, the UAV destroyed); Deactivate (@0x180e7c190) the reverse.
                 if x["type"] == "UCAVModel":
                     sp = sub_tower(deref(xf.get("ucavTowerModel")), None)
                     if sp:
-                        out.setdefault("create_tower", []).append(dict(sp, lifespan=xf.get("duration", 0.0)))
+                        out.setdefault("create_tower", []).append(dict(sp, lifespan=xf.get("duration", 0.0), ucav=True))
                 # AbilityCreateTowerModel (Summon Phoenix): a temporary sub-tower.
                 if x["type"] == "AbilityCreateTowerModel":
                     sp = sub_tower(deref(xf.get("towerModel")), None)
