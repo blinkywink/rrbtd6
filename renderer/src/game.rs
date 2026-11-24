@@ -29335,10 +29335,14 @@ impl Game {
             };
             self.move_bloon(i, &zones, &shoves, &mut leak_voice);
         }
-        // (Any made while they moved, after them.)
+        // (Any made while they moved, after them. Not the Spawner's: a leak's pre-leak check makes
+        // this frame's emissions early (pre_leak_abilities), but the Spawner's place is before the
+        // bloons, so its bloon waits for the next frame as ever; recording dand_l10_r40 rt 2967, a
+        // round's Black spawned as Black 730 leaks, held at 173.6.)
         let mut i = 0;
         while i < self.bloons.len() {
-            if done.contains(&self.bloons[i].id) || early.contains(&self.bloons[i].id) || !self.move_bloon(i, &zones, &shoves, &mut leak_voice) {
+            let spawned_now = self.bloons[i].spawner && self.bloons[i].born / 4 == self.sim_elapsed;
+            if done.contains(&self.bloons[i].id) || early.contains(&self.bloons[i].id) || spawned_now || !self.move_bloon(i, &zones, &shoves, &mut leak_voice) {
                 i += 1;
             }
         }
