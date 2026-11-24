@@ -64,42 +64,65 @@ mod consts {
     pub const BUFFER_FRAMES: u32 = 4096;
 }
 
-unsafe fn audio_thread(mut mixer: crate::mixer::Mixer) {
-    CoInitializeEx(std::ptr::null_mut(), COINIT_MULTITHREADED);
+/// (rrbtd6) An open output: the default render device's shared-mode client.
+struct Output {
+    device: *mut IMMDevice,
+    client: *mut IAudioClient,
+    render: *mut IAudioRenderClient,
+    frames: u32,
+    id: Vec<u16>,
+}
 
-    let buffer_end_event = CreateEventA(std::ptr::null_mut(), FALSE, FALSE, std::ptr::null());
-    assert!(buffer_end_event.is_null() == false);
-
-    let mut device_enumerator: *mut IMMDeviceEnumerator = std::ptr::null_mut();
-    let hr = CoCreateInstance(
-        &CLSID_IMMDeviceEnumerator,
-        std::ptr::null_mut(),
-        CLSCTX_ALL,
-        &IID_IMMDeviceEnumerator,
-        &mut device_enumerator as *mut _ as _,
-    );
-    assert!(hr >= 0, "CoCreatInstance failed");
-
+/// The default render device's id (changes when headphones are plugged in or the user switches
+/// outputs).
+unsafe fn default_id(enumerator: *mut IMMDeviceEnumerator) -> Option<Vec<u16>> {
     let mut device: *mut IMMDevice = std::ptr::null_mut();
-    let hr = (*device_enumerator).GetDefaultAudioEndpoint(eRender, eConsole, &mut device);
-    assert!(hr >= 0, "GetDefaultAudioEndPoint failed");
+    if (*enumerator).GetDefaultAudioEndpoint(eRender, eConsole, &mut device) < 0 || device.is_null() {
+        return None;
+    }
+    let id = device_id(device);
+    (*device).Release();
+    id
+}
 
-    let mut audio_client: *mut IAudioClient = std::ptr::null_mut();
-    let hr = (*device).Activate(
-        &IID_IAudioClient,
-        CLSCTX_ALL,
-        std::ptr::null_mut(),
-        &mut audio_client as *mut _ as _,
-    );
-    assert!(hr >= 0, "Device Activate failed");
+unsafe fn device_id(device: *mut IMMDevice) -> Option<Vec<u16>> {
+    let mut wide: winapi::shared::ntdef::LPWSTR = std::ptr::null_mut();
+    if (*device).GetId(&mut wide) < 0 || wide.is_null() {
+        return None;
+    }
+    let mut n = 0;
+    while *wide.add(n) != 0 {
+        n += 1;
+    }
+    let id = std::slice::from_raw_parts(wide, n).to_vec();
+    CoTaskMemFree(wide as _);
+    Some(id)
+}
 
+unsafe fn close(out: Output) {
+    (*out.client).Stop();
+    (*out.render).Release();
+    (*out.client).Release();
+    (*out.device).Release();
+}
+
+/// Opens the default render device for 44.1 kHz stereo float (shared mode, converted by Windows);
+/// None when there is no usable device.
+unsafe fn open(enumerator: *mut IMMDeviceEnumerator, event: winapi::um::winnt::HANDLE) -> Option<Output> {
+    let mut device: *mut IMMDevice = std::ptr::null_mut();
+    if (*enumerator).GetDefaultAudioEndpoint(eRender, eConsole, &mut device) < 0 || device.is_null() {
+        return None;
+    }
     let mut state = 0;
     (*device).GetState(&mut state);
-    assert!(
-        state & DEVICE_STATE_ACTIVE != 0,
-        "Default device not active"
-    );
-
+    let mut client: *mut IAudioClient = std::ptr::null_mut();
+    if state & DEVICE_STATE_ACTIVE == 0
+        || (*device).Activate(&IID_IAudioClient, CLSCTX_ALL, std::ptr::null_mut(), &mut client as *mut _ as _) < 0
+        || client.is_null()
+    {
+        (*device).Release();
+        return None;
+    }
     let format = WAVEFORMATEX {
         nChannels: consts::CHANNELS as _,
         nSamplesPerSec: consts::SAMPLE_RATE as _,
@@ -107,82 +130,118 @@ unsafe fn audio_thread(mut mixer: crate::mixer::Mixer) {
         wBitsPerSample: 32,
         nBlockAlign: consts::CHANNELS as u16 * 4,
         nAvgBytesPerSec: consts::CHANNELS as u32 * consts::SAMPLE_RATE as u32 * 4,
-        cbSize: (std::mem::size_of::<WAVEFORMATEXTENSIBLE>() - std::mem::size_of::<WAVEFORMATEX>())
-            as _,
+        cbSize: (std::mem::size_of::<WAVEFORMATEXTENSIBLE>() - std::mem::size_of::<WAVEFORMATEX>()) as _,
     };
-
     const FRONT_LEFT: u32 = 0b0001;
     const FRONT_RIGHT: u32 = 0b0010;
-
     let format_extensible = WAVEFORMATEXTENSIBLE {
         Format: format,
         Samples: 4 * 8,
         dwChannelMask: FRONT_LEFT | FRONT_RIGHT,
         SubFormat: ksmedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
     };
-
     // https://docs.microsoft.com/en-us/windows/win32/coreaudio/audclnt-streamflags-xxx-constants
     const AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM: u32 = 0x80000000;
     const AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY: u32 = 0x08000000;
-
     let dur = consts::BUFFER_FRAMES as f64 / (consts::SAMPLE_RATE as f64 * 1.0 / 10000000.0);
-    let hr = (*audio_client).Initialize(
+    let mut frames = 0;
+    let mut render: *mut IAudioRenderClient = std::ptr::null_mut();
+    let ok = (*client).Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK
-            | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
-            | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
         dur as _,
         0,
         &format_extensible as *const _ as _,
         std::ptr::null(),
-    );
-    if hr < 0 {
-        println!("Error code: 0x{:x}", hr as u32);
-    }
-    assert!(hr >= 0, "audio_client.Initialize failed");
+    ) >= 0
+        && (*client).GetBufferSize(&mut frames) >= 0
+        && (*client).GetService(&IID_IAudioRenderClient, &mut render as *mut _ as _) >= 0
+        && !render.is_null()
+        && (*client).SetEventHandle(event) >= 0;
+    let Some(id) = device_id(device).filter(|_| ok) else {
+        if !render.is_null() {
+            (*render).Release();
+        }
+        (*client).Release();
+        (*device).Release();
+        return None;
+    };
+    (*client).Start();
+    Some(Output { device, client, render, frames, id })
+}
 
-    let mut dst_buffer_frames = 0;
-    let hr = (*audio_client).GetBufferSize(&mut dst_buffer_frames);
-    assert!(hr >= 0, "GetBufferSize failed");
-
-    let mut render_client: *mut IAudioRenderClient = std::ptr::null_mut();
-    let hr = (*audio_client).GetService(&IID_IAudioRenderClient, &mut render_client as *mut _ as _);
-    assert!(
-        hr >= 0,
-        "sokol_audio wasapi: audio client GetService failed"
-    );
-
-    let hr = (*audio_client).SetEventHandle(buffer_end_event);
-    assert!(hr >= 0, "SetEventHandle failed");
-
-    (*audio_client).Start();
+/// (rrbtd6) The output thread survives having no device and device changes: without a device the
+/// mixer keeps running silently in real time (sounds and music stay where they would be) and the
+/// device is tried again every 2 s; a device that goes away (unplugged headset, disabled card) is
+/// reopened, and a change of the default output (checked every second) moves to the new one.
+/// RRBTD6_NO_AUDIO_DEVICE: run as if there were none (testing).
+unsafe fn audio_thread(mut mixer: crate::mixer::Mixer) {
+    use std::time::{Duration, Instant};
+    const WAIT_OBJECT_0: u32 = 0;
+    CoInitializeEx(std::ptr::null_mut(), COINIT_MULTITHREADED);
+    let event = CreateEventA(std::ptr::null_mut(), FALSE, FALSE, std::ptr::null());
+    let mut enumerator: *mut IMMDeviceEnumerator = std::ptr::null_mut();
+    let have_api = !event.is_null()
+        && CoCreateInstance(&CLSID_IMMDeviceEnumerator, std::ptr::null_mut(), CLSCTX_ALL, &IID_IMMDeviceEnumerator, &mut enumerator as *mut _ as _) >= 0
+        && !enumerator.is_null()
+        && std::env::var_os("RRBTD6_NO_AUDIO_DEVICE").is_none();
+    // Silent running: this many frames per sleep (~23 ms at 44.1 kHz).
+    const SILENT_FRAMES: usize = 1024;
+    let mut scratch = vec![0f32; SILENT_FRAMES * consts::CHANNELS as usize];
+    let mut out: Option<Output> = None;
+    let mut next_try = Instant::now();
+    let mut last_check = Instant::now();
+    let mut reported = false;
     loop {
-        WaitForSingleObject(buffer_end_event, INFINITE);
-
-        let mut padding = 0;
-        if (*audio_client).GetCurrentPadding(&mut padding) < 0 {
+        if out.is_none() && have_api && Instant::now() >= next_try {
+            out = open(enumerator, event);
+            if out.is_none() {
+                if !reported {
+                    eprintln!("audio: no usable output device; running silently and retrying");
+                    reported = true;
+                }
+                next_try = Instant::now() + Duration::from_secs(2);
+            } else {
+                reported = false;
+            }
+        }
+        let Some(o) = out.as_ref() else {
+            std::thread::sleep(Duration::from_millis(23));
+            mixer.fill_audio_buffer(&mut scratch, SILENT_FRAMES);
+            continue;
+        };
+        let waited = WaitForSingleObject(event, 200);
+        if last_check.elapsed() >= Duration::from_secs(1) {
+            last_check = Instant::now();
+            if default_id(enumerator).as_ref() != Some(&o.id) {
+                close(out.take().unwrap());
+                next_try = Instant::now();
+                continue;
+            }
+        }
+        if waited != WAIT_OBJECT_0 {
             continue;
         }
-        let num_frames = dst_buffer_frames - padding;
-
+        let mut padding = 0;
+        if (*o.client).GetCurrentPadding(&mut padding) < 0 {
+            // AUDCLNT_E_DEVICE_INVALIDATED and the like: the device went away.
+            close(out.take().unwrap());
+            next_try = Instant::now() + Duration::from_millis(500);
+            continue;
+        }
+        let num_frames = o.frames.saturating_sub(padding);
         if num_frames == 0 {
             continue;
         }
-
         let mut wasapi_buffer: *mut u8 = std::ptr::null_mut();
-        if (*render_client).GetBuffer(num_frames, &mut wasapi_buffer) < 0 {
+        if (*o.render).GetBuffer(num_frames, &mut wasapi_buffer) < 0 || wasapi_buffer.is_null() {
+            close(out.take().unwrap());
+            next_try = Instant::now() + Duration::from_millis(500);
             continue;
         }
-        assert!(wasapi_buffer.is_null() == false);
-
-        let buffer = std::slice::from_raw_parts_mut(
-            wasapi_buffer as *mut f32,
-            num_frames as usize * consts::CHANNELS as usize,
-        );
-
+        let buffer = std::slice::from_raw_parts_mut(wasapi_buffer as *mut f32, num_frames as usize * consts::CHANNELS as usize);
         mixer.fill_audio_buffer(buffer, num_frames as _);
-
-        (*render_client).ReleaseBuffer(num_frames, 0);
+        (*o.render).ReleaseBuffer(num_frames, 0);
     }
 }
 

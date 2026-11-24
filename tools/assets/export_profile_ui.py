@@ -17,7 +17,7 @@ def export(game, root, all_art=True):
     env = dict(os.environ, RRBTD6_UI_BUNDLES='*_monoscripts_*.bundle;ui_scenes_all_*.bundle;sprite_atlases_assets_all_*.bundle;localization_assets_all_*.bundle;asset_references_assets_all_*.bundle')
 
     def run(script, *arguments):
-        subprocess.run([sys.executable, '-I', str(tools / script), *map(str, arguments)], env=env, check=True)
+        subprocess.run([sys.executable, '-X', 'utf8', '-I', str(tools / script), *map(str, arguments)], env=env, check=True)
     run('dump_ui_prefab.py', game, root / 'ui/prefabs',
         'scenefile:Assets/UI - New/Scenes/TrophyStoreUI.unity=TrophyStoreUI',
         'field:TrophyStoreScreen/TrophyStoreScreen.trophyPrefab=TrophyStoreCard',

@@ -1107,6 +1107,10 @@ impl WindowsDisplay {
     unsafe fn get_proc_address(&mut self, proc: &str) -> Option<unsafe extern "C" fn() -> ()> {
         let proc = std::ffi::CString::new(proc).unwrap();
         let mut proc_ptr = (self.libopengl32.wglGetProcAddress)(proc.as_ptr());
+        // (rrbtd6) Some drivers return 1, 2, 3 or -1 instead of null for a function they lack.
+        if matches!(proc_ptr as isize, 1 | 2 | 3 | -1) {
+            proc_ptr = std::ptr::null_mut();
+        }
         if proc_ptr.is_null() {
             proc_ptr = GetProcAddress(self.libopengl32.module.0, proc.as_ptr());
         }

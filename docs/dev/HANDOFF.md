@@ -18,6 +18,13 @@ committed to the public repo, not just the local machine"): `tools/checkpoint.sh
 `tools/publish.sh` after committing; after a plain `git commit`, run `sh tools/publish.sh`. The
 iOS IPA is never published.
 
+Versions (owner, 2026-11-24): `VERSION` at the root (0.651 to start). CI tests and builds every
+push, but a GitHub release (tag `v<VERSION>`, title "Version <VERSION>", shown on the website) is
+made only when VERSION has none yet, and that deletes every older release. Raise it by 0.001 for a
+player-facing update (small steps: the numbers must last until 1.0); 1.0 only once everything looks
+and plays exact with co-op working, on the owner's word. `version.json` keeps "build" (the run
+number) rising for installed launchers.
+
 ## Asset formats changed (2026-11-01)
 
 Only matters when exporting or inspecting assets (simulation code is unaffected; details in
@@ -2389,6 +2396,26 @@ P-OFFTRACKORDER: newest factory object first). (The wind_seg filing above now on
 seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
+
+- 2026-11-24: Windows compatibility pass + versioned releases (VERSION 0.651; release.yml publishes
+  only on a new VERSION and then deletes older releases; it had failed since build 353 on a stale
+  test_extraction_plan assertion, fixed). Game: windowed subsystem (no console behind it), NVIDIA /
+  AMD discrete-GPU exports (build.rs /EXPORT), a crash dialog (graphics-driver failures get their own
+  message, platform::crash_text), `_set_FMA3_enable(0)` at start (the regression matches with it:
+  one C-runtime math path on every CPU), settings written through a temp file, precision defaults
+  in 6 fragment shaders, version in the window title and crash log. Vendored: no GL 2.1 fallback
+  (RRBTD6_ALLOW_GL21), wglGetProcAddress's 1/2/3/-1 treated as missing, instancing only with
+  glVertexAttribDivisor (RRBTD6_NO_INSTANCING), WASAPI that runs silently without a device and
+  reopens on device loss or a default-output change (RRBTD6_NO_AUDIO_DEVICE). RRBTD6_COMPAT_TEST=1
+  turns every fallback on (checked: same sim trace, 329 fps round 200 vs 419; 42 fps with 500 BADs).
+  Extraction: every Python runs with -X utf8 (-I ignored PYTHONIOENCODING; non-English code pages
+  broke it). Launcher: BTD6 found through Steam's registry / libraryfolders.vdf / Epic manifests,
+  system proxy, free-space check, release SHA-256s, a standalone install offer
+  (%LOCALAPPDATA%\RustTD6, desktop shortcut) when started outside an install, and a prepared Python
+  runtime release (python-runtime-<hash>) before python.org / PyPI. Installer mod: recommended
+  folder, folder checks (Program Files, path length, writable, 15 GB free, OneDrive warning), the
+  launcher's last lines in its failure dialog (C# unbuilt locally: no .NET SDK; CI builds it).
+  Not done: code signing (needs a certificate), co-op resync after a divergence (it still stops).
 
 - 2026-11-24: Perf batch A. (1) map_logic LogicState's def / pool / paths / dormant are Shared (the
   frame copy cloned every MapPath each frame; Game::view at round 200 now ~0.02 ms; no

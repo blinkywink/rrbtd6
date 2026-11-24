@@ -18,6 +18,10 @@ import struct
 import subprocess
 import sys
 import threading
+
+# Every Python this starts reads and writes text as UTF-8 whatever the Windows code page (cp932,
+# cp936 ...): -I ignores PYTHON* variables, so the launches also pass -X utf8.
+os.environ["PYTHONUTF8"] = "1"
 import time
 from pathlib import Path
 from collections import deque
@@ -50,9 +54,9 @@ class Ctx:
 
     def py(self, script, *args, env=None, progress=(0., 1.)):
         """Run one tools/ script with this interpreter (isolated mode), from ROOT."""
-        cmd = [sys.executable, "-I", str(self.root / script), *map(str, args)]
+        cmd = [sys.executable, "-X", "utf8", "-I", str(self.root / script), *map(str, args)]
         # unitypy_lowmem (via sitecustomize) streams large bundles through a disk cache.
-        full_env = dict(os.environ, OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1", PYTHONIOENCODING="utf-8", RRBTD6_TOOLS=str(self.root / "tools"),
+        full_env = dict(os.environ, OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1", PYTHONIOENCODING="utf-8", PYTHONUTF8="1", RRBTD6_TOOLS=str(self.root / "tools"),
                         RRBTD6_BUNDLE_CACHE=str(self.out / "_bundle_cache"), **(env or {}))
         print("  Preparing:", Path(script).stem.replace('_', ' '), flush=True)
         began = time.time()

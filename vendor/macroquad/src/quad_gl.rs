@@ -172,6 +172,7 @@ mod snapshotter_shader {
     }"#;
 
     pub const FRAGMENT: &str = r#"#version 100
+    precision mediump float;
     varying lowp vec2 uv;
 
     uniform sampler2D Texture;
@@ -659,6 +660,8 @@ pub struct QuadGl {
 
     batch_vertex_buffer: Vec<Vertex>,
     batch_index_buffer: Vec<u16>,
+    /// (rrbtd6) The context draws instanced (`geometry_instanced` declines without it).
+    instancing: bool,
 }
 
 impl QuadGl {
@@ -668,8 +671,10 @@ impl QuadGl {
         max_indices: usize,
     ) -> QuadGl {
         let white_texture = ctx.new_texture_from_rgba8(1, 1, &[255, 255, 255, 255]);
+        let instancing = ctx.info().features.instancing;
 
         QuadGl {
+            instancing,
             pipelines: PipelinesStorage::new(ctx),
             state: GlState {
                 clip: None,
@@ -1216,7 +1221,7 @@ impl QuadGl {
         texture: Option<miniquad::TextureId>,
         inst: [f32; 8],
     ) -> bool {
-        if self.state.pipeline.is_some() || self.state.draw_mode != DrawMode::Triangles {
+        if !self.instancing || self.state.pipeline.is_some() || self.state.draw_mode != DrawMode::Triangles {
             return false;
         }
         let pip = self.pipelines.get(self.state.draw_mode, self.state.depth_test_enable);
@@ -1373,6 +1378,7 @@ mod shader {
     }"#;
 
     pub const FRAGMENT: &str = r#"#version 100
+    precision mediump float;
     varying lowp vec4 color;
     varying lowp vec2 uv;
 

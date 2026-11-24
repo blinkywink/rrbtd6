@@ -124,7 +124,8 @@ class PlanTests(unittest.TestCase):
         self.assertIn(("tools/assets/word_anims.py", str(ctx.out / "models"), "--root", str(ctx.root)), ctx.calls)
         self.assertIn(("tools/assets/share_model_textures.py", str(ctx.out / "models")), ctx.calls)
         self.assertEqual(ctx.calls[-1], ("tools/assets/compact_json.py", str(ctx.out)))
-        self.assertEqual(driver.STEPS[-2:], [driver.finish, driver.dedupe])
+        # dedupe last; the compressed GPU textures are made from the finished models, before it.
+        self.assertEqual(driver.STEPS[-3:], [driver.finish, driver.gpu_assets, driver.dedupe])
         # Models for unbuilt mechanics are exported before finish packs every model's animations.
         self.assertLess(driver.STEPS.index(driver.pending_models), driver.STEPS.index(driver.finish))
         ctx.calls.clear()

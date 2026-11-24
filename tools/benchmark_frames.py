@@ -190,7 +190,7 @@ def main():
         results=[]
         for round_num in (98,140,200):
             destination=output/f'round-{round_num}'
-            cmd=[sys.executable,'-I',str(Path(__file__).resolve()),'--exe',str(exe),'--output',str(destination),'--round',str(round_num),'--degree',str(args.degree),'--pairs',str(args.pairs),'--frames',str(max(args.frames,18000)),'--warmup',str(args.warmup)]
+            cmd=[sys.executable,'-X','utf8','-I',str(Path(__file__).resolve()),'--exe',str(exe),'--output',str(destination),'--round',str(round_num),'--degree',str(args.degree),'--pairs',str(args.pairs),'--frames',str(max(args.frames,18000)),'--warmup',str(args.warmup)]
             if args.reference_exe:cmd+=['--reference-exe',str(args.reference_exe.resolve())]
             elif not args.same_build_ab:cmd+=['--baseline-only']
             if args.trace_loads:cmd+=['--trace-loads']
@@ -257,7 +257,7 @@ def main():
                     check_inputs()
                     with (output/(label+'.log')).open('w',encoding='utf-8') as log:
                         command=[str(run_exe)]
-                        if args.profile:command=[sys.executable,'-I',str(Path(__file__).resolve().parent/'sample_prof.py'),'--top','200',*(['--lines',args.profile_lines] if args.profile_lines else []),'--out',str(output/(label+'.prof')),'--',str(run_exe)]
+                        if args.profile:command=[sys.executable,'-X','utf8','-I',str(Path(__file__).resolve().parent/'sample_prof.py'),'--top','200',*(['--lines',args.profile_lines] if args.profile_lines else []),'--out',str(output/(label+'.prof')),'--',str(run_exe)]
                         process_metrics=run_measured(command,cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT,
                                        startupinfo=startup,creationflags=flags)
                     check_inputs()

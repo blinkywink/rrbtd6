@@ -164,7 +164,8 @@ const CULLS: [CullFace; 3] = [CullFace::Nothing, CullFace::Front, CullFace::Back
 
 impl Instancer {
     pub fn new() -> Option<Self> {
-        if std::env::var_os("RRBTD6_NO_INSTANCED_BLOONS").is_some() || unsafe { get_internal_gl() }.quad_context.info().backend != mq::Backend::OpenGl {
+        let info = unsafe { get_internal_gl() }.quad_context.info();
+        if std::env::var_os("RRBTD6_NO_INSTANCED_BLOONS").is_some() || info.backend != mq::Backend::OpenGl || !info.features.instancing {
             return None;
         }
         let mut programs = Vec::new();

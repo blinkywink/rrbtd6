@@ -30,9 +30,10 @@
   });
 })();
 
-// Under the button: the latest build's number, age and installer size, from GitHub's API (kept for
-// ten minutes per tab). Every push to main publishes a new build, so this can't be written into the
-// page; when the request fails the line just stays hidden.
+// Under the button: the current version ("Version 0.651", the release title), its age and the
+// installer size, from GitHub's API (kept for ten minutes per tab). A release is published whenever
+// VERSION is raised, so this isn't written into the page; when the request fails the line stays
+// hidden.
 (function () {
   var line = document.getElementById("release");
   if (!line || !window.fetch) return;

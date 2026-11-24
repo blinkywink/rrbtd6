@@ -30820,6 +30820,8 @@ mod tests {
     #[test]
     #[ignore]
     fn compare_recording() {
+        // (As the game runs: the C runtime's math on one path on every CPU.)
+        crate::platform::lock_math();
         let paths: Vec<String> = match std::env::var("RRBTD6_REC") {
             Ok(p) => vec![p],
             Err(_) => {

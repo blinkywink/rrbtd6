@@ -925,6 +925,7 @@ void main() {
 
 /// GrayscaleUI: _GrayscaleAmount 0.8 toward luminance, then x _Tint (0.643, 0.725, 0.824).
 const GRAY_FS: &str = r#"#version 100
+precision mediump float;
 varying lowp vec4 color;
 varying lowp vec2 uv;
 uniform sampler2D Texture;

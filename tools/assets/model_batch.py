@@ -89,7 +89,7 @@ def run(game, jobs, size=16, workers=None, *, progress_offset=0, progress_total=
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 json.dump(group, stream)
-            cmd = [sys.executable, "-I", str(Path(__file__).with_name("export_animated_batch.py")), str(game), manifest]
+            cmd = [sys.executable, "-X", "utf8", "-I", str(Path(__file__).with_name("export_animated_batch.py")), str(game), manifest]
             if keep_floats:
                 cmd.append("--keep-floats")
             tail = deque(maxlen=25)

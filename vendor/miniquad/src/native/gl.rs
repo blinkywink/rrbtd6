@@ -663,3 +663,9 @@ pub unsafe fn is_gl2() -> bool {
         || version_string.starts_with("2")
         || version_string.starts_with("OpenGL ES 2")
 }
+
+/// (rrbtd6) Whether glVertexAttribDivisor loaded (core in OpenGL 3.3; ARB_instanced_arrays before):
+/// instancing needs it.
+pub fn has_vertex_attrib_divisor() -> bool {
+    unsafe { (*std::ptr::addr_of!(__pfns::glVertexAttribDivisor)).is_some() }
+}

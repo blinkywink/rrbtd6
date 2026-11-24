@@ -132,12 +132,12 @@ class BatchTests(unittest.TestCase):
     def test_cache_lock_serializes_processes_and_survives_worker_exit(self):
         with tempfile.TemporaryDirectory() as temp:
             code = "import sys,time;sys.path.insert(0,sys.argv[1]);from bundle_lock import cache_lock;from pathlib import Path;counter=Path(sys.argv[2]);lock=sys.argv[3];" + "\nfor _ in range(10):\n with cache_lock(lock):\n  n=int(counter.read_text()) if counter.exists() else 0\n  time.sleep(.002)\n  counter.write_text(str(n+1))"
-            cmd = [sys.executable, "-I", "-c", code, str(TOOLS), str(Path(temp)/"count"), str(Path(temp)/"cache.lock")]
+            cmd = [sys.executable, "-X", "utf8", "-I", "-c", code, str(TOOLS), str(Path(temp)/"count"), str(Path(temp)/"cache.lock")]
             children = [subprocess.Popen(cmd) for _ in range(3)]
             for child in children:self.assertEqual(child.wait(timeout=20), 0)
             self.assertEqual((Path(temp)/"count").read_text(), "30")
             code = "import sys,time;sys.path.insert(0,sys.argv[1]);from bundle_lock import cache_lock;\nwith cache_lock(sys.argv[2]):\n print('locked',flush=True)\n time.sleep(60)"
-            child = subprocess.Popen([sys.executable, "-I", "-c", code, str(TOOLS), str(Path(temp)/"cache.lock")], stdout=subprocess.PIPE, text=True)
+            child = subprocess.Popen([sys.executable, "-X", "utf8", "-I", "-c", code, str(TOOLS), str(Path(temp)/"cache.lock")], stdout=subprocess.PIPE, text=True)
             try:
                 self.assertEqual(child.stdout.readline().strip(), "locked")
             finally:

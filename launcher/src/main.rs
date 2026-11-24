@@ -13,6 +13,7 @@
 
 mod transaction;
 mod compatibility;
+mod system;
 
 use std::fs;
 use std::io::{self, Write};
@@ -42,17 +43,32 @@ fn pause() {
 
 fn run() -> Result<()> {
     let dir = std::env::current_exe()?.parent().ok_or("no install folder")?.to_path_buf();
+    // Started on its own from a download folder (no installer mod): offer the recommended folder.
+    if standalone_install(&dir)? {
+        return Ok(());
+    }
     let _install_lock = transaction::lock(&dir)?;
     transaction::recover(&dir)?;
     let skip_update = std::env::args().any(|a| a == "--offline");
     let refresh_assets=std::env::args().any(|a|a=="--refresh-assets");
     let config: serde_json::Value = fs::read_to_string(dir.join("rrbtd6.json")).ok()
         .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    let game = config["game"].as_str().map(PathBuf::from).or_else(find_btd6)
-        .ok_or("BTD6 folder unknown: install through the BTD6 mod, or write {\"game\": \"<BTD6 folder>\"} to rrbtd6.json")?;
-    if !game.join("GameAssembly.dll").exists() {
-        return Err(format!("{} is not a BTD6 install", game.display()).into());
-    }
+    let configured = config["game"].as_str().map(PathBuf::from).filter(|g| g.join("GameAssembly.dll").exists());
+    let game = match configured {
+        Some(g) => g,
+        // Moved or never set: Steam (any library on any drive), Epic, the default folders.
+        None => {
+            let found = system::find_btd6().ok_or(
+                "Couldn't find Bloons TD 6. RustTD6 reads its data from your own BTD6 install (Steam or Epic). \
+                 Install BTD6, start it once, then start RustTD6 again. If BTD6 is installed somewhere unusual, \
+                 write {\"game\": \"<BTD6 folder>\"} to rrbtd6.json in this folder.")?;
+            let mut config = if config.is_object() { config.clone() } else { serde_json::json!({}) };
+            config["game"] = serde_json::Value::String(found.to_string_lossy().into_owned());
+            let _ = fs::write(dir.join("rrbtd6.json"), serde_json::to_string(&config)?);
+            println!("Found BTD6 at {}", found.display());
+            found
+        }
+    };
 
     if !skip_update {
         match update(&dir,&game,refresh_assets) {
@@ -81,19 +97,78 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-/// Default Steam / Epic install locations.
-fn find_btd6() -> Option<PathBuf> {
-    ["C:/Program Files (x86)/Steam/steamapps/common/BloonsTD6", "C:/Program Files/Epic Games/BloonsTD6"]
-        .iter().map(PathBuf::from).find(|p| p.join("GameAssembly.dll").exists())
+/// The folder `standalone_install` offers: per-user, always writable, not synced.
+fn recommended_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("RustTD6"))
+}
+
+/// Started on its own (downloaded from the releases page, no installer mod) in a folder that is no
+/// install yet: install to the recommended folder (copy itself there, a desktop shortcut, start
+/// there) or into this folder. True when this run handed over and should end.
+fn standalone_install(dir: &Path) -> Result<bool> {
+    let installed = dir.join("rrbtd6.json").exists() || dir.join("version.json").exists() || dir.join("rrbtd6.exe").exists();
+    let Some(target) = recommended_dir() else { return Ok(false) };
+    if installed || std::env::args().any(|a| a == "--from-installer" || a == "--here") || dir == target {
+        return Ok(false);
+    }
+    let text = format!(
+        "Install RustTD6 to {}? (recommended)\n\nYes: install there and put a shortcut on the desktop.\nNo: install into this folder ({}).\nCancel: quit.",
+        target.display(),
+        dir.display()
+    );
+    match system::ask("RustTD6 Setup", &text, true) {
+        6 => {
+            fs::create_dir_all(&target)?;
+            let me = std::env::current_exe()?;
+            let copy = target.join("rrbtd6-launcher.exe");
+            fs::copy(&me, &copy)?;
+            desktop_shortcut(&copy, &target);
+            Command::new(&copy).current_dir(&target).spawn()?;
+            Ok(true)
+        }
+        7 => Ok(false),
+        _ => std::process::exit(0),
+    }
+}
+
+/// A desktop shortcut "RustTD6" to the launcher (as the installer mod makes; a convenience, so
+/// failures are ignored).
+fn desktop_shortcut(launcher: &Path, dir: &Path) {
+    let q = |p: &Path| p.display().to_string().replace('\'', "''");
+    let script = format!(
+        "$d=[Environment]::GetFolderPath('Desktop');$s=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d 'RustTD6.lnk'));$s.TargetPath='{}';$s.WorkingDirectory='{}';$s.Save()",
+        q(launcher),
+        q(dir)
+    );
+    let _ = Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).status();
 }
 
 fn get(url: &str) -> Result<ureq::Response> {
     static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    let agent = AGENT.get_or_init(|| ureq::AgentBuilder::new()
-        .timeout_connect(std::time::Duration::from_secs(10))
-        .timeout_read(std::time::Duration::from_secs(60))
-        .timeout_write(std::time::Duration::from_secs(60)).build());
+    let agent = AGENT.get_or_init(|| {
+        let mut b = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .timeout_read(std::time::Duration::from_secs(60))
+            .timeout_write(std::time::Duration::from_secs(60));
+        // School / office networks: HTTPS_PROXY, or the Windows proxy setting.
+        if let Some(p) = system::proxy().and_then(|p| ureq::Proxy::new(&p).ok()) {
+            b = b.proxy(p);
+        }
+        b.build()
+    });
     Ok(agent.get(url).set("User-Agent", USER_AGENT).call()?)
+}
+
+/// A downloaded release file against the SHA-256 the release lists (version.json "sha256"; older
+/// releases list none).
+fn verify(remote: &serde_json::Value, name: &str, path: &Path) -> Result<()> {
+    let Some(want) = remote["sha256"][name].as_str() else { return Ok(()) };
+    let got = system::sha256_hex(&fs::read(path)?).ok_or("could not hash the download")?;
+    if !got.eq_ignore_ascii_case(want) {
+        let _ = fs::remove_file(path);
+        return Err(format!("{name} was damaged while downloading (checksum mismatch); try again").into());
+    }
+    Ok(())
 }
 
 fn download(url: &str, to: &Path) -> Result<()> {
@@ -133,9 +208,12 @@ fn update(dir: &Path,game:&Path,refresh_assets:bool) -> Result<Update> {
     let payload = transaction::prepare(dir)?;
     let staging = transaction::staging(dir);
     download(asset("rrbtd6.exe").ok_or("release has no rrbtd6.exe")?, &payload.join("rrbtd6.exe"))?;
+    verify(&remote, "rrbtd6.exe", &payload.join("rrbtd6.exe"))?;
     download(asset("rrbtd6-tools.zip").ok_or("release has no rrbtd6-tools.zip")?, &staging.join("tools.zip"))?;
+    verify(&remote, "rrbtd6-tools.zip", &staging.join("tools.zip"))?;
     if let Some(url) = asset("rrbtd6-launcher.exe") {
         download(url, &payload.join("rrbtd6-launcher.exe"))?;
+        verify(&remote, "rrbtd6-launcher.exe", &payload.join("rrbtd6-launcher.exe"))?;
     }
     // Tools: replace the folder wholesale so removed scripts disappear too.
     let tools_new = staging.join("tools_new");
@@ -204,10 +282,17 @@ fn ensure_python_from(dir: &Path,tools:&Path) -> Result<PathBuf> {
     if python.exists() && fs::read_to_string(&stamp).ok().as_deref() == Some(requirements.as_str()) {
         return Ok(python);
     }
+    // The release's prepared runtime first (one GitHub download, no python.org / PyPI, nothing
+    // built); without it, set one up from python.org and PyPI as before.
+    match bundled_python(&root, &requirements) {
+        Ok(true) => return Ok(python),
+        Ok(false) => {}
+        Err(e) => println!("Prepared Python runtime unavailable ({e}); setting one up instead."),
+    }
     // A cancelled ZIP extraction can leave python.exe present without its DLLs
     // or standard library. Probe it before treating the runtime as installed.
     let runtime_ready = python.exists() && Command::new(&python)
-        .args(["-I", "-c", "import ssl, zipfile, sysconfig"])
+        .args(["-X", "utf8", "-I", "-c", "import ssl, zipfile, sysconfig"])
         .output().is_ok_and(|out| out.status.success());
     if !runtime_ready {
         println!("Setting up Python {PYTHON_VERSION} (first run only)...");
@@ -227,7 +312,7 @@ fn ensure_python_from(dir: &Path,tools:&Path) -> Result<PathBuf> {
     }
     // get-pip may have been interrupted after the runtime was unpacked. Retry
     // bootstrap independently instead of getting stuck on 'No module named pip'.
-    let pip_ready = Command::new(&python).args(["-I", "-m", "pip", "--version"])
+    let pip_ready = Command::new(&python).args(["-X", "utf8", "-I", "-m", "pip", "--version"])
         .output().is_ok_and(|out| out.status.success());
     if !pip_ready {
         let get_pip = root.join("get-pip.py");
@@ -246,10 +331,74 @@ fn ensure_python_from(dir: &Path,tools:&Path) -> Result<PathBuf> {
     Ok(python)
 }
 
+/// The release tag of the prepared runtime for these requirements (release.yml makes it when
+/// the requirements or the Python version change): `python-runtime-` + the first 16 hex digits
+/// of SHA-256(requirements.txt + PYTHON_VERSION).
+fn runtime_tag(requirements: &str) -> Option<String> {
+    let hex = system::sha256_hex(format!("{requirements}{PYTHON_VERSION}").as_bytes())?;
+    Some(format!("python-runtime-{}", &hex[..16]))
+}
+
+/// Unpacks the prepared runtime (embeddable Python with tools/requirements.txt installed, its
+/// stamp included) into `root`. Ok(false): this build has none published.
+fn bundled_python(root: &Path, requirements: &str) -> Result<bool> {
+    let Some(tag) = runtime_tag(requirements) else { return Ok(false) };
+    let url = format!("https://github.com/{REPO}/releases/download/{tag}/rrbtd6-python.zip");
+    let parent = root.parent().ok_or("no install folder")?;
+    let archive = parent.join("python-runtime.zip");
+    println!("Setting up Python (first run only)...");
+    if let Err(e) = download(&url, &archive) {
+        let _ = fs::remove_file(&archive);
+        // 404: not published for these requirements.
+        return if e.to_string().contains("404") { Ok(false) } else { Err(e) };
+    }
+    let unpack = parent.join("python.new");
+    let _ = fs::remove_dir_all(&unpack);
+    let result = (|| -> Result<()> {
+        zip::ZipArchive::new(fs::File::open(&archive)?)?.extract(&unpack)?;
+        let ok = Command::new(unpack.join("python.exe")).args(["-X", "utf8", "-I", "-c", "import ssl, zipfile, UnityPy, numpy, PIL"])
+            .output().is_ok_and(|out| out.status.success());
+        if !ok || fs::read_to_string(unpack.join("requirements.installed")).ok().as_deref() != Some(requirements) {
+            return Err("the prepared runtime doesn't start or doesn't match these requirements".into());
+        }
+        if root.exists() {
+            fs::remove_dir_all(root)?;
+        }
+        fs::rename(&unpack, root)?;
+        Ok(())
+    })();
+    let _ = fs::remove_file(&archive);
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&unpack);
+    }
+    result.map(|_| true)
+}
+
+/// Space the extraction needs on the install drive: the data (~7 GB) and, the first time, its
+/// working copy of the game's bundles (~5 GB) and Python.
+fn check_space(dir: &Path) -> Result<()> {
+    let first = !dir.join("local_extracted/game/game.json").is_file();
+    let need: u64 = if first { 15 } else { 7 } << 30;
+    if let Some(free) = system::free_bytes(dir) {
+        if free < need {
+            return Err(format!(
+                "Not enough free disk space: setup needs about {} GB free on the drive with {} and {:.1} GB are free. Free up some space and start RustTD6 again.",
+                need >> 30,
+                dir.display(),
+                free as f64 / (1u64 << 30) as f64
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 /// tools/extract_all.py skips finished steps and invalidates them by game fingerprint/output version.
 fn extract(dir: &Path, python: &Path, game: &Path) -> Result<()> {
+    check_space(dir)?;
     println!("Checking game data (the first run extracts it from your BTD6 install; this takes a while)...");
-    check(Command::new(python).arg("-I").arg(dir.join("tools/extract_all.py"))
+    // -X utf8: text as UTF-8 whatever the Windows code page (-I ignores PYTHONUTF8).
+    check(Command::new(python).args(["-X", "utf8", "-I"]).arg(dir.join("tools/extract_all.py"))
         .arg("--game").arg(game).arg("--root").arg(dir).current_dir(dir))
 }
 

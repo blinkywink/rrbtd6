@@ -59,7 +59,7 @@ def methods():
     same_build()
     live = os.path.join(TMP, "methods_live.tsv")
     if not os.path.exists(live):
-        subprocess.run([sys.executable, "-I", os.path.join(ROOT, "tools", "il2cpp", "live_methods.py"), live], check=True)
+        subprocess.run([sys.executable, "-X", "utf8", "-I", os.path.join(ROOT, "tools", "il2cpp", "live_methods.py"), live], check=True)
     rows = []
     for line in open(live, encoding="utf-8"):
         va, _img, t, m, *_ = line.rstrip("\n").split("\t")

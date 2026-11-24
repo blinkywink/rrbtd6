@@ -1762,6 +1762,7 @@ void main() {
 }"#;
 
 const PART_FS: &str = r#"#version 100
+precision mediump float;
 varying lowp vec4 color;
 varying lowp vec2 uv;
 uniform sampler2D Texture;
@@ -1771,6 +1772,7 @@ void main() {
 
 /// URP Particles/Unlit additive colour mode: albedo (texture x tint) plus the particle colour.
 const PART_ADD_FS: &str = r#"#version 100
+precision mediump float;
 varying lowp vec4 color;
 varying lowp vec2 uv;
 uniform sampler2D Texture;

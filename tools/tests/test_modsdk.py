@@ -17,7 +17,7 @@ class ModSdkTests(unittest.TestCase):
     def test_quickstart_builds_with_no_third_party_dependencies(self):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "mod.json"
-            subprocess.run([sys.executable, "-I", str(ROOT / "tools/modsdk.py"), "build",
+            subprocess.run([sys.executable, "-X", "utf8", "-I", str(ROOT / "tools/modsdk.py"), "build",
                             str(ROOT / "website/public/mods/quickstart.py"), "--out", str(destination)], check=True,
                            stdout=subprocess.DEVNULL)
             manifest = json.loads(destination.read_text(encoding="utf-8"))
@@ -63,7 +63,7 @@ class ModSdkTests(unittest.TestCase):
     def test_downloadable_entity_lab_builds_with_embedded_source(self):
         with tempfile.TemporaryDirectory() as directory:
             destination=Path(directory)/"mod.json"
-            subprocess.run([sys.executable,"-I",str(ROOT/"website/public/mods/modsdk.py"),"build",
+            subprocess.run([sys.executable,"-X","utf8","-I",str(ROOT/"website/public/mods/modsdk.py"),"build",
                             str(ROOT/"website/public/mods/entity-lab.py"),"--out",str(destination)],check=True,stdout=subprocess.DEVNULL)
             manifest=json.loads(destination.read_text(encoding="utf-8"))
             self.assertEqual(manifest["id"],"entity-lab")

@@ -55,9 +55,22 @@ public class Installer : MelonMod
             return;
         }
         if (!Native.InstallPrompt(out bool shortcut)) return;
-        string folder = Native.PickFolder("Choose a folder to install rrbtd6 into");
-        if (folder == null) return;
-        folder = Path.Combine(folder, "rrbtd6");
+        // The recommended folder first: always writable for this user and not synced to OneDrive.
+        int where = Native.Ask(DialogKind.Info, "RustTD6 Setup", "Where should RustTD6 go?",
+            "Recommended: " + Recommended + "\n\nThis folder belongs to your Windows account, is always writable and isn't synced to OneDrive.", null,
+            new[] { "Install there", "Choose another folder", "Cancel" }, 2);
+        if (where != 0 && where != 1) return;
+        string folder = Recommended;
+        if (where == 1)
+        {
+            string picked = Native.PickFolder("Choose a folder to install rrbtd6 into");
+            if (picked == null) return;
+            folder = Path.Combine(picked, "rrbtd6");
+        }
+        string problem = FolderProblem(folder, out string warning);
+        if (problem != null) { Native.Error("RustTD6 can't be installed there", problem); return; }
+        if (warning != null && Native.Ask(DialogKind.Warning, "RustTD6 Setup", "Install here anyway?", warning, null,
+                new[] { "Install here", "Cancel" }, 1) != 0) return;
         if (HasPreview && (File.Exists(Path.Combine(folder, "local_extracted", "game", "game.json")) || File.Exists(Path.Combine(folder, "rrbtd6.exe")))) {
             Native.Ask(DialogKind.Warning, "RustTD6 Setup", "Please choose a new, empty folder",
                 "This is a setup test. An existing installation would reuse prepared assets and would not measure first-time extraction.", null,
@@ -83,6 +96,52 @@ public class Installer : MelonMod
                 Native.Error("Could not download RustTD6 from GitHub", e.Message);
             }
         });
+    }
+
+    static string Recommended => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RustTD6");
+
+    /// Why RustTD6 can't be installed in this folder (null: it can), and what is worth a warning.
+    static string FolderProblem(string folder, out string warning)
+    {
+        warning = null;
+        string full;
+        try { full = Path.GetFullPath(folder); }
+        catch (Exception e) { return "That folder path isn't valid: " + e.Message; }
+        // Windows limits file paths to 260 characters, and the game data goes about 160 deep.
+        if (full.Length > 95)
+            return "The folder path is " + full.Length + " characters long. Windows limits file paths to 260 characters and the game's data goes about 160 characters deep, so choose a folder with a shorter path, for example " + Recommended + ".";
+        foreach (var special in new[] { Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86, Environment.SpecialFolder.Windows })
+        {
+            string root = Environment.GetFolderPath(special);
+            if (!string.IsNullOrEmpty(root) && (full.Equals(root, StringComparison.OrdinalIgnoreCase) || full.StartsWith(root.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)))
+                return "Windows only lets administrators change files inside " + root + ", so RustTD6 couldn't save its data or settings there. Choose another folder, for example " + Recommended + ".";
+        }
+        try
+        {
+            Directory.CreateDirectory(full);
+            string probe = Path.Combine(full, ".rrbtd6-write-test");
+            File.WriteAllText(probe, "ok");
+            File.Delete(probe);
+        }
+        catch (Exception e) { return "RustTD6 can't write to that folder (" + e.Message + "). Choose another folder, for example " + Recommended + "."; }
+        try
+        {
+            long free = new DriveInfo(Path.GetPathRoot(full)).AvailableFreeSpace;
+            const long need = 15L * 1024 * 1024 * 1024;
+            if (free < need)
+                return "Setup needs about 15 GB free on " + Path.GetPathRoot(full) + " (the game data is about 7 GB, plus working space while it is prepared), and " + (free / 1073741824.0).ToString("0.0") + " GB are free. Free up some space, or choose a folder on another drive.";
+        }
+        catch (Exception) { /* a network drive may not say; the launcher checks again */ }
+        foreach (var name in new[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" })
+        {
+            string synced = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrEmpty(synced) && full.StartsWith(synced.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
+            {
+                warning = "This folder is synced by OneDrive. RustTD6's game data is several GB, which OneDrive would upload, and files it keeps only online make the game slow to load. " + Recommended + " isn't synced.";
+                break;
+            }
+        }
+        return null;
     }
 
     // Reads only the currently loaded display name. No account IDs, sessions or save data.
@@ -156,14 +215,18 @@ public class Installer : MelonMod
         }};
         // A progress window, so players don't need the terminal; the terminal still gets every line.
         SetupDialog.Progress window = null;
+        // The launcher's last lines, for the dialog if setup stops.
+        var lastLines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        void Remember(string line) { lastLines.Enqueue(line); while (lastLines.Count > 6) lastLines.TryDequeue(out _); }
         try { window = new SetupDialog.Progress(); } catch (Exception e) { LoggerInstance.Warning("Progress window unavailable: " + e.Message); }
         process.OutputDataReceived += (_, e) => {
             if (string.IsNullOrEmpty(e.Data)) return;
             LoggerInstance.Msg(e.Data);
+            Remember(e.Data);
             window?.Report(e.Data);
             if (e.Data.StartsWith("Starting rrbtd6")) window?.Close();
         };
-        process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrEmpty(e.Data)) LoggerInstance.Warning(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrEmpty(e.Data)) { LoggerInstance.Warning(e.Data); Remember(e.Data); } };
         if (!process.Start()) { process.Dispose(); throw new InvalidOperationException("Could not start the RustTD6 launcher."); }
         process.StandardInput.Close();
         process.BeginOutputReadLine();process.BeginErrorReadLine();
@@ -173,8 +236,9 @@ public class Installer : MelonMod
                 window?.Close();
                 if (process.ExitCode != 0) {
                     LoggerInstance.Error("RustTD6 setup stopped. Completed extraction stages are saved; retry to continue.");
+                    string detail = string.Join("\n", lastLines);
                     Native.Error("Setup could not finish", "Completed stages are saved, so you can retry without starting over.",
-                                 "See the last error in the MelonLoader terminal.");
+                                 detail.Length > 0 ? "Last messages:\n" + detail : "See the last error in the MelonLoader terminal.");
                 }
             } catch (Exception e) { LoggerInstance.Error(e); }
             finally { process.Dispose(); }

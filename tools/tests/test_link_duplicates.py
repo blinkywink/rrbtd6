@@ -10,7 +10,7 @@ TOOL = Path(__file__).resolve().parents[1] / "assets/link_duplicates.py"
 
 
 def run(*args):
-    return subprocess.run([sys.executable, "-I", str(TOOL), *map(str, args)], check=True, capture_output=True, text=True).stdout
+    return subprocess.run([sys.executable, "-X", "utf8", "-I", str(TOOL), *map(str, args)], check=True, capture_output=True, text=True).stdout
 
 
 def inode(path):

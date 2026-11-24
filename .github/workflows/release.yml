@@ -1,7 +1,10 @@
-# Every push to main (tools/publish.sh) builds the Windows game, the launcher and the BTD6
-# installer mod, and publishes them as the latest release. The launcher and the mod read
-# releases/latest to install and update. Code only: the game data is extracted on each player's
-# PC from their own BTD6 install.
+# Every push to main (tools/publish.sh) tests and builds the Windows game, the launcher and the
+# BTD6 installer mod. A release is published only when VERSION names a version that has none yet
+# (tag v<VERSION>, title "Version <VERSION>"); then every older release goes, so the releases page
+# holds the current version alone (plus the prepared Python runtime). The launcher and the mod read
+# releases/latest to install and update; version.json's "build" (the run number) keeps rising for
+# launchers that compare it. Code only: the game data is extracted on each player's PC from their
+# own BTD6 install.
 name: release
 
 on:
@@ -16,11 +19,16 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  # The embeddable Python the launcher sets up (launcher/src/main.rs PYTHON_VERSION; checked below).
+  PYTHON_EMBED: "3.13.1"
+
 jobs:
   windows:
     runs-on: windows-latest
     env:
       RUSTFLAGS: -C target-feature=+crt-static
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +41,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: game
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          version="$(tr -d ' \r\n' < VERSION)"
+          if ! [[ "$version" =~ ^0\.[0-9]+$ || "$version" =~ ^[1-9][0-9]*\.[0-9]+$ ]]; then
+            echo "VERSION must be a number like 0.651, not '$version'"; exit 1
+          fi
+          grep -q "const PYTHON_VERSION: &str = \"$PYTHON_EMBED\";" launcher/src/main.rs \
+            || { echo "PYTHON_EMBED ($PYTHON_EMBED) differs from the launcher's PYTHON_VERSION"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"; echo "Version $version is already released: test and build only."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"; echo "Version $version will be released."
+          fi
 
       - name: Install storage test dependencies
         shell: bash
@@ -60,6 +85,7 @@ jobs:
           cargo test --release -p rrbtd6-coop --locked
           cargo test --release -p btd6-game modding:: --locked
           cargo test --release -p btd6-game frontend::mod_browser:: --locked
+          cargo test --release -p btd6-game platform:: --locked
 
       - name: Build game and launcher
         shell: bash
@@ -76,7 +102,9 @@ jobs:
           RRBTD6_AUDIO_FIXTURES=target/audio-fixtures cargo test --release -p btd6-game lossless_mixer_equivalence --locked -- --ignored
           cargo test --release -p quad-snd prepared_tests --locked
 
+      # Downloads Python and PyPI packages, so only for a build that will be released.
       - name: Test embedded Python bootstrap
+        if: steps.version.outputs.publish == 'true'
         shell: bash
         run: python -I tools/tests/test_launcher_bootstrap.py target/release/rrbtd6-launcher.exe
 
@@ -89,6 +117,7 @@ jobs:
           dotnet build installer_mod/RRBTD6Installer.csproj -c Release -p:MelonLoaderDir="$PWD/ml" -o installer_out
 
       - name: Package
+        if: steps.version.outputs.publish == 'true'
         shell: bash
         run: |
           mkdir -p dist
@@ -97,17 +126,65 @@ jobs:
           cp installer_out/RRBTD6Installer.dll dist/RRBTD6Installer.dll
           python -I tools/package_tools.py dist/rrbtd6-tools.zip
           revision="$(python -I tools/extract_all.py --asset-revision)"
-          printf '{"build":%s,"commit":"%s","assets_revision":"%s"}\n' "${{ github.run_number }}" "${{ github.sha }}" "$revision" > dist/version.json
+          sha() { python -I -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$1"; }
+          printf '{"build":%s,"version":"%s","commit":"%s","assets_revision":"%s","sha256":{"rrbtd6.exe":"%s","rrbtd6-launcher.exe":"%s","rrbtd6-tools.zip":"%s"}}\n' \
+            "${{ github.run_number }}" "${{ steps.version.outputs.version }}" "${{ github.sha }}" "$revision" \
+            "$(sha dist/rrbtd6.exe)" "$(sha dist/rrbtd6-launcher.exe)" "$(sha dist/rrbtd6-tools.zip)" > dist/version.json
+          cat dist/version.json
+
+      # The launcher's first-run Python with the extraction packages already installed (one GitHub
+      # download for players instead of python.org + PyPI). Its tag is keyed by the requirements and
+      # the Python version (launcher runtime_tag), so it is only built when those change.
+      - name: Prepared Python runtime
+        id: runtime
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        run: |
+          key="$(python -I -c "import hashlib; print(hashlib.sha256((open('tools/requirements.txt', encoding='utf-8', newline='').read() + '$PYTHON_EMBED').encode()).hexdigest()[:16])")"
+          tag="python-runtime-$key"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then echo "$tag exists"; exit 0; fi
+          curl --fail --location --retry 3 -o py.zip "https://www.python.org/ftp/python/$PYTHON_EMBED/python-$PYTHON_EMBED-embed-amd64.zip"
+          python -m zipfile -e py.zip py
+          for pth in py/*._pth; do sed -i 's/^#import site/import site/' "$pth"; done
+          curl --fail --location --retry 3 -o get-pip.py https://bootstrap.pypa.io/get-pip.py
+          py/python.exe get-pip.py --no-warn-script-location
+          py/python.exe -m pip install --no-warn-script-location setuptools==80.9.0 wheel==0.45.1
+          py/python.exe -m pip install --no-warn-script-location --no-build-isolation -r tools/requirements.txt
+          cp tools/requirements.txt py/requirements.installed
+          py/python.exe -X utf8 -I -c "import ssl, zipfile, UnityPy, numpy, PIL"
+          python -I -c "
+          import os, zipfile
+          with zipfile.ZipFile('rrbtd6-python.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              for d, _, files in os.walk('py'):
+                  for f in files:
+                      p = os.path.join(d, f)
+                      z.write(p, os.path.relpath(p, 'py'))
+          "
+          gh release create "$tag" rrbtd6-python.zip -R "$GITHUB_REPOSITORY" --title "Python runtime $key" \
+            --notes "The launcher's first-run Python $PYTHON_EMBED with tools/requirements.txt installed. Not a game release." --latest=false
 
       - name: Publish release
+        if: steps.version.outputs.publish == 'true'
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          tag="build-${{ github.run_number }}"
-          notes="Automatic build of ${{ github.sha }}.
+          version="${{ steps.version.outputs.version }}"
+          notes="RustTD6 version $version (${{ github.sha }}).
 
-          Install: put RRBTD6Installer.dll in your BTD6 Mods folder (MelonLoader 0.7.3) and start BTD6.
+          Install: put RRBTD6Installer.dll in your BTD6 Mods folder (MelonLoader 0.7.3) and start BTD6, or run rrbtd6-launcher.exe on its own.
           Game data is not included; it is extracted from your own BTD6 install."
-          gh release create "$tag" dist/rrbtd6.exe dist/rrbtd6-launcher.exe dist/RRBTD6Installer.dll \
-            dist/rrbtd6-tools.zip dist/version.json --title "Build ${{ github.run_number }}" --notes "$notes" --latest
+          gh release create "v$version" dist/rrbtd6.exe dist/rrbtd6-launcher.exe dist/RRBTD6Installer.dll \
+            dist/rrbtd6-tools.zip dist/version.json -R "$GITHUB_REPOSITORY" --title "Version $version" --notes "$notes" --latest
+
+      # Only the current version (and the current Python runtime) stay on the releases page.
+      - name: Remove older releases
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        run: |
+          keep_version="v${{ steps.version.outputs.version }}"
+          keep_runtime="${{ steps.runtime.outputs.tag }}"
+          gh release list -R "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' | while read -r tag; do
+            if [ "$tag" = "$keep_version" ] || [ "$tag" = "$keep_runtime" ]; then continue; fi
+            echo "deleting $tag"
+            gh release delete "$tag" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag || echo "could not delete $tag"
+          done

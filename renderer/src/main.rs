@@ -6,6 +6,9 @@
 //! Space / Go button = start next round, F = toggle 1x/3x speed, A = auto-start,
 //! gear button / Esc = pause screen, Esc = cancel placement, V = toggle 3D / 2D view.
 
+// No console window behind the game (its output still reaches a parent that redirects it).
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
 #[cfg(windows)]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -29,6 +32,7 @@ mod mod_maps;
 mod load_work;
 mod frame_bench;
 mod frame_pacer;
+mod platform;
 mod sim_thread;
 mod presentation_check;
 mod round_bench;
@@ -273,7 +277,12 @@ fn load_settings(root: &std::path::Path) -> Option<[f32; 3]> {
 fn save_setting(root: &std::path::Path, key: &str, value: serde_json::Value) {
     let mut v = read_settings(root);
     v[key] = value;
-    let _ = std::fs::write(settings_path(root), v.to_string());
+    // Through a temporary file: an interrupted write (power loss, a full disk) keeps the old one.
+    let path = settings_path(root);
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, v.to_string()).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 fn save_settings(root: &std::path::Path, v: [f32; 3]) {
@@ -399,15 +408,13 @@ fn conf() -> macroquad::conf::Conf {
     conf
 }
 
-const WINDOW_TITLE: &str = "RustTD6";
+/// The window title, with the version (VERSION at the repository root, through build.rs).
+const WINDOW_TITLE: &str = concat!("RustTD6 ", env!("RRBTD6_VERSION"));
 
 fn apply_display_mode(a: &advanced::Advanced) {
     miniquad::window::set_fullscreen(a.fullscreen);
 }
 
-/// Ends a frame for the Advanced settings: "Show FPS" puts the frame rate in the window title
-/// (twice a second; see DEVIATIONS.md), and the "FPS Limit" (0: none) sleeps out the rest of the
-/// presentation interval, including submission and swap after this call.
 /// Minimized or behind another window, outside autotests (their window is hidden) and co-op
 /// (its lockstep pacing).
 fn in_background(autotest: bool, coop: bool) -> bool {
@@ -417,6 +424,9 @@ fn in_background(autotest: bool, coop: bool) -> bool {
 /// The frame rate while minimized or unfocused (`pace`).
 const BACKGROUND_FPS: u32 = 30;
 
+/// Ends a frame for the Advanced settings: "Show FPS" puts the frame rate in the window title
+/// (twice a second; see DEVIATIONS.md), and the "FPS Limit" (0: none) sleeps out the rest of the
+/// presentation interval, including submission and swap after this call.
 fn pace(frame_t0: std::time::Instant, adv: &advanced::Advanced, pacer: &mut frame_pacer::FramePacer, legacy: bool, background: bool) {
     static SHOWN: std::sync::Mutex<(bool, f64)> = std::sync::Mutex::new((false, 0.0));
     if let Ok(mut shown) = SHOWN.lock() {
@@ -639,21 +649,24 @@ async fn loading_task<F:std::future::Future>(future:F,front:&mut frontend::Front
 }
 
 fn main() {
+    platform::compat_test_env();
     mem_guard::limit_process();
-    // A crash leaves its reason in ~/RustTD6-crash.log (a Mac app has no console to read).
+    platform::lock_math();
+    // A crash leaves its reason in ~/RustTD6-crash.log (a Mac app has no console to read), and on
+    // the main thread a dialog says so (the window would otherwise just disappear).
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let mut saved = None;
         if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             use std::io::Write;
             let path = PathBuf::from(home).join("RustTD6-crash.log");
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-                let _ = writeln!(f, "{info}
-data folder: {}
-{}
-", root().display(), std::backtrace::Backtrace::force_capture());
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                let _ = writeln!(f, "RustTD6 {}: {info}\ndata folder: {}\n{}\n", env!("RRBTD6_VERSION"), root().display(), std::backtrace::Backtrace::force_capture());
+                saved = Some(path);
             }
         }
         default_hook(info);
+        platform::crash_dialog(&platform::panic_reason(info), saved.as_deref());
     }));
     macroquad::Window::from_config(conf(),presentation_check::wrap(game_main()));
 }
@@ -667,7 +680,7 @@ async fn game_main() {
     render3d::init_compressed_textures();
     mark("json");
     let json = std::sync::Arc::new(std::fs::read_to_string(simulation_path(&root,"game/game.json"))
-        .expect("local_extracted/game/game.json missing: run tools/assets/build_game_data.py"));
+        .expect("The game data (local_extracted/game/game.json) is missing. Start RustTD6 through rrbtd6-launcher.exe: it extracts the data from your BTD6 install."));
     let mut hero: Option<String> = read_settings(&root)["hero"].as_str().map(str::to_string);
     let mut maps = map_keys(&root);
     // (RRBTD6_MAP=<map>: an autotest's map, over the saved one.)

@@ -831,7 +831,8 @@ fn gl_info() -> ContextInfo {
     let webgl1 = gl_version_string == "WebGL 1.0";
 
     let features = Features {
-        instancing: !gl2,
+        // (rrbtd6) Instancing also needs the divisor function (OpenGL 3.3 / ARB_instanced_arrays).
+        instancing: !gl2 && crate::native::gl::has_vertex_attrib_divisor() && std::env::var_os("RRBTD6_NO_INSTANCING").is_none(),
         resolve_attachments: !webgl1 && !gl2,
     };
 

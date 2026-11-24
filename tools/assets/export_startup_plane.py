@@ -19,7 +19,7 @@ if len(matches) != 1:
 cab = matches[0]
 del env
 gc.collect()
-subprocess.run([sys.executable, "-I", str(Path(__file__).with_name("export_animated.py")),
+subprocess.run([sys.executable, "-X", "utf8", "-I", str(Path(__file__).with_name("export_animated.py")),
                 str(game), str(root / "models/startup_plane"), "ui_scenes_all_",
                 f"scene:{cab}|TitleScreenBg/MonkeyAce/MonkeyAce", "60"],
                env={**os.environ, "RRBTD6_ANIM_LOCAL": "1"}, check=True)

@@ -426,7 +426,10 @@ impl Wgl {
             attrs.as_ptr() as *const _,
         );
 
-        if gl_ctx.is_null() {
+        // (rrbtd6) No 2.1 fallback: the game uses OpenGL 3 functions, so a 2.1 context only fails
+        // later and less clearly; a driver without 3.1 gets the panic below, which the game turns
+        // into a "graphics driver" message (renderer platform.rs).
+        if gl_ctx.is_null() && std::env::var_os("RRBTD6_ALLOW_GL21").is_some() {
             eprintln!("WGL: failed to create 3.1 context, trying 2.1");
 
             let attrs = [
