@@ -517,6 +517,7 @@ unsafe extern "system" fn win32_wndproc(
             }
 
             let iconified = wparam == SIZE_MINIMIZED;
+            crate::window::set_minimized(iconified);
             if iconified != payload.iconified {
                 payload.iconified = iconified;
                 if iconified {
@@ -836,6 +837,7 @@ unsafe extern "system" fn win32_wndproc(
             }
         }
         WM_ACTIVATE => {
+            crate::window::set_unfocused(!(LOWORD(wparam as _) == WA_ACTIVE || LOWORD(wparam as _) == WA_CLICKACTIVE));
             if LOWORD(wparam as _) == WA_ACTIVE || LOWORD(wparam as _) == WA_CLICKACTIVE {
                 event_handler.window_restored_event();
             } else {

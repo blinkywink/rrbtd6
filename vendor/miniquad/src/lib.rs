@@ -120,6 +120,29 @@ fn native_display() -> &'static Mutex<native::NativeDisplayData> {
 pub mod window {
     use super::*;
 
+    static MINIMIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static UNFOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// (rrbtd6) Whether the window is minimized (Windows: WM_SIZE SIZE_MINIMIZED; false elsewhere).
+    pub fn is_minimized() -> bool {
+        MINIMIZED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// (rrbtd6) Whether another window is active (Windows: WM_ACTIVATE; false elsewhere).
+    pub fn is_unfocused() -> bool {
+        UNFOCUSED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_minimized(on: bool) {
+        MINIMIZED.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn set_unfocused(on: bool) {
+        UNFOCUSED.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// The same as
     /// ```ignore
     /// if metal {

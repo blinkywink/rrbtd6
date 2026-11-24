@@ -110,7 +110,7 @@ struct RemoveableState {
 
 #[derive(Clone, Default)]
 pub struct LogicState {
-    pub def: LogicDef,
+    pub def: crate::game::Shared<LogicDef>,
     removeables: Vec<RemoveableState>,
     events_active: Vec<bool>,
     /// MapTrigger.triggered per event, per trigger.
@@ -119,10 +119,10 @@ pub struct LogicState {
     /// event, per trigger (filled on first use).
     round_skip: Vec<Vec<(bool, i32)>>,
     /// Every Area of the map: DestroyArea and CreateArea move them out of and into `Game::areas`.
-    pool: Vec<Area>,
+    pool: crate::game::Shared<Vec<Area>>,
     /// The active paths' data (parallel to `Game::tracks`), and paths not yet on the map.
-    paths: Vec<MapPath>,
-    pub(crate) dormant: Vec<MapPath>,
+    paths: crate::game::Shared<Vec<MapPath>>,
+    pub(crate) dormant: crate::game::Shared<Vec<MapPath>>,
     splitter_ids: Vec<i64>,
     spawner: Option<crate::map_routes::SpawnerDef>,
     reversed: bool,
@@ -164,15 +164,15 @@ impl LogicState {
             inactive: Vec::new(),
             cycle_last: Vec::new(),
             in_round_end: false,
-            pool: map.areas.clone(),
-            paths,
+            pool: map.areas.clone().into(),
+            paths: paths.into(),
             dormant: map.paths.iter().filter(|p| !p.active && p.points.len() > 1).cloned().collect(),
             splitter_ids,
             spawner: map.spawner.clone(),
             reversed,
             hide_parts: Vec::new(),
             lives_lost: 0.0,
-            def,
+            def: def.into(),
         }
     }
 
@@ -799,8 +799,8 @@ mod tests {
             removeables: logic.removeables.iter().map(|r| RemoveableState { active: r.active, sold: false }).collect(),
             events_active: logic.events.iter().map(|e| e.active).collect(),
             triggered: logic.events.iter().map(|e| vec![false; e.triggers.len()]).collect(),
-            pool: areas.clone(),
-            def: logic,
+            pool: areas.clone().into(),
+            def: logic.into(),
             ..Default::default()
         };
         g.areas.extend(areas);

@@ -408,7 +408,16 @@ fn apply_display_mode(a: &advanced::Advanced) {
 /// Ends a frame for the Advanced settings: "Show FPS" puts the frame rate in the window title
 /// (twice a second; see DEVIATIONS.md), and the "FPS Limit" (0: none) sleeps out the rest of the
 /// presentation interval, including submission and swap after this call.
-fn pace(frame_t0: std::time::Instant, adv: &advanced::Advanced, pacer: &mut frame_pacer::FramePacer, legacy: bool) {
+/// Minimized or behind another window, outside autotests (their window is hidden) and co-op
+/// (its lockstep pacing).
+fn in_background(autotest: bool, coop: bool) -> bool {
+    !autotest && !coop && (miniquad::window::is_minimized() || miniquad::window::is_unfocused())
+}
+
+/// The frame rate while minimized or unfocused (`pace`).
+const BACKGROUND_FPS: u32 = 30;
+
+fn pace(frame_t0: std::time::Instant, adv: &advanced::Advanced, pacer: &mut frame_pacer::FramePacer, legacy: bool, background: bool) {
     static SHOWN: std::sync::Mutex<(bool, f64)> = std::sync::Mutex::new((false, 0.0));
     if let Ok(mut shown) = SHOWN.lock() {
         let now = get_time();
@@ -420,7 +429,20 @@ fn pace(frame_t0: std::time::Instant, adv: &advanced::Advanced, pacer: &mut fram
             shown.0 = false;
         }
     }
-    let cap = adv.fps_cap;
+    // Minimized or behind another window: BACKGROUND_FPS at most (the sim still runs in real
+    // time; only the redraws nobody sees drop).
+    let cap = if background { if adv.fps_cap == 0 { BACKGROUND_FPS } else { adv.fps_cap.min(BACKGROUND_FPS) } } else { adv.fps_cap };
+    // RRBTD6_FPS_LOG: the frame rate and window state once a second (checking the background cap).
+    if std::env::var_os("RRBTD6_FPS_LOG").is_some() {
+        static LOGGED: std::sync::Mutex<f64> = std::sync::Mutex::new(0.0);
+        if let Ok(mut at) = LOGGED.lock() {
+            let now = get_time();
+            if now - *at >= 1.0 {
+                *at = now;
+                eprintln!("fps-log: {} fps, minimized {}, unfocused {}, cap {cap}", get_fps(), miniquad::window::is_minimized(), miniquad::window::is_unfocused());
+            }
+        }
+    }
     if !legacy {
         pacer.wait(cap, frame_t0);
         return;
@@ -1671,7 +1693,7 @@ const VINE_END_FRAMES: i32 = 23;
                             break;
                         }
                     }
-                    pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
+                    pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing, in_background(autotest.is_some(), coop_runtime.is_some()));
                     next_frame().await;
                     frame_t0 = std::time::Instant::now();
                     continue;
@@ -1772,7 +1794,7 @@ const VINE_END_FRAMES: i32 = 23;
                     break;
                 }
             }
-            pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
+            pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing, in_background(autotest.is_some(), coop_runtime.is_some()));
             next_frame().await;
             frame_t0 = std::time::Instant::now();
             continue;
@@ -1939,7 +1961,7 @@ const VINE_END_FRAMES: i32 = 23;
                     break;
                 }
             }
-            pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
+            pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing, in_background(autotest.is_some(), coop_runtime.is_some()));
             next_frame().await;
             frame_t0 = std::time::Instant::now();
             continue;
@@ -4977,7 +4999,7 @@ const VINE_END_FRAMES: i32 = 23;
         }
         let frame_cpu=get_time()-cpu_t0;
         cpu_time += frame_cpu;
-        pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing);
+        pace(frame_t0, &adv, &mut frame_pacer, legacy_pacing, in_background(autotest.is_some(), coop_runtime.is_some()));
         let nf0 = get_time();
         next_frame().await;
         if let Some(c)=frame_capture.as_mut(){c.record(frames,frame_t0.elapsed().as_secs_f64(),frame_cpu,game.bloons.len(),game.projectiles.len(),game.towers.len(),game.round+1,game.round_active,game.towers.iter().filter(|t|t.paragon.is_some()).count());}

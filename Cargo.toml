@@ -24,6 +24,16 @@ lto = false
 codegen-units = 16
 incremental = true
 
+# Shipped builds (tools/build_exe.sh, build_macos.sh, build_ios.sh): the game profile's results,
+# whole-program optimized (fat LTO, one codegen unit). Slower to build, faster to run; the same
+# floating-point results (Rust never reorders float math).
+[profile.dist]
+inherits = "release"
+debug = 0
+lto = "fat"
+codegen-units = 1
+incremental = false
+
 # miniquad with independent depth test / depth write (see vendor/miniquad/src/graphics/gl.rs).
 [patch.crates-io]
 miniquad = { path = "vendor/miniquad" }

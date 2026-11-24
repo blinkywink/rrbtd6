@@ -2390,6 +2390,18 @@ seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
 
+- 2026-11-24: Perf batch A. (1) map_logic LogicState's def / pool / paths / dormant are Shared (the
+  frame copy cloned every MapPath each frame; Game::view at round 200 now ~0.02 ms; no
+  copy-on-write copies in the benchmark). (2) Cargo profile `dist` (fat LTO, 1 codegen unit):
+  ~4% faster bad_bench (4335 vs 4505 ms), 8 min to build, so opt-in: `sh tools/build_exe.sh
+  --dist` for a build to hand out. (3) Minimized or unfocused (vendor/miniquad window::is_minimized /
+  is_unfocused, from WM_SIZE / WM_ACTIVATE) the frame pacer caps at BACKGROUND_FPS 30, outside
+  autotests and co-op; the sim still runs in real time. RRBTD6_FPS_LOG=1 logs fps and the window
+  state each second (checked: ~145 fps focused at a 144 cap, 29 behind another window and
+  minimized). Not done: a refresh-rate cap as a vsync backstop (on two monitors it could cap below
+  the faster one; the FPS Limit setting covers vsync off). Frame bench round 200 unchanged within
+  noise (A/B order matters: the second run of a pair reads ~4% slower).
+
 - 2026-11-23: Frame perf (pixels identical): vendor/macroquad QuadGl::pipeline no longer forces a
   batch break on every material switch. geometry / geometry_instanced already start a new call
   when the pipeline differs and set_uniform still breaks, so the break only split every
