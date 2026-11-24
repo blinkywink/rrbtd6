@@ -1213,6 +1213,9 @@ pub struct Attack {
     /// TargetEliteTargettingModel.percentageThroughMap (Elite: past it a bloon goes first).
     #[serde(default = "elite_perc_default")]
     pub elite_perc: f32,
+    /// FilterParentTowerRangeModel: only bloons the parent tower's first attack can see.
+    #[serde(default)]
+    pub parent_range: bool,
     /// Target*PrioCamoModel: camo bloons are picked before any others (Ninja Monkey).
     #[serde(default)]
     pub prio_camo: bool,
@@ -3292,6 +3295,9 @@ pub struct AirPattern {
 
 #[derive(Deserialize, Clone)]
 pub struct SubTowerSpec {
+    /// DroneSupportModel's spawn and DroneIdle / PursuitSettingCustom (Etienne's drones).
+    #[serde(default)]
+    pub drone: Option<DroneSpec>,
     /// TowerModel.radius and footprint, for Map.OverlapsOtherEntity.
     #[serde(default)]
     pub place_radius: f32,
@@ -4311,4 +4317,31 @@ pub struct PsiScream {
     pub psi: [f32; 4],
     #[serde(default)]
     pub psi_destroy: Option<std::sync::Arc<Contact>>,
+}
+
+/// Etienne's drones: DroneSupportModel spawnMarkerStarts / Ends (Etienne's frame, game units),
+/// spawnDelayFrames (DroneIdle.inactiveFrames) and ignoreTargetingFrames; the drone's DroneIdleModel
+/// (outOfRangeRepositionTime, idleRepositionTimeMin / Max, frames) and PursuitSettingCustomModel.
+#[derive(Deserialize, Clone, Default)]
+pub struct DroneSpec {
+    #[serde(default)]
+    pub starts: Vec<[f32; 2]>,
+    #[serde(default)]
+    pub ends: Vec<[f32; 2]>,
+    #[serde(default)]
+    pub delay_frames: i32,
+    #[serde(default)]
+    pub ignore_frames: i32,
+    #[serde(default)]
+    pub out_frames: i32,
+    #[serde(default)]
+    pub idle_min: i32,
+    #[serde(default)]
+    pub idle_max: i32,
+    #[serde(default)]
+    pub pursuit_distance: f32,
+    #[serde(default)]
+    pub in_parent: bool,
+    #[serde(default)]
+    pub parent_close: bool,
 }

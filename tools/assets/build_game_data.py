@@ -1722,6 +1722,12 @@ def main():
             # selectable Elite mode, 0.5 on Psi's Attack2; recording psi_l10_r40 rt 2405, a Green at
             # 0.54 over a Black).
             elite_perc = next((x["f"].get("percentageThroughMap", 0.75) for x in items(af["behaviors"]) if x and x["type"] == "TargetEliteTargettingModel"), 0.75)
+            # FilterParentTowerRangeModel (Etienne's drones): FilterParentTowerRange.FilterBloon
+            # (VERIFIED-DECOMP @0x180c3fbe0) takes only bloons in its Process's list (@0x180c3fd30): the
+            # parent tower's first Attack's GetVisibleTargets (recording etienne_l03_r20 rt 73).
+            parent_range = any(flt and flt["type"] == "FilterParentTowerRangeModel"
+                               for x in items(af["behaviors"]) if x and x["type"] == "AttackFilterModel"
+                               for flt in items(x["f"].get("filters")))
             # TargetTrackOrDefaultModel without forceTargetTrack (Obyn's Brambles): GetTargets
             # (VERIFIED-DECOMP @0x180e07820) takes its bloon targets when there are any, the track
             # points (GeneratePoints) only otherwise. INFERRED: the bloon targets are First's.
@@ -2208,7 +2214,7 @@ def main():
                                      next(([flt["f"].get("fieldOfView", 360.0), flt["f"].get("baseTowerRotationOffset", 0.0), 1.0 if flt["f"].get("ignoreTowerRotation") else 0.0]
                                            for y in items(af["behaviors"]) if y and y["type"] == "AttackFilterModel"
                                            for flt in items(y["f"]["filters"]) if flt and flt["type"] == "FilterTargetAngleModel"), None)),
-                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "offscreen": offscreen, "cant_hit": cant_hit, "prio_moab": prio_moab, "elite_perc": elite_perc, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
+                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "offscreen": offscreen, "cant_hit": cant_hit, "prio_moab": prio_moab, "elite_perc": elite_perc, "parent_range": parent_range, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
                     "while_fx": next(([prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")) or "", prefab_name((deref(x["f"].get("exitEffectModel")) or {"f": {}})["f"].get("assetId")) or ""] for x in items(af["behaviors"]) if x and x["type"] == "CreateEffectWhileAttackingModel"), None),
                     "fire_without_target": af.get("fireWithoutTarget", False),
                     # AttackModel.attackThroughWalls: no Map.IsTargetLineClear check.
@@ -2494,9 +2500,10 @@ def main():
                 # UCAV for `duration`. Temporary sub-towers like Summon Phoenix.
                 if x["type"] == "DroneSwarmModel":
                     ds = (deref(xf.get("droneSupportModel")) or {"f": {}})["f"]
-                    sp = sub_tower(deref(ds.get("droneModel")), None)
+                    dm = deref(ds.get("droneModel"))
+                    sp = sub_tower(dm, None)
                     if sp:
-                        out.setdefault("create_tower", []).extend([dict(sp, lifespan=xf.get("duration", 0.0))] * int(ds.get("count", 1)))
+                        out.setdefault("create_tower", []).extend([dict(sp, lifespan=xf.get("duration", 0.0), drone=drone_spec(ds, dm))] * int(ds.get("count", 1)))
                 if x["type"] == "UCAVModel":
                     sp = sub_tower(deref(xf.get("ucavTowerModel")), None)
                     if sp:
@@ -2985,9 +2992,10 @@ def main():
                     pets.append(sp)
             # DroneSupportModel (Etienne): `count` drones (droneModel), kept like pets.
             if b and b["type"] == "DroneSupportModel":
-                sp = sub_tower(deref(b["f"].get("droneModel")), None)
+                dm = deref(b["f"].get("droneModel"))
+                sp = sub_tower(dm, None)
                 if sp:
-                    pets += [sp] * int(b["f"].get("count", 1))
+                    pets += [dict(sp, drone=drone_spec(b["f"], dm))] * int(b["f"].get("count", 1))
             if b and b["type"] == "BeastHandlerLeashModel":
                 # rotateToLeashedTower (+0x4c): RotateToLeashedTower turns the handler to a moved pet.
                 leash_rotate = bool(b["f"].get("rotateToLeashedTower"))
@@ -3450,6 +3458,30 @@ def main():
                                      for k in ("moabSound", "bfbSound", "zomgSound", "ddtSound", "badSound") for v in [sounds(b, [k])] if v}}}
 
     sub_cache, sub_busy = {}, set()
+
+    def drone_spec(dsf, tobj):
+        """DroneSupportModel (Etienne's drones) and its drone's DroneIdleModel / PursuitSettingCustomModel:
+        DroneSupport.SpawnDrones (VERIFIED-DECOMP @0x180d1f750) places each at spawnMarkerStarts[count %
+        n] turned by Etienne's rotation, a custom move to spawnMarkerEnds; DroneIdle (Process @0x180d1dfd0,
+        IdleMove @0x180d1d670) repositions it; PursuitSettingCustom keeps it in Etienne's range."""
+        fr = lambda v: int(round((v or 0.0) * 60))
+        xs = [v for v in (deref(dsf.get("spawnMarkerStartsX")) or []) if isinstance(v, (int, float))]
+        ys = [v for v in (deref(dsf.get("spawnMarkerStartsY")) or []) if isinstance(v, (int, float))]
+        ex = [v for v in (deref(dsf.get("spawnMarkerEndsX")) or []) if isinstance(v, (int, float))]
+        ey = [v for v in (deref(dsf.get("spawnMarkerEndsY")) or []) if isinstance(v, (int, float))]
+        out = {"starts": [[a, b] for a, b in zip(xs, ys)], "ends": [[a, b] for a, b in zip(ex, ey)],
+               "delay_frames": fr(dsf.get("spawnDelay")), "ignore_frames": fr(dsf.get("ignoreTargetingTime")),
+               "out_frames": 0, "idle_min": 0, "idle_max": 0, "pursuit_distance": 0.0, "in_parent": False, "parent_close": False}
+        for b in items((tobj or {"f": {}})["f"].get("behaviors")):
+            if b and b["type"] == "DroneIdleModel":
+                out.update({"out_frames": fr(b["f"].get("outOfRangeRepositionTime")), "idle_min": fr(b["f"].get("idleRepositionTimeMin")),
+                            "idle_max": fr(b["f"].get("idleRepositionTimeMax"))})
+            if b and b["type"] in ("AttackAirUnitModel", "AttackModel"):
+                for x in items(b["f"].get("behaviors")):
+                    if x and x["type"] == "PursuitSettingCustomModel":
+                        out.update({"pursuit_distance": x["f"].get("pursuitDistance", 0.0), "in_parent": bool(x["f"].get("mustBeInRangeOfParent")),
+                                    "parent_close": bool(x["f"].get("useParentForClose"))})
+        return out
 
     def sub_tower(tobj, display):
         """A sub-tower spawned by a projectile: its tier data, lifespan and display prefab."""

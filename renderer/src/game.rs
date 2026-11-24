@@ -2666,6 +2666,47 @@ pub struct AirUnit {
     pub hm_born: u64,
     /// Simulation time of its last HeliMovement pass.
     pub hm_step: u64,
+    /// HeliMovement.customMovement while isActive.
+    pub hm_custom: Option<HmCustom>,
+    /// DroneIdle's counters (Etienne's drones).
+    pub drone: DroneIdleState,
+    /// PursuitSettingCustom.lastPositionInsideParent (clone frame).
+    pub pursuit_inside: Option<[f32; 2]>,
+}
+
+/// HeliMovement.CustomMovement (VERIFIED-DECOMP SetCustomMovement @0x180d2cfd0): its position
+/// (clone frame), ignoreTargeting (the attacks paused meanwhile), dontStrafe, onlyMoveDuringRound.
+#[derive(Clone, Copy, Default)]
+pub struct HmCustom {
+    pub pos: [f32; 2],
+    pub pause: bool,
+    pub dont_strafe: bool,
+    pub only_round: bool,
+}
+
+/// DroneIdle (Process @0x180d1dfd0): inactiveFrames (attacks and movement paused),
+/// ignoreTargetingFrames (attacks paused), framesOutsideOfRange, framesSinceValidTarget,
+/// framesSinceIdleReposition, forceMoveWhenNotBeingRedeployed, currentIdleRepositionFrames,
+/// canEndCustomMovement (true from the ctor).
+#[derive(Clone, Copy)]
+pub struct DroneIdleState {
+    pub inactive: i32,
+    pub ignore: i32,
+    pub fsor: i32,
+    pub fsvt: i32,
+    pub fsir: i32,
+    pub force: bool,
+    pub cur_idle: i32,
+    pub can_end: bool,
+    /// PursuitSettingCustom.currentTargetType (initialTargetType First; DroneSupport /
+    /// DroneSwarm set it per drone).
+    pub ttype: TargetMode,
+}
+
+impl Default for DroneIdleState {
+    fn default() -> Self {
+        Self { inactive: 0, ignore: 0, fsor: 0, fsvt: 0, fsir: 0, force: false, cur_idle: 0, can_end: true, ttype: TargetMode::First }
+    }
 }
 
 impl AirUnit {
@@ -4260,6 +4301,10 @@ pub struct Game {
     ghost_cell: Option<[f32; 2]>,
     /// TranceTotemSpawner: totems its next Process makes (parent id, spec, spot).
     pending_pets: Vec<(u64, std::sync::Arc<crate::data::SubTowerSpec>, [f32; 2])>,
+    /// Drones an ability's DroneSupport makes (spawnAndUpdateDrones): DroneSupport.Process makes
+    /// them in the parent's next turn (recording etienne_l03_r20: Drone Swarm at rt 400, its drones
+    /// from 401).
+    drone_queue: Vec<(u64, std::sync::Arc<crate::data::SubTowerSpec>)>,
     /// Beast Handler merges, in order: (target handler id, beast base id, contributing handler
     /// id): the target's contributingHandlersByBeast and the source's
     /// beastsLostThroughContribution (BeastHandlerLeash.Contribute @0x180cfadf0).
@@ -7117,6 +7162,7 @@ impl Game {
             fill_first_id: None,
             ghost_cell: None,
             pending_pets: Vec::new(),
+            drone_queue: Vec::new(),
             merges: Vec::new(),
             leash_sets: HashMap::new(),
             merge_respawn: Vec::new(),
@@ -10578,6 +10624,9 @@ impl Game {
                 hm_near_next: Vec::new(),
                 hm_born: self.sim_elapsed,
                 hm_step: u64::MAX,
+                hm_custom: None,
+                drone: DroneIdleState::default(),
+                pursuit_inside: None,
             });
             // A plane takes a pooled FighterMovement if there is one: its timer as it was, its path
             // point (0, 0) (recording bucc_upgrades_r30 rt 1862: the 5-1-0's second plane with the
@@ -10895,12 +10944,48 @@ impl Game {
     /// 99999, through the attack's filter. `pursuitDistance` + radius / 2 ahead of the bloon along
     /// its path (Path.DistanceToPoint) while that is on the path, else along Bloon.Heading; off the
     /// map, Map.WrapLineAroundMapEdge from the bloon. None: keep lastDestination.
+    /// The bloon GetPursuitTarget gives (see pursuit_destination).
+    fn pursuit_target(&self, t: usize, here: [f32; 2]) -> Option<u64> {
+        let tier = self.tier(t)?;
+        let camo = tier.attacks.first().is_some_and(|a| a.camo) || self.buffs.get(t).is_some_and(|b| b.camo);
+        let pr = tier.attacks.first().is_some_and(|a| a.parent_range);
+        let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind])) && (!pr || g.parent_sees(t, b));
+        let drone = self.towers[t].sub.as_ref().and_then(|s| s.spec.drone.as_ref());
+        match (drone, self.towers[t].air.as_ref().map(|a| a.drone.ttype)) {
+            // (PursuitSettingCustom.GetTargets: BloonManager.GetTargets of currentTargetType from the
+            // drone, Close from the parent with useParentForClose.)
+            (Some(d), Some(m)) if m != TargetMode::First => {
+                let from = if m == TargetMode::Close && d.parent_close {
+                    self.towers[t].sub.as_ref().and_then(|s| self.towers.iter().find(|o| o.id == s.parent)).map_or(here, |o| o.pos)
+                } else {
+                    here
+                };
+                self.typed_target_from(from, 99999.0, m, &ok)
+            }
+            _ => self.first_target_from(here, 99999.0, &ok),
+        }
+    }
+
+    /// FilterParentTowerRange: `b` is among the parent tower's first Attack's GetVisibleTargets.
+    fn parent_sees(&self, t: usize, b: &Bloon) -> bool {
+        let Some(parent) = self.towers[t].sub.as_ref().map(|s| s.parent) else { return true };
+        let Some(pi) = self.towers.iter().position(|o| o.id == parent) else { return false };
+        let Some(attack) = self.tier(pi).and_then(|tr| tr.attacks.first()) else { return false };
+        let buff = self.buffs.get(pi).cloned().unwrap_or_default();
+        let camo = attack.camo || buff.camo;
+        let no_moab = attack.exclude_tags.iter().any(|x| x == "Moabs");
+        let r = self.visible_spot(b, self.attack_pos(pi), buff.attack_range(attack), camo, no_moab, attack).is_some();
+        r
+    }
+
     fn pursuit_destination(&self, t: usize, here: [f32; 2]) -> Option<[f32; 2]> {
         let tier = self.tier(t)?;
-        let pd = tier.pursuit_distance?;
+        // (PursuitSettingCustomModel's pursuitDistance for a drone.)
+        let pd = tier.pursuit_distance.or_else(|| self.towers[t].sub.as_ref().and_then(|s| s.spec.drone.as_ref()).map(|d| d.pursuit_distance))?;
         let camo = tier.attacks.first().is_some_and(|a| a.camo) || self.buffs.get(t).is_some_and(|b| b.camo);
         let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind]));
-        let id = self.first_target_from(here, 99999.0, &ok)?;
+        let _ = &ok;
+        let id = self.pursuit_target(t, here)?;
         let b = bloon_idx(&self.bloons, &self.bidx, id).map(|j| &self.bloons[j])?;
         let off = self.defs[b.kind].radius * 0.5 + pd;
         let d = off + b.dist;
@@ -10919,6 +11004,37 @@ impl Game {
         // (Game frame for the wrap: y up.)
         let g = |v: [f32; 2]| [v[0], -v[1]];
         wrap_line_around_map_edge(g(b.pos), g(p)).map(g)
+    }
+
+    /// PursuitSettingCustom.FinalTweakToPursuitDestination (VERIFIED-DECOMP @0x180dd0700) with
+    /// mustBeInRangeOfParent: a destination inside the parent's range is kept (and stored as
+    /// lastPositionInsideParent); else that stored spot, set the first time to the target bloon if it
+    /// is in the parent's range, else the parent's position.
+    fn drone_final_tweak(&mut self, t: usize, p: [f32; 2], here: [f32; 2]) -> [f32; 2] {
+        let Some((ds, parent)) = self.towers[t].sub.as_ref().and_then(|s| s.spec.drone.clone().map(|d| (d, s.parent))) else { return p };
+        if !ds.in_parent {
+            return p;
+        }
+        let Some(pi) = self.towers.iter().position(|o| o.id == parent) else { return p };
+        let pp = self.towers[pi].pos;
+        let r = self.tier(pi).map_or(0.0, |tr| tr.range);
+        let rr = r * r;
+        let d2 = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2);
+        if d2(p, pp) < rr {
+            self.towers[t].air.as_mut().unwrap().pursuit_inside = Some(p);
+            return p;
+        }
+        if let Some(q) = self.towers[t].air.as_ref().unwrap().pursuit_inside {
+            return q;
+        }
+        // (The pursuit target: GetPursuitDestination's currentTarget.)
+        let target = self.pursuit_target(t, here).and_then(|id| bloon_idx(&self.bloons, &self.bidx, id)).map(|j| self.bloons[j].pos);
+        let q = match target {
+            Some(b) if d2(b, pp) < rr => b,
+            _ => pp,
+        };
+        self.towers[t].air.as_mut().unwrap().pursuit_inside = Some(q);
+        q
     }
 
     /// RotateToTargetAirUnit.ApplyRotation (VERIFIED-DECOMP @0x180dd6e00) for attack `ai` (range
@@ -10972,7 +11088,12 @@ impl Game {
                 }
                 // (Only when ApplyMovement ran: recording heli_005, the Heli still at rt 1 never
                 // listed the Comanches made on it; heli_025, moving at rt 1, did.)
-                if !self.heli_move(t, &h, &helis) {
+                let moved = self.heli_move(t, &h, &helis);
+                // (HYPOTHESIS P-DRONEREPULSE: a drone held by DroneIdle.inactiveFrames keeps its
+                // repulsion list; recording etienne_l03_r20 rt 461, the swarm's first move already
+                // pushed apart.)
+                let drone_wait = self.towers[t].sub.as_ref().is_some_and(|s| s.spec.drone.is_some()) && self.towers[t].air.as_ref().is_some_and(|a| a.drone.inactive > 0);
+                if !moved && !drone_wait {
                     return;
                 }
                 // (HeliEnter / HeliExit: after its move, the others where they are now (moved this
@@ -10997,6 +11118,16 @@ impl Game {
     }
 
     fn heli_move(&mut self, t: usize, h: &crate::data::HeliSpec, helis: &[(usize, [f32; 2])]) -> bool {
+        // (A drone's DroneIdle.inactiveFrames pause its HeliMovement too.)
+        if self.towers[t].air.as_ref().is_some_and(|a| a.drone.inactive > 0) && self.towers[t].sub.as_ref().is_some_and(|s| s.spec.drone.is_some()) {
+            return false;
+        }
+        // HeliMovement.Process (VERIFIED-DECOMP @0x180d2c950): an active customMovement is the
+        // destination (none between rounds with onlyMoveDuringRound).
+        let custom = self.towers[t].air.as_ref().and_then(|a| a.hm_custom);
+        if custom.is_some_and(|c| c.only_round) && !self.rounds_active() {
+            return false;
+        }
         let id = self.towers[t].id;
         let cur = if self.coop_pointers.is_empty() { self.cursor } else { self.coop_pointer(id) };
         let tw = &mut self.towers[t];
@@ -11008,7 +11139,9 @@ impl Game {
         if let Some(c) = touch_now {
             a.touch = c;
         }
-        let (here, touch, mode, point, tpos) = (a.pos, a.touch, tw.target, tw.point, tw.pos);
+        // (A drone's path supplier is its attack's PursuitSettingCustom, whatever its target type.)
+        let is_drone = tw.sub.as_ref().is_some_and(|s| s.spec.drone.is_some());
+        let (here, touch, mode, point, tpos) = (a.pos, a.touch, if is_drone { TargetMode::Pursuit } else { tw.target }, tw.point, tw.pos);
         // FollowTouchSetting.Process (VERIFIED-DECOMP @0x180db8c70): only while the cursor is active
         // and on the map does it call HeliGroupOffset.Update (idsOfHelisUsingOffset); before that
         // GetAvailableOffset (@0x18102df90) finds no id and gives (0, 0) (recording
@@ -11023,9 +11156,13 @@ impl Game {
         // HeliGroupOffset.GetAvailableOffset (VERIFIED-DECOMP @0x18102df90): the helis of the base
         // tower in this target type, in tower order, each its slot (recording heli_005: the
         // Heli at (0, 0) and its three Comanches round it at 15).
+        // (Drones: HeliMovement.GetGroupOffsetInstance by the setting and the tower's baseId, one
+        // group of every drone in tower order; recording etienne_l03_r20 HM lines, the base drone
+        // (0, 0), the swarm's (0, 15), (15, 0), (0, -15), (-15, 0).)
+        let is_drone_o = |g: &Self, o: usize| g.towers[o].sub.as_ref().is_some_and(|s| s.spec.drone.is_some());
         let off = if matches!(mode, TargetMode::Point | TargetMode::Pursuit) {
             let group: Vec<usize> = (0..self.towers.len())
-                .filter(|&o| self.towers[o].target == mode && self.towers[o].air.is_some() && self.tier(o).and_then(|tr| tr.air.as_ref()).is_some_and(|x| x.heli.is_some()))
+                .filter(|&o| if is_drone { is_drone_o(self, o) && self.towers[o].air.is_some() } else { !is_drone_o(self, o) && self.towers[o].target == mode && self.towers[o].air.is_some() && self.tier(o).and_then(|tr| tr.air.as_ref()).is_some_and(|x| x.heli.is_some()) })
                 .collect();
             let slot = group.iter().position(|&o| o == t).unwrap_or(0);
             heli_group_offsets(group.len()).get(slot).copied().unwrap_or([0.0; 2])
@@ -11037,12 +11174,15 @@ impl Game {
             }
         };
         let goal = match mode {
+            _ if custom.is_some() => custom.unwrap().pos,
             TargetMode::Point => point.unwrap_or(tpos),
             TargetMode::Pursuit => {
                 let last = self.towers[t].air.as_ref().and_then(|a| a.pursuit_last).unwrap_or(here);
                 let p = self.pursuit_destination(t, here).unwrap_or(last);
                 // (GetPath stores it as lastDestination; + lastGroupOffset (0 for one heli),
                 // GetPointWithinMap.)
+                self.towers[t].air.as_mut().unwrap().pursuit_last = Some(p);
+                let p = self.drone_final_tweak(t, p, here);
                 self.towers[t].air.as_mut().unwrap().pursuit_last = Some(p);
                 let p = [p[0] + off[0], p[1] - off[1]];
                 [p[0].clamp(-WORLD_X, WORLD_X), p[1].clamp(-WORLD_Z, WORLD_Z)]
@@ -11119,7 +11259,9 @@ impl Game {
         // destination or while a RotateToTargetAirUnit has applied; else LerpAngle
         // toward Vector2.get_Rotation (atan2(x, y) in degrees) of the direction it set off in.
         let e = [np[0] - dest[0], np[1] - dest[1]];
-        if !(e[0] * e[0] + e[1] * e[1] < h.strafeDistanceSquared) && !a.hm_applied.iter().any(|x| x.0) {
+        // (customMovement.dontStrafe: no strafeDistance hold.)
+        let dont_strafe = a.hm_custom.is_some_and(|c| c.dont_strafe);
+        if (dont_strafe || !(e[0] * e[0] + e[1] * e[1] < h.strafeDistanceSquared)) && !a.hm_applied.iter().any(|x| x.0) {
             let want = crt_atan2(dir[0], dir[1]) * RAD2DEG;
             a.hm_rot = lerp_angle(a.hm_rot, want, h.rotationSpeed);
         }
@@ -13041,7 +13183,179 @@ impl Game {
             self.towers[n].target = TargetMode::Pursuit;
         }
         self.init_air(n);
+        self.drone_spawn(n);
         self.sound(&place, None);
+    }
+
+    /// DroneSupport.SpawnDrones (VERIFIED-DECOMP @0x180d1f750) for the drone just made (`n`): at
+    /// its parent's spot + spawnMarkerStarts[count % n] turned by the parent's rotation
+    /// (Vector2.Rotate); PursuitSetting.lastDestination there; with spawnMarkerEnds a custom move
+    /// there (dontStrafe, onlyMoveDuringRound); DroneIdle.inactiveFrames = spawnDelayFrames and
+    /// ignoreTargetingFrames (recording etienne_l03_r20 rt 1: the drone at Etienne + (14.14, 14.14)).
+    fn drone_spawn(&mut self, n: usize) {
+        let Some((ds, parent, pet)) = self.towers[n].sub.as_ref().and_then(|s| s.spec.drone.clone().map(|d| (d, s.parent, s.pet))) else { return };
+        let Some(pi) = self.towers.iter().position(|o| o.id == parent) else { return };
+        let idx = self.towers[..n].iter().filter(|o| o.sub.as_ref().is_some_and(|s| s.parent == parent && s.pet == pet && s.spec.drone.is_some())).count();
+        let rot = self.towers[pi].game_rot.unwrap_or(0.0);
+        let pp = self.towers[pi].pos;
+        let mut gpos = [pp[0], -pp[1]];
+        if !ds.starts.is_empty() {
+            let m = ds.starts[idx % ds.starts.len()];
+            let (ox, oy) = offset_turned(m[0], m[1], rot);
+            gpos = [ox + gpos[0], oy + gpos[1]];
+        }
+        // (Map.GetPointWithinMap with -(the parent's radius) as border, xorps with -0.0
+        // (VERIFIED-DISASM @0x180d1fea8): that far inside the edges.)
+        let border = -self.tower_radius(pi);
+        let within = |q: [f32; 2]| [q[0].clamp(-WORLD_X - border, WORLD_X + border), q[1].clamp(-WORLD_Z - border, WORLD_Z + border)];
+        let gpos = within(gpos);
+        let cpos = [gpos[0], -gpos[1]];
+        // (The end marker is added to the new drone's Tower position, its parent's spot, not its air
+        // unit's; recording etienne_l03_r20 rt 461: the fourth swarm drone heads for (-143, 4.455).)
+        let custom = (!ds.ends.is_empty()).then(|| {
+            let m = ds.ends[idx % ds.ends.len()];
+            let (ox, oy) = offset_turned(m[0], m[1], rot);
+            let e = within([ox + pp[0], oy + -pp[1]]);
+            HmCustom { pos: [e[0], -e[1]], pause: false, dont_strafe: true, only_round: true }
+        });
+        let Some(a) = self.towers[n].air.as_mut() else { return };
+        a.pos = cpos;
+        a.touch = cpos;
+        a.pursuit_last = Some(cpos);
+        a.hm_custom = custom;
+        a.drone.inactive = ds.delay_frames;
+        a.drone.ignore = ds.ignore_frames;
+        // DroneSwarm.Process (VERIFIED-DECOMP @0x180e2c420), hasSetTargetTypes: its drones 0 and 1
+        // Strong, 2 First, 3 Last. (The pets: DroneSupport.UpdateDroneTargetTypes by Etienne's own
+        // type; First keeps First.)
+        if !pet {
+            a.drone.ttype = match idx { 0 | 1 => TargetMode::Strong, 3 => TargetMode::Last, _ => TargetMode::First };
+        }
+    }
+
+    /// EntityModel.radius of tower `t`'s model.
+    fn tower_radius(&self, t: usize) -> f32 {
+        match self.towers[t].sub.as_ref() {
+            Some(sb) => sb.spec.place_radius,
+            None => self.tower_defs[self.towers[t].def].1.radius,
+        }
+    }
+
+    /// DroneIdle.Process (VERIFIED-DECOMP @0x180d1dfd0), in the drone's turn before its attack.
+    fn drone_idle(&mut self, t: usize) {
+        let Some((ds, parent)) = self.towers[t].sub.as_ref().and_then(|s| s.spec.drone.clone().map(|d| (d, s.parent))) else { return };
+        let Some(mut st) = self.towers[t].air.as_ref().map(|a| a.drone) else { return };
+        if st.inactive > 0 || st.ignore > 0 {
+            if self.rounds_active() {
+                st.inactive = (st.inactive - 1).max(0);
+                st.ignore = (st.ignore - 1).max(0);
+            }
+            self.towers[t].air.as_mut().unwrap().drone = st;
+            return;
+        }
+        let Some(pi) = self.towers.iter().position(|o| o.id == parent) else { return };
+        let Some(h) = self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.heli.clone()) else { return };
+        let here = self.towers[t].air.as_ref().unwrap().pos;
+        if let Some(c) = self.towers[t].air.as_ref().unwrap().hm_custom {
+            st.fsvt = 0;
+            st.fsor = 0;
+            let d2 = (c.pos[0] - here[0]).powi(2) + (c.pos[1] - here[1]).powi(2);
+            if d2 < h.slowdownRadiusMinSquared {
+                if !st.can_end {
+                    self.towers[t].air.as_mut().unwrap().drone = st;
+                    return;
+                }
+                let a = self.towers[t].air.as_mut().unwrap();
+                a.pursuit_last = Some(c.pos);
+                a.hm_custom = None;
+            } else if c.pause {
+                self.towers[t].air.as_mut().unwrap().drone = st;
+                return;
+            }
+        }
+        if st.force {
+            st.force = false;
+            st.fsir = 0;
+            self.towers[t].air.as_mut().unwrap().drone = st;
+            self.drone_idle_move(t, &ds);
+            st = self.towers[t].air.as_ref().unwrap().drone;
+        }
+        let main = self.tier(t).and_then(|tr| tr.attacks.first().map(|a| a.model_name.clone())).unwrap_or_default();
+        if self.towers[t].had_target.get(&main).copied().unwrap_or(false) {
+            st.fsvt = 0;
+            st.fsor = 0;
+            self.towers[t].air.as_mut().unwrap().hm_custom = None;
+        } else {
+            st.fsvt += 1;
+        }
+        let pp = self.towers[pi].pos;
+        let here = self.towers[t].air.as_ref().unwrap().pos;
+        let pr = self.tier(pi).map_or(0.0, |tr| tr.range);
+        if pr * pr < (here[0] - pp[0]).powi(2) + (here[1] - pp[1]).powi(2) {
+            st.fsor += 1;
+        } else {
+            st.fsor = 0;
+        }
+        let x = ds.out_frames;
+        if st.fsvt < x || st.fsor < x {
+            if st.fsir < st.cur_idle || st.fsvt < x {
+                st.fsir += 1;
+                self.towers[t].air.as_mut().unwrap().drone = st;
+                return;
+            }
+            st.fsir = 0;
+        } else {
+            st.fsir = 0;
+            st.fsor = 0;
+        }
+        self.towers[t].air.as_mut().unwrap().drone = st;
+        self.drone_idle_move(t, &ds);
+    }
+
+    /// DroneIdle.IdleMove (VERIFIED-DECOMP @0x180d1d670; all three tries run, VERIFIED-DISASM:
+    /// the loop only ends at 3): a spot radius + (range - radius) x NextDouble from the parent,
+    /// (0, that) Vector2.Rotate-d by NextDouble x 360, TruncateVector2(2); on the map and no other
+    /// drone of the parent's (its custom spot, else where it is) within this drone's radius:
+    /// SetCustomMovement there (each passing try, until one fails); then
+    /// currentIdleRepositionFrames = Next(idleRepositionTimeMinFrames, MaxFrames).
+    fn drone_idle_move(&mut self, t: usize, ds: &crate::data::DroneSpec) {
+        let Some(parent) = self.towers[t].sub.as_ref().map(|s| s.parent) else { return };
+        let Some(pi) = self.towers.iter().position(|o| o.id == parent) else { return };
+        let prange = self.tier(pi).map_or(0.0, |tr| tr.range);
+        let prad = self.tower_radius(pi);
+        let rr = { let r = self.tower_radius(t); r * r };
+        let pp = self.towers[pi].pos;
+        let trunc = |v: f32| (((v * 100.0) as f64).trunc() / 100.0f32 as f64) as f32;
+        let mut ok = true;
+        for _ in 0..3 {
+            let r1 = self.synced_double();
+            let len = prad + ((prange - prad) as f64 * r1) as f32;
+            let r2 = self.synced_double();
+            let (ox, oy) = offset_turned(0.0, len, (r2 * 360.0) as f32);
+            let g = [trunc(ox) + pp[0], trunc(oy) + -pp[1]];
+            let c = [g[0], -g[1]];
+            if !on_map(c, 0.0) {
+                continue;
+            }
+            for o in 0..self.towers.len() {
+                if o == t || !self.towers[o].sub.as_ref().is_some_and(|s| s.parent == parent && s.spec.drone.is_some()) {
+                    continue;
+                }
+                let Some(oa) = self.towers[o].air.as_ref() else { continue };
+                let q = oa.hm_custom.map_or(oa.pos, |cm| cm.pos);
+                if (q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2) < rr {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                continue;
+            }
+            let a = self.towers[t].air.as_mut().unwrap();
+            a.hm_custom = Some(HmCustom { pos: c, pause: false, dont_strafe: true, only_round: false });
+        }
+        let cur = self.synced_range(ds.idle_min, ds.idle_max);
+        self.towers[t].air.as_mut().unwrap().drone.cur_idle = cur;
     }
 
     /// The map has an area of this type (water = 1).
@@ -13687,6 +14001,11 @@ impl Game {
             if self.towers.len() == n0 + 1 {
                 let mut nt = self.towers.pop().unwrap();
                 nt.id = oid;
+                // (DroneSupport.SpawnDrones makes no new drone while the count is the same: the drone
+                // keeps flying where it is through its parent's upgrades.)
+                if nt.sub.as_ref().is_some_and(|s| s.spec.drone.is_some()) {
+                    nt.air = self.towers[oi].air.take();
+                }
                 if let Some(s) = nt.sub.as_mut() {
                     s.age = age;
                     s.born = born;
@@ -14835,6 +15154,10 @@ impl Game {
         }
         let (pos, id) = (self.towers[t].pos, self.towers[t].id);
         for spec in &a.create_tower {
+            if spec.drone.is_some() {
+                self.drone_queue.push((id, spec.clone()));
+                continue;
+            }
             self.spawn_sub(spec.clone(), pos, id, false);
         }
         // MorphTower.Activate (VERIFIED-DECOMP @0x180e3e900), mutateSelf: PauseTower and the delay's
@@ -20264,6 +20587,16 @@ impl Game {
             }
             if only_temp.is_none() {
                 self.collect_zone_step(t);
+                self.drone_idle(t);
+                let tid = self.towers[t].id;
+                if self.drone_queue.iter().any(|q| q.0 == tid) {
+                    let pos = self.towers[t].pos;
+                    let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.drone_queue).into_iter().partition(|q| q.0 == tid);
+                    self.drone_queue = rest;
+                    for (_, spec) in mine {
+                        self.spawn_sub(spec, pos, tid, false);
+                    }
+                }
             }
             if only_temp.is_none() && self.towers[t].sub.is_none() {
                 let gone = self.monkeyopolis_absorb(t);
@@ -20861,8 +21194,12 @@ impl Game {
                 if self.in_step && !self.instant_hits.is_empty() {
                     self.instant_pass();
                 }
+                // (A drone's attacks paused: DroneIdle inactiveFrames / ignoreTargetingFrames, a custom
+                // move with ignoreTargeting; HeliMovement.PauseAttacks.)
+                let drone_paused = self.towers[t].air.as_ref().is_some_and(|a| a.drone.inactive > 0 || a.drone.ignore > 0 || a.hm_custom.is_some_and(|c| c.pause))
+                    && self.towers[t].sub.as_ref().is_some_and(|s| s.spec.drone.is_some());
                 // (PauseAttack: an attack outside the Magus graveyard's state doesn't act.)
-                if !self.towers[t].paused_attacks.is_empty() && self.towers[t].paused_attacks.contains(&attack.model_name) {
+                if drone_paused || (!self.towers[t].paused_attacks.is_empty() && self.towers[t].paused_attacks.contains(&attack.model_name)) {
                     wi += attack.weapons.len();
                     continue;
                 }
@@ -20994,7 +21331,9 @@ impl Game {
                 // The off hand (TargetLeftHandModel) uses the tower's left-hand mode.
                 let tower_mode = if attack.hand.as_deref() == Some("left") { self.towers[t].left_target } else { self.towers[t].target };
                 let modes: Vec<TargetMode> = attack.targets.iter().filter_map(|s| TargetMode::parse(s)).collect();
+                let drone_mode = self.towers[t].sub.as_ref().is_some_and(|s| s.spec.drone.is_some()).then(|| self.towers[t].air.as_ref().map(|a| a.drone.ttype)).flatten();
                 let mode = match modes.as_slice() {
+                    _ if drone_mode.is_some() => drone_mode.unwrap(),
                     [only] => *only,
                     // (A TargetSelectedPoint with startWithClosestTrackPoint has its point from the
                     // start: recording ezili_l10_r40 rt 400, Sacrificial Totem (Track / Point) on the
@@ -21147,7 +21486,11 @@ impl Game {
                 // Without shared ranges only a bloon on a segment that is plain or near enough can be
                 // a target (`!seg_in && shared.is_empty()` below), so only those are visited, still in
                 // storage order (ties go to the first). Same targets as checking every bloon.
-                let order: Vec<usize> = if use_segment_cache && !shared_any {
+                // (A drone's targets are its PursuitSettingCustom's: BloonManager.GetTargets range
+                // 99999 through FilterParentTowerRange, not its own range; recording etienne_l03_r20
+                // rt 86, a shot at a Red 74.5 away from the drone, in Etienne's view.)
+                let supplier = attack.parent_range;
+                let order: Vec<usize> = if use_segment_cache && !shared_any && !supplier {
                     let index = self.target_index.as_ref().expect("target index");
                     // The segments that can hold targets, then the bloons on them in storage order.
                     let mut wanted = vec![false; index.base.last().map_or(0, |&b| b + index.segs.last().map_or(0, Vec::len))];
@@ -21300,7 +21643,7 @@ impl Game {
                         aim_off = [0.0; 2];
                         aim_circle = None;
                     }
-                    if !seg_in && !shared_any {
+                    if !seg_in && !shared_any && !supplier {
                         continue;
                     }
                     // (Targetting.GetTargets: a camo bloon needs its segment entry's canSeeCamo; a
@@ -21316,6 +21659,10 @@ impl Game {
                         continue;
                     }
                     if !attack.require_tags.iter().all(|t| d.tags.contains(t)) || (!buff.unfilter && attack.exclude_tags.iter().any(|t| d.tags.contains(t))) {
+                        continue;
+                    }
+                    // (FilterParentTowerRange: Etienne's drones.)
+                    if attack.parent_range && !self.parent_sees(t, b) {
                         continue;
                     }
                     if !self.target_angle_ok(t, attack, b.pos) {
@@ -21338,7 +21685,7 @@ impl Game {
                     // (includeBloonRadius only: the map widened by the bloon's radius; recording
                     // druid_032 rt 1841, a Black at -157.19 vined.)
                     let off_border = if attack.offscreen == 1 { d.radius } else { 0.0 };
-                    if (!seg_in && !on_map(p, 0.0)) || (attack.offscreen > 0 && !on_map(p, off_border)) {
+                    if (!seg_in && !supplier && !on_map(p, 0.0)) || (attack.offscreen > 0 && !on_map(p, off_border)) {
                         continue;
                     }
                     let dd = (p[0] - pos[0]).powi(2) + (p[1] - pos[1]).powi(2);
@@ -21348,7 +21695,7 @@ impl Game {
                     // bloon counts by its segment, not its own spot and radius; recording
                     // map_lotusisland_sub_paragon_quincy_r40 rt 577: no shot at a MOAB 70.8 from
                     // Quincy's 50, whose segment is out of it.)
-                    if !seg_in || dd < attack.min_range * attack.min_range {
+                    if (!seg_in && !supplier) || dd < attack.min_range * attack.min_range {
                         continue;
                     }
                     any_target = true;
@@ -21396,13 +21743,13 @@ impl Game {
                         score += 1e13;
                         prio += 10.0;
                     }
-                    let key = if mode == TargetMode::Close && seg_in {
+                    let key = if mode == TargetMode::Close && (seg_in || supplier) {
                         let rank = close_rank.get(&(b.path, seg_idx)).map_or(1e6, |&r| r as f64);
                         prio * 1e12 - rank * 1e3 - self.path_rank.get(&b.id).map_or(999.0, |r| r.1 as f64).min(999.0)
-                    } else if mode == TargetMode::Strong && seg_in && attack.air_target {
+                    } else if mode == TargetMode::Strong && (seg_in || supplier) && attack.air_target {
                         let rank = self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64);
                         prio * 1e12 + if air_strong == Some(b.id) { 1e10 } else { -(b.path as f64) * 1e8 - seg_idx as f64 * 1e4 - rank * 1e-3 }
-                    } else if mode == TargetMode::Strong && seg_in {
+                    } else if mode == TargetMode::Strong && (seg_in || supplier) {
                         let len = self.leak_dist(b.path as usize) as f64;
                         let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         // TargetStrong.GetTarget (VERIFIED-DISASM @0xe0dfa0): over Attack
@@ -21414,7 +21761,7 @@ impl Game {
                         // listed; mix_dart_boomerang_r40: the first listed of a White and a Black).
                         prio * 1e12
                             + if (attack.prio_camo && self.towers[t].camo_prio) && strong_lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e10 } else if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { d.danger as f64 * 1e8 + 1e4 } else { d.danger as f64 * 1e8 - until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
-                    } else if mode == TargetMode::First && seg_in {
+                    } else if mode == TargetMode::First && (seg_in || supplier) {
                         // (Segments in the order of the ones the bloons were filed on at frame
                         // start: recording engineer_320 rt 2452, a Sentry's First is a Red on segment
                         // 63, not a Blue at 441.3 still filed on 62.)
@@ -21423,7 +21770,7 @@ impl Game {
                         let len = self.leak_dist(b.path as usize) as f64;
                         let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e9 } else { -until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
-                    } else if mode == TargetMode::Last && seg_in {
+                    } else if mode == TargetMode::Last && (seg_in || supplier) {
                         let len = self.leak_dist(b.path as usize) as f64;
                         let until_leak = len - (seg_idx as f64 * 7.0 + 3.5);
                         prio * 1e12 + if lead[b.path as usize].is_some_and(|(l, _, _)| l == bi) { 1e9 } else { until_leak * 1e4 - self.path_rank.get(&b.id).map_or(1e6, |r| r.1 as f64) * 1e-3 }
@@ -21537,6 +21884,9 @@ impl Game {
                             continue;
                         }
                         if !attack.require_tags.iter().all(|t| d.tags.contains(t)) || (!buff.unfilter && attack.exclude_tags.iter().any(|t| d.tags.contains(t))) {
+                            continue;
+                        }
+                        if attack.parent_range && !self.parent_sees(t, b) {
                             continue;
                         }
                         if !self.target_angle_ok(t, attack, b.pos) {
@@ -22154,7 +22504,8 @@ impl Game {
                             }
                             self.process_bloons_before(ws, early, round_clock, dots, emits, zones, shoves, leak_voice);
                             let camo = attack.camo || buff.camo;
-                            let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind]));
+                            let pr = attack.parent_range;
+                            let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind])) && (!pr || g.parent_sees(t, b));
                             let r = buff.attack_range(attack);
                             // (A fresh FindTarget: recording heli_upgrades_r30 rt 1193, the young darts
                             // turn the heli from -68.39 to -51.62, to a bloon other than the held one.)

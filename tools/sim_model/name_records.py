@@ -28,13 +28,25 @@ def main():
         by_short.setdefault(full.replace(".", "_").replace("/", "_"), []).append(full)
 
     # Property types from the interop dump; enums -> int.
-    enums, ptypes = set(), {}
+    enums, ptypes, parent = set(), {}, {}
     for line in open(asm_path, encoding="utf-8"):
         t = json.loads(line)
         n = t["name"].replace("Il2Cpp", "", 1) if t["name"].startswith("Il2Cpp") else t["name"]
         if t["extends"] == "System.Enum":
             enums.add(t["name"])
         ptypes[n] = {p["name"]: p["type"] for p in t["props"]}
+        e = t["extends"] or ""
+        parent[n] = e.replace("Il2Cpp", "", 1) if e.startswith("Il2Cpp") else e
+
+    def fields_of(full):
+        # The type's own fields and its base classes' (a setter segment can store an inherited
+        # field: PursuitSettingCustomModel's pursuitDistance at 52 is PursuitSettingModel's).
+        out, seen, cur = [], set(), full
+        while cur and cur not in seen:
+            seen.add(cur)
+            out += [(n, o) for n, o in offsets.get(cur, []) if o is not None and o >= 16]
+            cur = parent.get(cur)
+        return out
 
     def resolve_type(short):
         c = by_short.get(short, [])
@@ -67,7 +79,8 @@ def main():
                     unresolved.add(seg["from"])
                     continue
                 flist = [(n, o) for n, o in offsets[full] if o is not None and o >= 16]
-                by_off = {o: n for n, o in flist}
+                by_off = {o: n for n, o in fields_of(full)}
+                by_off.update({o: n for n, o in flist})
                 used = set()
                 vals = seg["values"]
                 for k, (store, v) in enumerate(vals):
