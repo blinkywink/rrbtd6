@@ -1210,6 +1210,9 @@ pub struct Attack {
     /// TargetMoabModel: MOAB-class bloons first.
     #[serde(default)]
     pub prio_moab: bool,
+    /// TargetEliteTargettingModel.percentageThroughMap (Elite: past it a bloon goes first).
+    #[serde(default = "elite_perc_default")]
+    pub elite_perc: f32,
     /// Target*PrioCamoModel: camo bloons are picked before any others (Ninja Monkey).
     #[serde(default)]
     pub prio_camo: bool,
@@ -2651,6 +2654,9 @@ pub struct Proj {
     /// PsiEffectModel.projectileOnBloonDestroyModel / emissionOnBloonDestroy.
     #[serde(default)]
     pub psi_destroy: Option<std::sync::Arc<Contact>>,
+    /// PsiPsionicScreamModel (Psi 20's Psionic Scream).
+    #[serde(default)]
+    pub psi_scream: Option<std::sync::Arc<PsiScream>>,
     /// CreateProjectileOnIntervalModel: every `frames` frames, a sub-projectile at a random bloon
     /// within `range` (Ball Lightning).
     #[serde(default)]
@@ -4290,4 +4296,19 @@ pub struct TowerBuffOnExpire {
 
 fn big_usize() -> usize {
     usize::MAX
+}
+
+fn elite_perc_default() -> f32 {
+    0.75
+}
+
+/// PsiPsionicScreamModel: psiEffectChance, the WindModel mutator it adds above it, and its
+/// psiEffectModel's hold ([damagePerTick, tickRate, superCeramicPenalty, maxDurationFrames]).
+#[derive(Deserialize, Clone)]
+pub struct PsiScream {
+    pub chance: f32,
+    pub wind: Wind,
+    pub psi: [f32; 4],
+    #[serde(default)]
+    pub psi_destroy: Option<std::sync::Arc<Contact>>,
 }

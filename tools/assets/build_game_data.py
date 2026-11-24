@@ -1252,6 +1252,26 @@ def main():
         out["psi_destroy"] = next(({"projectile": projectile(deref(x["f"]["projectileOnBloonDestroyModel"]), depth + 1),
                                     "emission": emission(deref(x["f"].get("emissionOnBloonDestroy")))}
                                    for x in pb.get("PsiEffectModel", []) if deref(x["f"].get("projectileOnBloonDestroyModel")) and depth < 3), None)
+        # PsiPsionicScreamModel (Psi 20's Psionic Scream): PsiPsionicScream.Collide (VERIFIED-DECOMP
+        # @0x180cd3b60): a syncedRandom draw per bloon; above psiEffectChance WindModel's
+        # AddBehaviorToBloonMutator (distractDistanceMin / Max, speedMultiplier; none on a carried
+        # bloon), else its psiEffectModel's hold for GetFramesUntilBloonCompletelyPopped frames
+        # (recording psi_l20_r80 rt 401: a ZOMG held 900 frames).
+        out["psi_scream"] = None
+        for x in pb.get("PsiPsionicScreamModel", []):
+            xf = x["f"]
+            pe = deref(xf.get("psiEffectModel"))
+            pef = pe["f"] if pe else {}
+            pd = deref(pef.get("projectileOnBloonDestroyModel"))
+            out["psi_scream"] = {
+                "chance": xf.get("psiEffectChance", 0.5),
+                "wind": {"first": False, "min": xf.get("distractDistanceMin", 0.0), "max": xf.get("distractDistanceMax", 0.0),
+                         "chance": 1.0, "moabs": True, "tag_scale": 0.0, "tags": [], "speed_mult": xf.get("speedMultiplier", 1.0)},
+                "psi": [float(pef.get("damagePerTick", 1)), float(pef.get("tickRate", 0.2)),
+                        float(pef.get("superCeramicPenalty", 0)), float(int(round(pef.get("maxDuration", 15.0) * 60)))],
+                "psi_destroy": ({"projectile": projectile(pd, depth + 1), "emission": emission(deref(pef.get("emissionOnBloonDestroy")))}
+                                if pd and depth < 3 else None),
+            }
         # SilasTrackTargetModel: [minimumSpeedFrames, maximumSpeedFrames, accelerationFrames,
         # lifespanFrames, projectileWaitTime frames] (SilasTrackTarget, VERIFIED-DECOMP @0x180cdc970).
         # (The model's ...Frames are speed x (1 / 60f) in float32: 600 -> 10.000001; recording
@@ -1698,6 +1718,10 @@ def main():
                              ("TargetEliteTargettingModel", "Elite")):
                     if x["type"] == t and m not in targets:
                         targets.append(m)
+            # TargetEliteTargettingModel.percentageThroughMap: past it a bloon goes first (0.75 on the
+            # selectable Elite mode, 0.5 on Psi's Attack2; recording psi_l10_r40 rt 2405, a Green at
+            # 0.54 over a Black).
+            elite_perc = next((x["f"].get("percentageThroughMap", 0.75) for x in items(af["behaviors"]) if x and x["type"] == "TargetEliteTargettingModel"), 0.75)
             # TargetTrackOrDefaultModel without forceTargetTrack (Obyn's Brambles): GetTargets
             # (VERIFIED-DECOMP @0x180e07820) takes its bloon targets when there are any, the track
             # points (GeneratePoints) only otherwise. INFERRED: the bloon targets are First's.
@@ -2184,7 +2208,7 @@ def main():
                                      next(([flt["f"].get("fieldOfView", 360.0), flt["f"].get("baseTowerRotationOffset", 0.0), 1.0 if flt["f"].get("ignoreTowerRotation") else 0.0]
                                            for y in items(af["behaviors"]) if y and y["type"] == "AttackFilterModel"
                                            for flt in items(y["f"]["filters"]) if flt and flt["type"] == "FilterTargetAngleModel"), None)),
-                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "offscreen": offscreen, "cant_hit": cant_hit, "prio_moab": prio_moab, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
+                    "glue_filter": glue_filter, "skip_frozen": skip_frozen, "offscreen": offscreen, "cant_hit": cant_hit, "prio_moab": prio_moab, "elite_perc": elite_perc, "random_position": random_position, "random_land": random_land, "random_basic": random_basic, "random_pos": random_pos,
                     "while_fx": next(([prefab_name((deref(x["f"].get("effectModel")) or {"f": {}})["f"].get("assetId")) or "", prefab_name((deref(x["f"].get("exitEffectModel")) or {"f": {}})["f"].get("assetId")) or ""] for x in items(af["behaviors"]) if x and x["type"] == "CreateEffectWhileAttackingModel"), None),
                     "fire_without_target": af.get("fireWithoutTarget", False),
                     # AttackModel.attackThroughWalls: no Map.IsTargetLineClear check.

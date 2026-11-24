@@ -6455,6 +6455,9 @@ macro_rules! collide_pass {
                     }
                 }
             }
+            if let (Some(sc), Some(i)) = ($s.projectiles[$p].spec.psi_scream.clone(), bloon_idx(&$s.bloons, &$s.bidx, id)) {
+                $s.psi_scream_hit(i, $p, &sc);
+            }
             // PushBack.Collide (VERIFIED-DISASM @0xcf29a0): pushAmount x the class multiplier,
             // through Bloon.Move(-amount), which keeps it from trailing the entrance by more than
             // 1.25 x its radius (recording boomerang_005: a MOAB pressed back to 157.35 moves on
@@ -21074,7 +21077,10 @@ impl Game {
                 // only: of two as far along, the first listed leads; recording glue_400, twin
                 // Greens out of one pop, stored the other way round.)
                 let mut lead: Vec<Option<(usize, f32, u32)>> = vec![None; self.tracks.len()];
-                if mode == TargetMode::First || mode == TargetMode::Last || mode == TargetMode::Strong {
+                // (Elite sorts Targetting.GetTargets, whose list starts with GetGlobalBest's First
+                // leader: recording psi_l10_r40 rt 2579, of two equal keys on one segment the leading
+                // Yellow 1147, not the Pink listed before it.)
+                if mode == TargetMode::First || mode == TargetMode::Last || mode == TargetMode::Strong || mode == TargetMode::Elite {
                     let key = (mode == TargetMode::Last, camo, no_moab);
                     lead = if use_segment_cache {
                         if !self.target_index_mut().lead.contains_key(&key) {
@@ -21352,7 +21358,7 @@ impl Game {
                         TargetMode::Close => -dd,
                         TargetMode::Strong => self.rbe[b.kind] * 1e4 + b.progress(),
                         // TargetEliteTargetting.Sort (VERIFIED-DISASM @0x180de19d0; buffers from its .ctor
-                        // @0x180de1c50, percentageThroughMap 0.75 from the model): camo priority on and a camo
+                        // @0x180de1c50, percentageThroughMap from the model: 0.75, Psi's Attack2 0.5): camo priority on and a camo
                         // bloon: danger + 1e9; past 75%: perc x 0.12 + 1e6; a MOAB: perc x 0.12 + danger + 10;
                         // with SpawnChildren and more than one child: children x 1e4 + perc x 0.12 + danger;
                         // else danger. (The f32 sum, as the game adds it.) Equal keys: see below.
@@ -21361,7 +21367,7 @@ impl Game {
                             let pt = perc * 1.2f32 * 0.1f32;
                             let key: f32 = if self.towers[t].camo_prio && b.camo(d) {
                                 d.danger + 1e9
-                            } else if perc > 0.75 {
+                            } else if perc > attack.elite_perc {
                                 pt + 1e6
                             } else if d.tags.iter().any(|t| t == "Moabs") {
                                 pt + d.danger + 10.0
@@ -25291,7 +25297,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                     self.emit_target = None;
                     self.emit_z = 0.0;
                 }
-                dots.push((id, total.ceil(), 0, owner, (true, false), "Psi".into(), now as f32, 0));
+                // (Bloon.Damage(.., distributeToChildren 1, overrideDistributeBlocker 1, ..): through a
+                // MOAB's layers too; recording psi_l20_r80 rt 1300, a held ZOMG gone, no BFBs.)
+                dots.push((id, total.ceil(), 0, owner, (true, true), "Psi".into(), now as f32, 0));
             }
         }
         let b = &mut self.bloons[i];
@@ -26823,6 +26831,60 @@ impl Game {
         b.effects.clear();
         b.psi = Some(((now + frames as u64).saturating_sub(1), owner));
         b.psi_destroy = pd;
+        b.psi_since = now;
+        b.psi_active = false;
+    }
+
+    /// PsiPsionicScream.Collide (VERIFIED-DECOMP @0x180cd3b60): syncedRandom.NextDouble; above
+    /// psiEffectChance, unless the bloon is carried (offTrackCount, +0x224), its WindModel mutator
+    /// (the old one removed; MoveWithWind.Attatched draws the distance back); else the
+    /// psiEffectModel's PsiBloonMutator for GetFramesUntilBloonCompletelyPopped frames, without
+    /// PsiEffect's RemoveAllMutators or canFireAt (recording psi_l20_r80 rt 401: a stunned ZOMG
+    /// held 900 frames, still held once the stun ends at 490).
+    fn psi_scream_hit(&mut self, i: usize, p: usize, sc: &crate::data::PsiScream) {
+        let r = self.synced_double();
+        let owner = self.projectiles[p].emitted_by;
+        let now = self.sim_elapsed;
+        if (sc.chance as f64) < r {
+            if self.bloons[i].wind.is_some() || self.bloons[i].held {
+                return;
+            }
+            let w = &sc.wind;
+            let mut back = (self.synced_double() as f32) * (w.max - w.min) + w.min;
+            if w.tag_scale > 0.0 && w.tags.iter().any(|t| self.defs[self.bloons[i].kind].tags.contains(t)) {
+                back *= w.tag_scale;
+            }
+            let d0 = self.bloons[i].dist;
+            self.push_back(i, back);
+            let r = self.defs[self.bloons[i].kind].radius;
+            let sd = self.track_ends.get(self.bloons[i].path as usize).and_then(|e| e.0);
+            let now_t = self.sim_elapsed * 4 + self.phase as u64;
+            self.create_seq += 1;
+            let seq = self.create_seq;
+            let b = &mut self.bloons[i];
+            if let Some(sd) = sd {
+                if b.dist <= sd - r * 1.25 {
+                    b.dist = sd - r * 1.25;
+                }
+            }
+            b.wind_since = now_t;
+            b.wind = Some(w.speed_mult);
+            b.wind_new = true;
+            b.wind_seg = Some(d0);
+            b.wind_direct = true;
+            b.wind_model = Some(Box::new(w.clone()));
+            b.wind_seq = seq;
+            return;
+        }
+        let [dpt, tick, penalty, max_frames] = sc.psi;
+        let b = &self.bloons[i];
+        let d = &self.defs[b.kind];
+        let total = (b.hp - d.max_health as i32 + self.total_health_model(b.kind)) as f64;
+        let per = if penalty > 0.0 && d.tags.iter().any(|t| t == "Super") { dpt - penalty } else { dpt };
+        let frames = (((total / ((1.0f32 / tick) * per) as f64) * 60.0) as i32).min(max_frames as i32).max(0);
+        let b = &mut self.bloons[i];
+        b.psi = Some(((now + frames as u64).saturating_sub(1), owner));
+        b.psi_destroy = sc.psi_destroy.clone();
         b.psi_since = now;
         b.psi_active = false;
     }
