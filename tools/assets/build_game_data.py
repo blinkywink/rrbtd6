@@ -431,6 +431,13 @@ def main():
                     if x["type"] == "FilterWithTagModel" and (x["f"].get("moabTag") or x["f"].get("tag")):
                         t = "Moabs" if x["f"].get("moabTag") else x["f"]["tag"]
                         (exclude_tags if x["f"].get("inclusive") else require_tags).append(t)
+                    # FilterWithTagsModel: FilterWithTags.FilterBloon (VERIFIED-DECOMP @0x180c40e00):
+                    # a bloon with any of the tags passes, with inclusive one with none of them (Psi
+                    # 10's BaseProjectileSplash: Ceramic / Moabs / Golden / Boss / Frontier out, so its
+                    # CollisionChecker grid margin is 0: recording psi_l10_r40 rt 1958).
+                    if x["type"] == "FilterWithTagsModel":
+                        tags = [t for t in (deref(x["f"].get("tags")) or []) if isinstance(t, str)]
+                        (exclude_tags if x["f"].get("inclusive") else require_tags).extend(tags)
                     if x["type"] == "FilterGlueLevelModel":
                         glue_filter = x["f"]["glueLevel"]
                     if x["type"] == "FilterFrozenBloonsModel":
@@ -498,15 +505,10 @@ def main():
                             "after_damage": bool(sf.get("applyAfterDamage", False)),
                             # Its damageModel's immuneBloonProperties: bloons it can't hold.
                             "immune": ((deref(sf.get("damageModel")) or {}).get("f") or {}).get("immuneBloonProperties", 0)})
-        # PsiEffectModel (Psi): the hit bloon is held and takes damagePerTick every tickRate
-        # seconds for up to maxDuration. HYPOTHESIS P-PSIHOLD: held = speed 0 meanwhile.
-        for s in pb.get("PsiEffectModel", []):
-            sf = s["f"]
-            effects.append({"kind": "dot", "id": "Psi", "lifespan": sf.get("maxDuration", 15.0), "layers": 9999,
-                            "damage": sf.get("damagePerTick", 1), "interval": sf.get("tickRate", 1.0), "immune": 0,
-                            "only_if_damaged": False, "moabs_only": False})
-            effects.append({"kind": "slow", "id": "PsiHold", "mult": 0.0, "lifespan": sf.get("maxDuration", 15.0),
-                            "layers": 9999, "glue": 0, "refresh": True, "tags": []})
+        # PsiEffectModel (Psi): no effects here. PsiEffect.Collide (@0x180cd3850) removes every
+        # mutator and adds only the PsiBloonMutator, which the projectile's "psi" (below) models: held
+        # from the frame after the hit, invulnerable, popped when it ends (an immediate speed-0 slow
+        # held it one frame early: recording psi_l10_r40 rt 1956, the splash's second bloon moves).
         for s in pb.get("AddBehaviorToBloonModel", []):
             sf = s["f"]
             flt = deref(sf.get("filter"))
@@ -546,16 +548,6 @@ def main():
                                     "layers": sf.get("layers", 1), "mult": df.get("desperadoDamageMultiplier", 1.0),
                                     "damage": df.get("popCashMultiplier", 1.0),
                                     "keep_on_degrade": bool(sf.get("dontRemoveOnBloonDegrade", False))})
-                # PsiBloonBehaviorModel (Psi): the bloon is held and takes damagePerTick every
-                # tickRate seconds. HYPOTHESIS P-PSIHOLD: held = speed 0 while it lasts.
-                if d and d["type"] == "PsiBloonBehaviorModel":
-                    df = d["f"]
-                    effects.append({"kind": "dot", "id": sf.get("mutationId") or "Psi", "lifespan": sf.get("lifespan", 0.0),
-                                    "layers": sf.get("layers", 1), "damage": df.get("damagePerTick", 1),
-                                    "interval": df.get("tickRate", 1.0), "immune": 0, "only_if_damaged": False,
-                                    "moabs_only": False})
-                    effects.append({"kind": "slow", "id": "PsiHold", "mult": 0.0, "lifespan": sf.get("lifespan", 0.0),
-                                    "layers": sf.get("layers", 1), "glue": 0, "refresh": True, "tags": []})
                 # CreateEffectOnPopModel (Glue Splatter's GlueDegradeSplatEffect): its effect where
                 # the bloon pops (visual).
                 if d and d["type"] == "CreateEffectOnPopModel":

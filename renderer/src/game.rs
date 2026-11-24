@@ -401,8 +401,7 @@ pub struct Bloon {
     pub psi: Option<(u64, u64)>,
     /// The hold's projectileOnBloonDestroy (Psi 10+).
     pub psi_destroy: Option<std::sync::Arc<crate::data::Contact>>,
-    /// The frame the hold began, and whether it holds the bloon in this frame's Process (from the
-    /// frame after the hit: recordings psi_l03_r20 rt 126, psi_l10_r40 rt 1956, it moves once more).
+    /// The frame the hold began, and whether it holds the bloon in this frame's Process.
     pub psi_since: u64,
     pub psi_active: bool,
     /// When a Gyrfalcon snatched it (sim_elapsed x 4 + 3) and where it was carried to as this frame
@@ -1721,7 +1720,7 @@ pub struct WeaponState {
     pub rand_target: Option<[f32; 2]>,
     /// BurstWeaponBehavior.currentCount: shots left in this burst (Initialise: the model's count).
     pub burst_left: u32,
-    /// PsiLimitProjectile.canFireAt (roundTime): a psi_limit weapon fires only from then.
+    /// PsiLimitProjectile.canFireAt (the elapsed frame count, `sim_elapsed`): a psi_limit weapon fires only from then.
     pub psi_can_fire: i64,
     /// The weapon gained its burst with an upgrade: its BurstWeaponBehavior is newer than the
     /// tower's DamageBasedAttackSpeed, so it runs after it in the process list.
@@ -5857,6 +5856,13 @@ macro_rules! collide_pass {
                     $s.emit_as(by, at, heading, &c.emission, &c.projectile, None, tiers, owner);
                     $s.emit_rot = None;
                     $s.emit_z = 0.0;
+                    // (A sub-projectile keeps its shot's Weapon, Projectile +0x1e0: recording
+                    // psi_l10_r40 rt 2057, the splash's hit on a Pink at 1961 sets the weapon's
+                    // PsiLimitProjectile.canFireAt.)
+                    let ws = $s.projectiles[$p].weapon_slot;
+                    for pr in &mut $s.projectiles[start..] {
+                        pr.weapon_slot = ws;
+                    }
                     if let Some(id) = skip {
                         // CreateProjectileOnContact.Collide (VERIFIED-DECOMP @0x180ca2a60): with
                         // passOnCollidedWith each new projectile's collidedWith takes the
@@ -6682,6 +6688,13 @@ macro_rules! collide_pass {
                     $s.emit_as(by, at, heading, &c.emission, &c.projectile, None, tiers, owner);
                     $s.emit_rot = None;
                     $s.emit_z = 0.0;
+                    // (A sub-projectile keeps its shot's Weapon, Projectile +0x1e0: recording
+                    // psi_l10_r40 rt 2057, the splash's hit on a Pink at 1961 sets the weapon's
+                    // PsiLimitProjectile.canFireAt.)
+                    let ws = $s.projectiles[$p].weapon_slot;
+                    for pr in &mut $s.projectiles[start..] {
+                        pr.weapon_slot = ws;
+                    }
                     if let Some(id) = skip {
                         // CreateProjectileOnContact.Collide (VERIFIED-DECOMP @0x180ca2a60): with
                         // passOnCollidedWith each new projectile's collidedWith takes the
@@ -22256,7 +22269,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                         _ => mg_state == 1 && mg_pool < mg_max,
                     };
                     // PsiLimitProjectile.FilterEmission (VERIFIED-DECOMP @0x180c8fb70): canFireAt <= roundTime.
-                    let psi_ok = !weapon.psi_limit || tw.weapons[w].psi_can_fire <= self.round_clock;
+                    let psi_ok = !weapon.psi_limit || tw.weapons[w].psi_can_fire <= self.sim_elapsed as i64;
                     let decide = empty_clip.or(best).or(ambient.then_some((0.0, pos, 0))).filter(|_| quota_left && rounds_on && grave_ok && magus_ok && psi_ok);
                     // Weapon.Process (VERIFIED-DISASM @0xc6f800): once lastEmission + rateFrames
                     // <= its clock and the attack has a target, the throw animation starts and
@@ -25254,7 +25267,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
         self.barrage_tick(i, dots);
         {
             let b = &mut self.bloons[i];
-            b.psi_active = b.psi.is_some() && now > b.psi_since;
+            // (PsiBloonMutator.Mutate: held from the frame it's hit; recording psi_l10_r40 rt 1956,
+            // the splash's second Pink stops that frame.)
+            b.psi_active = b.psi.is_some();
         }
         // PsiBloonBehavior.OnDestroy (VERIFIED-DECOMP @0x181005390), as the PsiBloonMutator runs out:
         // Bloon.Damage of Math.Ceiling(the current total health), distributed, credited to the tower:
@@ -26792,12 +26807,13 @@ impl Game {
         let frames = (((total / ((1.0f32 / tick) * per) as f64) * 60.0) as i32).min(max_frames as i32).max(0);
         let owner = self.projectiles[p].emitted_by;
         let now = self.sim_elapsed;
-        let rc = self.round_clock;
         // (The PsiLimitProjectile of the weapon that fired it, + Weapon.rateFrames: Projectile +0x1e0
-        // is its Weapon, +0xa0 rateFrames.)
+        // is its Weapon, +0xa0 rateFrames. The clock is Simulation +0x30 +0x10, the elapsed frame
+        // count, not roundTime: it runs on through the frame a new round holds roundTime
+        // (recording psi_l03_r20: hit at rt 583, round 20 starts at 636, next throw rt 696).)
         let slot = self.projectiles[p].weapon_slot as usize;
         if let Some(st) = self.towers.iter_mut().find(|w| w.id == owner).and_then(|tw| tw.weapons.get_mut(slot)) {
-            let at = rc + st.rate_frames + frames as i64;
+            let at = now as i64 + st.rate_frames + frames as i64;
             if st.psi_can_fire < at {
                 st.psi_can_fire = at;
             }
