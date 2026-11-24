@@ -2577,6 +2577,21 @@ pub struct OverTime {
     from: [f32; 2],
     /// EmissionSupplyRandomTargetModels (min, max, mapBorder, spawnProjectilesOnTarget).
     supply: Vec<[f32; 4]>,
+    /// A weapon's own EmissionOverTime (DanDMonke's alternates): Emit stores the throw's direction
+    /// and Target, and each emission goes along them (see `StoredAim`).
+    aimed: Option<StoredAim>,
+}
+
+/// The throw an EmissionOverTime keeps: (direction, tower rotation, z, Target, its circle offset,
+/// the point aimed at).
+#[derive(Clone, Copy)]
+pub struct StoredAim {
+    dir: f32,
+    rot: Option<f32>,
+    z: f32,
+    target: Option<u64>,
+    target_off: [f32; 2],
+    aim: [f32; 2],
 }
 
 #[derive(Clone)]
@@ -12500,6 +12515,22 @@ impl Game {
         o.last = now;
         o.left -= 1;
         let (emission, proj, crit, tiers, owner) = (o.emission.clone(), o.proj.clone(), o.crit, o.tiers, o.owner);
+        // (A weapon's own over-time emission: along the stored throw.)
+        if let Some(a) = o.aimed {
+            let from = o.from;
+            self.emit_rot = a.rot;
+            self.emit_z = a.z;
+            self.emit_target = a.target;
+            self.emit_target_off = a.target_off;
+            self.emit_aim = Some(a.aim);
+            self.emit(from, a.dir, &emission, &proj, crit, tiers, owner);
+            self.emit_rot = None;
+            self.emit_z = 0.0;
+            self.emit_target = None;
+            self.emit_target_off = [0.0; 2];
+            self.emit_aim = None;
+            return;
+        }
         // EmissionSupplyRandomTarget.OnEmit (VERIFIED-DECOMP @0x180c3ce60, GetTargets' MoveNext
         // @0x180c4d360) for each behaviour in turn, around the projectile's Position: r = (float)(synced
         // NextDouble x (max - min) + min), a synced NextDouble for the angle, the point drawn again
@@ -23430,12 +23461,54 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                         owner,
                                         from,
                                         supply: bf.supply.clone(),
+                                        aimed: None,
                                     });
                                     self.over_time_step(t, wi);
                                     // (What EmissionOverTime.Process makes isn't the weapon's
                                     // ProjectilesCreated: recording sniper_paragon_r40 rt 3507, round
                                     // 41's first crate made as the Supply Drop fires, no
                                     // AngleToMapCenter draw, the tower's rotation kept.)
+                                    s0 = self.projectiles.len();
+                                    start = s0;
+                                } else if let (Some([count, frames, delay]), true, None) = (emission.over_time, emission.supply.is_empty(), weapon.burst.as_ref()) {
+                                    // A weapon's own EmissionOverTime (DanDMonke's alternates, no burst):
+                                    // Emit stores the throw and its Process makes them, one every
+                                    // timeBetween, each along the throw's direction at its Target. The
+                                    // object stays with the weapon: its first volley starts in the next
+                                    // frame's Process, a later one (delayCompleted kept) at once
+                                    // (recording dand_l10_r40: the Macaque's alternate thrown at 133,
+                                    // BaseProjectile 513 made at 134, 521 at 137, both flying -36.83 at
+                                    // MOAB 488; thrown at 223, 547 made with it, 555 at 226).
+                                    let now = self.sim_elapsed as i64;
+                                    let key = (self.towers[t].id, wi);
+                                    let (started, done) = self.over_time.get(&key).map_or((now, false), |o| (o.started, o.done));
+                                    self.over_time.insert(key, OverTime {
+                                        left: count as u32,
+                                        last: 0,
+                                        frames: frames as i64,
+                                        delay: delay as i64,
+                                        started,
+                                        done,
+                                        made: now,
+                                        emission: crate::data::Emission { over_time: None, ..emission.clone() },
+                                        proj: proj.clone(),
+                                        crit,
+                                        tiers,
+                                        owner,
+                                        from,
+                                        supply: Vec::new(),
+                                        aimed: Some(StoredAim {
+                                            dir,
+                                            rot: self.emit_rot,
+                                            z: self.emit_z,
+                                            target: self.emit_target,
+                                            target_off: self.emit_target_off,
+                                            aim: target,
+                                        }),
+                                    });
+                                    if done {
+                                        self.over_time_step(t, wi);
+                                    }
                                     s0 = self.projectiles.len();
                                     start = s0;
                                 } else {
@@ -27674,6 +27747,7 @@ impl Game {
                         owner,
                         from: pos,
                         supply: ex.emission.supply.clone(),
+                        aimed: None,
                     });
                     self.over_time_step(t, key.1);
                 }
