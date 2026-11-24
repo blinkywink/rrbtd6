@@ -1149,6 +1149,9 @@ const VINE_END_FRAMES: i32 = 23;
     if std::env::var_os("RRBTD6_MAP_BATCH_CHECK").is_some(){render3d::verify_map_batching(&root).await;}
     if std::env::var_os("RRBTD6_STATIC_MAP_CHECK").is_some(){render3d::verify_static_maps(&root).await;}
     if std::env::var_os("RRBTD6_MESH_INSTANCE_CHECK").is_some(){render3d::verify_mesh_instancing(&root).await;}
+    if std::env::var_os("RRBTD6_PIPELINE_BATCH_CHECK").is_some(){render3d::verify_pipeline_batching().await;}
+    // RRBTD6_PIPELINE_BREAK: macroquad's forced batch break on every material switch, as before.
+    if std::env::var_os("RRBTD6_PIPELINE_BREAK").is_some(){macroquad::set_pipeline_break(true);}
     if std::env::var_os("RRBTD6_BCT_CHECK").is_some(){render3d::verify_bct(&root).await;}
     let mortar_target = tex(root.join("sprites").join("IngameUi").join("MortarTarget.png")).await;
     let mut speed = 1u32;

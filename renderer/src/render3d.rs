@@ -132,6 +132,45 @@ fn draw_sprite_geometry(vertices:&[Vertex],indices:&[u16],texture:Option<&Textur
     });
 }
 
+/// RRBTD6_PIPELINE_BATCH_CHECK: overlapping translucent sprites (the sprite, additive and default
+/// materials and two textures interleaved, at mixed depths) drawn with macroquad's forced break
+/// on every material switch and without it: the same pixels, in fewer draw calls.
+pub async fn verify_pipeline_batching() {
+    let a = Texture2D::from_rgba8(2, 2, &[255, 40, 10, 255, 10, 255, 40, 160, 40, 10, 255, 200, 255, 255, 255, 90]);
+    let b = Texture2D::from_rgba8(2, 2, &[20, 200, 255, 220, 255, 255, 0, 120, 255, 0, 255, 255, 0, 0, 0, 60]);
+    a.set_filter(FilterMode::Linear);
+    b.set_filter(FilterMode::Linear);
+    let rt = render_target_ex(256, 256, RenderTargetParams { sample_count: 1, depth: true });
+    let camera = Camera3D { position: vec3(0.0, 40.0, 40.0), target: Vec3::ZERO, up: Vec3::Y, projection: Projection::Orthographics, fovy: 60.0, aspect: Some(1.0), render_target: Some(rt.clone()), ..Default::default() };
+    let mut runs = Vec::new();
+    for forced in [true, false] {
+        macroquad::set_pipeline_break(forced);
+        set_camera(&camera);
+        clear_background(BLACK);
+        let _ = macroquad::take_draw_tags();
+        macroquad::set_draw_tag("pipeline-check");
+        for k in 0..72u32 {
+            let (x, z) = ((k % 9) as f32 * 5.0 - 20.0, (k / 9) as f32 * 5.0 - 18.0);
+            let y = (k % 7) as f32 * 0.7;
+            let tex = if (k / 4) % 3 == 2 { &b } else { &a };
+            let dir = [((k as f32) * 0.7).cos(), ((k as f32) * 0.7).sin()];
+            match k % 6 {
+                5 => flat_sprite_additive(tex, x, y, z, 9.0, 6.0, [0.5, 0.5], dir, [255, 200, 120, 200], k % 12 == 5),
+                4 => draw_cube(gl(x, y, z), vec3(2.0, 2.0, 2.0), None, Color::from_rgba(120, 200, 80, 255)),
+                _ => flat_sprite_tinted(tex, x, y, z, 8.0, 8.0, [0.5, 0.5], dir, [255, 255, 255, (120 + k * 2) as u8]),
+            }
+        }
+        set_default_camera();
+        let calls = macroquad::take_draw_tags().into_iter().find(|t| t.0 == "pipeline-check").map_or(0, |t| t.1);
+        runs.push((calls, rt.texture.get_texture_data().bytes));
+        next_frame().await;
+    }
+    macroquad::set_pipeline_break(false);
+    macroquad::set_draw_tag("other");
+    let (n, lit) = runs[0].1.chunks_exact(4).zip(runs[1].1.chunks_exact(4)).fold((0usize, 0usize), |(n, lit), (p, q)| (n + (p != q) as usize, lit + (p[0] | p[1] | p[2] != 0) as usize));
+    eprintln!("pipeline-batch-check: {} draw calls with forced breaks, {} without; {n} of {lit} lit pixels differ", runs[0].0, runs[1].0);
+}
+
 /// Same submission as macroquad::draw_mesh, borrowing immutable mesh data.
 pub async fn verify_sprite_submission(){
     let texture=Texture2D::from_rgba8(2,2,&[255,20,10,255,10,255,20,128,20,10,255,200,255,255,255,0]);

@@ -2390,6 +2390,20 @@ seek / closest, which skip carried bloons anyway.)
 
 ## Log (newest first; one entry per checkpoint)
 
+- 2026-11-23: Frame perf (pixels identical): vendor/macroquad QuadGl::pipeline no longer forces a
+  batch break on every material switch. geometry / geometry_instanced already start a new call
+  when the pipeline differs and set_uniform still breaks, so the break only split every
+  `gl_use_material; draw; gl_use_default_material` (each projectile sprite, layer, map piece) into a
+  call of its own. Round 200 (4 paragons): 427 -> 277 draw calls a frame (projectiles 164 -> 57, map
+  55 -> 19), 313 -> 406 fps; sandbox flood 683 -> 773; 500 BADs 135 -> 146. The GPU wasn't the
+  limit: a quarter of the pixels (--window 800x450) gave +4%. RRBTD6_PIPELINE_BATCH_CHECK draws
+  72 overlapping sprites (sprite / additive / default materials, two textures) with and without
+  the break: 72 -> 42 calls, 0 of 26018 lit pixels differ. RRBTD6_PIPELINE_BREAK=1 brings the
+  break back (macroquad::set_pipeline_break). What's left is real state changes (particle systems'
+  textures / blends, projectile types interleaved): merging those needs reordering. Pre-existing:
+  RRBTD6_RENDER_CHECK fails at anim.rs:1186 ("GPU pixels changed at tier 000, case 2"), before this
+  change too.
+
 - 2026-11-23: Frame perf (sim bit-exact, regression full; frame-bench population traces identical
   inline / threaded): the owed steps run on a sim thread while the world is drawn. Where they ran
   inline, main.rs now takes `Game::view()` (a clone; the display queues the drawing drains move to

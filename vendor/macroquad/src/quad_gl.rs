@@ -51,6 +51,14 @@ fn count_draw_tag() {
     });
 }
 
+static PIPELINE_BREAK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// (rrbtd6) Whether every pipeline switch ends the current batch (macroquad's own behaviour; off:
+/// calls merge when their state matches). For comparing the two.
+pub fn set_pipeline_break(on: bool) {
+    PIPELINE_BREAK.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// (rrbtd6) Returns and resets the draw counters.
 pub fn take_draw_stats() -> (usize, usize, usize) {
     DRAW_STATS.with(|c| c.replace((0, 0, 0)))
@@ -1097,11 +1105,15 @@ impl QuadGl {
     }
 
     pub fn pipeline(&mut self, pipeline: Option<GlPipeline>) {
-        if self.state.pipeline == pipeline {
-            return;
+        // (rrbtd6) No forced break: `geometry` / `geometry_instanced` already start a new call
+        // when the pipeline differs from the previous call's, and `set_uniform` breaks when its
+        // uniforms change. Breaking here too made every `gl_use_material(m); draw;
+        // gl_use_default_material()` (each projectile / particle sprite) a call of its own, even
+        // when the previous call used the same material and texture. `set_pipeline_break(true)`
+        // brings it back (comparisons).
+        if PIPELINE_BREAK.load(std::sync::atomic::Ordering::Relaxed) {
+            self.state.break_batching = true;
         }
-
-        self.state.break_batching = true;
         self.state.pipeline = pipeline;
     }
 
