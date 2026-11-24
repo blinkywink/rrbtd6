@@ -10759,7 +10759,7 @@ impl Game {
                 }
                 g.perc_through_map(b) >= 0.01
             };
-            let Some(bid) = self.typed_target_from_ex(pos, sh.range, TargetMode::First, &valid, true) else { continue };
+            let Some(bid) = self.typed_target_from_ex(pos, sh.range, TargetMode::First, &valid, true, false) else { continue };
             let Some(b) = bloon_idx(&self.bloons, &self.bidx, bid).map(|j| &self.bloons[j]) else { continue };
             let d = &self.defs[b.kind];
             let cap = match d.base_id.as_str() {
@@ -10830,14 +10830,14 @@ impl Game {
     /// As `first_target_from` for First, Last (least far along) or Strong (the most RBE, then
     /// the furthest).
     fn typed_target_from(&self, pos: [f32; 2], range: f32, mode: TargetMode, ok: &dyn Fn(&Self, &Bloon) -> bool) -> Option<u64> {
-        self.typed_target_from_ex(pos, range, mode, ok, false)
+        self.typed_target_from_ex(pos, range, mode, ok, false, false)
     }
 
-    fn typed_target_from_ex(&self, pos: [f32; 2], range: f32, mode: TargetMode, ok: &dyn Fn(&Self, &Bloon) -> bool, bracket: bool) -> Option<u64> {
+    fn typed_target_from_ex(&self, pos: [f32; 2], range: f32, mode: TargetMode, ok: &dyn Fn(&Self, &Bloon) -> bool, bracket: bool, full_filter: bool) -> Option<u64> {
         let reach = range + 40.0;
         let rank = |b: &Bloon| self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);
         if mode == TargetMode::Strong {
-            return self.strong_target_from(pos, range, ok);
+            return self.strong_target_from(pos, range, ok, full_filter);
         }
         let mut best: Option<(f32, u32, u64)> = None;
         for (pi, sg) in self.track_segs.iter().enumerate() {
@@ -10870,6 +10870,10 @@ impl Game {
                     // GetTargets (heli_200_pursuit) goes by how far along each is.)
                     let score = match mode {
                         _ if bracket && mode == TargetMode::First => -self.seg_until_leak(pi as u8, k),
+                        // (A drone's Last, PursuitSettingCustom's BloonManager.GetTargets: segments
+                        // furthest from the exit first, a segment's bloons in list order (CompareBracketLast);
+                        // recording etienne_l03_r20 rt 461, Yellow 556 before Pink 564 on segment 94.)
+                        TargetMode::Last if full_filter => self.seg_until_leak(pi as u8, k),
                         TargetMode::Last => -perc,
                         TargetMode::Strong => self.rbe[b.kind] * 1e4 + perc,
                         _ => perc,
@@ -10893,7 +10897,7 @@ impl Game {
     /// segments ascending (the least far along first), each segment's bloons in list order
     /// (recording sniper_paragon_r40_ti rt 970: shrapnel 1420 takes Black 1521 at 198.9, not
     /// the Black ahead at 216.7).
-    fn strong_target_from(&self, pos: [f32; 2], range: f32, ok: &dyn Fn(&Self, &Bloon) -> bool) -> Option<u64> {
+    fn strong_target_from(&self, pos: [f32; 2], range: f32, ok: &dyn Fn(&Self, &Bloon) -> bool, full_filter: bool) -> Option<u64> {
         let reach = range + 40.0;
         let rank = |b: &Bloon| self.path_rank.get(&b.id).map_or(u32::MAX, |r| r.1);
         let reached = |b: &Bloon| -> bool {
@@ -10925,6 +10929,12 @@ impl Game {
         for b in by_rank {
             let d = &self.defs[b.kind];
             if b.camo(d) && !ok(self, b) {
+                continue;
+            }
+            // (HYPOTHESIS P-STRONGFILTER: Path.FindBestBloon skips what a FilterParentTowerRange
+            // filter refuses; recording etienne_l03_r20 rt 461, a swarm drone's Strong is Pink 564 in
+            // Etienne's view, not the furthest Pink 523 out of it.)
+            if full_filter && !ok(self, b) {
                 continue;
             }
             if best.is_none_or(|(bd, bs, _)| d.danger > bd || (d.danger == bd && b.prev_dist > bs)) {
@@ -10960,7 +10970,7 @@ impl Game {
                 } else {
                     here
                 };
-                self.typed_target_from(from, 99999.0, m, &ok)
+                self.typed_target_from_ex(from, 99999.0, m, &ok, false, pr)
             }
             _ => self.first_target_from(here, 99999.0, &ok),
         }
@@ -11173,6 +11183,17 @@ impl Game {
                 None => [0.0; 2],
             }
         };
+        // (HeliMovement.Process calls currentPathSupplier.GetPath every frame, before it looks at
+        // customMovement: a drone's PursuitSettingCustom keeps its lastDestination and
+        // lastPositionInsideParent going during a custom move; recording etienne_l03_r20 rt 522, a
+        // swarm drone sets off from its end marker for a spot it saw on the way.)
+        if custom.is_some() && is_drone {
+            let last = self.towers[t].air.as_ref().and_then(|a| a.pursuit_last).unwrap_or(here);
+            let p = self.pursuit_destination(t, here).unwrap_or(last);
+            self.towers[t].air.as_mut().unwrap().pursuit_last = Some(p);
+            let p = self.drone_final_tweak(t, p, here);
+            self.towers[t].air.as_mut().unwrap().pursuit_last = Some(p);
+        }
         let goal = match mode {
             _ if custom.is_some() => custom.unwrap().pos,
             TargetMode::Point => point.unwrap_or(tpos),
@@ -13233,6 +13254,19 @@ impl Game {
         }
     }
 
+    /// A drone's HeliMovement in its own turn (after its attack), not with the helis after the
+    /// tower phase.
+    fn drone_turn_move(&mut self, t: usize) {
+        if !self.towers[t].sub.as_ref().is_some_and(|s| s.spec.drone.is_some()) || self.towers[t].air.as_ref().is_none_or(|a| a.hm_step == self.sim_elapsed) {
+            return;
+        }
+        let helis: Vec<(usize, [f32; 2])> = (0..self.towers.len())
+            .filter(|&o| self.tier(o).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.heli.is_some()))
+            .filter_map(|o| self.towers[o].air.as_ref().map(|a| (o, a.pos)))
+            .collect();
+        self.move_one_heli(t, &helis);
+    }
+
     /// EntityModel.radius of tower `t`'s model.
     fn tower_radius(&self, t: usize) -> f32 {
         match self.towers[t].sub.as_ref() {
@@ -13257,7 +13291,9 @@ impl Game {
         let Some(h) = self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.heli.clone()) else { return };
         let here = self.towers[t].air.as_ref().unwrap().pos;
         if let Some(c) = self.towers[t].air.as_ref().unwrap().hm_custom {
+            // (One 8-byte store clears framesSinceValidTarget and framesSinceIdleReposition.)
             st.fsvt = 0;
+            st.fsir = 0;
             st.fsor = 0;
             let d2 = (c.pos[0] - here[0]).powi(2) + (c.pos[1] - here[1]).powi(2);
             if d2 < h.slowdownRadiusMinSquared {
@@ -13280,9 +13316,15 @@ impl Game {
             self.drone_idle_move(t, &ds);
             st = self.towers[t].air.as_ref().unwrap().drone;
         }
+        // Attack.HasValidTarget (VERIFIED-DECOMP @0x180daeee0): the frameTarget's bloon still there
+        // (the kept target), from its last search (recording etienne_l03_r20 rt 769: 120 frames after
+        // the last target went, IdleMove).
         let main = self.tier(t).and_then(|tr| tr.attacks.first().map(|a| a.model_name.clone())).unwrap_or_default();
-        if self.towers[t].had_target.get(&main).copied().unwrap_or(false) {
+        let kept_alive = self.towers[t].air.as_ref().and_then(|a| a.hm_target.first().copied().flatten()).is_some_and(|(id, _)| bloon_idx(&self.bloons, &self.bidx, id).is_some());
+        let _ = main;
+        if kept_alive {
             st.fsvt = 0;
+            st.fsir = 0;
             st.fsor = 0;
             self.towers[t].air.as_mut().unwrap().hm_custom = None;
         } else {
@@ -20574,6 +20616,7 @@ impl Game {
                     self.track_sets_init(pt);
                     inited.push(self.towers[pt].id);
                     self.spirit_grow(pt);
+                    self.drone_turn_move(pt);
                 }
             }
             if absorbed.contains(&self.towers[t].id) {
@@ -20587,6 +20630,12 @@ impl Game {
             }
             if only_temp.is_none() {
                 self.collect_zone_step(t);
+                // (A drone acts in its place in the process list: the bloons older than it have
+                // moved by then; recording etienne_l03_r20 rt 461, a swarm drone made at 401 takes
+                // Pink 564 where it is after that frame's move.)
+                if let Some(stamp) = self.towers[t].sub.as_ref().filter(|s| s.spec.drone.is_some()).and_then(|_| self.towers[t].attack_born.values().copied().min()) {
+                    self.process_bloons_before(stamp, early, round_clock, dots, emits, zones, shoves, leak_voice);
+                }
                 self.drone_idle(t);
                 let tid = self.towers[t].id;
                 if self.drone_queue.iter().any(|q| q.0 == tid) {
@@ -24920,6 +24969,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
             self.track_sets_init(pt);
             inited.push(self.towers[pt].id);
             self.spirit_grow(pt);
+            self.drone_turn_move(pt);
         }
         // (Simulation.DestroyTower for Monkeyopolis's farms: gone, no refund; their sub-towers
         // with them.)
