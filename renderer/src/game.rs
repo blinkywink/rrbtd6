@@ -13460,8 +13460,13 @@ impl Game {
             if !on_map(c, 0.0) {
                 continue;
             }
+            // (The drones of the parent's GetBehavior<DroneSupport>(): its tower model's own, the pets;
+            // the swarm's DroneSupport comes after it. The drone itself is in that list too. Recording
+            // etienne_l03_r20 rt 1147: swarm drone 648's second try 4.86 from swarm drone 676, its
+            // third try still taken.)
+            let pets_only = self.towers.iter().any(|o| o.sub.as_ref().is_some_and(|s| s.parent == parent && s.pet && s.spec.drone.is_some()));
             for o in 0..self.towers.len() {
-                if o == t || !self.towers[o].sub.as_ref().is_some_and(|s| s.parent == parent && s.spec.drone.is_some()) {
+                if !self.towers[o].sub.as_ref().is_some_and(|s| s.parent == parent && s.spec.drone.is_some() && (s.pet || !pets_only)) {
                     continue;
                 }
                 let Some(oa) = self.towers[o].air.as_ref() else { continue };
