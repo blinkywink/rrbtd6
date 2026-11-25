@@ -1519,7 +1519,7 @@ pub struct Weapon {
     pub disp_rot: bool,
     /// EmissionRotationOffBloonDirectionModel: shots head for the target bloon from the eject
     /// point ("eject", OnEmit) or the tower ("tower", dontSetAfterEmit), whatever the facing;
-    /// "air" (useAirUnitPosition: from the plane, Monkey Ace) isn't applied yet.
+    /// "air" (useAirUnitPosition): from the AirUnit position.
     #[serde(default)]
     pub bloon_dir: Option<String>,
     /// PrinceOfDarknessEmissionModel: the weapon sends the Prince of Darkness's ghost.

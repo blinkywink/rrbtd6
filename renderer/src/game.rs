@@ -4316,6 +4316,8 @@ pub struct Game {
     drone_queue: Vec<(u64, std::sync::Arc<crate::data::SubTowerSpec>)>,
     /// UCAV.Activate: (UCAV tower id, the UAV's spec) for Deactivate to make the UAV again.
     ucav_uav: Vec<(u64, std::sync::Arc<crate::data::SubTowerSpec>)>,
+    /// A kept drone is being remade for its parent's new level (no DroneIdle.Initialise).
+    drone_keep: bool,
     /// Beast Handler merges, in order: (target handler id, beast base id, contributing handler
     /// id): the target's contributingHandlersByBeast and the source's
     /// beastsLostThroughContribution (BeastHandlerLeash.Contribute @0x180cfadf0).
@@ -7175,6 +7177,7 @@ impl Game {
             pending_pets: Vec::new(),
             drone_queue: Vec::new(),
             ucav_uav: Vec::new(),
+            drone_keep: false,
             merges: Vec::new(),
             leash_sets: HashMap::new(),
             merge_respawn: Vec::new(),
@@ -13250,6 +13253,16 @@ impl Game {
     /// ignoreTargetingFrames (recording etienne_l03_r20 rt 1: the drone at Etienne + (14.14, 14.14)).
     fn drone_spawn(&mut self, n: usize) {
         let Some((ds, parent, pet)) = self.towers[n].sub.as_ref().and_then(|s| s.spec.drone.clone().map(|d| (d, s.parent, s.pet))) else { return };
+        // DroneIdle.Initialise (VERIFIED-DISASM @0x180d1df28; the decomp drops it as unreachable):
+        // currentIdleRepositionFrames = syncedRandom.Next(idleRepositionTimeMinFrames, MaxFrames)
+        // (recording etienne_l10_r40: R r 120 300 at rt 0 for the two pets, four at rt 400 for the
+        // swarm).
+        if !self.drone_keep {
+            let cur = self.synced_range(ds.idle_min, ds.idle_max);
+            if let Some(a) = self.towers[n].air.as_mut() {
+                a.drone.cur_idle = cur;
+            }
+        }
         let Some(pi) = self.towers.iter().position(|o| o.id == parent) else { return };
         let idx = self.towers[..n].iter().filter(|o| o.sub.as_ref().is_some_and(|s| s.parent == parent && s.pet == pet && s.spec.drone.is_some())).count();
         let rot = self.towers[pi].game_rot.unwrap_or(0.0);
@@ -14104,7 +14117,10 @@ impl Game {
             let Some(oi) = self.towers.iter().position(|o| o.id == oid) else { continue };
             let (pos, age, born) = (self.towers[oi].pos, self.towers[oi].sub.as_ref().map_or(0.0, |s| s.age), self.towers[oi].sub.as_ref().map_or(0, |s| s.born));
             let (fx0, sfx0, n0) = (self.place_fx.len(), self.sfx.len(), self.towers.len());
+            // (The drone object stays: no DroneIdle.Initialise draw.)
+            self.drone_keep = true;
             self.spawn_sub(pet, pos, id, true);
+            self.drone_keep = false;
             // (No placement: drop what making it queued.)
             self.place_fx.truncate(fx0);
             self.sfx.truncate(sfx0);
@@ -15290,7 +15306,9 @@ impl Game {
             // PathMovement copied from the UAV (PathMovement.Copy), the UAV destroyed (recording
             // etienne_l10_r40 rt 400: UAV 514 gone, UCAV 670 where it was, t 0.6598 on).
             if spec.ucav {
-                let uav = self.towers.iter().position(|o| o.sub.as_ref().is_some_and(|s| s.parent == id && !s.spec.ucav && s.spec.id == "UAV"));
+                // (The parent's UAV behaviour's first tower: the UAV pet, or level 20's permanent
+                // UCAV; recording etienne_l20_r80 rt 400, 573 gone, 2647 in its place.)
+                let uav = self.towers.iter().position(|o| o.sub.as_ref().is_some_and(|s| s.parent == id && !s.spec.ucav && s.spec.drone.is_none() && o.air.is_some()));
                 self.spawn_sub(spec.clone(), pos, id, false);
                 let n = self.towers.len() - 1;
                 if let Some(u) = uav {
@@ -23943,7 +23961,10 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 // the shot turned to (bloon - eject point); with dontSetAfterEmit only
                                 // OnGetDirection's (bloon - tower) (recording wizard_005: Prince of
                                 // Darkness's bolts fly at their MOAB while the tower stays at 0).
-                                let bloon_from = match weapon.bloon_dir.as_deref() { Some("tower") => Some(pos), Some("eject") => Some(from), _ => None };
+                                // (useAirUnitPosition, OnGetDirection VERIFIED-DECOMP @0x180c3b750: Rotation(bloon -
+                                // AirUnit.Position); recording etienne_l10_r40 rt 402, the UCAV's missile fan.)
+                                let air_at = self.towers[t].air.as_ref().map(|a| a.pos);
+                                let bloon_from = match weapon.bloon_dir.as_deref() { Some("tower") => Some(pos), Some("eject") => Some(from), Some("air") => air_at.or(Some(pos)), _ => None };
                                 // (Target.bloon's own position: no collision-circle offset.)
                                 let bloon_at = bloon_idx(&self.bloons, &self.bidx, target_id).map(|j| &self.bloons[j]).map(|b| b.pos);
                                 // (Not from a carrier plane: FireFromAirUnit fires along the plane; recording
@@ -31727,6 +31748,15 @@ mod tests {
             }
             // (Made at this tier in one go: the base tier's shuffles didn't happen.)
             g.synced = rng_before;
+            // (Its drones' DroneIdle.Initialise draws stand: made with the tower.)
+            let tid = g.towers[t].id;
+            for d in 0..g.towers.len() {
+                let Some(ds) = g.towers[d].sub.as_ref().filter(|s| s.parent == tid).and_then(|s| s.spec.drone.clone()) else { continue };
+                let cur = g.synced_range(ds.idle_min, ds.idle_max);
+                if let Some(a) = g.towers[d].air.as_mut() {
+                    a.drone.cur_idle = cur;
+                }
+            }
             g.towers[t].randpos.clear();
             g.towers[t].track_sets.clear();
             g.random_pos_init(t);
