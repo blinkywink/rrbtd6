@@ -10892,6 +10892,11 @@ impl Game {
                         // recording etienne_l03_r20 rt 461, Yellow 556 before Pink 564 on segment 94.)
                         TargetMode::Last if full_filter => self.seg_until_leak(pi as u8, k),
                         TargetMode::Last => -perc,
+                        // (A drone's Close (CompareBracketClose): the segments nearest the point first,
+                        // a segment's bloons in list order; recording etienne_l20_r80 rt 1289, pet 3
+                        // (ZoneDefense: Close from Etienne) leaves the MOAB for the bloon by him.)
+                        TargetMode::Close if full_filter => -dd,
+                        TargetMode::Close => -((b.pos[0] - pos[0]).powi(2) + (b.pos[1] - pos[1]).powi(2)),
                         TargetMode::Strong => self.rbe[b.kind] * 1e4 + perc,
                         _ => perc,
                     };
@@ -10978,7 +10983,7 @@ impl Game {
         let pr = tier.attacks.first().is_some_and(|a| a.parent_range);
         let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind])) && (!pr || g.parent_sees(t, b));
         let drone = self.towers[t].sub.as_ref().and_then(|s| s.spec.drone.as_ref());
-        match (drone, self.towers[t].air.as_ref().map(|a| a.drone.ttype)) {
+        match (drone, self.drone_ttype(t)) {
             // (PursuitSettingCustom.GetTargets: BloonManager.GetTargets of currentTargetType from the
             // drone, Close from the parent with useParentForClose.)
             (Some(d), Some(m)) if m != TargetMode::First => {
@@ -10991,6 +10996,31 @@ impl Game {
             }
             _ => self.first_target_from(here, 99999.0, &ok),
         }
+    }
+
+    /// A drone's PursuitSettingCustom.currentTargetType. A pet's is DroneSupport.UpdateDroneTargetTypes
+    /// (VERIFIED-DECOMP @0x180d20770) by Etienne's target type and its index in the pets: First all
+    /// First; DivideAndConquer odd First, even Strong; ZoneDefense index % 4 First, Strong, Last,
+    /// Close. HYPOTHESIS P-ETIENNEMODE: Etienne's type is the last one his level unlocks
+    /// (DivideAndConquer from 7, ZoneDefense from 11): recording etienne_l10_r40 rt 899, drone 0 picks
+    /// a Black over the Yellow ahead; etienne_l20_r80 rt 1289, pets 2 and 3 leave the MOAB for the
+    /// last / closest bloon.
+    fn drone_ttype(&self, t: usize) -> Option<TargetMode> {
+        let s = self.towers[t].sub.as_ref().filter(|s| s.spec.drone.is_some())?;
+        let own = self.towers[t].air.as_ref().map(|a| a.drone.ttype);
+        if !s.pet || env_flag!("RRBTD6_NO_ETIENNEMODE") {
+            return own;
+        }
+        let parent = s.parent;
+        let level = self.towers.iter().find(|o| o.id == parent).map_or(1, |o| o.tiers[0]);
+        let idx = self.towers[..t].iter().filter(|o| o.sub.as_ref().is_some_and(|x| x.parent == parent && x.pet && x.spec.drone.is_some())).count();
+        Some(if level >= 11 {
+            [TargetMode::First, TargetMode::Strong, TargetMode::Last, TargetMode::Close][idx % 4]
+        } else if level >= 7 {
+            if idx % 2 == 1 { TargetMode::First } else { TargetMode::Strong }
+        } else {
+            TargetMode::First
+        })
     }
 
     /// FilterParentTowerRange: `b` is among the parent tower's first Attack's GetVisibleTargets.
@@ -21534,7 +21564,7 @@ impl Game {
                 // The off hand (TargetLeftHandModel) uses the tower's left-hand mode.
                 let tower_mode = if attack.hand.as_deref() == Some("left") { self.towers[t].left_target } else { self.towers[t].target };
                 let modes: Vec<TargetMode> = attack.targets.iter().filter_map(|s| TargetMode::parse(s)).collect();
-                let drone_mode = self.towers[t].sub.as_ref().is_some_and(|s| s.spec.drone.is_some()).then(|| self.towers[t].air.as_ref().map(|a| a.drone.ttype)).flatten();
+                let drone_mode = self.drone_ttype(t);
                 let mode = match modes.as_slice() {
                     _ if drone_mode.is_some() => drone_mode.unwrap(),
                     [only] => *only,
