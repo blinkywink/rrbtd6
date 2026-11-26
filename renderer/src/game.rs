@@ -10867,7 +10867,10 @@ impl Game {
                     continue;
                 }
                 let near = dd <= (range + 2.0) * (range + 2.0);
-                for b in self.bloons.iter().filter(|b| !b.off_track() && b.path as usize == pi && (b.prev_dist / 7.0).max(0.0) as usize == k) {
+                // (A drone's PursuitSettingCustom.GetTargets reads the segment lists, a move behind
+                // (seg_dist): recording etienne_l20_r80 rt 1308, Last keeps a Bfb that has just crossed
+                // into the segment of one listed before it.)
+                for b in self.bloons.iter().filter(|b| !b.off_track() && b.path as usize == pi && ((if full_filter { b.seg_dist } else { b.prev_dist }) / 7.0).max(0.0) as usize == k) {
                     let d = &self.defs[b.kind];
                     let reached = near
                         || (d.is_moab
