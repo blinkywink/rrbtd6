@@ -2668,6 +2668,16 @@ pub struct AirUnit {
     pub hm_step: u64,
     /// HeliMovement.customMovement while isActive.
     pub hm_custom: Option<HmCustom>,
+    /// RosaliaMovement state: isPursuitEnabled, lastDestination and currentJumpDestination (clone
+    /// frame), currentJumpState (0 none, 1 up, 2 relocating, 3 down), jumpStateLastUpdatedAt (step),
+    /// Position.z, Flight Boost frames left.
+    pub rm_pursuit: bool,
+    pub rm_last: Option<[f32; 2]>,
+    pub rm_jump_dest: Option<[f32; 2]>,
+    pub rm_jump: i32,
+    pub rm_jump_at: i64,
+    pub rm_z: f32,
+    pub rm_boost: Option<u32>,
     /// DroneIdle's counters (Etienne's drones).
     pub drone: DroneIdleState,
     /// PursuitSettingCustom.lastPositionInsideParent (clone frame).
@@ -3377,6 +3387,11 @@ pub struct Projectile {
     refresh_t: f32,
     /// Frames since the last interval sub-projectile (CreateProjectileOnIntervalModel).
     interval_t: f32,
+    /// CreateProjectilesInArea: startedAt (roundTime when made) and projectilesEmitted.
+    area_start: i64,
+    area_n: u32,
+    /// KineticChargeProjectile's state.
+    kc: Option<Box<KcState>>,
     /// CreateProjectileOnExhaustFraction.isDone, a bit per `spec.on_exhaust` entry.
     exhaust_done: u32,
     /// Projectile.Target's bloon (the game's): what the weapon aimed at, or a glaive's latest
@@ -3458,6 +3473,23 @@ fn overriding_mutated(b: &Bloon, f: &(Vec<String>, String, String)) -> bool {
         }
     }
     b.is_mutated_by(default)
+}
+
+/// KineticChargeProjectile's fields: its start and deployTo (clone frame), when it was made (step),
+/// isFlyingTowardsTarget and its Target (bloon, last position), attachedBloon / attachedAt /
+/// healthAtAttached, explodeNextMovement.
+#[derive(Clone, Default, Debug)]
+pub struct KcState {
+    start: [f32; 2],
+    to: [f32; 2],
+    born: i64,
+    flying: bool,
+    target: Option<u64>,
+    target_pos: [f32; 2],
+    attached: Option<u64>,
+    attached_at: i64,
+    health_at: i32,
+    explode_next: bool,
 }
 
 /// NinjaKiwi.Common.SeededRandom (VERIFIED-DISASM): Lehmer, seed = |seed x 16807 mod (2^31 - 1)|.
@@ -9525,6 +9557,16 @@ impl Game {
         self.los_clear(Los::of(attack), pos, q)
     }
 
+    /// The same from height `z` when given: Rosalia's AttackAirUnit looks from her AirUnit's
+    /// Position.z (RosaliaMovement.GetHeight: 250 once she flies; recording rosalia_l10_r40 rt 37,
+    /// a MOAB 60 away past the Tutorial's trees taken).
+    fn seg_line_clear_at(&self, attack: &crate::data::Attack, pos: [f32; 2], q: [f32; 2], z: Option<f32>) -> bool {
+        match z {
+            Some(z) => Los::of(attack).through_walls || self.line_clear(pos, z, q),
+            None => self.seg_line_clear(attack, pos, q),
+        }
+    }
+
     fn los_clear(&self, los: Los, pos: [f32; 2], q: [f32; 2]) -> bool {
         if los.through_walls {
             return true;
@@ -10640,6 +10682,13 @@ impl Game {
                 hm_born: self.sim_elapsed,
                 hm_step: u64::MAX,
                 hm_custom: None,
+                rm_pursuit: false,
+                rm_last: None,
+                rm_jump_dest: None,
+                rm_jump: 0,
+                rm_jump_at: -1,
+                rm_z: 0.0,
+                rm_boost: None,
                 drone: DroneIdleState::default(),
                 pursuit_inside: None,
                 hm_last_off: [0.0; 2],
@@ -10684,8 +10733,8 @@ impl Game {
             if spec.fighter.is_some() {
                 continue;
             }
-            // (Helis move after their attacks: move_helis.)
-            if spec.heli.is_some() {
+            // (Helis move after their attacks: move_helis; Rosalia too: move_rosalia.)
+            if spec.heli.is_some() || spec.rosalia.is_some() {
                 continue;
             }
             let tw = &mut self.towers[t];
@@ -11096,6 +11145,246 @@ impl Game {
         self.towers[t].air.as_mut().unwrap().pursuit_inside = Some(q);
         q
     }
+
+    /// RosaliaMovement.GetHeight (VERIFIED-DECOMP @0x180d82980): Map.GetTerrainHeight under the
+    /// AirUnit while AirUnitModel.blocksPlacement, else 250.
+    fn rosalia_height(&self, t: usize, p: [f32; 2]) -> f32 {
+        if self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.grounded) { self.terrain_z(p) } else { 250.0 }
+    }
+
+    /// RosaliaMovement.TogglePursuit (VERIFIED-DECOMP @0x180d85760): on, the AirUnit's spot (or the
+    /// jump's destination mid-jump) becomes lastDestination and currentJumpDestination; off, she
+    /// jumps back to currentJumpDestination (StartJump).
+    fn rosalia_toggle(&mut self, t: usize, on: bool) {
+        let Some(a) = self.towers[t].air.as_mut() else { return };
+        if a.rm_pursuit == on {
+            return;
+        }
+        let v = if a.rm_jump == 0 { a.pos } else { a.rm_jump_dest.unwrap_or(a.pos) };
+        a.rm_last = Some(v);
+        a.rm_pursuit = on;
+        if on {
+            a.rm_jump_dest = Some(v);
+            return;
+        }
+        let d = a.rm_jump_dest.unwrap_or(v);
+        self.rosalia_start_jump(t, d);
+    }
+
+    /// RosaliaMovement.StartJump (VERIFIED-DECOMP @0x180d85290): lastDestination and the jump's
+    /// destination `d`, state FLYING_UP from now, turned toward it (Vector2.get_Rotation); her
+    /// attacks paused (PauseAttacks) till EndJump. (A grounded Rosalia's placeholder tower isn't
+    /// modelled.)
+    fn rosalia_start_jump(&mut self, t: usize, d: [f32; 2]) {
+        let now = self.steps as i64;
+        let Some(a) = self.towers[t].air.as_mut() else { return };
+        a.rm_jump_dest = Some(d);
+        a.rm_last = Some(d);
+        a.rm_jump_at = now;
+        a.rm_jump = 1;
+        let e = [d[0] - a.pos[0], -(d[1] - a.pos[1])];
+        a.hm_rot = crt_atan2(e[0], e[1]) * RAD2DEG;
+        a.angle = (a.hm_rot - 90.0) * DEG2RAD;
+    }
+
+    /// Rosalia mid-jump: RosaliaMovement.PauseAttacks (VERIFIED-DECOMP @0x180d844e0) holds her
+    /// attacks from StartJump to EndJump.
+    pub(crate) fn rosalia_jumping(&self, t: usize) -> bool {
+        self.towers[t].air.as_ref().is_some_and(|a| a.rm_jump != 0)
+    }
+
+    /// RosaliaMovement's target: GetBloonTarget (VERIFIED-DECOMP @0x180d823f0), BloonManager.GetTarget
+    /// of the tower's target type from the tower, range 99999, through IsBloonValid (not destroyed,
+    /// camo only if the tower sees camo, not untargetable).
+    fn rosalia_target(&self, t: usize) -> Option<u64> {
+        let tier = self.tier(t)?;
+        let camo = tier.attacks.first().is_some_and(|a| a.camo) || self.buffs.get(t).is_some_and(|b| b.camo);
+        let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind])) && !g.bloon_nontarget(b);
+        let from = self.towers[t].pos;
+        match self.towers[t].target {
+            TargetMode::First => self.first_target_from(from, 99999.0, &ok),
+            m => self.typed_target_from_ex(from, 99999.0, m, &ok, false, false),
+        }
+    }
+
+    /// RosaliaMovement.Process (VERIFIED-DECOMP @0x180d84b70): UpdateJump, then UpdateMovement
+    /// (VERIFIED-DECOMP @0x180d85c60) / ApplyMovement (VERIFIED-DISASM @0x180d81400), in her tower's
+    /// processing after its attacks.
+    fn move_rosalia(&mut self, t: usize) {
+        let Some(rs) = self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.rosalia.clone()) else { return };
+        if self.towers[t].air.is_none() {
+            return;
+        }
+        let now = self.steps as i64;
+        // (Flight Boost's lifespan: FlightBoostAbility.Deactivate (VERIFIED-DECOMP @0x180e32750)
+        // toggles pursuit off, a jump home.)
+        let ended = {
+            let a = self.towers[t].air.as_mut().unwrap();
+            match a.rm_boost.as_mut() {
+                Some(n) => {
+                    *n = n.saturating_sub(1);
+                    *n == 0
+                }
+                None => false,
+            }
+        };
+        if ended {
+            self.towers[t].air.as_mut().unwrap().rm_boost = None;
+            self.rosalia_toggle(t, false);
+        }
+        {
+            let a = self.towers[t].air.as_mut().unwrap();
+            if a.rm_last.is_none() {
+                a.rm_last = Some(a.pos);
+            }
+            if a.rm_jump_dest.is_none() {
+                a.rm_jump_dest = Some(a.pos);
+            }
+        }
+        // UpdateJump (VERIFIED-DECOMP @0x180d85880).
+        let jump = self.towers[t].air.as_ref().unwrap().rm_jump;
+        if jump != 0 {
+            let a = self.towers[t].air.as_mut().unwrap();
+            let since = (now - a.rm_jump_at) as f32;
+            match jump {
+                1 => {
+                    if since >= rs.jumpUpTimeFrames {
+                        a.rm_jump_at = now;
+                        a.rm_jump = 2;
+                    }
+                }
+                2 => {
+                    let d = a.rm_jump_dest.unwrap_or(a.pos);
+                    let (dg, pg) = ([d[0], -d[1]], [a.pos[0], -a.pos[1]]);
+                    let e = [dg[0] - pg[0], dg[1] - pg[1]];
+                    let step = rs.jumpSpeedScale * rs.maxSpeed * (1.0 / 60.0f32);
+                    if step * step < e[0] * e[0] + e[1] * e[1] {
+                        // Vector2.Normalized.
+                        let m = (e[0] * e[0] + e[1] * e[1]).sqrt();
+                        let n = if m > 1e-5 { [e[0] / m, e[1] / m] } else { [0.0; 2] };
+                        a.pos = [n[0] * step + pg[0], -(n[1] * step + pg[1])];
+                    } else {
+                        a.rm_jump_at = now;
+                        a.pos = d;
+                        a.rm_jump = 3;
+                    }
+                }
+                _ => {
+                    if since >= rs.jumpDownTimeFrames {
+                        // EndJump (VERIFIED-DECOMP @0x180d82080): at the destination, GetHeight; attacks back.
+                        let d = a.rm_jump_dest.unwrap_or(a.pos);
+                        a.pos = d;
+                        a.rm_jump = 0;
+                        a.rm_jump_at = -1;
+                        let z = self.rosalia_height(t, d);
+                        let a = self.towers[t].air.as_mut().unwrap();
+                        a.rm_z = z;
+                        a.height = z;
+                    }
+                }
+            }
+            return;
+        }
+        // UpdateMovement: only in a round.
+        if !self.rounds_active() {
+            return;
+        }
+        let pursuit = self.towers[t].air.as_ref().unwrap().rm_pursuit;
+        let last = self.towers[t].air.as_ref().unwrap().rm_last.unwrap();
+        let mut target: Option<u64> = None;
+        let dest = if !pursuit {
+            last
+        } else {
+            target = self.rosalia_target(t);
+            let dest = match target.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id)) {
+                None => last,
+                Some(j) => {
+                    // GetPursuitDestination (VERIFIED-DECOMP @0x180d82ac0): radius x 0.5 +
+                    // pursuitDistance ahead along the path (Path.DistanceToPoint), past its end along
+                    // Bloon.Heading; off the map, WrapLineAroundMapEdge from the bloon, else none
+                    // (lastDestination, no group offset).
+                    let b = &self.bloons[j];
+                    let off = self.defs[b.kind].radius * 0.5 + rs.pursuitDistance;
+                    let d = off + b.dist;
+                    let tr = &self.tracks[b.path as usize];
+                    let p = if d >= 0.0 && tr.length() >= d {
+                        tr.pos(d)
+                    } else {
+                        let h = game_dir(self.path_rot(b.path, b.dist).unwrap_or(0.0));
+                        [b.pos[0] + h[0] * off, b.pos[1] + h[1] * off]
+                    };
+                    let g = |v: [f32; 2]| [v[0], -v[1]];
+                    let q = if on_map(p, 0.0) { Some(p) } else { wrap_line_around_map_edge(g(b.pos), g(p)).map(g) };
+                    match q {
+                        // (+ groupOffset, (0, 0) for one Rosalia; Map.GetPointWithinMap.)
+                        Some(q) => [q[0].clamp(-WORLD_X, WORLD_X), q[1].clamp(-WORLD_Z, WORLD_Z)],
+                        None => last,
+                    }
+                }
+            };
+            // Math.TruncateVector2(2), stored as lastDestination.
+            let tr2 = |v: f32| (((v * 100.0) as f64).trunc() / 100.0f32 as f64) as f32;
+            let gd = [tr2(dest[0]), tr2(-dest[1])];
+            let dest = [gd[0], -gd[1]];
+            self.towers[t].air.as_mut().unwrap().rm_last = Some(dest);
+            dest
+        };
+        let tgt_pos = target.and_then(|id| bloon_idx(&self.bloons, &self.bidx, id)).map(|j| self.bloons[j].pos);
+        // ApplyMovement, game frame.
+        const DT: f32 = 1.0 / 60.0;
+        let a = self.towers[t].air.as_mut().unwrap();
+        let pos = [a.pos[0], -a.pos[1]];
+        let dg = [dest[0], -dest[1]];
+        let delta = [dg[0] - pos[0], dg[1] - pos[1]];
+        let sq = delta[0] * delta[0] + delta[1] * delta[1];
+        let mag = sq.sqrt();
+        let dir = if mag > 1e-5 { [delta[0] / mag, delta[1] / mag] } else { [0.0; 2] };
+        let vel0 = [a.vel[0], -a.vel[1]];
+        let speed = (vel0[0] * vel0[0] + vel0[1] * vel0[1]).sqrt();
+        let vel = if !pursuit {
+            [0.0; 2]
+        } else if target.is_none() && rs.noTargetSlowdownDistance * rs.noTargetSlowdownDistance > sq {
+            // (No target, near lastDestination: currentVelocity x noTargetVelocityScale.)
+            [vel0[0] * rs.noTargetVelocityScale, vel0[1] * rs.noTargetVelocityScale]
+        } else if sq <= rs.slowdownRadiusMinSquared {
+            [0.0; 2]
+        } else {
+            let k = (1.0 - speed / rs.movementForceEnd) * rs.movementForceStart;
+            let acc = [dir[0] * k + 0.0, dir[1] * k + 0.0];
+            let mut cap = 1.0f32;
+            if rs.slowdownRadiusMax > mag {
+                cap = (mag - rs.slowdownRadiusMin) / (rs.slowdownRadiusMax - rs.slowdownRadiusMin) * (1.0 - rs.minVelocityCapScale) + rs.minVelocityCapScale;
+            }
+            let v = [vel0[0] + acc[0] * DT, vel0[1] + acc[1] * DT];
+            let lim = cap * rs.maxSpeed;
+            let m = (v[0] * v[0] + v[1] * v[1]).sqrt();
+            if lim < m {
+                let f = lim / m;
+                [v[0] * f, v[1] * f]
+            } else {
+                v
+            }
+        };
+        a.vel = [vel[0], -vel[1]];
+        let np = [pos[0] + vel[0] * DT, pos[1] + vel[1] * DT];
+        a.pos = [np[0], -np[1]];
+        // UpdateRotation (VERIFIED-DECOMP @0x180d86320): toward the target from where she was, LerpAngle
+        // by rotationSpeed, unless a RotateToTargetAirUnit has applied this frame.
+        if let Some(bp) = tgt_pos {
+            if !a.hm_applied.iter().any(|x| x.0) {
+                let e = [bp[0] - pos[0], -bp[1] - pos[1]];
+                let want = crt_atan2(e[0], e[1]) * RAD2DEG;
+                a.hm_rot = lerp_angle(a.hm_rot, want, rs.rotationSpeed);
+                a.angle = (a.hm_rot - 90.0) * DEG2RAD;
+            }
+        }
+        let p = a.pos;
+        let z = self.rosalia_height(t, p);
+        let a = self.towers[t].air.as_mut().unwrap();
+        a.rm_z = z;
+        a.height = z;
+    }
+
 
     /// RotateToTargetAirUnit.ApplyRotation (VERIFIED-DECOMP @0x180dd6e00) for attack `ai` (range
     /// `range`) with its target point, if any.
@@ -15188,6 +15477,15 @@ impl Game {
                 if let Some(fz) = pr.spec.freeze_others {
                     pr.freeze_until = now + ((fz * fm[0]) * 60.0) as i64;
                 }
+            }
+        }
+        // FlightBoostAbility.Activate (VERIFIED-DECOMP @0x180e31f60): RosaliaMovement.TogglePursuit(true)
+        // for lifespanFrames (Deactivate toggles it off: move_rosalia counts it down).
+        if let Some(n) = a.flight_boost {
+            self.init_air(t);
+            self.rosalia_toggle(t, true);
+            if let Some(air) = self.towers[t].air.as_mut() {
+                air.rm_boost = Some(n);
             }
         }
         let tw = &mut self.towers[t];
@@ -21085,7 +21383,7 @@ impl Game {
             let extra_slots: Vec<usize> = self.towers[t].temp.iter().map(|x| x.slot).collect();
             // (FinalStrike.StartCountdown pauses the tower's Attacks till EndCountdown: recording
             // map_lotusisland_sub_paragon_040_r40, the Navarch throws nothing from rt 700.)
-            let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some() || self.towers[t].leap_paused
+            let paused = self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some() || self.rosalia_jumping(t) || self.towers[t].leap_paused
                 || self.towers[t].morph_wait.is_some()
                 // ParagonTower's pause starts after its first frame: an attack with a target in range
                 // then throws once (recordings boomerang_paragon_r63 / r90: at the purchase, then
@@ -21496,7 +21794,7 @@ impl Game {
                 let fresh_attack = self.towers[t].paragon.is_some() && self.sim_elapsed < self.towers[t].paragon_active_at
                     && !self.towers[t].paragon_kept.contains(&attack.model_name);
                 let paused = paused && (self.towers[t].paragon.is_none() || self.towers[t].paragon_kept.contains(&attack.model_name)
-                    || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some() || self.towers[t].leap_paused);
+                    || self.towers[t].temp.iter().any(|x| x.pauses && x.delay <= 0.0) || self.towers[t].mute > 0.0 || self.towers[t].fstrike.is_some() || self.rosalia_jumping(t) || self.towers[t].leap_paused);
                 // At zero Sandbox health, bloons keep moving but neither base nor temporary
                 // ability attacks may start or release shots. Timers above still advance.
                 // PauseOtherAttacks.Process, in its own attack's turn: durationFrames + lastFiredAt
@@ -21523,7 +21821,7 @@ impl Game {
                 // (A heli's RotateToTargetAirUnit attack still faces the target it kept, where that
                 // is now: recordings heli_500 rt 152, the darts' attack on cooldown turning the heli
                 // before the missiles leave; heli_400 rt 388, no new target until a weapon's ready.)
-                let air_turn = attack.air_rotate && tier.air.as_ref().is_some_and(|x| x.heli.is_some());
+                let air_turn = attack.air_rotate && tier.air.as_ref().is_some_and(|x| x.heli.is_some() || x.rosalia.is_some());
                 if attack.turn_rate.is_none() && attack.weapons.iter().all(|w| w.name != "LongWeapon" && w.with_main.is_none()) {
                     let n = attack.weapons.len();
                     let (now_t, rc) = (self.sim_elapsed as i64, self.round_clock);
@@ -21717,11 +22015,16 @@ impl Game {
                     self.target_index_mut();
                 }
                 // A segment's (plain, line clear, near enough for MOAB circles), as check_segment below.
+                let seg_z = if attack.air_target && self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|x| x.rosalia.is_some()) {
+                    self.towers[t].air.as_ref().map(|a| a.rm_z)
+                } else {
+                    None
+                };
                 let seg_check = |pi: usize, k: usize| {
                     let seg_ok = self.track_seg_ok.get(pi).and_then(|v| v.get(k)).copied().unwrap_or(false);
                     let seg_q = self.track_segs.get(pi).and_then(|sg| sg.get(k)).copied();
                     let near = |q: [f32; 2], reach: f32| seg_ok && (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2) <= reach * reach;
-                    let clear = seg_q.is_some_and(|q| self.seg_line_clear(attack, pos, q));
+                    let clear = seg_q.is_some_and(|q| self.seg_line_clear_at(attack, pos, q, seg_z));
                     let plain = seg_q.is_some_and(|q| near(q, if no_moab { range } else { range + 2.0 })) && clear;
                     (plain, clear, seg_q.is_some_and(|q| near(q, range + 40.0)))
                 };
@@ -21752,6 +22055,12 @@ impl Game {
                 } else {
                     (0..self.bloons.len()).collect()
                 };
+                // (An air unit sees from its height: a Heli's transform is at 250; see P-AIRLOS.)
+                let air_z = match self.towers[t].air.as_ref() {
+                    Some(a) if self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|x| x.rosalia.is_some()) => a.rm_z,
+                    Some(_) => 250.0,
+                    None => self.stand_z(pos),
+                };
                 for &bi in &order {
                     let b = &self.bloons[bi];
                     // Path.Process (VERIFIED-DISASM @0xf6fe60) files on its segments only the bloons
@@ -21764,6 +22073,13 @@ impl Game {
                     // map_kartsndarts_dart_205_r40: the tunnel's MOAB is a target, its Ceramic isn't
                     // (no throw at rt 428, the target again at 437 as it leaves).
                     if self.bloon_nontarget(b) {
+                        continue;
+                    }
+                    // HYPOTHESIS P-AIRLOS: an AttackAirUnit takes only a bloon in line of sight from the
+                    // air unit, at its height (a grounded Rosalia, z 0, can't see past the Tutorial's
+                    // trees; a Heli's 250 is over every blocker). Recording rosalia_l03_r20: the first
+                    // take on each bloon (rt 15, 680, 2936) the frame it starts past x -148.4.
+                    if attack.air_target && !env_flag!("RRBTD6_NO_AIRLOS") && !self.line_clear(pos, air_z, b.pos) {
                         continue;
                     }
                     let d = &self.defs[b.kind];
@@ -21788,7 +22104,7 @@ impl Game {
                     let seg_q = self.track_segs.get(b.path as usize).and_then(|sg| sg.get(seg_idx)).copied();
                     let seg_near = |q: [f32; 2], reach: f32| seg_ok && (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2) <= reach * reach;
                     let check_segment=||{
-                        let clear=seg_q.is_some_and(|q|self.seg_line_clear(attack,pos,q));
+                        let clear=seg_q.is_some_and(|q|self.seg_line_clear_at(attack,pos,q,seg_z));
                         let plain=seg_q.is_some_and(|q|seg_near(q,if no_moab{range}else{range+2.0}))&&clear;
                         let moab_near=seg_q.is_some_and(|q|seg_near(q,range+40.0));
                         (plain,clear,moab_near)
@@ -22513,7 +22829,7 @@ impl Game {
                 // the air unit turns to Vector2.get_Rotation(Target.Position - its position), the
                 // bloon where it was and the heli before it moves this frame (recording heli_000 rt
                 // 14: -84.26471); appliedRotation then stops HeliMovement.UpdateRotation.
-                if attack.air_rotate && tier.air.as_ref().is_some_and(|x| x.heli.is_some()) {
+                if attack.air_rotate && tier.air.as_ref().is_some_and(|x| x.heli.is_some() || x.rosalia.is_some()) {
                     // (Target.Position: the targeted collision circle of a MOAB-class bloon, recording
                     // heli_032 rt 31: -82.03 at the circle 6.3 ahead of the MOAB.)
                     // (It turns first to the Target the attack still holds, alive, any range, then
@@ -23324,6 +23640,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                 // missiles start along 90).
                                 grot = Some(pr);
                                 dir = (pr - 90.0) * DEG2RAD;
+                            } else if let Some(pr) = tw.air.as_ref().filter(|_| weapon.swap_eject).map(|a| a.hm_rot) {
+                                // SwapProjectile.GetEmitPositionForProjectile (VERIFIED-DECOMP @0x180c93e10):
+                                // the eject turns by AirUnit.Rotation (recording rosalia_l03_r20 rt 15: her
+                                // laser from (-124.31, -35.89), the AirUnit at -77.13).
+                                grot = Some(pr);
                             } else if tier.air.as_ref().is_some_and(|x| x.fighter.is_some()) && weapon.emission.kind != "Arc" {
                                 // (The plane tower's own Rotation stays 0: W lines.)
                                 let r0 = 0.0;
@@ -23894,6 +24215,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             // (A UseParentEject weapon's eject turns with the parent Weapon's transform.)
                             // (rotateTower off: the first Attack's own stored rotation.)
                             let parent_rot = if weapon.parent_eject { Some(self.towers[t].ent_rots.first().copied().flatten().or(self.towers[t].game_rot).unwrap_or(0.0)) } else { None };
+                            if env_flag!("DBGR") { eprintln!("DBGAIM EM rt {} grot {:?} fighter {:?} body {:?} swap {} air {:?}", self.round_clock, grot, fighter_rot, body_rot, weapon.swap_eject, self.towers[t].air.as_ref().map(|a| a.hm_rot)); }
                             let from = match parent_rot.or(grot.or(fighter_rot).map(|r| body_rot.unwrap_or(r))) {
                                 // Weapon.GetEjectPosition: Vector2.Rotate by -rotation, AddDisplaySpaceHeight
                                 // (y - z / tan 60), then onto the tower's position.
@@ -26828,6 +27150,11 @@ impl Game {
         if from_air && self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.heli.is_some()) {
             return 250.0;
         }
+        // (Rosalia's: her AirUnit's Position.z, RosaliaMovement.GetHeight; recording rosalia_l10_r40
+        // rt 37, the laser at 260 = 250 + ejectZ over the trees.)
+        if from_air && self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.rosalia.is_some()) {
+            return self.towers[t].air.as_ref().map_or(0.0, |a| a.rm_z);
+        }
         self.tower_height(t)
     }
 
@@ -28644,6 +28971,180 @@ impl Game {
         if z < t { t } else { z }
     }
 
+    /// KineticChargeProjectile.GetBloonTarget (VERIFIED-DECOMP @0x180cc4800): BloonManager.GetTarget of
+    /// the emitting tower's target type from the projectile, range 99999, through IsBloonValid
+    /// (@0x180cc5370: not destroyed, camo only if it can hit camo, not untargetable, BloonModel.isMoab).
+    fn kc_target(&self, p: usize) -> Option<u64> {
+        let pr = &self.projectiles[p];
+        let from = pr.pos;
+        let t = self.towers.iter().position(|o| o.id == pr.emitted_by).or_else(|| self.towers.iter().position(|o| o.id == pr.owner))?;
+        let camo = pr.camo || self.tier(t).and_then(|tr| tr.attacks.first()).is_some_and(|a| a.camo) || self.buffs.get(t).is_some_and(|b| b.camo);
+        let ok = |g: &Self, b: &Bloon| b.hp > 0 && g.defs[b.kind].is_moab && (camo || !b.camo(&g.defs[b.kind])) && !g.bloon_nontarget(b);
+        match self.towers[t].target {
+            TargetMode::First => self.first_target_from(from, 99999.0, &ok),
+            m => self.typed_target_from_ex(from, 99999.0, m, &ok, false, false),
+        }
+    }
+
+    /// KineticChargeProjectile.Explode (VERIFIED-DECOMP @0x180cc42c0): its projectileExplosionModel
+    /// through singleEmissionModel where it is, its DamageModel + min(maxAdditionalDamageAmount, the
+    /// health its bloon lost since AttachToBloon (all it had, once destroyed)); then it is gone.
+    fn kc_explode(&mut self, p: usize, add: i32) {
+        let Some(k) = self.projectiles[p].spec.kinetic.clone() else { return };
+        let mut ex = k.explosion.clone();
+        if add > 0 && ex.damage > 0.0 {
+            ex.damage += add.min(k.max_add) as f32;
+        }
+        let pr = &self.projectiles[p];
+        let (pos, z, camo, tiers, owner, by) = (pr.pos, pr.z, pr.camo, pr.tiers, pr.owner, pr.emitted_by);
+        let start = self.projectiles.len();
+        self.emit_z = z;
+        self.emit_as(by, pos, -std::f32::consts::FRAC_PI_2, &k.emission, &ex, None, tiers, owner);
+        self.emit_z = 0.0;
+        for q in &mut self.projectiles[start..] {
+            q.camo = camo;
+        }
+        let pr = &mut self.projectiles[p];
+        pr.kc = None;
+        pr.frames_left = 0.0;
+    }
+
+    /// KineticChargeProjectile each frame: the Collide (@0x180cc41e0) its flight meets (its Target, or
+    /// any bloon once that is gone: AttachToBloon, pierce - 1), then Process (@0x180cc5b00).
+    /// Deploying (made less than deployTimeFrames ago): Vector2.Lerp(start, deployTo, sin(t x pi / 2)),
+    /// t = frames / deployTimeFrames. Then GetBloonTarget; with one, isFlyingTowardsTarget, and from
+    /// the next frame UpdateMovement (@0x180cc63d0): travelSpeed / 60 toward the Target's position, onto
+    /// it (exploding the next frame) once within that. Attached: on its bloon; Explode when it lost
+    /// damageTakenMaxAmount since attaching or durationFrames have passed, or it is destroyed.
+    fn kinetic_step(&mut self, uid: u64) {
+        let Some(p) = self.projectiles.iter().position(|pr| pr.uid == uid) else { return };
+        let Some(k) = self.projectiles[p].spec.kinetic.clone() else { return };
+        let Some(mut st) = self.projectiles[p].kc.clone().map(|b| *b) else { return };
+        let now = self.steps as i64;
+        let bloon_at = |g: &Self, id: u64| bloon_idx(&g.bloons, &g.bidx, id);
+        // Collide: Simulate's collisions come before Process.
+        if st.flying && st.attached.is_none() {
+            let pp = self.projectiles[p].pos;
+            let target_alive = st.target.and_then(|id| bloon_at(self, id));
+            let hit = |g: &Self, i: usize| {
+                let b = &g.bloons[i];
+                let d = &g.defs[b.kind];
+                let r = 2.0 + d.radius;
+                let e = [b.pos[0] - pp[0], b.pos[1] - pp[1]];
+                b.hp > 0 && e[0] * e[0] + e[1] * e[1] <= r * r && circles_hit(pp, 2.0, b.pos, g.mrot(b), &d.circles)
+            };
+            let got = match target_alive {
+                Some(i) => hit(self, i).then_some(i),
+                None => (0..self.bloons.len()).find(|&i| hit(self, i)),
+            };
+            if let Some(i) = got {
+                st.attached = Some(self.bloons[i].id);
+                st.flying = false;
+                st.health_at = self.total_bloon_health(i);
+                st.attached_at = now;
+                self.projectiles[p].pierce -= 1.0;
+            }
+        }
+        if let Some(id) = st.attached {
+            match bloon_at(self, id) {
+                None => {
+                    // OnAttachedBloonDestroyed: Explode, all the health it had.
+                    self.kc_explode(p, st.health_at);
+                    return;
+                }
+                Some(i) => {
+                    let lost = st.health_at - self.total_bloon_health(i);
+                    if k.max_taken <= lost || k.duration_frames <= now - st.attached_at {
+                        self.kc_explode(p, lost);
+                        return;
+                    }
+                    self.projectiles[p].pos = self.bloons[i].pos;
+                }
+            }
+        } else if !st.flying {
+            let since = now - st.born;
+            if since < k.deploy_frames {
+                let t = (since as f32 / k.deploy_frames as f32).min(1.0);
+                let (e, _) = crt_sin_cos(t * 1.570_796_4);
+                let (a, b) = ([st.start[0], -st.start[1]], [st.to[0], -st.to[1]]);
+                let q = [a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e];
+                let pr = &mut self.projectiles[p];
+                pr.pos = [q[0], -q[1]];
+                pr.z = 251.0;
+            } else if let Some(id) = self.kc_target(p) {
+                st.flying = true;
+                st.target = Some(id);
+                if let Some(i) = bloon_at(self, id) {
+                    st.target_pos = self.bloons[i].pos;
+                }
+                self.projectiles[p].target = Some(id);
+            }
+        } else {
+            if st.explode_next {
+                self.kc_explode(p, 0);
+                return;
+            }
+            if let Some(i) = st.target.and_then(|id| bloon_at(self, id)) {
+                st.target_pos = self.bloons[i].pos;
+            }
+            let step = k.speed / 60.0;
+            let pr = &mut self.projectiles[p];
+            let (a, b) = ([pr.pos[0], -pr.pos[1]], [st.target_pos[0], -st.target_pos[1]]);
+            let e = [b[0] - a[0], b[1] - a[1]];
+            if e[0] * e[0] + e[1] * e[1] <= step * step {
+                pr.pos = st.target_pos;
+                st.explode_next = true;
+            } else {
+                // Vector2.Normalized x speed onto where it is.
+                let m = (e[0] * e[0] + e[1] * e[1]).sqrt();
+                let n = if m > 1e-5 { [e[0] / m, e[1] / m] } else { [0.0; 2] };
+                let q = [a[0] + n[0] * step, a[1] + n[1] * step];
+                pr.pos = [q[0], -q[1]];
+            }
+        }
+        if let Some(b) = self.projectiles[p].kc.as_mut() {
+            **b = st;
+        }
+    }
+
+
+    /// CreateProjectilesInArea.Process (VERIFIED-DECOMP @0x180ca8fa0): once roundTime - startedAt is
+    /// past initialDelayFrames, each frame with (roundTime - initialDelayFrames - startedAt) %
+    /// intervalFrames == 0 while projectilesEmitted < maxProjectileCount, the projectile through its
+    /// emission at GetNextProjectilePosition (@0x180ca8ab0): SeededRandom.SetSeed(|(startedAt +
+    /// projectilesEmitted) x 0xccccccc|) (int product), (0, 1) turned by NextFloat x 360, x (NextFloat
+    /// x range), onto the projectile, TruncateVector2(3) (recording rosalia_l03_r20 rt 439: the first
+    /// Scatter Explosion at (-50.749, 36.769), 3.22 off the missile).
+    fn area_spawn_step(&mut self, uid: u64) {
+        let Some(p) = self.projectiles.iter().position(|pr| pr.uid == uid) else { return };
+        let Some(sp) = self.projectiles[p].spec.area_spawn.clone() else { return };
+        let now = self.round_clock;
+        let (start, n) = (self.projectiles[p].area_start, self.projectiles[p].area_n);
+        if n >= sp.max || now - start <= sp.initial || (now - sp.initial - start) % sp.interval != 0 {
+            return;
+        }
+        let seed = ((start as i32).wrapping_add(n as i32)).wrapping_mul(0xccccccc_i32) as i64;
+        let mut rng = NkRandom(seed.abs());
+        let a = rng.next_float() * 360.0;
+        let r = rng.next_float() * sp.range;
+        let (ox, oy) = offset_turned(0.0, 1.0, a);
+        let (ox, oy) = (ox * r, oy * r);
+        let pr = &self.projectiles[p];
+        let tr3 = |v: f32| (((v * 1000.0) as f64).trunc() / 1000.0f32 as f64) as f32;
+        let g = [tr3(pr.pos[0] + ox), tr3(-pr.pos[1] + oy)];
+        let pos = [g[0], -g[1]];
+        let (camo, tiers, owner, by) = (pr.camo, pr.tiers, pr.owner, pr.emitted_by);
+        self.projectiles[p].area_n += 1;
+        let start_len = self.projectiles.len();
+        let saved = self.emit_rot;
+        self.emit_rot = Some(0.0);
+        self.emit_as(by, pos, -std::f32::consts::FRAC_PI_2, &sp.emission, &sp.projectile, None, tiers, owner);
+        self.emit_rot = saved;
+        for q in &mut self.projectiles[start_len..] {
+            q.camo = camo;
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// CreateProjectileOnIntervalModel (Ball Lightning). HYPOTHESIS P-INTERVAL: every
     /// `intervalFrames` frames the projectile fires its sub-projectile at a uniformly random
@@ -29246,6 +29747,18 @@ impl Game {
             for (fx, k) in &spec.emit_fx {
                 self.place_fx.push((pos, fx.clone(), *k));
             }
+            // KineticChargeProjectile.SetStartPosition (VERIFIED-DECOMP @0x180cc60a0): deployTo is
+            // (0, r) turned by NextDouble x 360 onto the start, r = (R - R / 5) x NextDouble + R / 5
+            // (Simulation.syncedRandom), the projectile at z 251.
+            let kc_state = spec.kinetic.as_ref().map(|k| {
+                let lo = k.deploy_r / 5.0;
+                let d1 = self.synced_double();
+                let r = (k.deploy_r - lo) * d1 as f32 + lo;
+                let d2 = self.synced_double();
+                let (ox, oy) = offset_turned(0.0, r, d2 as f32 * 360.0);
+                let g = [pos[0] + ox, -pos[1] + oy];
+                Box::new(KcState { start: pos, to: [g[0], -g[1]], born: self.steps as i64, ..Default::default() })
+            });
             self.projectiles.push(Projectile {
                 adora: None,
                 fall,
@@ -29424,6 +29937,9 @@ impl Game {
                 refresh_t: self.sim_elapsed as f32,
                 check_t: 0,
                 interval_t: 0.0,
+                area_start: self.round_clock,
+                area_n: 0,
+                kc: kc_state,
                 exhaust_done: 0,
                 aim: None,
             });
@@ -29911,6 +30427,9 @@ impl Game {
         self.charge_step();
         self.place_step();
         self.move_helis();
+        for t in 0..self.towers.len() {
+            self.move_rosalia(t);
+        }
         self.moab_shove_step();
         self.fly_patterns();
         // InstantDamageEmission.Process: this frame's instant-damage shots hit their targets now,
@@ -30337,6 +30856,14 @@ impl Game {
             ivs.sort_unstable();
             for u in ivs {
                 self.interval_shots(Some(u));
+            }
+            let kcs: Vec<u64> = self.projectiles.iter().filter(|pr| pr.kc.is_some()).map(|pr| pr.uid).collect();
+            for u in kcs {
+                self.kinetic_step(u);
+            }
+            let areas: Vec<u64> = self.projectiles.iter().filter(|pr| pr.spec.area_spawn.is_some()).map(|pr| pr.uid).collect();
+            for u in areas {
+                self.area_spawn_step(u);
             }
         }
         // RetargetOnContact.Process (VERIFIED-DISASM @0xcf6c20): delayFrames after the last

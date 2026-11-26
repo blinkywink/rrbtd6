@@ -1479,6 +1479,10 @@ pub struct Weapon {
     /// FireFromAirUnitModel: ejected from the air unit (else from the tower itself).
     #[serde(default)]
     pub from_air: bool,
+    /// SwapProjectileModel: SwapProjectile.GetEmitPositionForProjectile (VERIFIED-DECOMP
+    /// @0x180c93e10) turns the eject by the AirUnit's rotation when the tower has one.
+    #[serde(default)]
+    pub swap_eject: bool,
     /// UseParentEjectModel: shots leave from the tower's first Attack's first Weapon's eject.
     #[serde(default)]
     pub parent_eject: bool,
@@ -2664,6 +2668,12 @@ pub struct Proj {
     /// within `range` (Ball Lightning).
     #[serde(default)]
     pub on_interval: Option<Box<OnInterval>>,
+    /// CreateProjectilesInAreaModel (Scatter Missile): timed sub-projectiles at seeded points round it.
+    #[serde(default)]
+    pub area_spawn: Option<Box<AreaSpawn>>,
+    /// KineticChargeProjectileModel (Kinetic Charge).
+    #[serde(default)]
+    pub kinetic: Option<Box<Kinetic>>,
     #[serde(default)]
     pub acid_pool: Option<AcidPool>,
     /// CreateSoundOnProjectileCollisionModel / ...ExpireModel / ...ExhaustModel clips.
@@ -2837,6 +2847,9 @@ pub struct Ability {
     pub activate: Vec<ActivateAttack>,
     #[serde(default)]
     pub turbo: Option<Turbo>,
+    /// FlightBoostAbilityModel.lifespanFrames: Rosalia's pursuit on for that long.
+    #[serde(default)]
+    pub flight_boost: Option<u32>,
     /// BrickellFreezeMinesAbilityBuffModel (Blast Chain): [multiplier (freeze duration),
     /// projectileSpeedMultiplier (SeaMineSeeking), lifespan].
     #[serde(default)]
@@ -3259,6 +3272,33 @@ pub struct AirSpec {
     pub bank_mul: f32,
     #[serde(default)]
     pub takeoff: Option<TakeOff>,
+    /// RosaliaMovementModel (Rosalia's AirUnit); None for the other air units.
+    #[serde(default)]
+    pub rosalia: Option<RosaliaSpec>,
+    /// AirUnitModel.blocksPlacement: RosaliaMovement.GetHeight stands it on the terrain (else 250).
+    #[serde(default)]
+    pub grounded: bool,
+}
+
+/// RosaliaMovementModel's fields (game names).
+#[allow(non_snake_case)]
+#[derive(Deserialize, Clone, Default)]
+pub struct RosaliaSpec {
+    pub maxSpeed: f32,
+    pub rotationSpeed: f32,
+    pub movementForceStart: f32,
+    pub movementForceEnd: f32,
+    pub slowdownRadiusMax: f32,
+    pub slowdownRadiusMin: f32,
+    pub slowdownRadiusMinSquared: f32,
+    pub minVelocityCapScale: f32,
+    pub pursuitDistance: f32,
+    pub groupingOffset: f32,
+    pub jumpUpTimeFrames: f32,
+    pub jumpDownTimeFrames: f32,
+    pub jumpSpeedScale: f32,
+    pub noTargetSlowdownDistance: f32,
+    pub noTargetVelocityScale: f32,
 }
 
 fn full_turn() -> f32 {
@@ -3467,6 +3507,28 @@ pub struct Circle {
 pub struct SwitchDisplay {
     pub display: Option<String>,
     pub lifespan: f32,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct Kinetic {
+    pub deploy_r: f32,
+    pub deploy_frames: i64,
+    pub duration_frames: i64,
+    pub speed: f32,
+    pub max_add: i32,
+    pub max_taken: i32,
+    pub explosion: Proj,
+    pub emission: Emission,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct AreaSpawn {
+    pub interval: i64,
+    pub range: f32,
+    pub initial: i64,
+    pub max: u32,
+    pub projectile: Proj,
+    pub emission: Emission,
 }
 
 #[derive(Deserialize, Clone)]

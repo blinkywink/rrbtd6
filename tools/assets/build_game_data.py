@@ -1293,6 +1293,27 @@ def main():
             lf = pb["LatchToBloonModel"][0]["f"]
             out["latch"] = {"rotate": bool(lf.get("rotateWithBloon")), "post_frames": lf.get("postBloonDestroyTimeFrames", 0),
                             "post_time": lf.get("postBloonDestroyTime", 0.0), "speed": lf.get("bloonSpeedMultiplier", 1.0)}
+        # CreateProjectilesInAreaModel (Rosalia's Scatter Missile): CreateProjectilesInArea.Process
+        # (VERIFIED-DECOMP @0x180ca8fa0): from initialDelayFrames after it is made, every
+        # intervalFrames up to maxProjectileCount, the projectile at GetNextProjectilePosition
+        # (@0x180ca8ab0): a SeededRandom point within range.
+        # KineticChargeProjectileModel (Rosalia's Kinetic Charge): KineticChargeProjectile
+        # (VERIFIED-DECOMP SetStartPosition @0x180cc60a0, Process @0x180cc5b00, UpdateMovement
+        # @0x180cc63d0, Collide @0x180cc41e0, AttachToBloon @0x180cc3f80, Explode @0x180cc42c0).
+        if depth < 3 and pb.get("KineticChargeProjectileModel"):
+            kf = pb["KineticChargeProjectileModel"][0]["f"]
+            out["kinetic"] = {"deploy_r": kf.get("deployRadiusMax", 0.0), "deploy_frames": kf.get("deployTimeFrames", 60),
+                              "duration_frames": kf.get("durationFrames", 600), "speed": kf.get("travelSpeed", 0.0),
+                              "max_add": kf.get("maxAdditionalDamageAmount", 0), "max_taken": kf.get("damageTakenMaxAmount", 0),
+                              "explosion": projectile(deref(kf["projectileExplosionModel"]), depth + 1),
+                              "emission": emission(deref(kf.get("singleEmissionModel")))}
+            out["no_hit"] = True
+        if depth < 3 and pb.get("CreateProjectilesInAreaModel"):
+            cf = pb["CreateProjectilesInAreaModel"][0]["f"]
+            out["area_spawn"] = {"interval": cf.get("intervalFrames", 1), "range": cf.get("range", 0.0),
+                                 "initial": cf.get("initialDelayFrames", 0), "max": cf.get("maxProjectileCount", 0),
+                                 "projectile": projectile(deref(cf["projectileModel"]), depth + 1),
+                                 "emission": emission(deref(cf.get("emissionModel")))}
         if depth < 3 and pb.get("CreateProjectileOnIntervalModel"):
             cf = pb["CreateProjectileOnIntervalModel"][0]["f"]
             out["on_interval"] = {"frames": cf["intervalFrames"], "range": cf.get("range", 0.0),
@@ -1999,7 +2020,13 @@ def main():
                                               if x and x["type"] == "SpinModel"), 0.0),
                                 "custom_start": w["f"].get("customStartCooldown", 0.0),
                                 "max_subs": max_subs,
-                                "eject": [w["f"].get("ejectX", 0.0), w["f"].get("ejectY", 0.0), w["f"].get("ejectZ", 0.0)],
+                                # SwapProjectile.GetEmitPositionForProjectile (VERIFIED-DECOMP @0x180c93e10): the
+                                # emit point is ejectFor A (B once swapped; isProjectileBActive starts false),
+                                # turned with the air unit, AddDisplaySpaceHeight (recording rosalia_l03_r20 rt
+                                # 15: the laser starts at (-124.31, -35.89) off her (-112.82, -30.9) at -77.13).
+                                "eject": next(([x["f"].get("ejectXForA", 0.0), x["f"].get("ejectYForA", 0.0), x["f"].get("ejectZForA", 0.0)]
+                                               for x in items(w["f"].get("behaviors")) if x and x["type"] == "SwapProjectileModel"),
+                                              [w["f"].get("ejectX", 0.0), w["f"].get("ejectY", 0.0), w["f"].get("ejectZ", 0.0)]),
                                 # HYPOTHESIS P-ABSMARKER (Mortar 0-4-x+): weapon-level ThrowMarkerOffsetModels
                                 # with CycleAnimationModel and EjectEffectWithOffsetsModel: each throw starts
                                 # at the next marker, turned and raised, from (0, 0).
@@ -2040,7 +2067,7 @@ def main():
                                 # syncedRandom.NextDouble()) (RandomRate.ProjectilesCreated, VERIFIED-DECOMP
                                 # @0x180c901a0; Benjamin's Bloon Trojan).
                                 "random_rate": next((round(float(x["f"].get("offsetRateFrames") or x["f"].get("offsetRate", 0.0) * 60)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "RandomRateModel"), None),
-                                "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "gw_limit": gw_limit, "over_track": over_track, "from_air": from_air, "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
+                                "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "gw_limit": gw_limit, "over_track": over_track, "from_air": from_air, "swap_eject": any(x and x["type"] == "SwapProjectileModel" for x in items(w["f"].get("behaviors"))), "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
                                 # the emission is laid out on the tower's rotation, each shot then sent at
@@ -2253,6 +2280,10 @@ def main():
                    "toggled_off": any(x and x["type"] == "ToggleableAbilityBehaviorModel" and not x["f"].get("startsToggledOn")
                                       for x in items(bf.get("behaviors"))),
                    "supports": [], "loan": None,
+                   # FlightBoostAbilityModel (Rosalia): Activate (VERIFIED-DECOMP @0x180e31f60) turns
+                   # RosaliaMovement.TogglePursuit on, Deactivate (@0x180e32750) off after lifespanFrames.
+                   "flight_boost": next((x["f"].get("lifespanFrames", 0) for x in items(bf.get("behaviors"))
+                                         if x and x["type"] == "FlightBoostAbilityModel"), None),
                    # activateOnRoundEnd: it goes off by itself as each round ends (Jungle's Bounty).
                    "round_end": bool(bf.get("activateOnRoundEnd")),
                    "sounds": behavior_sounds(items(bf.get("behaviors")), "CreateSoundOnAbilityModel", SOUND_KEYS),
@@ -2897,7 +2928,21 @@ def main():
                 hm = next((x["f"] for x in bs if x["type"] == "HeliMovementModel"), None)
                 pm = next((x["f"] for x in bs if x["type"] == "PathMovementModel"), None)
                 fm = next((x["f"] for x in bs if x["type"] == "FighterMovementModel"), None)
-                if fm:
+                rm = next((x["f"] for x in bs if x["type"] == "RosaliaMovementModel"), None)
+                if rm:
+                    # RosaliaMovement (VERIFIED-DISASM ApplyMovement @0x180d81400, UpdateMovement
+                    # @0x180d85c60, UpdateJump @0x180d85880): her AirUnit, on her spot until Flight
+                    # Boost's pursuit, jumping back after. GetHeight (@0x180d82980): terrain height
+                    # while AirUnitModel.blocksPlacement (levels 1-6), else 250.
+                    air = {"display": prefab_name(b["f"].get("display")), "speed": rm["maxSpeed"],
+                           "accel": rm["movementForceStart"], "slowdown": rm.get("slowdownRadiusMax", 0.0),
+                           "grounded": bool(b["f"].get("blocksPlacement")),
+                           "rosalia": {k: rm.get(k, 0.0) for k in ("maxSpeed", "rotationSpeed", "movementForceStart",
+                                       "movementForceEnd", "slowdownRadiusMax", "slowdownRadiusMinSquared",
+                                       "slowdownRadiusMin", "minVelocityCapScale", "pursuitDistance", "groupingOffset",
+                                       "jumpUpTimeFrames", "jumpDownTimeFrames", "jumpSpeedScale",
+                                       "noTargetSlowdownDistance", "noTargetVelocityScale")}}
+                elif fm:
                     # STAND-IN P-FIGHTER: FighterMovementModel (Aircraft Carrier planes) steers
                     # at maxSpeed with no slow-down, turning at most turningSpeed rad per frame
                     # (sideways acceleration speed x turningSpeed x 60), so it overshoots and
