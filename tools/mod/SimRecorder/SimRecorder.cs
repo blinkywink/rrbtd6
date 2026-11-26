@@ -1910,6 +1910,23 @@ static class SimulatePatch
                     w.WriteLine($"HM {t.Id.Id} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(p.Z)} {Recorder.F(tr.rotation.value)} {Recorder.F(hm.currentVelocity.x)} {Recorder.F(hm.currentVelocity.y)} {Recorder.F(hm.lastGroupOffset.x)} {Recorder.F(hm.lastGroupOffset.y)} {hm.pathIndex}");
                     break;
                 }
+                // Rosalia's RosaliaMovement each frame (after it ran): "RM tower x y z rotation velX velY
+                // groupOffX groupOffY jumpState jumpStartedAt pursuit" (airUnitTransformBehavior; her
+                // AttackAirUnit targets from it). (lastDestination / currentJumpDestination, Nullable<Vector2>,
+                // read as garbage through the interop: not logged.)
+                for (int k = 0; ftb != null && k < ftb.Count; k++)
+                {
+                    var rm = ftb[k]?.TryCast<Il2CppAssets.Scripts.Simulation.Towers.Behaviors.RosaliaMovement>();
+                    var tr = rm?.airUnitTransformBehavior;
+                    if (rm == null || tr == null) continue;
+                    try
+                    {
+                        var p = tr.position;
+                        w.WriteLine($"RM {t.Id.Id} {Recorder.F(p.X)} {Recorder.F(p.Y)} {Recorder.F(p.Z)} {Recorder.F(tr.rotation.value)} {Recorder.F(rm.currentVelocity.x)} {Recorder.F(rm.currentVelocity.y)} {Recorder.F(rm.groupOffset.x)} {Recorder.F(rm.groupOffset.y)} {(int)rm.currentJumpState} {rm.jumpStartedAt} {(rm.isPursuitEnabled ? 1 : 0)}");
+                    }
+                    catch (Exception) { }
+                    break;
+                }
                 if (fm != null)
                     w.WriteLine($"FM {t.Id.Id} {Recorder.F(fm.transformPosition.x)} {Recorder.F(fm.transformPosition.y)} {Recorder.F(fm.rotation.x)} {Recorder.F(fm.rotation.y)} {Recorder.F(fm.targetPosition.x)} {Recorder.F(fm.targetPosition.y)} {fm.timer} {(fm.flyoverEngaged ? 1 : 0)}");
                 // "TD tower damageDealt cashEarned": what ParagonTower.GetTowerInvestment reads.
