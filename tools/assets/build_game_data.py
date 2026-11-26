@@ -1169,6 +1169,11 @@ def main():
                                  "explosion": ({"projectile": projectile(deref(sf["explosionProjectileModel"]), depth + 1),
                                                 "emission": emission(deref(sf.get("explosionEmissionModel")))}
                                                if deref(sf.get("explosionProjectileModel")) and depth < 3 else None)}
+        # IgnoreCollisionAfterCollideModel: Collide (VERIFIED-DISASM @0x180cc0fd0) notes the frame,
+        # FilterCollision (@0x180cc1000) lets a bloon through once (now - it) >= (int)(timeAfterCollide x 60)
+        # (recording rosalia_l10_r40: a grenade hits at 835 and 838).
+        if pb.get("IgnoreCollisionAfterCollideModel"):
+            out["ignore_after"] = float(int(pb["IgnoreCollisionAfterCollideModel"][0]["f"].get("timeAfterCollide", 0.0) * 60.0))
         if pb.get("RetargetOnContactModel"):
             rf = pb["RetargetOnContactModel"][0]["f"]
             # (Behaviours Process in model order: a TravelStrait listed before it has moved the
@@ -1176,6 +1181,8 @@ def main():
             kinds = [b["type"] for b in items(f["behaviors"]) if b]
             after = "TravelStraitModel" in kinds and kinds.index("TravelStraitModel") < kinds.index("RetargetOnContactModel")
             out["retarget"] = {"distance": rf["distance"], "max_bounces": rf["maxBounces"], "delay": rf["delay"],
+                               # RetargetOnContact.BloonFilter (VERIFIED-DECOMP @0x180cd7e90): none nearer than minDistance.
+                               "min_distance": rf.get("minDistance", 0.0),
                                "expire_if_none": rf.get("expireIfNoTargetFound", True), "after_travel": after}
         if pb.get("LightningModel"):
             # HYPOTHESIS P-LIGHTNING: an instant shot that chains to the closest unhit bloon within
@@ -1345,7 +1352,11 @@ def main():
                                           # dontCreateAtBloon: made where the shot is, not on the bloon.
                                           "at_shot": bool(cf.get("dontCreateAtBloon", False)),
                                           "pass_dir": bool(cf.get("passOnDirectionToContact", False)),
-                                          "after_damage": after_damage(cc)})
+                                          "after_damage": after_damage(cc),
+                                          # Listed after a RetargetOnContactModel: a hit that finds no
+                                          # next target (expireIfNoTargetFound) ends the shot first
+                                          # (recording rosalia_l20_r80 rt 408: no Cluster).
+                                          "after_retarget": any(x["type"] == "RetargetOnContactModel" for x in order[:next(i for i, x in enumerate(order) if x is cc)])})
             for cc in pb.get("EmitOnDamageModel", []):
                 cf = cc["f"]
                 out["on_contact"].append({"projectile": projectile(deref(cf["projectile"]), depth + 1),
@@ -2067,7 +2078,23 @@ def main():
                                 # syncedRandom.NextDouble()) (RandomRate.ProjectilesCreated, VERIFIED-DECOMP
                                 # @0x180c901a0; Benjamin's Bloon Trojan).
                                 "random_rate": next((round(float(x["f"].get("offsetRateFrames") or x["f"].get("offsetRate", 0.0) * 60)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "RandomRateModel"), None),
-                                "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "gw_limit": gw_limit, "over_track": over_track, "from_air": from_air, "swap_eject": any(x and x["type"] == "SwapProjectileModel" for x in items(w["f"].get("behaviors"))), "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
+                                "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "gw_limit": gw_limit, "over_track": over_track, "from_air": from_air, "swap_eject": any(x and x["type"] == "SwapProjectileModel" for x in items(w["f"].get("behaviors"))),
+                                # SwapProjectileModel's projectile B and its eject (emitBoth: Flight Boost),
+                                # ChangeProjectilePerEmitModel / DuplicateProjectilePerEmitModel (Rosalia).
+                                "swap_b": next(({"proj": projectile(deref(x["f"]["projectileModelB"])),
+                                                 "eject": [x["f"].get("ejectXForB", 0.0), x["f"].get("ejectYForB", 0.0), x["f"].get("ejectZForB", 0.0)]}
+                                                for x in items(w["f"].get("behaviors")) if x and x["type"] == "SwapProjectileModel"), None),
+                                "change_emit": next(({"every": x["f"].get("forProjectileCount", 1),
+                                                      "orig": (deref(x["f"]["originalProjectileModel"]) or {"f": {}})["f"].get("id"),
+                                                      "proj": projectile(deref(x["f"]["changedProjectileModel"]))}
+                                                     for x in items(w["f"].get("behaviors")) if x and x["type"] == "ChangeProjectilePerEmitModel"), None),
+                                "dup_emit": next(({"every": x["f"].get("forProjectileCount", 1), "extra": x["f"].get("additionalProjectiles", 0),
+                                                   "angle": x["f"].get("angleOffset", 0.0),
+                                                   "orig": (deref(x["f"]["originalProjectileModel"]) or {"f": {}})["f"].get("id")}
+                                                  for x in items(w["f"].get("behaviors")) if x and x["type"] == "DuplicateProjectilePerEmitModel"), None),
+                                # BloonsInRangeAttackSpeedModel: GetRate (VERIFIED-DISASM @0x180c6b4d0).
+                                "bir_speed": next(([x["f"].get("rateIncreasePerStack", 0.0), x["f"].get("bloonsPerStack", 1), x["f"].get("maxStacks", 0)]
+                                                   for x in items(w["f"].get("behaviors")) if x and x["type"] == "BloonsInRangeAttackSpeedModel"), None), "map_center": map_center, "reset_rate": reset_rate or None, "parent_eject": parent_eject,
                                 "aim_offset": aim_offset, "bloon_dir": bloon_dir,
                                 # EmissionRotationOffDisplayModel (Aircraft Carrier, the tower not turning):
                                 # the emission is laid out on the tower's rotation, each shot then sent at

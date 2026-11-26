@@ -1686,6 +1686,9 @@ pub struct WeaponState {
     /// Weapon.bonusDamageCarryover (ApplyExtraDamagePrecision): what a weapon faster than 1/120 s
     /// is owed in whole extra shots' damage; 0 when the weapon is made.
     pub dmg_carry: f32,
+    /// ChangeProjectilePerEmit / DuplicateProjectilePerEmit currentCount.
+    pub change_n: i32,
+    pub dup_n: i32,
     /// What the rate was last calculated from: the tower's buffs (its mutated model), and the
     /// weapon behaviours as of the last shot (distance bonus, leak danger, necromancer stacks).
     buff_rate: f32,
@@ -1698,6 +1701,8 @@ pub struct WeaponState {
     standoff_k: f32,
     /// VagrantWeaponBehavior's towers and bloons in its zones, as of the last shot.
     vagrant_n: (u32, u32),
+    /// BloonsInRangeAttackSpeed's stacks as it last fired.
+    bir_stacks: i32,
     /// LifeBasedAttackSpeed: calculateFrom (the lives as it attached, i32::MIN until then) and
     /// its GetRate divisor now.
     life_from: i32,
@@ -1784,12 +1789,15 @@ impl WeaponState {
             bonus_count: 0,
             bonus_last: 0,
             dmg_carry: 0.0,
+            change_n: 0,
+            dup_n: 0,
             buff_rate: f32::NAN,
             brew_up: Vec::new(),
             model_rate: f32::NAN,
             dist_k: 1.0,
             standoff_k: 1.0,
             vagrant_n: (0, 0),
+            bir_stacks: 0,
             life_from: i32::MIN,
             life_div: 1.0,
             sun_stacks: 0,
@@ -1850,6 +1858,9 @@ impl WeaponState {
         // TheBlazingSun.GetRate (VERIFIED-DISASM @0x180c95dd0), after Standoff in the behaviour
         // list (recording desperado_500 with SimRecorder's Q lines): rate / (currentStacks x
         // attackSpeedPerStack + 1), attackSpeedPerStack -0.01 (slower as it heats up).
+        if let (Some((inc, _, _)), true) = (w.bir_speed, self.bir_stacks != 0) {
+            r /= self.bir_stacks as f32 * inc + 1.0;
+        }
         let sun = w.blazing_sun.map_or(1.0, |[_, _, per, _]| if self.sun_stacks != 0 { self.sun_stacks as f32 * per + 1.0 } else { 1.0 });
         let r = r / self.dist_k / self.standoff_k / sun / (1.0 + self.danger * w.leak_danger) * self.necro / self.life_div;
         if w.rate_min > r {
@@ -2678,6 +2689,8 @@ pub struct AirUnit {
     pub rm_jump_at: i64,
     pub rm_z: f32,
     pub rm_boost: Option<u32>,
+    /// SwapProjectile.emitBoth on her weapon (FlightBoostAbility.Activate sets it, Deactivate clears it).
+    pub rm_emit_both: bool,
     /// DroneIdle's counters (Etienne's drones).
     pub drone: DroneIdleState,
     /// PursuitSettingCustom.lastPositionInsideParent (clone frame).
@@ -3390,6 +3403,8 @@ pub struct Projectile {
     /// CreateProjectilesInArea: startedAt (roundTime when made) and projectilesEmitted.
     area_start: i64,
     area_n: u32,
+    /// IgnoreCollisionAfterCollide.timeOfLastCollide (step).
+    last_collide: i64,
     /// KineticChargeProjectile's state.
     kc: Option<Box<KcState>>,
     /// CreateProjectileOnExhaustFraction.isDone, a bit per `spec.on_exhaust` entry.
@@ -5561,6 +5576,7 @@ macro_rules! collide_pass {
                     None => !pr.ignore_first,
                 })
                 || b.hit_by(&pr.hit)
+                || (pr.spec.ignore_after > 0.0 && (($s.steps as i64 - pr.last_collide) as f32) < pr.spec.ignore_after)
                 // TrackTargetAfterDelay.FilterCollision (VERIFIED-DECOMP @0x180cefa30): nothing
                 // until completedIntialDelay; after it, while its Target is valid only that bloon
                 // (recording sniper_paragon_r40 rt 233: shrapnel on its way to 794 passes a Green).
@@ -5892,7 +5908,7 @@ macro_rules! collide_pass {
             // CreateProjectileOnContact.Collide runs in the collision pass, before the hit's
             // damage and its pops (recording glue_025: a glob's Glue Splatter splat comes
             // before the splat its popped Pink leaves, and pops the Reds first).
-            if $s.projectiles[$p].spec.on_contact.iter().any(|c| !c.on_damage && !c.on_pop && !c.after_damage && !c.map_only) {
+            if $s.projectiles[$p].spec.on_contact.iter().any(|c| !c.on_damage && !c.on_pop && !c.after_damage && !c.map_only && !c.after_retarget) {
                 let pr = &$s.projectiles[$p];
                 let heading = if pr.spec.instant && pr.target.is_some() { (bp[1] - pr.origin[1]).atan2(bp[0] - pr.origin[0]) } else { pr.vel[1].atan2(pr.vel[0]) };
                 // CreateProjectileOnExhaustPierce.Collide (VERIFIED-DISASM @0xca4050): at most
@@ -5905,7 +5921,7 @@ macro_rules! collide_pass {
                     .spec
                     .on_contact
                     .iter()
-                    .filter(|c| !c.on_damage && !c.on_pop && !c.after_damage && !c.map_only && !gated(c))
+                    .filter(|c| !c.on_damage && !c.on_pop && !c.after_damage && !c.map_only && !c.after_retarget && !gated(c))
                     .map(|c| (if c.at_shot { pp } else { bp }, c.clone(), c.pass_on_collided.then_some(layer)))
                     .collect();
                 let (tiers, owner, grot, by) = (pr.tiers, pr.owner, pr.grot, pr.emitted_by);
@@ -6664,7 +6680,12 @@ macro_rules! collide_pass {
             // hitting its first).
             // TrackTarget.Collide: lastTargetSearchElapsed = 0, so its Process this frame looks
             // (`track_targets`).
-            if pr.seek == Some(id) {
+            // (Before its first look its Target is the one it was thrown at: recording
+            // rosalia_l20_r80 rt 765, a Palm Blast made on its ZOMG looks at 766 and 771.)
+            // STAND-IN P-FIRSTTARGET: only for a shot with ClearHitBloons; the clone's `aim` isn't always the
+            // game's Target (recording druid_300 rt 335: a Tornado's Target is a Black already gone).
+            let first_target = if pr.spec.seek.is_some() && pr.spec.clear_hits.is_some() && pr.seek.is_none() && pr.seek_t == pr.made_at { pr.target.or(pr.aim) } else { None };
+            if pr.seek == Some(id) || first_target == Some(id) {
                 pr.seek_t = 0;
                 // AdoraTrackTarget.Collide (VERIFIED-DECOMP @0x180c84860) likewise
                 // (recording ace_003 rt 2634: a dart takes 2372 the frame after hitting 2364).
@@ -6678,6 +6699,7 @@ macro_rules! collide_pass {
                 }
             }
             pr.pierce -= pr.spec.pierce_cost;
+            pr.last_collide = $s.steps as i64;
             // (CollideExtraPierceReduction with a bloonTag: more on such bloons.)
             pr.pierce -= tag_extra;
             // Projectile.CollideBloon (VERIFIED-DISASM @0xc8b970): Exhausted once pierce is
@@ -6701,8 +6723,9 @@ macro_rules! collide_pass {
                 pr.vel[1].atan2(pr.vel[0])
             };
             let mut now_after = Vec::new();
+            let mut deferred = Vec::new();
             for c in &pr.spec.on_contact { // P-CONTACT
-                if c.map_only || (c.on_damage && immune) || (c.on_pop && popped_now == 0) || (!c.on_damage && !c.on_pop && !c.after_damage) {
+                if c.map_only || (c.on_damage && immune) || (c.on_pop && popped_now == 0) || (!c.on_damage && !c.on_pop && !c.after_damage && !c.after_retarget) {
                     continue;
                 }
                 let skip = if c.pass_on_collided { Some(layer) } else { None };
@@ -6747,6 +6770,10 @@ macro_rules! collide_pass {
                     }
                 }
                 let cz = if c.at_shot { pr.z } else { hit_z };
+                if c.after_retarget {
+                    deferred.push((at, heading, c, pr.tiers, (pr.owner, pr.emitted_by), skip, cz, Some(id)));
+                    continue;
+                }
                 $contacts.push((at, heading, c, pr.tiers, (pr.owner, pr.emitted_by), skip, cz, Some(id)));
             }
             if !now_after.is_empty() {
@@ -6825,6 +6852,9 @@ macro_rules! collide_pass {
                         }
                     }
                 }
+            }
+            if $s.projectiles[$p].frames_left > 0.0 {
+                $contacts.extend(deferred);
             }
             // Storage only changes at or after `i`: a popped bloon is swap-removed (the last
             // bloon moves into slot i) and children are appended. So re-check slot i if its
@@ -9012,6 +9042,15 @@ impl Game {
             if pr.spec.path.is_some() || pr.born >= now {
                 continue;
             }
+            // (ClearHitBloons, listed before TrackTarget, has emptied the hit list in this Process:
+            // recording rosalia_l20_r80 rt 771, a Palm Blast takes its ZOMG again as the list clears.)
+            if pr.clear_hits_next {
+                let pr = &mut self.projectiles[p];
+                pr.hit.clear();
+                pr.clear_hits_next = false;
+            }
+            let pr = &self.projectiles[p];
+            let Some(sk) = pr.spec.seek.as_ref() else { continue };
             // (The look clock starts when it is made; a shot thrown with a target keeps it until
             // then: recording ninja_002, a shuriken still turns for a Black behind the entrance
             // trees on its first frame.)
@@ -10689,6 +10728,7 @@ impl Game {
                 rm_jump_at: -1,
                 rm_z: 0.0,
                 rm_boost: None,
+                rm_emit_both: false,
                 drone: DroneIdleState::default(),
                 pursuit_inside: None,
                 hm_last_off: [0.0; 2],
@@ -11229,7 +11269,9 @@ impl Game {
             }
         };
         if ended {
-            self.towers[t].air.as_mut().unwrap().rm_boost = None;
+            let a = self.towers[t].air.as_mut().unwrap();
+            a.rm_boost = None;
+            a.rm_emit_both = false;
             self.rosalia_toggle(t, false);
         }
         {
@@ -15485,7 +15527,9 @@ impl Game {
             self.init_air(t);
             self.rosalia_toggle(t, true);
             if let Some(air) = self.towers[t].air.as_mut() {
-                air.rm_boost = Some(n);
+                // (Counted from the next frame: recording rosalia_l10_r40, used at 400, the jump home at 1600.)
+                air.rm_boost = Some(n + 1);
+                air.rm_emit_both = true;
             }
         }
         let tw = &mut self.towers[t];
@@ -23540,6 +23584,20 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                         // (Its own attack's range: recording desperado_005 rt 73 with Q lines, the pistol
                         // (range 60) counts the MOAB 42 away, the shotgun (36) doesn't.)
                         let vagrant_n = weapon.vagrant.map(|_| self.vagrant_counts_in(t, pos, range));
+                        // BloonsInRangeAttackSpeed.GetRate (VERIFIED-DISASM @0x180c6b4d0): rate / (stacks x
+                        // rateIncreasePerStack + 1), stacks = min(bloons in its zone / bloonsPerStack,
+                        // maxStacks); the zone (GetRange @0x180c6b490) is the attack's range + 1 round the
+                        // AirUnit. The rate is worked out as it fires (recording rosalia_l10_r40: 1 stack
+                        // from before 951, the cooldown 60 till 1011, 59 after). HYPOTHESIS P-BIRZONE: a
+                        // bloon is in it while its centre is within that.
+                        let bir_n = weapon.bir_speed.map(|(_, per, max)| {
+                            let c = self.towers[t].air.as_ref().map_or(pos, |a| a.pos);
+                            let r = range + 1.0;
+                            // (Where the bloons began the frame: 21 of the recording's 22 Q-line rates;
+                            // rt 1716, after her jump, counts 2 fewer: OPEN, the zone's enter / exit.)
+                            let n = self.bloons.iter().filter(|x| x.hp > 0 && (x.prev[0] - c[0]).powi(2) + (x.prev[1] - c[1]).powi(2) <= r * r).count() as i32;
+                            (n / per.max(1)).min(max)
+                        });
                         let vagrant_n = vagrant_n.map(|(tw, b)| (tw, self.towers[t].weapons[w].zone_in.as_ref().map_or(b, |z| z.len() as u32)));
                         if !double {
                             if let Some(fx) = &attack.fire_fx {
@@ -24451,7 +24509,37 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                                     s0 = self.projectiles.len();
                                     start = s0;
                                 } else {
-                                    self.emit(from, dir, emission, proj, crit, tiers, owner);
+                                    // ChangeProjectilePerEmit.GetProjectile (VERIFIED-DECOMP @0x180c6d1a0): each
+                                    // ask for the original model counts; every forProjectileCount-th is the
+                                    // changed one (Rosalia's tenth laser a Palm Blast).
+                                    let changed = weapon.change_emit.as_ref().filter(|c| c.orig.as_deref() == Some(proj.pid.as_str())).and_then(|c| {
+                                        let st = &mut self.towers[t].weapons[w];
+                                        st.change_n += 1;
+                                        (st.change_n % c.every.max(1) == 0).then(|| c.proj.clone())
+                                    });
+                                    self.emit(from, dir, emission, changed.as_ref().unwrap_or(proj), crit, tiers, owner);
+                                    // SwapProjectile.ProjectilesCreated with emitBoth (Flight Boost's): the other
+                                    // projectile through the weapon's emission from its own eject
+                                    // (GetEmitPositionForProjectile: turned by the AirUnit's rotation, display
+                                    // height), at the same Target; DuplicateProjectilePerEmit sees what it made.
+                                    let both = self.towers[t].air.as_ref().is_some_and(|a| a.rm_emit_both);
+                                    if let (true, Some(sb)) = (both, weapon.swap_b.clone()) {
+                                        let r = self.towers[t].air.as_ref().map_or(0.0, |a| a.hm_rot);
+                                        let [bx, by, bz] = sb.eject;
+                                        let (sa, ca) = crt_sin_cos(DEG2RAD * -r);
+                                        let (ox, oy) = (ca * bx - sa * by, ca * by + sa * bx);
+                                        let fb = [pos[0] + ox, pos[1] + -(oy - bz / TAN60)];
+                                        let saved_z = self.emit_z;
+                                        self.emit_z = bz + self.shot_base_z(t, weapon.from_air);
+                                        let sb0 = self.projectiles.len();
+                                        self.emit(fb, dir, emission, &sb.proj, crit, tiers, owner);
+                                        self.emit_z = saved_z;
+                                        // (DuplicateProjectilePerEmit sees B twice: from Swap's own ProjectilesCreated call and
+                                        // from the weapon's, B's list put first; recording rosalia_l10_r40 rt 691, the
+                                        // fifth boosted grenade the one tripled.)
+                                        self.dup_per_emit(t, w, weapon.dup_emit.as_ref(), emission, sb0, tiers, owner);
+                                        self.dup_per_emit(t, w, weapon.dup_emit.as_ref(), emission, sb0, tiers, owner);
+                                    }
                                 }
                                 if let (true, Some(g)) = (disp, grot) {
                                     let gd = game_dir(g);
@@ -25363,6 +25451,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             st.dist_k = dist_k;
                             if let Some(n) = vagrant_n {
                                 st.vagrant_n = n;
+                            }
+                            if let Some(n) = bir_n {
+                                st.bir_stacks = n;
                             }
                             st.danger = danger;
                             let r = st.rate(weapon);
@@ -26522,9 +26613,11 @@ impl Game {
             None => pr.prev,
         };
         let at = |b: &Bloon| if b.born < pr.born { b.pos } else { b.prev };
-        let best = self.closest_target(q, rt.distance, |b| !b.hit_by(&pr.hit) && (!b.camo(&self.defs[b.kind]) || pr.camo), at);
+        let mn = rt.min_distance;
+        let best = self.closest_target(q, rt.distance, |b| !b.hit_by(&pr.hit) && (!b.camo(&self.defs[b.kind]) || pr.camo) && !(mn > 0.0 && { let a = at(b); (a[0] - q[0]).powi(2) + (a[1] - q[1]).powi(2) < mn * mn }), at);
         let tpos = best.map(|i| at(&self.bloons[i]));
         let tid = best.map(|i| self.bloons[i].id);
+        if env_flag!("DBGRT") { eprintln!("DBGAIM RT rt {} pid {} q {:?} best {:?} tpos {:?} n {}", self.round_clock, pr.spec.pid, q, tid, tpos, self.bloons.iter().filter(|b| { let a = at(b); (a[0]-q[0]).powi(2)+(a[1]-q[1]).powi(2) <= rt.distance*rt.distance }).count()); }
         let pr = &mut self.projectiles[p];
         // (Target.set_bloon: the new bloon becomes its Target.)
         if tid.is_some() {
@@ -28971,6 +29064,50 @@ impl Game {
         if z < t { t } else { z }
     }
 
+    /// DuplicateProjectilePerEmit.ProjectilesCreated (VERIFIED-DECOMP @0x180c72ef0, angles from the
+    /// disasm): the first projectile made from `start`, if its model is the original, counts; at
+    /// forProjectileCount the count goes back to 0 and additionalProjectiles copies are emitted where
+    /// it is, at its Target, each along its direction Vector2.Rotate-d by angleOffset x -0.5 and then
+    /// by (i / (additionalProjectiles - 1)) x angleOffset.
+    fn dup_per_emit(&mut self, t: usize, w: usize, de: Option<&crate::data::DupEmit>, single: &crate::data::Emission, start: usize, tiers: [u8; 3], owner: u64) {
+        let Some(de) = de else { return };
+        let Some(first) = self.projectiles.get(start) else { return };
+        if de.orig.as_deref() != Some(first.spec.pid.as_str()) {
+            return;
+        }
+        let st = &mut self.towers[t].weapons[w];
+        st.dup_n += 1;
+        if st.dup_n < de.every {
+            return;
+        }
+        st.dup_n = 0;
+        let (pos, spec, vel, target, z) = (first.pos, first.spec.clone(), first.vel, first.target, first.z);
+        let g0 = [vel[0], -vel[1]];
+        let m = (g0[0] * g0[0] + g0[1] * g0[1]).sqrt();
+        let g0 = if m > 0.0 { [g0[0] / m, g0[1] / m] } else { [0.0, 1.0] };
+        for i in 0..de.extra {
+            let mut g = g0;
+            if de.angle > 0.0 && de.extra > 1 {
+                let (x, y) = offset_turned(g[0], g[1], de.angle * -0.5);
+                g = [x, y];
+                let (x, y) = offset_turned(g[0], g[1], (i as f32 / (de.extra as f32 - 1.0)) * de.angle);
+                g = [x, y];
+            }
+            let s0 = self.projectiles.len();
+            let saved = (self.emit_z, self.emit_target);
+            self.emit_z = z;
+            self.emit_target = target;
+            self.emit(pos, g[1].atan2(g[0]) * -1.0, single, &spec, None, tiers, owner);
+            (self.emit_z, self.emit_target) = saved;
+            let sf = spec.speed * FRAME_TIME;
+            for pr in &mut self.projectiles[s0..] {
+                pr.dir = Some(g);
+                pr.vel = [g[0] * sf, -g[1] * sf];
+                pr.grot = Some(RAD2DEG * crt_atan2(g[0], g[1]));
+            }
+        }
+    }
+
     /// KineticChargeProjectile.GetBloonTarget (VERIFIED-DECOMP @0x180cc4800): BloonManager.GetTarget of
     /// the emitting tower's target type from the projectile, range 99999, through IsBloonValid
     /// (@0x180cc5370: not destroyed, camo only if it can hit camo, not untargetable, BloonModel.isMoab).
@@ -29022,29 +29159,6 @@ impl Game {
         let Some(mut st) = self.projectiles[p].kc.clone().map(|b| *b) else { return };
         let now = self.steps as i64;
         let bloon_at = |g: &Self, id: u64| bloon_idx(&g.bloons, &g.bidx, id);
-        // Collide: Simulate's collisions come before Process.
-        if st.flying && st.attached.is_none() {
-            let pp = self.projectiles[p].pos;
-            let target_alive = st.target.and_then(|id| bloon_at(self, id));
-            let hit = |g: &Self, i: usize| {
-                let b = &g.bloons[i];
-                let d = &g.defs[b.kind];
-                let r = 2.0 + d.radius;
-                let e = [b.pos[0] - pp[0], b.pos[1] - pp[1]];
-                b.hp > 0 && e[0] * e[0] + e[1] * e[1] <= r * r && circles_hit(pp, 2.0, b.pos, g.mrot(b), &d.circles)
-            };
-            let got = match target_alive {
-                Some(i) => hit(self, i).then_some(i),
-                None => (0..self.bloons.len()).find(|&i| hit(self, i)),
-            };
-            if let Some(i) = got {
-                st.attached = Some(self.bloons[i].id);
-                st.flying = false;
-                st.health_at = self.total_bloon_health(i);
-                st.attached_at = now;
-                self.projectiles[p].pierce -= 1.0;
-            }
-        }
         if let Some(id) = st.attached {
             match bloon_at(self, id) {
                 None => {
@@ -29053,12 +29167,14 @@ impl Game {
                     return;
                 }
                 Some(i) => {
+                    // (On its bloon first, then the checks: recording rosalia_l20_r80 rt 1064, the
+                    // explosion where the ZOMG has moved to.)
+                    self.projectiles[p].pos = self.bloons[i].pos;
                     let lost = st.health_at - self.total_bloon_health(i);
                     if k.max_taken <= lost || k.duration_frames <= now - st.attached_at {
                         self.kc_explode(p, lost);
                         return;
                     }
-                    self.projectiles[p].pos = self.bloons[i].pos;
                 }
             }
         } else if !st.flying {
@@ -29100,6 +29216,32 @@ impl Game {
                 let n = if m > 1e-5 { [e[0] / m, e[1] / m] } else { [0.0; 2] };
                 let q = [a[0] + n[0] * step, a[1] + n[1] * step];
                 pr.pos = [q[0], -q[1]];
+            }
+        }
+        // Collide: after its Process moved it (recording rosalia_l10_r40 rt 478: the hit from the spot
+        // it flew to, on its bloon from 479).
+        if st.flying && st.attached.is_none() && self.projectiles[p].kc.is_some() {
+            let pp = self.projectiles[p].pos;
+            let target_alive = st.target.and_then(|id| bloon_at(self, id));
+            let hit = |g: &Self, i: usize| {
+                let b = &g.bloons[i];
+                let d = &g.defs[b.kind];
+                let r = 2.0 + d.radius;
+                let e = [b.pos[0] - pp[0], b.pos[1] - pp[1]];
+                b.hp > 0 && e[0] * e[0] + e[1] * e[1] <= r * r && circles_hit(pp, 2.0, b.pos, g.mrot(b), &d.circles)
+            };
+            let got = match target_alive {
+                Some(i) => hit(self, i).then_some(i),
+                None => (0..self.bloons.len()).find(|&i| hit(self, i)),
+            };
+            if let Some(i) = got {
+                st.attached = Some(self.bloons[i].id);
+                st.flying = false;
+                st.health_at = self.total_bloon_health(i);
+                // (The game's collision is the next frame's pass: attachedAt one later; recording
+                // rosalia_l20_r80, attached at 464, exploding at 1064 after durationFrames.)
+                st.attached_at = now + 1;
+                self.projectiles[p].pierce -= 1.0;
             }
         }
         if let Some(b) = self.projectiles[p].kc.as_mut() {
@@ -29939,6 +30081,7 @@ impl Game {
                 interval_t: 0.0,
                 area_start: self.round_clock,
                 area_n: 0,
+                last_collide: i64::MIN / 2,
                 kc: kc_state,
                 exhaust_done: 0,
                 aim: None,
@@ -30861,6 +31004,8 @@ impl Game {
             for u in kcs {
                 self.kinetic_step(u);
             }
+            // (An exploded charge is gone at once: recording rosalia_l10_r40 rt 770.)
+            self.projectiles.retain(|pr| !(pr.spec.kinetic.is_some() && pr.kc.is_none()));
             let areas: Vec<u64> = self.projectiles.iter().filter(|pr| pr.spec.area_spawn.is_some()).map(|pr| pr.uid).collect();
             for u in areas {
                 self.area_spawn_step(u);

@@ -1483,6 +1483,19 @@ pub struct Weapon {
     /// @0x180c93e10) turns the eject by the AirUnit's rotation when the tower has one.
     #[serde(default)]
     pub swap_eject: bool,
+    /// SwapProjectileModel's projectile B and eject B: with emitBoth (Flight Boost) every shot is
+    /// followed by B from its eject (SwapProjectile.ProjectilesCreated, VERIFIED-DECOMP @0x180c94b90).
+    #[serde(default)]
+    pub swap_b: Option<Box<SwapB>>,
+    /// ChangeProjectilePerEmitModel: every `every`th `orig` projectile asked for is `proj` instead.
+    #[serde(default)]
+    pub change_emit: Option<Box<ChangeEmit>>,
+    /// DuplicateProjectilePerEmitModel: every `every`th `orig` made gets `extra` copies fanned `angle`.
+    #[serde(default)]
+    pub dup_emit: Option<DupEmit>,
+    /// BloonsInRangeAttackSpeedModel: [rateIncreasePerStack, bloonsPerStack, maxStacks].
+    #[serde(default)]
+    pub bir_speed: Option<(f32, i32, i32)>,
     /// UseParentEjectModel: shots leave from the tower's first Attack's first Weapon's eject.
     #[serde(default)]
     pub parent_eject: bool,
@@ -2181,6 +2194,9 @@ pub struct Contact {
     /// passOnCollidedWith: the sub-projectiles can't hit the bloon that triggered them.
     #[serde(default)]
     pub pass_on_collided: bool,
+    /// After the shot's RetargetOnContact: only made if that left the shot alive.
+    #[serde(default)]
+    pub after_retarget: bool,
     /// dontCreateAtBloon: made where the shot is instead of on the bloon.
     #[serde(default)]
     pub at_shot: bool,
@@ -2239,6 +2255,9 @@ pub struct Footprint {
 #[derive(Deserialize, Clone)]
 pub struct Retarget {
     pub distance: f32,
+    /// minDistance: RetargetOnContact.BloonFilter drops bloons within it (squared, strictly).
+    #[serde(default)]
+    pub min_distance: f32,
     pub max_bounces: u32,
     pub delay: f32,
     pub expire_if_none: bool,
@@ -2249,6 +2268,9 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// IgnoreCollisionAfterCollideModel: frames after a collision it hits nothing.
+    #[serde(default)]
+    pub ignore_after: f32,
     /// CreateProjectilesOnTrackOnExhaustFractionModel.range (Spike Paragon pile): at Initialise
     /// the path segments within it of the target are shuffled.
     #[serde(default)]
@@ -3507,6 +3529,27 @@ pub struct Circle {
 pub struct SwitchDisplay {
     pub display: Option<String>,
     pub lifespan: f32,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct SwapB {
+    pub proj: Proj,
+    pub eject: [f32; 3],
+}
+
+#[derive(Deserialize, Clone)]
+pub struct ChangeEmit {
+    pub every: i32,
+    pub orig: Option<String>,
+    pub proj: Proj,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct DupEmit {
+    pub every: i32,
+    pub extra: i32,
+    pub angle: f32,
+    pub orig: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
