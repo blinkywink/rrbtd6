@@ -6853,8 +6853,29 @@ macro_rules! collide_pass {
                     }
                 }
             }
+            // (RetargetOnContact.Collide runs whatever the pierce: a spent shot still makes them when
+            // it finds a next target (recording rosalia_l20_r80 rt 1316), not when it finds none
+            // (rt 1077).)
+            if !deferred.is_empty() && $s.projectiles[$p].pierce <= 0.0 && $s.projectiles[$p].frames_left > 0.0 {
+                if let Some(rt) = $s.projectiles[$p].spec.retarget.clone() {
+                    $s.retarget($p, &rt, false);
+                }
+            }
             if $s.projectiles[$p].frames_left > 0.0 {
-                $contacts.extend(deferred);
+                // (useProjectileRotation: the shot's rotation as the retarget left it; recording
+                // rosalia_l20_r80 rt 1068, a grenade's Cluster fanned round its new heading.)
+                let pr = &$s.projectiles[$p];
+                let r = match (pr.grot, pr.dir) {
+                    (Some(g), _) => g,
+                    (None, Some(d)) => RAD2DEG * crt_atan2(d[0], d[1]),
+                    (None, None) => RAD2DEG * crt_atan2(pr.vel[0], -pr.vel[1]),
+                };
+                for mut d in deferred {
+                    if d.2.emission.proj_rot {
+                        d.2.rot = Some(r);
+                    }
+                    $contacts.push(d);
+                }
             }
             // Storage only changes at or after `i`: a popped bloon is swap-removed (the last
             // bloon moves into slot i) and children are appended. So re-check slot i if its
@@ -9048,6 +9069,17 @@ impl Game {
                 let pr = &mut self.projectiles[p];
                 pr.hit.clear();
                 pr.clear_hits_next = false;
+            }
+            // STAND-IN P-FIRSTTARGET: a ClearHitBloons shot's TrackTarget starts on the Target it was
+            // thrown at (recording rosalia_l20_r80 rt 1366: a Palm Blast turns for its ZOMG on its
+            // first Process).
+            {
+                let pr = &self.projectiles[p];
+                if pr.spec.clear_hits.is_some() && pr.seek.is_none() && pr.seek_t == pr.made_at {
+                    if let Some(id) = pr.target.or(pr.aim).filter(|&id| bloon_idx(&self.bloons, &self.bidx, id).is_some()) {
+                        self.projectiles[p].seek = Some(id);
+                    }
+                }
             }
             let pr = &self.projectiles[p];
             let Some(sk) = pr.spec.seek.as_ref() else { continue };
@@ -23591,11 +23623,15 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                         // from before 951, the cooldown 60 till 1011, 59 after). HYPOTHESIS P-BIRZONE: a
                         // bloon is in it while its centre is within that.
                         let bir_n = weapon.bir_speed.map(|(_, per, max)| {
-                            let c = self.towers[t].air.as_ref().map_or(pos, |a| a.pos);
-                            let r = range + 1.0;
-                            // (Where the bloons began the frame: 21 of the recording's 22 Q-line rates;
-                            // rt 1716, after her jump, counts 2 fewer: OPEN, the zone's enter / exit.)
-                            let n = self.bloons.iter().filter(|x| x.hp > 0 && (x.prev[0] - c[0]).powi(2) + (x.prev[1] - c[1]).powi(2) <= r * r).count() as i32;
+                            // (The zone's list as its last Process kept it, as Vagrant's.)
+                            let n = match self.towers[t].weapons[w].zone_in.as_ref() {
+                                Some(z) => z.len() as i32,
+                                None => {
+                                    let c = self.towers[t].air.as_ref().map_or(pos, |a| a.pos);
+                                    let r = range + 1.0;
+                                    self.bloons.iter().filter(|x| (x.pos[0] - c[0]).powi(2) + (x.pos[1] - c[1]).powi(2) <= r * r).count() as i32
+                                }
+                            };
                             (n / per.max(1)).min(max)
                         });
                         let vagrant_n = vagrant_n.map(|(tw, b)| (tw, self.towers[t].weapons[w].zone_in.as_ref().map_or(b, |z| z.len() as u32)));
@@ -25512,7 +25548,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                 for attack in tier.attacks.iter().chain(extra.iter()) {
                     let r = buff.attack_range(attack);
                     for w in &attack.weapons {
-                        if w.vagrant.is_some() {
+                        // (BloonsInRangeAttackSpeed's zone the same, its range + 1: GetRange @0x180c6b490.)
+                        if w.vagrant.is_some() || w.bir_speed.is_some() {
+                            let r = if w.bir_speed.is_some() { attack.range + 1.0 } else { r };
                             let p = self.attack_pos(t);
                             let ids: Vec<u64> = self.bloons.iter().filter(|b| { let q = b.pos; (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= r * r }).map(|b| b.id).collect();
                             if let Some(st) = self.towers[t].weapons.get_mut(wi) {
