@@ -11298,10 +11298,10 @@ impl Game {
             let range = h.otherHeliRepulsionRange;
             let (mut sum, mut total, mut n) = ([0.0f32; 2], 0.0f32, 0u32);
             let near = self.towers[t].air.as_ref().unwrap().hm_near.clone();
-            for &(o, q) in helis {
-                if o == t || !near.contains(&self.towers[o].id) {
-                    continue;
-                }
+            // (In heliPositionsInRepulseRange's order, as they entered: the float sums depend on it;
+            // recording etienne_l10_r40 rt 973, drone 481's velocity 1 ulp off in tower order.)
+            let order: Vec<(usize, [f32; 2])> = near.iter().filter_map(|nid| helis.iter().find(|&&(o, _)| o != t && self.towers[o].id == *nid).copied()).collect();
+            for &(o, q) in &order {
                 let op = self.towers[o].air.as_ref().map_or(q, |x| x.pos);
                 let op = [op[0], -op[1]];
                 let e = [pos[0] - op[0], pos[1] - op[1]];
@@ -14452,6 +14452,12 @@ impl Game {
             self.spawn_sub(spec, p, parent, false);
             let n = self.towers.len() - 1;
             self.ucav_copy_air(t, n);
+            // (The UAV made this frame doesn't move till the next: recording etienne_l10_r40 rt 1480,
+            // UAV 7805 where the UCAV was.)
+            let now = self.sim_elapsed;
+            if let Some(a) = self.towers[n].air.as_mut() {
+                a.pm_moved = now;
+            }
         }
         for t in gone.into_iter().rev() {
             {
