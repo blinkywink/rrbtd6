@@ -1846,6 +1846,9 @@ static class SimulatePatch
                             if (etb != null) { var ep = etb.position; w.WriteLine($"ATE {t.Id.Id} {ak} {Recorder.F(ep.X)} {Recorder.F(ep.Y)} {Recorder.F(ep.Z)}"); }
                         }
                         catch (Exception) { }
+                        // "ATR tower attack range model": Attack.range at run time (Attack.UpdateRange lets a
+                        // behaviour override the model's) and the attack model's name.
+                        try { w.WriteLine($"ATR {t.Id.Id} {ak} {Recorder.F(at.range)} {at.attackModel?.name}"); } catch (Exception) { }
                         // "ATP tower attack x y z offx offy offz": Target.Position and bloonTargetOffset.
                         if (atb != null)
                         {
