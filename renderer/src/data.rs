@@ -884,6 +884,12 @@ pub struct Tier {
     /// PerRoundCashBonusTowerModel.cashPerRound: paid at each round end.
     #[serde(default)]
     pub round_cash: f64,
+    /// Monkey Knowledge Healthy Bananas: lives each round end (BonusLivesPerRound.OnRoundEnd).
+    #[serde(default)]
+    pub round_lives: f64,
+    /// WeaponReloadPercentageOnTargetPrioModel (Monkey Knowledge): (target type, multiplier).
+    #[serde(default)]
+    pub reload_prio: Vec<(String, f32)>,
     /// TowerSellModel multipliers (Monkey Knowledge): Tower.GetTotalSaleTransforms.
     #[serde(default)]
     pub sell_transforms: Vec<f32>,

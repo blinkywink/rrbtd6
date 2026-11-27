@@ -18148,6 +18148,17 @@ impl Game {
                 }
                 // MonkeyBoost (a Power, powers.rs): the rate x rateScale while it lasts.
                 b.rate_mult *= self.power_boost(t);
+                // WeaponReloadPercentageOnTargetPrio (Monkey Knowledge; Initialise /
+                // OnChangeTargetPriority, VERIFIED-DECOMP): while the tower targets targetType, its
+                // ReloadTimeTowerMutator: rate - rate x multiplier (HYPOTHESIS P-MKPRIO: the same
+                // Mutate as ReloadTimeTowerMutator's, here as a rate factor).
+                if let Some(rp) = self.tier(t).map(|x| x.reload_prio.clone()) {
+                    for (tt, m) in rp {
+                        if TargetMode::parse(&tt).is_some_and(|mode| mode == self.towers[t].target) {
+                            b.rate_mult *= 1.0 - m;
+                        }
+                    }
+                }
                 // ComeOnEverybody (Monkey Knowledge; ComeOnEverybody.CheckBuffs, VERIFIED-DECOMP): a
                 // Primary tower's rate x rateMultiplier while every Primary tower is below tier 3.
                 if let Some((rm, _)) = self.come_on_everybody {
@@ -31983,6 +31994,14 @@ impl Game {
             for t in 0..self.towers.len() {
                 let s = self.tier_sounds(t);
                 self.sound(&s.round_end, None);
+            }
+            // Healthy Bananas (Monkey Knowledge): BonusLivesPerRound.OnRoundEnd AddHealth(amount).
+            for t in 0..self.towers.len() {
+                let n = self.tier(t).map_or(0.0, |tr| tr.round_lives);
+                if n > 0.0 {
+                    self.lives += n;
+                    self.towers[t].lives_gained += n;
+                }
             }
             // BonusLivesPerRoundModel: lives back each round, up to a share above the start.
             for t in 0..self.towers.len() {

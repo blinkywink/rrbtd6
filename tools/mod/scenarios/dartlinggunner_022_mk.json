@@ -1,0 +1,1 @@
+{"name": "dartlinggunner_022_mk", "map": "Tutorial", "difficulty": "Hard", "mode": "Standard", "frames": 3600, "quit": true, "round": 40, "seed": 699336078, "towers": [{"id": "DartlingGunner-022", "x": -112.815414, "y": -30.9, "point": [-130.0, -22.9], "target": "Locked"}], "cash": 10000000, "mk": true}

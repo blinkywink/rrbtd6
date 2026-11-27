@@ -3366,6 +3366,10 @@ def main():
                 # multiplier joins Tower.GetTotalSaleTransforms (TowerSell.TransformSalePerc while it has
                 # charges: all of them 9999999).
                 "sell_transforms": [b["f"].get("multiplier", 0.0) for b in items(f["behaviors"]) if b and b["type"] == "TowerSellModel"],
+                # WeaponReloadPercentageOnTargetPrioModel (Monkey Knowledge Flanking Maneuvers): while the
+                # tower targets targetType, a ReloadTimeTowerMutator (rate - rate x multiplier).
+                "reload_prio": [[b["f"].get("targetType"), b["f"].get("multiplier", 0.0)] for b in items(f["behaviors"])
+                                if b and b["type"] == "WeaponReloadPercentageOnTargetPrioModel"],
                 "attacks": attacks, "pets": pets, "leash_rotate": leash_rotate, "merge_fx": merge_fx, "merged_fx": merged_fx, "power_fx": power_fx, "merge_sound": merge_sound, "leash_power": leash_power, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
                 "round_start_rate": round_start_rate, "vigilante": vigilante, "vigilante_fx": vigilante_fx, "bank": bank, "supports": supports,
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
@@ -3447,7 +3451,12 @@ def main():
                 # BonusLivesPerRoundModel: livesRestored each round end while lives are under
                 # maxLivesAboveStartingLives x the starting lives.
                 "bonus_lives": next(([b["f"].get("livesRestored", 0), b["f"].get("maxLivesAboveStartingLives", 1.0)]
-                                     for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "BonusLivesPerRoundModel"), None),
+                                     for b in items(tobj["f"]["behaviors"]) if b and b["type"] == "BonusLivesPerRoundModel"
+                                     and "amount" not in b["f"]), None),
+                # The other BonusLivesPerRoundModel (Monkey Knowledge Healthy Bananas, mk_mutate.py):
+                # BonusLivesPerRound.OnRoundEnd (VERIFIED-DECOMP) AddHealth(amount), a "+n" text.
+                "round_lives": sum(b["f"].get("amount", 0) for b in items(tobj["f"]["behaviors"])
+                                   if b and b["type"] == "BonusLivesPerRoundModel" and "amount" in b["f"]),
                 "round_cash": sum(b["f"].get("cashPerRound", 0.0) for b in items(tobj["f"]["behaviors"])
                                   if b and b["type"] == "PerRoundCashBonusTowerModel"),
                 "round_cash_shared": sum(b["f"].get("cashPerRound", 0.0) for b in items(tobj["f"]["behaviors"])
