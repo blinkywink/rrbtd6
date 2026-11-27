@@ -459,6 +459,34 @@ def m_arc_count(tw, mm, target):
             o["f"]["SliceSize"] = o["f"].get("SliceSize", 0) + mm.get("additionalCount", 0)
 
 
+def m_alternate_arc(tw, mm, target):
+    # AlternateArcModModel.Mutate (VERIFIED-DECOMP @0x18129d640): each WeaponModel the target string
+    # ends with gets AlternateProjectileModel(the mod's name, its projectile, a clone of its
+    # ArcEmissionModel with count + increase, interval shotCount, alternateAnimation -1) at the end
+    # of its behaviours (4And4: Triple Shot's every 4th throw makes 4; recording dart_030_mk, 4 darts
+    # at rt 163, 1862, 1974 ...). The game's all-knowledge GameModel dump doesn't have it (it is put on
+    # elsewhere), so the oracle counts 15 differences for it.
+    for w in tw.descendants({"WeaponModel"}):
+        n = name_of(w)
+        if not n or not (target or "").endswith(n):
+            continue
+        e = tw.m.ref(w["f"].get("emission"))
+        e = tw.m.objs.get(e) if isinstance(e, int) else e
+        if not e or e["type"] != "ArcEmissionModel":
+            continue
+        cid = clone_model(tw.m, e["i"])
+        c = tw.m.objs[cid]
+        c["f"]["SliceSize"] = c["f"].get("SliceSize", 0) + mm.get("increase", 0)
+        fields = {"_name": mm.get("_name") or "", "projectile": w["f"].get("projectile"), "emissionModel": {"$ref": cid},
+                  "interval": mm.get("shotCount", 0), "alternateAnimation": -1, "priority": 0}
+        if append_behavior(tw.m, w, "behaviors", "AlternateProjectileModel", fields) is None:
+            nid = tw.m.new_id()
+            tw.m.objs[nid] = {"i": nid, "type": "AlternateProjectileModel", "f": fields}
+            vid = tw.m.new_id()
+            tw.m.values[vid] = {"_container": "array", "len": 1, "items": [nid]}
+            w["f"]["behaviors"] = {"$ref": vid}
+
+
 def m_dmg_tag(tw, mm, target):
     # DamageModifierForTagModModel: each named ProjectileModel; its first DamageModifierForTagModel
     # with tag bloonTag gets damageMultiplier + multiplierAdditive and damageAddative + addative;
@@ -856,6 +884,7 @@ MUTATORS = {
     "RecurringRangsModModel": m_recurring_rangs,
     "TargetedPineapplesModModel": m_pineapples,
     "GrantCamoDetectForAbilityModModel": m_grant_camo,
+    "AlternateArcModModel": m_alternate_arc,
     "CreateEffectOnAbilityModModel": m_effect_on_ability,
     "WingmonkeyModModel": m_wingmonkey,
     "BankDepositsModModel": m_bank_deposits,
