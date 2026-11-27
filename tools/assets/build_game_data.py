@@ -509,6 +509,17 @@ def main():
         # mutator and adds only the PsiBloonMutator, which the projectile's "psi" (below) models: held
         # from the frame after the hit, invulnerable, popped when it ends (an immediate speed-0 slow
         # held it one frame early: recording psi_l10_r40 rt 1956, the splash's second bloon moves).
+        # AddBehaviorToBloonModel -> HauntModel (Corvus's Haunt): the bloon and every layer below it
+        # haunted (Haunt.GetModifiedDamage @0x180ff63b0: + bonusEnergyDamage to damage types with bit 8;
+        # CorvusManager.OnBloonDegrade @0x180f9a050: the last one popped with no children emits
+        # projectileOnDestroyModel through singleEmissionModel, Haunt.EmitProjectile @0x180ff6030).
+        haunt_spec = None
+        for s in pb.get("AddBehaviorToBloonModel", []):
+            hm = next((d["f"] for d in items(s["f"].get("behaviors")) if d and d["type"] == "HauntModel"), None)
+            if hm and depth < 3:
+                haunt_spec = {"bonus": hm.get("bonusEnergyDamage", 0.0), "mana_per_rbe": hm.get("manaPerRbe", 0),
+                                "explosion": projectile(deref(hm.get("projectileOnDestroyModel")), depth + 1),
+                                "emission": emission(deref(hm.get("singleEmissionModel")))}
         for s in pb.get("AddBehaviorToBloonModel", []):
             sf = s["f"]
             flt = deref(sf.get("filter"))
@@ -1179,6 +1190,8 @@ def main():
         # @0x180ce0f90) puts it on its tower's position, TruncateVector3(1).
         if pb.get("SyncProjectileMovementToTowerModel"):
             out["sync_tower"] = True
+        if haunt_spec:
+            out["haunt"] = haunt_spec
         # IgnoreCollisionAfterCollideModel: Collide (VERIFIED-DISASM @0x180cc0fd0) notes the frame,
         # FilterCollision (@0x180cc1000) lets a bloon through once (now - it) >= (int)(timeAfterCollide x 60)
         # (recording rosalia_l10_r40: a grenade hits at 835 and 838).
@@ -2089,6 +2102,9 @@ def main():
                                 # @0x180c901a0; Benjamin's Bloon Trojan).
                                 "random_rate": next((round(float(x["f"].get("offsetRateFrames") or x["f"].get("offsetRate", 0.0) * 60)) for x in items(w["f"].get("behaviors")) if x and x["type"] == "RandomRateModel"), None),
                                 "limit": limit, "limit_id": limit_id, "limit_delay": limit_delay, "limit_destroyed": limit_destroyed, "vine_limit": vine_limit, "gw_limit": gw_limit, "over_track": over_track, "from_air": from_air, "swap_eject": any(x and x["type"] == "SwapProjectileModel" for x in items(w["f"].get("behaviors"))),
+                                # LimitByHauntSpellModel: CanFire (VERIFIED-DECOMP @0x180c7c330) only while no
+                                # bloon is haunted (CorvusManager.IsHauntActive).
+                                "haunt_limit": any(x and x["type"] == "LimitByHauntSpellModel" for x in items(w["f"].get("behaviors"))),
                                 # SwapProjectileModel's projectile B and its eject (emitBoth: Flight Boost),
                                 # ChangeProjectilePerEmitModel / DuplicateProjectilePerEmitModel (Rosalia).
                                 "swap_b": next(({"proj": projectile(deref(x["f"]["projectileModelB"])),
@@ -3688,6 +3704,25 @@ def main():
                               for e in [deref(b["f"].get("effectModel"))] if e), None),
         }
 
+    def hero_unlock(name, tiers):
+        """A hero is placed at level 1 and raised to its level in one Hero.UpgradeToLevel (the
+        recorder's herolevel line, SimRecorder): what the level-1 model has is made first, what the
+        jump adds after it, in behaviour order; so the game's weapon list goes level-1 attacks /
+        abilities, then the others (recordings corvus_l03_r20: Haunt (level 1) before Soul Harvest;
+        obyn_l20_r80: Brambles and Wall of Trees before the Totem attack, all added by the jump).
+        `unlock`: 1 for those in the level-1 model, else 2."""
+        if name not in HEROES:
+            return tiers
+        first = tiers.get("100") or tiers[min(tiers, key=lambda k: int(k))]
+        a1 = {a.get("model_name") for a in first.get("attacks", [])}
+        b1 = {b.get("name") for b in first.get("abilities", []) or []}
+        for t in tiers.values():
+            for a in t.get("attacks", []):
+                a["unlock"] = 1 if a.get("model_name") in a1 else 2
+            for b in t.get("abilities", []) or []:
+                b["unlock"] = 1 if b.get("name") in b1 else 2
+        return tiers
+
     def tower_tiers(name):
         # Only "<name>" and "<name>-xyz": other models share the baseId (TransformedMonkey).
         sep = " " if name in HEROES else "-"
@@ -3763,7 +3798,7 @@ def main():
         return {
             "hero": hero,
             "paragon": paragon,
-            "tiers": {"".join(str(x) for x in items(r["f"]["tiers"])): tier(r) for r in models},
+            "tiers": hero_unlock(name, {"".join(str(x) for x in items(r["f"]["tiers"])): tier(r) for r in models}),
             "upgrades": sorted([{"name": r["f"]["_name"], "cost": r["f"]["cost"], "path": r["f"]["path"], "tier": r["f"]["tier"]}
                                 for r in objs.values() if r["type"] == "UpgradeModel" and r["f"]["_name"] in names],
                                key=lambda u: (u["path"], u["tier"])),

@@ -1118,6 +1118,10 @@ pub struct Necro {
 
 #[derive(Deserialize, Clone)]
 pub struct Attack {
+    /// A hero's: the level it is unlocked at (0 otherwise); with the model order, its place in
+    /// the game's weapon list.
+    #[serde(default)]
+    pub unlock: u32,
     /// AttackModel name (an upgrade keeps the Attack whose model has the same name).
     #[serde(default)]
     pub model_name: String,
@@ -1483,6 +1487,9 @@ pub struct Weapon {
     /// @0x180c93e10) turns the eject by the AirUnit's rotation when the tower has one.
     #[serde(default)]
     pub swap_eject: bool,
+    /// LimitByHauntSpellModel: fires only while no bloon is haunted.
+    #[serde(default)]
+    pub haunt_limit: bool,
     /// SwapProjectileModel's projectile B and eject B: with emitBoth (Flight Boost) every shot is
     /// followed by B from its eject (SwapProjectile.ProjectilesCreated, VERIFIED-DECOMP @0x180c94b90).
     #[serde(default)]
@@ -2268,6 +2275,9 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// AddBehaviorToBloonModel with a HauntModel (Corvus's Haunt).
+    #[serde(default)]
+    pub haunt: Option<std::sync::Arc<HauntSpec>>,
     /// SyncProjectileMovementToTowerModel: on its tower's position (TruncateVector3(1)) each frame.
     #[serde(default)]
     pub sync_tower: bool,
@@ -2856,6 +2866,9 @@ pub struct Ability {
     /// The tower's attacks listed before it in the model's behaviours.
     #[serde(default = "big_usize")]
     pub attack_pos: usize,
+    /// A hero's: the level it is unlocked at (0 otherwise).
+    #[serde(default)]
+    pub unlock: u32,
     /// AbilityModel.maxActivationsPerRound (0 or less: no limit).
     #[serde(default)]
     pub per_round: i32,
@@ -3555,6 +3568,15 @@ pub struct Circle {
 pub struct SwitchDisplay {
     pub display: Option<String>,
     pub lifespan: f32,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct HauntSpec {
+    pub bonus: f32,
+    #[serde(default)]
+    pub mana_per_rbe: i32,
+    pub explosion: Proj,
+    pub emission: Emission,
 }
 
 #[derive(Deserialize, Clone)]

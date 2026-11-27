@@ -399,6 +399,8 @@ pub struct Bloon {
     /// PatsBigSqueezeWind (offTrackCount): (framesAtStart, framesToWait, startLocation): held at
     /// startLocation till framesAtStart + framesToWait, then carried back (`squeeze_step`).
     pub squeeze: Option<(u64, u64, [f32; 2])>,
+    /// Corvus's Haunt on it (the Corvus tower, the model): every layer below it too.
+    pub haunt: Option<(u64, std::sync::Arc<crate::data::HauntSpec>)>,
     /// PsiBloonMutator (Psi): (the sim frame its hold ends, the tower). Held in place,
     /// invulnerable, popped through every layer when it ends.
     pub psi: Option<(u64, u64)>,
@@ -1106,6 +1108,7 @@ struct PopParent {
     parent_id: u64,
     parent_held: (u64, [f32; 2]),
     parent_squeeze: Option<(u64, u64, [f32; 2])>,
+    parent_haunt: Option<(u64, std::sync::Arc<crate::data::HauntSpec>)>,
     lineage: std::sync::Arc<[u64]>,
     parent_galv: (u8, u64),
     parent_galv_chain: Option<std::sync::Arc<crate::data::GalvChain>>,
@@ -1317,7 +1320,9 @@ impl Bloon {
 /// The ActivateAttack weapons of the abilities listed before tier attack `k` (the game lists a
 /// tower's weapons in behaviour order).
 fn ability_weapons_before(tier: &Tier, k: usize) -> usize {
-    tier.abilities.iter().filter(|a| a.attack_pos <= k).flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter()).map(|a| a.weapons.len()).sum()
+    // (A hero's by unlock level first: see build_game_data's hero_unlock.)
+    let ku = tier.attacks.get(k).map_or(0, |a| a.unlock);
+    tier.abilities.iter().filter(|a| a.unlock < ku || (a.unlock == ku && a.attack_pos <= k)).flat_map(|a| a.activate.iter()).flat_map(|x| x.attacks.iter()).map(|a| a.weapons.len()).sum()
 }
 
 /// The tower's own weapons listed before the ability whose ActivateAttack weapons start at
@@ -1328,7 +1333,7 @@ fn tier_weapons_before_ability(tier: &Tier, slot: usize) -> usize {
         let n: usize = a.activate.iter().flat_map(|x| x.attacks.iter()).map(|x| x.weapons.len()).sum();
         if slot < seen + n || (n == 0 && slot == seen) {
             let pos = a.attack_pos.min(tier.attacks.len());
-            return tier.attacks[..pos].iter().map(|x| x.weapons.len()).sum();
+            return tier.attacks.iter().enumerate().filter(|(j, x)| x.unlock < a.unlock || (x.unlock == a.unlock && *j < pos)).map(|(_, x)| x.weapons.len()).sum();
         }
         seen += n;
     }
@@ -5674,6 +5679,11 @@ macro_rules! collide_pass {
                 // a squeeze at 400 with 228 frames.)
                 $s.bloons[i].squeeze = Some(($s.sim_elapsed + 1, n, at));
             }
+            // AddBehaviorToBloon -> Haunt (Attatched @0x180ff5fa0: CorvusManager.HauntedBloonCreated).
+            if let Some(h) = $s.projectiles[$p].spec.haunt.clone() {
+                let owner = $s.projectiles[$p].owner;
+                $s.bloons[i].haunt = Some((owner, h));
+            }
             #[allow(unused_variables)]
             let b = &$s.bloons[i];
             #[allow(unused_variables)]
@@ -5791,6 +5801,14 @@ macro_rules! collide_pass {
                             dmg += *bonus;
                         }
                     }
+                }
+            }
+            // Haunt.GetModifiedDamage (VERIFIED-DECOMP @0x180ff63b0): + bonusEnergyDamage when the shot's
+            // damage type (its immunity mask) has bit 8 (recording corvus_l03_r20 rt 33: the Spirit's
+            // body takes a haunted Black to two Yellows).
+            if let Some((_, hs)) = b.haunt.as_ref() {
+                if pr.spec.immune & 8 != 0 {
+                    dmg += hs.bonus;
                 }
             }
             // DesperadoMarkModel: marked bloons take extra damage from Desperados.
@@ -8243,7 +8261,7 @@ impl Game {
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
         self.bidx.get_mut().insert(id, self.bloons.len() as u32);
-        self.bloons.push(Bloon { barrage: Vec::new(), hex_last: -1, held: false, squeeze: None, psi: None, psi_destroy: None, psi_since: 0, psi_active: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false, spawner: false });
+        self.bloons.push(Bloon { barrage: Vec::new(), hex_last: -1, held: false, squeeze: None, haunt: None, psi: None, psi_destroy: None, psi_since: 0, psi_active: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false, spawner: false });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
         if self.defs[kind].rotate_to_follow_path {
@@ -18746,6 +18764,7 @@ impl Game {
         // (A carried bloon's degrade keeps the bird's hold: the first child is the same object.)
         let parent_held = (b.held_at, b.held_prev);
         let parent_squeeze = b.squeeze;
+        let parent_haunt = b.haunt.clone();
         let lineage: std::sync::Arc<[u64]> = {
             let l = b.lineage.as_deref().unwrap_or(&[]);
             let mut v = Vec::with_capacity(l.len() + 1);
@@ -18985,6 +19004,11 @@ impl Game {
         let pp = self.tracks[path as usize].pos(dist);
         self.pops.push(pp);
         let n_kids = if strip { 0 } else { self.child_kinds[kind].len() };
+        // CorvusManager.OnBloonDegrade (VERIFIED-DECOMP @0x180f9a050): a haunted bloon popped with no
+        // children leaves the list; the last one emits the Haunt's explosion where it was.
+        if n_kids == 0 {
+            self.haunt_destroyed(parent_id, pp0, parent_z, &parent_haunt);
+        }
         if n_kids == 0 {
             self.destroyed_tally += 1;
             self.bloon_destroyed(parent_id, pp0, parent_z);
@@ -19001,7 +19025,7 @@ impl Game {
         // SpawnChildren.CreatedChildren (VERIFIED-DISASM @0x1027440): the first child is the
         // parent itself (it moves on, at its new speed); child k sits k x min(26.7 / count, 8.6)
         // behind (not below 0) and, being new, waits for the next frame to move.
-        let pop_parent = PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, parent_squeeze, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow };
+        let pop_parent = PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, parent_squeeze, parent_haunt, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow };
         popped += self.spawn_children(pop_parent, out_children);
         self.pop_depth -= 1;
         if top {
@@ -19136,7 +19160,7 @@ impl Game {
     /// the hit has left (`damage`), or popped through without being made (`pop_virtual`).
     #[allow(unused_variables)]
     fn spawn_children(&mut self, p: PopParent, out_children: &mut Vec<u64>) -> u64 {
-        let PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, parent_squeeze, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow } = p;
+        let PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, parent_squeeze, parent_haunt, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow } = p;
         let mut popped = 0u64;
         let spacing = (26.7f32 / n_kids.max(1) as f32).min(8.6);
         for n in 0..n_kids {
@@ -19269,6 +19293,9 @@ impl Game {
                 self.pops.push(pp);
                 let vkids = self.child_kinds[c].len();
                 if vkids == 0 {
+                    // (A layer popped through in the same hit: recording corvus_l03_r20 rt 225, a
+                    // haunted Blue's Red.)
+                    self.haunt_destroyed(vid, vpos, vheight, &parent_haunt);
                     self.destroyed_tally += 1;
                     self.bloon_destroyed(vid, vpos, vheight);
                 }
@@ -19290,6 +19317,7 @@ impl Game {
                     parent_id: vid,
                     parent_held: vheld,
                     parent_squeeze,
+                    parent_haunt: parent_haunt.clone(),
                     lineage: vlineage,
                     parent_galv: if galv_moab { (0, 0) } else { parent_galv },
                     parent_galv_chain: if galv_moab { None } else { parent_galv_chain.clone() },
@@ -19459,6 +19487,10 @@ impl Game {
             // (recording pat_l10_r40 rt 401: a MOAB's four Ceramics); a later pop's go straight onto
             // the track (rt 631: a carried Ceramic's Green at its track spot).)
             child.squeeze = parent_squeeze.filter(|(st, _, _)| *st == self.sim_elapsed + 1);
+            // (The Haunt is on every layer: each child haunted too.)
+            if parent_haunt.is_some() {
+                child.haunt = parent_haunt.clone();
+            }
             // Made in the collision pass, before this frame's movement: new objects, they move
             // from the next frame (the first child is the parent object and moves on, unless that
             // was made this frame too: recording dart_400, a Lead's second Black's Pinks).
@@ -21294,6 +21326,20 @@ impl Game {
     /// retimes: timeToTake = |Target.Position - startPos| / altSpeed (3D: the bloon's Position z
     /// `z`), startFrame kept (recording alch_000_close rt 3014: a potion whose Red popped eases
     /// on 0.114 of the way a frame, not 0.124).
+    /// CorvusManager.OnBloonDegrade (VERIFIED-DECOMP @0x180f9a050) for a haunted bloon popped with no
+    /// children: when no other haunted bloon is left, Haunt.EmitProjectile (@0x180ff6030) where it was.
+    fn haunt_destroyed(&mut self, id: u64, at: [f32; 2], z: f32, haunt: &Option<(u64, std::sync::Arc<crate::data::HauntSpec>)>) {
+        let Some((owner, hs)) = haunt.clone() else { return };
+        if self.bloons.iter().any(|b| b.id != id && b.haunt.is_some()) {
+            return;
+        }
+        let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
+        let saved = self.emit_z;
+        self.emit_z = z;
+        self.emit(at, 0.0, &hs.emission, &hs.explosion, None, tiers, owner);
+        self.emit_z = saved;
+    }
+
     fn bloon_destroyed(&mut self, id: u64, at: [f32; 2], z: f32) {
         #[cfg(test)] let _destroy_timer=sim_profile::Timer::new(5);
         let (now, cursor) = (self.sim_elapsed, self.proj_cursor);
@@ -23326,7 +23372,8 @@ impl Game {
                     // .EmitCash); at the limit each try holds it to now + delayInFrames
                     // (IsEmissionLimitedByTime @0xc7ced0; recording engineer_004: no new Bloon
                     // Trap 167 frames after the full one goes).
-                    let at_limit = weapon.limit.is_some_and(|n| {
+                    let haunt_held = weapon.haunt_limit && self.bloons.iter().any(|b| b.haunt.is_some());
+                    let at_limit = haunt_held || weapon.limit.is_some_and(|n| {
                         let id = self.towers[t].id;
                         let out = self.projectiles.iter().filter(|pr| (pr.owner == id || pr.emitted_by == id) && (if weapon.limit_id.is_empty() { pr.spec.eat.is_some() } else { pr.spec.pid == weapon.limit_id }) && !(pr.spec.eat.is_some() && pr.spec.cash.is_some())).count();
                         let now = self.sim_elapsed as i64;
