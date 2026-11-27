@@ -2268,6 +2268,10 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// DelayBloonChildrenSpawningModel.lifespanFrames: the bloon hit (and its children) held where
+    /// the shot was that long (PatsBigSqueezeWind), then carried back to the track.
+    #[serde(default)]
+    pub squeeze_frames: Option<u64>,
     /// IgnoreCollisionAfterCollideModel: frames after a collision it hits nothing.
     #[serde(default)]
     pub ignore_after: f32,

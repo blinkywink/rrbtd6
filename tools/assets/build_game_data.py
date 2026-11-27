@@ -1169,6 +1169,12 @@ def main():
                                  "explosion": ({"projectile": projectile(deref(sf["explosionProjectileModel"]), depth + 1),
                                                 "emission": emission(deref(sf.get("explosionEmissionModel")))}
                                                if deref(sf.get("explosionProjectileModel")) and depth < 3 else None)}
+        # DelayBloonChildrenSpawningModel (Pat's Big Squeeze): Collide (VERIFIED-DECOMP @0x180cb75e0)
+        # gives the bloon's layers a WindMutator -> PatsBigSqueezeWind (startLocation the shot's
+        # position, framesToWait lifespanFrames).
+        if pb.get("DelayBloonChildrenSpawningModel"):
+            df = pb["DelayBloonChildrenSpawningModel"][0]["f"]
+            out["squeeze_frames"] = df.get("lifespanFrames") or int(df.get("lifespan", 0.0) * 60)
         # IgnoreCollisionAfterCollideModel: Collide (VERIFIED-DISASM @0x180cc0fd0) notes the frame,
         # FilterCollision (@0x180cc1000) lets a bloon through once (now - it) >= (int)(timeAfterCollide x 60)
         # (recording rosalia_l10_r40: a grenade hits at 835 and 838).

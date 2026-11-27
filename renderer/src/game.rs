@@ -396,6 +396,9 @@ pub struct Bloon {
     pub cseq: u64,
     /// In a Gyrfalcon's claws (MoveWithAirUnit, offTrackCount): not filed on the path's segments.
     pub held: bool,
+    /// PatsBigSqueezeWind (offTrackCount): (framesAtStart, framesToWait, startLocation): held at
+    /// startLocation till framesAtStart + framesToWait, then carried back (`squeeze_step`).
+    pub squeeze: Option<(u64, u64, [f32; 2])>,
     /// PsiBloonMutator (Psi): (the sim frame its hold ends, the tower). Held in place,
     /// invulnerable, popped through every layer when it ends.
     pub psi: Option<(u64, u64)>,
@@ -1102,6 +1105,7 @@ struct PopParent {
     parent_ign: (bool, Vec<u64>),
     parent_id: u64,
     parent_held: (u64, [f32; 2]),
+    parent_squeeze: Option<(u64, u64, [f32; 2])>,
     lineage: std::sync::Arc<[u64]>,
     parent_galv: (u8, u64),
     parent_galv_chain: Option<std::sync::Arc<crate::data::GalvChain>>,
@@ -1208,7 +1212,7 @@ impl Bloon {
     /// offTrackCount > 0: carried by wind, held, or in a Mermonkey trance (MermonkeyTrance
     /// .Initialise adds one, the walk back to its track spot takes it off).
     pub fn off_track(&self) -> bool {
-        self.wind.is_some() || self.held || self.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq))
+        self.wind.is_some() || self.held || self.squeeze.is_some() || self.effects.iter().any(|e| matches!(&e.kind, EffectKind::Trance(t) if t.in_seq))
     }
 
     /// Mutable.IsMutatedBy(string) (VERIFIED-DISASM @0xf55180): a mutator's id, or the parts
@@ -5632,6 +5636,21 @@ macro_rules! collide_pass {
                     continue;
                 }
             }
+            // DelayBloonChildrenSpawning.Collide: the WindMutator on every layer, so the children the
+            // hit pops out are held too (recording pat_l10_r40 rt 401: a squeezed MOAB's four Ceramics
+            // at Pat's spot).
+            if let Some(n) = $s.projectiles[$p].spec.squeeze_frames {
+                let at = $s.projectiles[$p].pos;
+                // (framesAtStart: PatsBigSqueezeWind.Initialise's frame, the next; carried from 629 after
+                // a squeeze at 400 with 228 frames.)
+                $s.bloons[i].squeeze = Some(($s.sim_elapsed + 1, n, at));
+            }
+            #[allow(unused_variables)]
+            let b = &$s.bloons[i];
+            #[allow(unused_variables)]
+            let d = &$s.defs[b.kind];
+            #[allow(unused_variables)]
+            let pr = &$s.projectiles[$p];
             // HYPOTHESIS P-EAT: a trap swallows every bloon it touches whole (no pops, no pop
             // cash) while it holds less than rbeCapacity RBE; then it closes and waits to be
             // collected for the eaten RBE x rbeCashMultiplier.
@@ -6700,6 +6719,7 @@ macro_rules! collide_pass {
             }
             pr.pierce -= pr.spec.pierce_cost;
             pr.last_collide = $s.steps as i64;
+
             // (CollideExtraPierceReduction with a bloonTag: more on such bloons.)
             pr.pierce -= tag_extra;
             // Projectile.CollideBloon (VERIFIED-DISASM @0xc8b970): Exhausted once pierce is
@@ -8194,7 +8214,7 @@ impl Game {
         let grow_ceiling = self.defs[kind].layer_number;
         let obj = self.fact_create();
         self.bidx.get_mut().insert(id, self.bloons.len() as u32);
-        self.bloons.push(Bloon { barrage: Vec::new(), hex_last: -1, held: false, psi: None, psi_destroy: None, psi_since: 0, psi_active: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false, spawner: false });
+        self.bloons.push(Bloon { barrage: Vec::new(), hex_last: -1, held: false, squeeze: None, psi: None, psi_destroy: None, psi_since: 0, psi_active: false, held_at: 0, held_prev: pos, galv: (0, 0), galv_chain: None, galv_zone: Vec::new(), galv_zone_skip: 0, galv_seq: 0, chill: (0, 0), wl: None, id, kind, dist, pos, hp: self.defs[kind].max_health, effects: Vec::new(), decamo: false, path, base: 0.0, grow_t, grow_ceiling, grow_colors: None, grow_fresh: true, fresh: false, prev: pos, prev_dist: dist, seg_dist: dist, mult: 1.0, cell_pos: pos, cell_kind: kind, cell_dist: dist, processed: false, coll_hold: None, cell_next: None, track_mult, order: id, lineage: None, layer: { self.next_layer += 1; self.next_layer }, rot: self.path_rot(path, dist).unwrap_or(0.0), born: self.sim_elapsed * 4 + self.phase as u64, height: 0.0, unplaced: false, first_move: false, wind: None, wind_new: false, wind_end: u64::MAX, wind_since: 0, wind_seg: None, wind_direct: false, wind_model: None, wind_seq: 0, grave_zone: (false, false), cseq: { self.create_seq += 1; self.create_seq }, obj, spawn_round: self.round as u32, lowest: self.defs[kind].layer_number, ign_checked: Vec::new(), ign_added: false, spawner: false });
         // (Bloon.SetPath calls SetRotation: the model's shared collision offsets take the new
         // bloon's rotation; recording quincy_l19_r80 rt 2893, a BFB's MOABs.)
         if self.defs[kind].rotate_to_follow_path {
@@ -18482,6 +18502,7 @@ impl Game {
         let parent_id = b.id;
         // (A carried bloon's degrade keeps the bird's hold: the first child is the same object.)
         let parent_held = (b.held_at, b.held_prev);
+        let parent_squeeze = b.squeeze;
         let lineage: std::sync::Arc<[u64]> = {
             let l = b.lineage.as_deref().unwrap_or(&[]);
             let mut v = Vec::with_capacity(l.len() + 1);
@@ -18737,7 +18758,7 @@ impl Game {
         // SpawnChildren.CreatedChildren (VERIFIED-DISASM @0x1027440): the first child is the
         // parent itself (it moves on, at its new speed); child k sits k x min(26.7 / count, 8.6)
         // behind (not below 0) and, being new, waits for the next frame to move.
-        let pop_parent = PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow };
+        let pop_parent = PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, parent_squeeze, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow };
         popped += self.spawn_children(pop_parent, out_children);
         self.pop_depth -= 1;
         if top {
@@ -18872,7 +18893,7 @@ impl Game {
     /// the hit has left (`damage`), or popped through without being made (`pop_virtual`).
     #[allow(unused_variables)]
     fn spawn_children(&mut self, p: PopParent, out_children: &mut Vec<u64>) -> u64 {
-        let PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow } = p;
+        let PopParent { kind, n_kids, start_dist, moved, mult, parent_tm, parent_fresh, parent_obj, path, parent_round, parent_lowest, parent_regrown, parent_ign, parent_id, parent_held, parent_squeeze, lineage, parent_galv, parent_galv_chain, parent_galv_zone, parent_chill, parent_grave, parent_wl, parent_seg, parent_at, pp0, parent_prev, parent_hold, parent_order, parent_born, parent_cseq, parent_wind, parent_wind_new, parent_wind_seg, parent_wind_direct, parent_wind_since, parent_wind_model, parent_wind_seq, parent_height, src_is_copy, parent_place, inherited, parent_tick, parent_unplaced, parent_z, dist, decamo, base, parent_colors, regrow, ceiling, parent_grow, parent_cell, parent_processed, parent_cell_kind, parent_cell_dist, parent_next, i, overflow } = p;
         let mut popped = 0u64;
         let spacing = (26.7f32 / n_kids.max(1) as f32).min(8.6);
         for n in 0..n_kids {
@@ -19025,6 +19046,7 @@ impl Game {
                     parent_ign: if first { parent_ign.clone() } else { (false, Vec::new()) },
                     parent_id: vid,
                     parent_held: vheld,
+                    parent_squeeze,
                     lineage: vlineage,
                     parent_galv: if galv_moab { (0, 0) } else { parent_galv },
                     parent_galv_chain: if galv_moab { None } else { parent_galv_chain.clone() },
@@ -19190,6 +19212,10 @@ impl Game {
             }
             let keep = self.child_effects(&inherited, n, c, src_is_copy, parent_tick);
             let child = self.bloons.last_mut().unwrap();
+            // (HYPOTHESIS P-SQUEEZECOPY: the children of the squeezing hit's pop are held as the bloon
+            // (recording pat_l10_r40 rt 401: a MOAB's four Ceramics); a later pop's go straight onto
+            // the track (rt 631: a carried Ceramic's Green at its track spot).)
+            child.squeeze = parent_squeeze.filter(|(st, _, _)| *st == self.sim_elapsed + 1);
             // Made in the collision pass, before this frame's movement: new objects, they move
             // from the next frame (the first child is the parent object and moves on, unless that
             // was made this frame too: recording dart_400, a Lead's second Black's Pinks).
@@ -22479,7 +22505,11 @@ impl Game {
                     }
                 }
                 if best.is_none() && mode != TargetMode::Point {
-                    let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].off_track()) && self.bloons[i].hp > 0).collect();
+                    // (HYPOTHESIS P-SQUEEZEHIDE: not a Big Squeeze's ones while held; recording pat_l10_r40,
+                    // Pat throws nothing at the four Ceramics at his feet from 401, then at the first
+                    // carried back, 629.)
+                    let now_f = self.sim_elapsed;
+                    let mut off: Vec<usize> = (0..self.bloons.len()).filter(|&i| (self.bloons[i].off_track()) && self.bloons[i].hp > 0 && self.bloons[i].squeeze.is_none_or(|(st, w, _)| now_f >= st + w)).collect();
                     // (Targetting.GetTargets (VERIFIED-DISASM @0x180fdbe70) walks the off-track ones
                     // through collisionChecker.BloonGrid's query from the tower: its order, as the
                     // instant-hit sort. Recordings druid_300 probe b rt 494 / probe rt 648: four
@@ -25977,6 +26007,35 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
             }
         }
         let b = &mut self.bloons[i];
+        // PatsBigSqueezeWind.Process (VERIFIED-DECOMP @0x181001b80): before framesAtStart +
+        // framesToWait it holds at startLocation (Initialise @0x1810019d0 put it there); then, its
+        // track spot (Path.DistanceToPointInfoBloon, z 20 / 120 / 180) within sqrt(110.25), the
+        // mutator goes; else 3.5 a frame straight at it in 3D.
+        if let Some((st, wait, at)) = b.squeeze {
+            b.fresh = false;
+            b.unplaced = false;
+            if self.sim_elapsed < st + wait {
+                b.pos = at;
+                return false;
+            }
+            let to = self.tracks[b.path as usize].bloon_pos(b.dist);
+            let d = &self.defs[b.kind];
+            let tz = if d.tags.iter().any(|t| t == "Boss") { 180.0 } else if d.is_moab { 120.0 } else { 20.0 };
+            let z = if b.height > 0.0 { b.height } else { tz };
+            let (dx, dy, dz) = (to[0] - b.pos[0], to[1] - b.pos[1], tz - z);
+            if dx * dx + dy * dy + dz * dz <= 110.25 {
+                b.squeeze = None;
+                b.wind_end = self.sim_elapsed;
+            } else {
+                let l = (dx * dx + dy * dy + dz * dz).sqrt();
+                let (nx, ny, nz) = (dx / l, dy / l, dz / l);
+                b.pos = [b.pos[0] + nx * 3.5, b.pos[1] + ny * 3.5];
+                if b.height > 0.0 {
+                    b.height = z + nz * 3.5;
+                }
+            }
+            return false;
+        }
         // MoveWithWind.Process (VERIFIED-DISASM @0xffeeb0) with Bloon.Process skipping the track
         // move while offTrackCount > 0: within 3 x speedFrames of its track spot the wind ends,
         // else it moves straight at it by speedFrames x speedMultiplier.
