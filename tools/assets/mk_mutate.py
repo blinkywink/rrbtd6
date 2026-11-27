@@ -535,6 +535,83 @@ def m_cold_front(tw, mm, target):
         add_child(tw.m, p, cid)
 
 
+def m_tiny_tornadoes(tw, mm, target):
+    # TinyTornadoesModModel.Mutate (VERIFIED-DECOMP @0x1812b22a0): a Druid (baseId) with top path 3+:
+    # the projectile of every attack whose name contains "Tornado" gets CreateProjectileOnExpireModel and
+    # CreateProjectileOnExhaustFractionModel (fraction 1, durationfraction -1, passOnCollidedWith),
+    # both "TinyTornadoes", each with a clone of the mod's projectile (middle path 2+: the
+    # "HeartOfOak" copy with a RemoveBloonModifiersModel cleansing regrow) and of its emission, then
+    # a clone of emissionBehaviorModel (EmissionRotationOffProjectileDirectionModel -120 / 120) on
+    # the projectile; here it goes into each emission's behaviours, where the exporter reads it.
+    root = tw.m.objs[tw.root]["f"]
+    if root.get("baseId") != "Druid":
+        return
+    tv = root.get("tiers")
+    tiers = tw.m.values.get(tv["$ref"]) if isinstance(tv, dict) and "$ref" in tv else tv
+    if isinstance(tiers, dict):
+        tiers = tiers.get("items", [])
+    tiers = tiers if isinstance(tiers, list) else []
+    if len(tiers) < 2 or tiers[0] < 3:
+        return
+    pid, eid, bid = tw.m.ref(mm.get("projectileModel")), tw.m.ref(mm.get("emissionModel")), tw.m.ref(mm.get("emissionBehaviorModel"))
+    if pid is None or eid is None:
+        return
+    if tiers[1] >= 2:
+        pid = clone_model(tw.m, pid)
+        po = tw.m.objs[pid]
+        po["f"]["_name"] = name_of(po) + "HeartOfOak"
+        rid = tw.m.new_id()
+        lid, lid2 = tw.m.new_id(), tw.m.new_id()
+        tw.m.values[lid], tw.m.values[lid2] = [], []
+        tw.m.objs[rid] = {"i": rid, "type": "RemoveBloonModifiersModel", "f": {
+            "_name": "RemoveBloonModifiers", "collisionPass": -1, "cleanseRegen": True, "cleanseCamo": False,
+            "cleanseLead": False, "cleanseFortified": False, "cleanseOnlyIfDamaged": False,
+            "bloonTagExcludeList": {"$ref": lid}, "bloonTagExplicitList": {"$ref": lid2}}}
+        append_ids(tw.m, po, "behaviors", rid)
+        add_child(tw.m, po, rid)
+
+    def emis():
+        c = clone_model(tw.m, eid)
+        if bid is not None:
+            append_ids(tw.m, tw.m.objs[c], "behaviors", clone_model(tw.m, bid))
+        return c
+    # (The check is on the AttackModel's name, AttackModel_TornadoAttack_; GetDescendant<ProjectileModel>:
+    # its first weapon's projectile.)
+    for at in tw.descendants({"AttackModel"}):
+        if "Tornado" not in name_of(at):
+            continue
+        ws = [x for x in tw.m.items(at["f"].get("weapons")) if x in tw.m.objs]
+        p = tw.m.ref(tw.m.objs[ws[0]]["f"].get("projectile")) if ws else None
+        if p is None:
+            continue
+        po = tw.m.objs[p]
+        for typ, extra in (("CreateProjectileOnExpireModel", {"useRotation": False, "useTargetPosition": False}),
+                           ("CreateProjectileOnExhaustFractionModel", {"fraction": 1.0, "durationfraction": -1.0,
+                                                                        "canCreateInBetweenRounds": False,
+                                                                        "collideOnSubProjectile": False,
+                                                                        "passOnCollidedWith": True})):
+            nid = tw.m.new_id()
+            tw.m.objs[nid] = {"i": nid, "type": typ, "f": {"_name": "TinyTornadoes", "projectile": {"$ref": clone_model(tw.m, pid)},
+                                                           "emission": {"$ref": emis()}, **extra}}
+            append_ids(tw.m, po, "behaviors", nid)
+            add_child(tw.m, po, nid)
+
+
+def append_ids(m, holder, field, nid):
+    """nid at the end of holder's container field (made if missing)."""
+    v = holder["f"].get(field)
+    c = m.values.get(v["$ref"]) if isinstance(v, dict) and "$ref" in v else None
+    if isinstance(c, dict) and "items" in c:
+        c["items"].append(nid)
+        c["len"] = len(c["items"])
+    elif isinstance(c, list):
+        c.append(nid)
+    else:
+        cid = m.new_id()
+        m.values[cid] = {"_container": "array", "len": 1, "items": [nid]}
+        holder["f"][field] = {"$ref": cid}
+
+
 def m_dmg_tag(tw, mm, target):
     # DamageModifierForTagModModel: each named ProjectileModel; its first DamageModifierForTagModel
     # with tag bloonTag gets damageMultiplier + multiplierAdditive and damageAddative + addative;
@@ -935,6 +1012,7 @@ MUTATORS = {
     "AlternateArcModModel": m_alternate_arc,
     "PaintStripperModModel": m_paint_stripper,
     "ColdFrontModModel": m_cold_front,
+    "TinyTornadoesModModel": m_tiny_tornadoes,
     "CreateEffectOnAbilityModModel": m_effect_on_ability,
     "WingmonkeyModModel": m_wingmonkey,
     "BankDepositsModModel": m_bank_deposits,
