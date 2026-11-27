@@ -4393,8 +4393,6 @@ pub struct Game {
     come_on_everybody: Option<(f32, f32)>,
     /// HeroXPBonusModModel's percentMultiplier.
     hero_xp_bonus: Option<f32>,
-    /// ParagonOfPowerModModel's rateMultiplier.
-    paragon_power: Option<f32>,
     /// TowerInventory.towerDiscounts from Monkey Knowledge's SimTowerDiscountModModels: (base ids,
     /// useAllHeroes, multiplier, subtraction, charges left).
     sim_discounts: Vec<(Vec<String>, bool, f32, f32, i32)>,
@@ -7420,8 +7418,6 @@ impl Game {
                 .filter_map(|x| Some((x["baseTowerID"].as_str()?.to_string(), x["mutuallyExclusiveWith"].as_str()?.to_string()))).collect(),
             hero_xp_bonus: d.mk_sim.iter().find(|x| x["type"] == "HeroXPBonusModModel")
                 .and_then(|x| x["percentMultiplier"].as_f64()).map(|m| m as f32),
-            paragon_power: d.mk_sim.iter().find(|x| x["type"] == "ParagonOfPowerModModel")
-                .and_then(|x| x["rateMultiplier"].as_f64()).map(|m| m as f32),
             come_on_everybody: d.mk_sim.iter().find(|x| x["type"] == "ComeOnEverybodyModModel")
                 .map(|x| (x["rateMultiplier"].as_f64().unwrap_or(1.0) as f32, x["discountMultiplier"].as_f64().unwrap_or(0.0) as f32)),
             mutator_data: (d.bloon_mutator_data.clone()).into(),
@@ -18387,17 +18383,10 @@ impl Game {
                         b.rate_mult *= rm;
                     }
                 }
-                // ParagonOfPower.CheckBuffs (Monkey Knowledge, VERIFIED-DECOMP @0x180e73ed0): a
-                // Paragon's rate mutator (AddParagonMutatorIncludeSubTowers: its sub-towers too) while
-                // no tower of its base id is at tier 5 (TowerModel.tier).
-                if let Some(rm) = self.paragon_power {
-                    let p = self.towers[t].sub.as_ref().and_then(|s| self.towers.iter().position(|o| o.id == s.parent)).unwrap_or(t);
-                    let def = self.towers[p].def;
-                    if self.towers[p].paragon.is_some()
-                        && !self.towers.iter().any(|o| o.def == def && o.sub.is_none() && o.paragon.is_none() && o.tiers.iter().max() == Some(&5)) {
-                        b.rate_mult *= rm;
-                    }
-                }
+                // ParagonOfPower (Monkey Knowledge; CheckBuffs @0x180e73ed0 puts a rate mutator on
+                // Paragons while no tower of their base id is tier 5): no rate change shows in
+                // recordings bomb / ninja_paragon_mk (exact without it, also after a tier-5 Bomb is
+                // placed at 1500), so it isn't applied here. HYPOTHESIS P-POPOFF.
                 // Dart Time's TowerTimeSlowMutator: the rate x 1 / towerAttackSpeed.
                 b.rate_mult *= self.dart_time_rate();
                 // OverrideCamoDetection (VERIFIED-DISASM @0xd4fbd0): a camo-detection mutator on the
@@ -26239,6 +26228,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             st.danger = danger;
                             let r = st.rate(weapon);
                             st.rate_frames = rate_frames(r);
+                            if env_flag!("DBGRATE") { eprintln!("DBGRATE rt {} base {} dist_k {} r {} frames {}", self.round_clock, weapon.rate, dist_k, r, rate_frames(r)); }
                             st.missed += missed_rate(r);
                             while st.missed > 1.0 {
                                 st.missed -= 1.0;
