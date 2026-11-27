@@ -76,6 +76,15 @@ public class MergeSpec
     public int slot { get; set; }
 }
 
+/// A Power used at a frame (UnityToSimulation.ActivatePower at the point, game coordinates).
+public class PowerSpec
+{
+    public string id { get; set; } = "";
+    public int frame { get; set; } = 0;
+    public float x { get; set; } = 0;
+    public float y { get; set; } = 0;
+}
+
 public class Scenario
 {
     public string name { get; set; } = "scenario";
@@ -86,6 +95,8 @@ public class Scenario
     public int frames { get; set; } = 1800;
     public double cash { get; set; } = -1;
     public List<TowerSpec> towers { get; set; } = new();
+    /// Powers used after their frame (as `ability`): "# power frame id x y".
+    public List<PowerSpec> powers { get; set; } = new();
     public bool quit { get; set; } = true;
     public bool fast { get; set; } = true;
     /// Monkey Knowledge: write every field where the game's modded tower models (Simulation.model,
@@ -507,6 +518,7 @@ public class Recorder : MelonMod
                     if (!string.IsNullOrEmpty(Sc.towers[k].target)) Out.WriteLine($"# target {k} {Sc.towers[k].target}");
                 if (Sc.ability >= 0) Out.WriteLine($"# ability {Sc.ability}");
                 if (!string.IsNullOrEmpty(Sc.ability_only)) Out.WriteLine($"# ability_only {Sc.ability_only}");
+                foreach (var pw in Sc.powers) Out.WriteLine($"# power {pw.frame} {pw.id} {Recorder.F(pw.x)} {Recorder.F(pw.y)}");
                 if (Sc.ability_auto) Out.WriteLine("# ability_auto");
                 for (int k = 0; k < Sc.towers.Count; k++)
                 {
@@ -1547,6 +1559,19 @@ static class SimulatePatch
         var w = Recorder.Out;
         if (w == null || Recorder.Recorded >= Recorder.Sc.frames) return;
         Recorder.Recorded++;
+        // Powers too: after their frame, through the bridge.
+        foreach (var pw in Recorder.Sc.powers)
+        {
+            if (pw.frame != Recorder.Recorded) continue;
+            var spec = pw;
+            Part("power", () =>
+            {
+                var bridge = InGame.instance.bridge;
+                var model = Il2CppAssets.Scripts.Unity.Game.instance.model.GetPowerWithId(spec.id);
+                bridge.ActivatePower(bridge.GetInputId(), new UnityEngine.Vector2(spec.x, spec.y), model);
+                MelonLogger.Msg($"SimRecorder power {spec.id} at {spec.x},{spec.y} frame {Recorder.Recorded}");
+            });
+        }
         // Abilities go off between frames, after the scenario's frame (the clone does the same).
         if (Recorder.Recorded == Recorder.Sc.ability)
             Part("ability", () =>

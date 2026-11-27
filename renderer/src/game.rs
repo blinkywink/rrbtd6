@@ -4391,6 +4391,9 @@ pub struct Game {
     type_bonus: Shared<HashMap<String, crate::data::TypeBonus>>,
     /// Monkey Knowledge's ComeOnEverybody (rateMultiplier, discountMultiplier).
     come_on_everybody: Option<(f32, f32)>,
+    /// Powers used between frames, applied at the start of the next step (UnityToSimulation
+    /// .ActivatePower queues them for the simulation; HYPOTHESIS P-POWERQUEUE).
+    pub queued_powers: Vec<(String, serde_json::Value, [f32; 2])>,
     /// HeroXpInjectionModModel: (levels, amount).
     mk_hero_injection: Option<(u8, f32)>,
     /// Whether a hero has had it (once a game).
@@ -7420,6 +7423,7 @@ impl Game {
                 x["subtraction"].as_f64().unwrap_or(0.0) as f32, x["charges"].as_i64().unwrap_or(0) as i32)).collect(),
             free_exclusive: d.mk_sim.iter().filter(|x| x["type"] == "FreeTowerModModel")
                 .filter_map(|x| Some((x["baseTowerID"].as_str()?.to_string(), x["mutuallyExclusiveWith"].as_str()?.to_string()))).collect(),
+            queued_powers: Vec::new(),
             mk_hero_injection: d.mk_sim.iter().find(|x| x["type"] == "HeroXpInjectionModModel")
                 .map(|x| (x["levels"].as_i64().unwrap_or(0) as u8, x["amount"].as_f64().unwrap_or(0.0) as f32)),
             hero_injected: false,
@@ -31130,6 +31134,10 @@ impl Game {
         self.sim_elapsed += 1;
         self.lives_at_step = self.lives;
         self.in_step = true;
+        // (Powers queued since the last step: they act now, inside it; recordings pending/powers.)
+        for (id, b, at) in std::mem::take(&mut self.queued_powers) {
+            self.use_power(&id, &b, at);
+        }
         self.step_first_id = self.next_id;
         self.moved_early.clear();
         self.phase = 0;
@@ -33261,6 +33269,8 @@ mod tests {
         let mut points: Vec<(usize, [f32; 2])> = Vec::new();
         let mut ability_at: Option<usize> = None;
         let mut ability_only: Option<String> = None;
+        // SimRecorder's `# power frame id x y`: a Power used after that frame.
+        let mut powers_at: Vec<(usize, String, f32, f32)> = Vec::new();
         // SimRecorder's `# ability_auto`: after every frame, Activate(false) on each ready ability.
         let mut ability_auto = false;
         // `# seed`: GameModel.randomSeed (freeplay rounds, the end screens' callout pick).
@@ -33331,6 +33341,7 @@ mod tests {
                 Some("#") if f.get(1) == Some(&"point") => points.push((f[2].parse::<usize>().unwrap(), [f[3].parse::<f32>().unwrap(), -f[4].parse::<f32>().unwrap()])),
                 Some("#") if f.get(1) == Some(&"ability") => ability_at = f[2].parse().ok(),
                 Some("#") if f.get(1) == Some(&"ability_only") => ability_only = f.get(2).map(|x| x.to_string()),
+                Some("#") if f.get(1) == Some(&"power") => powers_at.push((f[2].parse().unwrap(), f[3].to_string(), f[4].parse().unwrap(), f[5].parse().unwrap())),
                 Some("#") if f.get(1) == Some(&"ability_auto") => ability_auto = true,
                 Some("#") if f.get(1) == Some(&"seed") => seed = f[2].parse().ok(),
                 // `# xpscale <scales> map <mapDifficulty> ...`: the map's XP tier.
@@ -33643,6 +33654,17 @@ mod tests {
                         }
                         if env_flag!("DBGE") { eprintln!("DBGAB rt {} {}", g.round_clock, name); }
                     }
+                }
+            }
+            // Powers: UnityToSimulation.ActivatePower queues the Power for the simulation's next
+            // step, so it shows a frame after `frame` (recordings pending/powers: the road spikes and
+            // the storm at rt 121 in the game). Game y flipped.
+            for (pf, id, x, y) in &powers_at {
+                if *pf == fi + 1 {
+                    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../local_extracted/game/powers.json");
+                    let all: serde_json::Value = serde_json::from_slice(&std::fs::read(&root).expect("powers.json")).expect("powers.json");
+                    let b = all[id.as_str()]["behaviors"].clone();
+                    g.queued_powers.push((id.clone(), b, [*x, -*y]));
                 }
             }
             // SimRecorder activates after its `ability`-th frame and before writing that frame's

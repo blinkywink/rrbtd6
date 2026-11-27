@@ -36,6 +36,29 @@ impl Game {
     /// Activates Power `id` (its game/powers.json behaviours) at `at` (game frame); false when it
     /// can't be used. Not modelled: CreateEffectOnPower (the full-screen effects) and
     /// CreateSoundOnPower.
+    /// Whether `use_power` would take Power `id` at `at` (its checks, nothing done).
+    pub fn power_ok(&self, id: &str, behaviors: &serde_json::Value, at: [f32; 2]) -> bool {
+        if let Some(&def) = self.power_tower_defs.get(id) {
+            return self.can_place(def, at);
+        }
+        if !Self::power_supported(behaviors) {
+            return false;
+        }
+        let track = behaviors.as_array().into_iter().flatten()
+            .any(|b| matches!(b["type"].as_str(), Some("RoadSpikesModel" | "GlueTrapModel" | "MoabMineModel" | "CamoTrapModel")));
+        !track || self.track_within(at, 5.0)
+    }
+
+    /// UnityToSimulation.ActivatePower: the Power waits for the next step and acts at its start
+    /// (recordings pending/powers, all nine exact that way); false when it can't be used.
+    pub fn queue_power(&mut self, id: &str, behaviors: &serde_json::Value, at: [f32; 2]) -> bool {
+        if !self.power_ok(id, behaviors, at) {
+            return false;
+        }
+        self.queued_powers.push((id.to_string(), behaviors.clone(), at));
+        true
+    }
+
     pub fn use_power(&mut self, id: &str, behaviors: &serde_json::Value, at: [f32; 2]) -> bool {
         // A tower Power (PowerManager.GetPowerTowerFromId @0x180f383a0): its TowerModel placed free
         // where a tower of it may go. HYPOTHESIS P-POWERTOWERPLACE: Power.CheckLocation is the tower's

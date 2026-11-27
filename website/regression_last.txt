@@ -40,6 +40,7 @@
 == obyn: 3/3 match
 == paragon: 12/12 match
 == pat: 3/3 match
+== powers: 9/9 match
 == psi: 3/3 match
 == quincy: 14/14 match
 == rosalia: 3/3 match

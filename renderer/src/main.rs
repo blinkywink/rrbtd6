@@ -2236,7 +2236,7 @@ const VINE_END_FRAMES: i32 = 23;
                 // Sent; the profile pays once the match has used it (replica.powers_used).
                 front.coop_input(rrbtd6_coop::Action::Power { id: id.clone(), at: mouse_world });
                 power_pick = None;
-            } else if behaviors.is_some_and(|b| game.use_power(&id, &b, mouse_world)) {
+            } else if behaviors.is_some_and(|b| game.queue_power(&id, &b, mouse_world)) {
                 if !game.sandbox {
                     let _ = local_profile::update(&root, |p| {
                         if let Some(n) = p.powers.get_mut(&id) {
