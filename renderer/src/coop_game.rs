@@ -218,6 +218,8 @@ impl Replica{
                     TowerChange::DefaultPoint=>{g.towers[t].point=None;true},
                     TowerChange::Stance=>g.toggle_stance(t),
                     TowerChange::CollectBank=>{g.collect_bank(t);true},
+                    // (BankDeposits.OnTsmThemeAction: from the tower owner's cash, the actor's here.)
+                    TowerChange::BankDeposit=>{let v=g.bank_deposit_amount(t);if v<=0.0{return false;}g.bank_deposit(t);true},
                 }
             },
             // Map.SellRemoveable takes the cash of the player who bought it; anyone may.

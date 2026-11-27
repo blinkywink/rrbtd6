@@ -41,6 +41,8 @@ pub enum TowerChange{
     /// The second target mode (TARGETS code, as in Target).
     LeftTarget(u8),
     DefaultPoint,Stance,CollectBank,
+    /// Bank Deposits (Monkey Knowledge): the owner's cash into the bank.
+    BankDeposit,
 }
 impl Action{
     pub fn valid(&self)->bool{
