@@ -340,12 +340,40 @@ def m_retarget(tw, mm, target):
 
 
 def m_track_target(tw, mm, target):
-    # ProjectileTrackTargetModModel: TrackTargetModels, turnRate x multiplierTurnRate + turnRate.
-    # HYPOTHESIS P-MKTRACK (which ones the target names).
+    # ProjectileTrackTargetModModel.Mutate (VERIFIED-DECOMP @0x1812acdc0): the ProjectileModels whose
+    # name HasTargetName, then every TrackTargetModel among each one's GetDescendants: turnRate x
+    # multiplierTurnRate + turnRate (oracle: the Ace Paragon's RedTippedDart / Spectre darts 160 ->
+    # 192 under AcceleratedAerodarts, though their TrackTargetModels aren't named after it).
     k = f32(mm.get("multiplierTurnRate", 0.0))
-    for o in desc(tw, "TrackTargetModel", target):
-        v = fl(o, "turnRate")
-        o["f"]["turnRate"] = f32(f32(v * k) + v)
+    done = set()
+    for p in desc(tw, "ProjectileModel", target):
+        for o in subtree(tw.m, p["i"], {"TrackTargetModel"}):
+            if o["i"] in done:
+                continue
+            done.add(o["i"])
+            v = fl(o, "turnRate")
+            o["f"]["turnRate"] = f32(f32(v * k) + v)
+
+
+def subtree(m, oid, types):
+    """Model.GetDescendants from `oid` (itself included) through childDependants, not into
+    TowerModels below it."""
+    out, seen = [], set()
+
+    def rec(i):
+        if i in seen or i not in m.objs:
+            return
+        seen.add(i)
+        o = m.objs[i]
+        if o["type"] in types:
+            out.append(o)
+        if o["type"] == "TowerModel" and i != oid:
+            return
+        for e in m.items(o["f"].get("childDependants")):
+            if isinstance(e, int):
+                rec(e)
+    rec(oid)
+    return out
 
 
 def m_ignore_blockers(tw, mm, target):
