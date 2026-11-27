@@ -5914,9 +5914,14 @@ macro_rules! collide_pass {
             if pr.spec.damage > 0.0 {
                 dmg += b.bonus_damage();
             }
-            for m in &pr.spec.tag_mods {
-                if tag_match(&d.tags, m) {
-                    dmg = dmg * m.mult + m.add;
+            // (The DamageModifiers are summed in Damage.Collide (VERIFIED-DECOMP @0x180cb6b50): a shot
+            // without a DamageModel has none, so knowledge's +1 Ceramic on Brickell's SeaMineSet does
+            // nothing; recording brickell_l10_mk rt 643.)
+            if pr.spec.damage_model {
+                for m in &pr.spec.tag_mods {
+                    if tag_match(&d.tags, m) {
+                        dmg = dmg * m.mult + m.add;
+                    }
                 }
             }
             // DamageModifierForCashAmount: per stackId the last whose cashThreshold is met, after the
@@ -5967,6 +5972,7 @@ macro_rules! collide_pass {
             if ring_out || nt_block {
                 dmg = 0.0;
             }
+            if env_flag!("DBGDMG") { eprintln!("DBGDMG rt {} pid {} bloon {} {} hp {} dmg {}", $s.round_clock, $s.projectiles[$p].spec.pid, $s.bloons[i].id, $s.names[$s.bloons[i].kind], $s.bloons[i].hp, dmg); }
             // CollideReducePierceForBloonState.Collide (collisionPass -1, before every pass-0
             // behaviour and the immune bounce): one synced draw per hit (recording sky_300 rt 28:
             // bolt 434 draws on Lead 427, then is destroyed by it).
