@@ -3837,6 +3837,9 @@ pub struct Bank {
     pub capacity: f32,
     pub interest: f32,
     pub auto: bool,
+    /// BankDepositsModel.depositPercent (Monkey Knowledge), if the bank takes deposits.
+    #[serde(default)]
+    pub deposit: Option<f32>,
 }
 
 #[derive(Deserialize, Clone)]

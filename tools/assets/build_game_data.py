@@ -2869,6 +2869,11 @@ def main():
                              if b and b["type"] == "VigilanteTowerBehaviorModel"), None)
         bank = next(({"capacity": b["f"]["capacity"], "interest": b["f"]["interest"], "auto": b["f"].get("autoCollect", False)}
                      for b in items(f["behaviors"]) if b and b["type"] == "BankModel"), None)
+        # BankDepositsModel (Monkey Knowledge's BankDeposits): depositPercent, on the bank.
+        if bank is not None:
+            dep = next((b["f"].get("depositPercent", 0.0) for b in items(f["behaviors"]) if b and b["type"] == "BankDepositsModel"), None)
+            if dep is not None:
+                bank["deposit"] = dep
         # Buffs this tower gives others in range (Village, Shinobi Tactics).
         support_kinds = {"RangeSupportModel": "range", "RateSupportModel": "rate", "PierceSupportModel": "pierce",
                          "ProjectileSpeedSupportModel": "speed", "VisibilitySupportModel": "camo",

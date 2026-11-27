@@ -1,6 +1,6 @@
 {
   "_how": "python website/count_progress.py (recording counts + website/regression_last.txt), then python website/build_progress.py. Sections: recorded scenarios that match the real game frame by frame / all recorded. Areas: rough estimates out of 10.",
-  "updated": "2026-11-26",
+  "updated": "2026-11-27",
   "areas": [
     [
       "Bloons & MOABs",
@@ -301,6 +301,16 @@
           "All knowledge on",
           25,
           25
+        ],
+        [
+          "Upgraded towers",
+          78,
+          78
+        ],
+        [
+          "Heroes",
+          0,
+          1
         ]
       ]
     ],

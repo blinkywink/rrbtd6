@@ -4707,6 +4707,12 @@ const VINE_END_FRAMES: i32 = 23;
                             if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::DefaultPoint});}else{game.towers[t].point = None;}
                         }
                     }
+                    hud::Action::BankDeposit => {
+                        // (Single player only: co-op has no deposit action yet.)
+                        if let (None, Some(t)) = (coop_runtime.as_ref(), selected) {
+                            game.bank_deposit(t);
+                        }
+                    }
                     hud::Action::BankCollect(all) => {
                         if coop_runtime.is_some() {
                             if all {front.coop_input(rrbtd6_coop::Action::CollectBanks);}

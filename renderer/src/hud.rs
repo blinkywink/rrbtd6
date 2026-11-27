@@ -93,6 +93,8 @@ pub enum Action {
     LeftTarget(TargetMode),
     /// TSMThemeBananaFarm: collect this bank (false) or every bank (true).
     BankCollect(bool),
+    /// Bank Deposits (Monkey Knowledge): cash into the selected bank.
+    BankDeposit,
 }
 
 /// A press on the shop list: becomes a scroll drag once it moves past the drag threshold,
@@ -1126,11 +1128,20 @@ impl Hud {
             }
             // Banana Farm: a bank's Collect (its balance) and Collect All (every bank's), and the
             // IMF Loan's debt.
-            if theme_id == "BananaFarm" {
+            // (Monkey Knowledge's BankDeposits: the BananaFarmDeposit theme adds Deposit, its cost
+            // BankDeposits.GetDepositAmount.)
+            if theme_id == "BananaFarm" || theme_id == "BananaFarmDeposit" {
                 let g = format!("{th}/BankButtonGroup");
                 let bank = game.tier(t).is_some_and(|tr| tr.bank.is_some());
                 self.tsm.set_active(&g, bank);
-                self.tsm.set_active(&format!("{g}/BankDeposit"), false);
+                let deposit = bank && game.tier(t).is_some_and(|tr| tr.bank.as_ref().is_some_and(|b| b.deposit.is_some()));
+                self.tsm.set_active(&format!("{g}/BankDeposit"), deposit);
+                if deposit {
+                    self.tsm.set_text(&format!("{g}/BankDeposit/Cost/Text"), &money(game.bank_deposit_amount(t) as f64));
+                    if self.tsm.clicked(&format!("{g}/BankDeposit/BankDepositBtn")) {
+                        out.push(Action::BankDeposit);
+                    }
+                }
                 if bank {
                     let all: f64 = game.towers.iter().map(|o| o.bank as f64).sum();
                     self.tsm.set_text(&format!("{g}/BankCollect/Cost/Text"), &money((tw.bank as f64).floor()));

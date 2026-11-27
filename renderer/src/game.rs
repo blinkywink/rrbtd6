@@ -1578,6 +1578,22 @@ fn offset_origin(tp: [f32; 2], ox: f32, oy: f32, oz: f32) -> [f32; 2] {
 
 /// Vector2.Rotate((0, 1), deg) in the clone's frame (the game's y flipped): a projectile's
 /// direction for a rotation in the game's degrees.
+/// Math.FindIntersectionLineLine (VERIFIED-DECOMP @0x180f1f240): where segments a1-a2 and b1-b2
+/// cross, none when parallel (|denominator| below the smallest float).
+fn line_line(a1: [f32; 2], a2: [f32; 2], b1: [f32; 2], b2: [f32; 2]) -> Option<[f32; 2]> {
+    let (dx, dy) = (a2[0] - a1[0], a2[1] - a1[1]);
+    let den = (b2[1] - b1[1]) * dx - (b2[0] - b1[0]) * dy;
+    if den > -f32::from_bits(1) && den < f32::from_bits(1) {
+        return None;
+    }
+    let u = (1.0 / den) * ((b1[0] - a1[0]) * dy - dx * (b1[1] - a1[1]));
+    let t = (1.0 / den) * ((b1[0] - a1[0]) * (b2[1] - b1[1]) - (b2[0] - b1[0]) * (b1[1] - a1[1]));
+    if t < 0.0 || t > 1.0 || u < 0.0 || u > 1.0 {
+        return None;
+    }
+    Some([t * dx + a1[0], t * dy + a1[1]])
+}
+
 fn game_dir(deg: f32) -> [f32; 2] {
     let a = DEG2RAD * -deg;
     // (UCRT sinf / cosf, as Vector2.Rotate: recordings bomb_032 / 502, a blast's frags.)
@@ -2148,6 +2164,8 @@ pub struct Tower {
     /// Bank.calculateInterestFrom (+0x88, f32): what PayInterest takes interest on (the balance at
     /// the last round end plus what SendToBank put in since).
     pub bank_from: f32,
+    /// Bank.depositedCash: what Bank Deposits put in since the last collect.
+    pub bank_deposited: f32,
     /// Tower.appliedCash: the pop cash its hits earned this frame, in f32 (Tower.AddPoppedCash),
     /// paid out by Simulation.UpdateStagedCash at the frame's end (`pay_staged_cash`).
     pub staged_cash: f32,
@@ -4373,6 +4391,10 @@ pub struct Game {
     type_bonus: Shared<HashMap<String, crate::data::TypeBonus>>,
     /// Monkey Knowledge's ComeOnEverybody (rateMultiplier, discountMultiplier).
     come_on_everybody: Option<(f32, f32)>,
+    /// HeroXPBonusModModel's percentMultiplier.
+    hero_xp_bonus: Option<f32>,
+    /// ParagonOfPowerModModel's rateMultiplier.
+    paragon_power: Option<f32>,
     /// TowerInventory.towerDiscounts from Monkey Knowledge's SimTowerDiscountModModels: (base ids,
     /// useAllHeroes, multiplier, subtraction, charges left).
     sim_discounts: Vec<(Vec<String>, bool, f32, f32, i32)>,
@@ -4380,6 +4402,9 @@ pub struct Game {
     free_exclusive: Vec<(String, String)>,
     /// Monkey Knowledge's PreGamePrep (distFromEdgeOfMap, its projectile).
     pre_game_prep: Option<(f32, std::sync::Arc<crate::data::Proj>)>,
+    /// CrossTheStreamsSimBehavior: (projectile, rateFrames, positionRandomness, endPointOffset,
+    /// timeOfLastExplosion).
+    cross_streams: Option<(std::sync::Arc<crate::data::Proj>, i64, f32, f32, i64)>,
     ggrid: GameGrid,
     /// The furthest any bloon moves in a frame (the broad phase looks at frame-start positions).
     max_bloon_step: f32,
@@ -7098,6 +7123,12 @@ macro_rules! collide_pass {
                 // (lifespanFramesIfMisses more from then: recording alch_003, a pool made at 10 is
                 // gone at 430.)
                 pr.frames_left = ap.lifespan * FPS;
+                // (AcidPool.Process also restarts the projectile's age there, so its AgeModel ends
+                // it at its own lifespan from the pooling: recording alchemist_202_mk, knowledge's
+                // 11.95 s pool gone 420 frames after it formed.)
+                if let Some(age) = pr.spec.age_lifespan.map(|l| (l * FPS).round()).filter(|f| f.is_finite()) {
+                    pr.frames_left = pr.frames_left.min(age);
+                }
                 std::sync::Arc::make_mut(&mut pr.spec).radius = ap.radius;
                 pr.pierce = ap.pierce;
             }
@@ -7362,6 +7393,13 @@ impl Game {
             has_grid_rank: !d.grid_offsets.is_empty(),
             grid_offsets: (d.grid_offsets.clone()).into(),
             type_bonus: (d.effect_type_bonus.clone()).into(),
+            cross_streams: d.mk_sim.iter().find(|x| x["type"] == "CrossTheStreamsModModel").and_then(|x| {
+                let proj: crate::data::Proj = serde_json::from_value(x["projectile"].clone()).ok()?;
+                let f = |k: &str| x[k].as_f64().unwrap_or(0.0) as f32;
+                // (CrossTheStreamsSimBehavior.Initialise: timeOfLastExplosion = -rateFrames.)
+                let rate = (f("rate") * 60.0).round() as i64;
+                Some((std::sync::Arc::new(proj), rate, f("positionRandomness"), f("endPointOffset"), -rate))
+            }),
             pre_game_prep: d.mk_sim.iter().find(|x| x["type"] == "PreGamePrepModModel").and_then(|x| {
                 let p: crate::data::Proj = serde_json::from_value(x["projectileModel"].clone()).ok()?;
                 Some((x["distFromEdgeOfMap"].as_f64().unwrap_or(0.0) as f32, std::sync::Arc::new(p)))
@@ -7372,6 +7410,10 @@ impl Game {
                 x["subtraction"].as_f64().unwrap_or(0.0) as f32, x["charges"].as_i64().unwrap_or(0) as i32)).collect(),
             free_exclusive: d.mk_sim.iter().filter(|x| x["type"] == "FreeTowerModModel")
                 .filter_map(|x| Some((x["baseTowerID"].as_str()?.to_string(), x["mutuallyExclusiveWith"].as_str()?.to_string()))).collect(),
+            hero_xp_bonus: d.mk_sim.iter().find(|x| x["type"] == "HeroXPBonusModModel")
+                .and_then(|x| x["percentMultiplier"].as_f64()).map(|m| m as f32),
+            paragon_power: d.mk_sim.iter().find(|x| x["type"] == "ParagonOfPowerModModel")
+                .and_then(|x| x["rateMultiplier"].as_f64()).map(|m| m as f32),
             come_on_everybody: d.mk_sim.iter().find(|x| x["type"] == "ComeOnEverybodyModModel")
                 .map(|x| (x["rateMultiplier"].as_f64().unwrap_or(1.0) as f32, x["discountMultiplier"].as_f64().unwrap_or(0.0) as f32)),
             mutator_data: (d.bloon_mutator_data.clone()).into(),
@@ -7708,6 +7750,74 @@ impl Game {
     /// Map.GetTrackEndPoints(distFromEdgeOfMap) of each path, before anything else (recording
     /// dart_000_mk: projectile 409 ahead of the tower). HYPOTHESIS P-PREPPOS: the track exit less
     /// distFromEdgeOfMap, as SingleEmissionAtTrackExit.
+    /// CrossTheStreamsSimBehavior.Process (VERIFIED-DECOMP @0x180e6f150): every rateFrames of
+    /// round time, for each pair of DartlingGunners with top path 4 or more (each pair once, the
+    /// earlier tower first), where their lines cross (GetLineStartAndEndPoints @0x180e6eaa0:
+    /// Weapon.GetEjectPosition to there + (0, 1) turned by the tower's rotation x (the line's
+    /// current length at tier 4, else 400, + endPointOffset), stopped at the first map blocker;
+    /// Math.FindIntersectionLineLine @0x180f1f240, both segments) the projectile comes out,
+    /// moved by (0, 1) turned by NextDouble x 360 x positionRandomness x NextDouble (synced
+    /// random, the length draw first), from the earlier tower.
+    fn cross_the_streams(&mut self) {
+        let Some((proj, rate, rand, offset, _)) = self.cross_streams.clone() else { return };
+        // (timeOfLastExplosion starts at -rateFrames and the check runs every frame from round
+        // time 0, so it goes on the multiples of rateFrames: recording dartling_400_400_mk, the
+        // first at rt 60, then 150, 180 ...)
+        let now = self.round_clock;
+        if rate <= 0 || now.rem_euclid(rate) != 0 {
+            return;
+        }
+        if let Some(c) = &mut self.cross_streams {
+            c.4 = now;
+        }
+        let lines: Vec<(usize, [f32; 2], [f32; 2])> = (0..self.towers.len()).filter_map(|t| {
+            let tw = &self.towers[t];
+            if tw.tiers[0] < 4 || self.tower_defs[tw.def].0 != "DartlingGunner" {
+                return None;
+            }
+            // The LineProjectileEmission's weapon (its first Line emission).
+            let tier = self.tier(t)?;
+            let weapon = tier.attacks.iter().find_map(|a| a.weapons.iter().find(|w| w.emission.kind == "Line"))?;
+            let rot = tw.game_rot.unwrap_or(0.0);
+            // Weapon.GetEjectPosition at the tower's current rotation (as the Line shot's start).
+            let [ex, ey, ez] = weapon.eject;
+            let (sa, ca) = crt_sin_cos(DEG2RAD * -rot);
+            let (ox, oy) = (ca * ex - sa * ey, ca * ey + sa * ex);
+            let (x, y, z) = (tw.pos[0] + ox, (tw.pos[1] + -oy) + ez / TAN60, ez);
+            // (At tier 4 GetLineStartAndEndPoints reads the emission's field at +0x8c instead of
+            // the constant; HYPOTHESIS P-CTSLEN: 400 there too, not the growing length: recording
+            // dartling_400_400_mk exact with it, one float step off with the current length.)
+            let len = 400.0 + offset;
+            let d = game_dir(rot);
+            let mut end = [x + d[0] * len, y + d[1] * len];
+            if let Some(q) = self.blocker_clip([x, y], z, end) {
+                end = q;
+            }
+            Some((t, [x, y], end))
+        }).collect();
+        let em: Emission = match serde_json::from_value(serde_json::json!({"kind": "Single", "count": 1})) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for a in 0..lines.len() {
+            for b in a + 1..lines.len() {
+                let ((ta, a1, a2), (_, b1, b2)) = (lines[a], lines[b]);
+                let Some(mut at) = line_line(a1, a2, b1, b2) else { continue };
+                if rand > 0.0 {
+                    let seed = self.freeplay_seed;
+                    let r = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
+                    let ang = self.synced.get_or_insert_with(|| BufferedRandom::new(seed)).next_double();
+                    let d = game_dir((ang * 360.0) as f32);
+                    let m = (rand as f64 * r) as f32;
+                    if env_flag!("DBGCTS") { eprintln!("DBGCTS rt {} lines {:?} {:?} at {:?} r {} ang {}", self.round_clock, (a1, a2), (b1, b2), at, r, ang); }
+                    at = [at[0] + d[0] * m, at[1] + d[1] * m];
+                }
+                let (tiers, owner) = (self.towers[ta].tiers, self.towers[ta].id);
+                self.emit(at, 0.0, &em, &proj, None, tiers, owner);
+            }
+        }
+    }
+
     fn pre_game_prep_spikes(&mut self) {
         let Some((edge, spec)) = self.pre_game_prep.clone() else { return };
         let em: Emission = match serde_json::from_value(serde_json::json!({"kind": "Single", "count": 1, "track_exit": edge})) {
@@ -10383,7 +10493,16 @@ impl Game {
                 }
             }
         }
-        self.towers[t].xp += x * scale;
+        // Hero.AddXp (VERIFIED-DECOMP @0x180d2e210): xp + amount x xpBonus. HeroXPBonus (Monkey
+        // Knowledge, @0x180e71500): 1, + percentMultiplier for each hero placed (recording
+        // quincy_dart_mk: 498.96 -> 523.908 with a Dart Monkey placed too).
+        let mut bonus = 1.0f32;
+        if let Some(p) = self.hero_xp_bonus {
+            for _ in self.towers.iter().filter(|o| o.sub.is_none() && self.hero_def(o.def).is_some()) {
+                bonus += p;
+            }
+        }
+        self.towers[t].xp += x * scale * bonus;
         let mut leveled = false;
         while let Some(next) = h.levels.iter().find(|l| l.level == self.towers[t].tiers[0] + 1) {
             if self.towers[t].xp < next.xp {
@@ -10543,6 +10662,7 @@ impl Game {
             idle_t: 0.0,
             bank: 0.0,
             bank_from: 0.0,
+            bank_deposited: 0.0,
             staged_cash: 0.0,
             brews: Vec::new(),
             acid_pts: None,
@@ -13961,6 +14081,7 @@ impl Game {
             idle_t: 0.0,
             bank: 0.0,
             bank_from: 0.0,
+            bank_deposited: 0.0,
             staged_cash: 0.0,
             brews: Vec::new(),
             acid_pts: None,
@@ -16530,13 +16651,51 @@ impl Game {
     /// Tower.cashEarned += it, Simulation.AddCash(depositedCash, 6) and AddCash(cash -
     /// depositedCash, 1) (the clone has no deposits: one AddCash of the whole f32 balance, not
     /// floored), a "$n" text effect, and cash = depositedCash = calculateInterestFrom = 0.
+    /// BankDeposits.GetDepositAmount (VERIFIED-DECOMP @0x180cfa2e0): (capacity - cash) x
+    /// depositPercent as an int unless that is 0, at most the player's cash, nothing under 1.
+    pub fn bank_deposit_amount(&self, t: usize) -> f32 {
+        let Some(bank) = self.tier(t).and_then(|tr| tr.bank.clone()) else { return 0.0 };
+        let Some(p) = bank.deposit else { return 0.0 };
+        let mut v = bank.capacity - self.towers[t].bank;
+        if (v * p) as i32 != 0 {
+            v = (v * p) as i32 as f32;
+        }
+        let cash = self.cash as f32;
+        if cash <= v {
+            v = cash;
+        }
+        if 1.0 <= v { v } else { 0.0 }
+    }
+
+    /// BankDeposits.OnTsmThemeAction (VERIFIED-DECOMP @0x180cfa510): the amount off the player's
+    /// cash into the bank (Bank.DepositCash @0x180ceda40: cash + it, at most the capacity;
+    /// depositedCash + what went in). Interest still counts from calculateInterestFrom only.
+    pub fn bank_deposit(&mut self, t: usize) {
+        let v = self.bank_deposit_amount(t);
+        let Some(cap) = self.tier(t).and_then(|tr| tr.bank.as_ref().map(|b| b.capacity)) else { return };
+        if v <= 0.0 {
+            return;
+        }
+        self.cash -= v as f64;
+        let tw = &mut self.towers[t];
+        let before = tw.bank;
+        tw.bank = (before + v).min(cap);
+        tw.bank_deposited += tw.bank - before;
+        let pos = tw.pos;
+        // (Its text effect: "+$" + the amount at the tower.)
+        self.cash_pops.push((pos, v as f64));
+    }
+
     pub fn collect_bank(&mut self, t: usize) {
         let tw = &mut self.towers[t];
         let b = tw.bank;
         if b == 0.0 {
             return;
         }
-        tw.cash_earned += b as f64;
+        // Bank.Collect (VERIFIED-DECOMP @0x180ced5a0): the tower's cashEarned takes cash less
+        // depositedCash; both come back to the player (HYPOTHESIS P-DEPOSITCASH: as one income).
+        tw.cash_earned += (b - tw.bank_deposited) as f64;
+        tw.bank_deposited = 0.0;
         tw.bank = 0.0;
         tw.bank_from = 0.0;
         let (id, pos) = (tw.id, tw.pos);
@@ -18188,6 +18347,17 @@ impl Game {
                 if let Some((rm, _)) = self.come_on_everybody {
                     let primary = |o: usize| self.towers[o].sub.is_none() && self.tier(o).is_some_and(|x| x.set & 1 != 0);
                     if primary(t) && (0..self.towers.len()).filter(|&o| primary(o)).all(|o| self.towers[o].tiers.iter().all(|&x| x < 3)) {
+                        b.rate_mult *= rm;
+                    }
+                }
+                // ParagonOfPower.CheckBuffs (Monkey Knowledge, VERIFIED-DECOMP @0x180e73ed0): a
+                // Paragon's rate mutator (AddParagonMutatorIncludeSubTowers: its sub-towers too) while
+                // no tower of its base id is at tier 5 (TowerModel.tier).
+                if let Some(rm) = self.paragon_power {
+                    let p = self.towers[t].sub.as_ref().and_then(|s| self.towers.iter().position(|o| o.id == s.parent)).unwrap_or(t);
+                    let def = self.towers[p].def;
+                    if self.towers[p].paragon.is_some()
+                        && !self.towers.iter().any(|o| o.def == def && o.sub.is_none() && o.paragon.is_none() && o.tiers.iter().max() == Some(&5)) {
                         b.rate_mult *= rm;
                     }
                 }
@@ -31203,6 +31373,8 @@ impl Game {
         let mut early: FastSet<u64> = FastSet::default();
         let round_clock = self.round_clock;
         let p1 = std::time::Instant::now();
+        // HYPOTHESIS P-CTSORDER: CrossTheStreamsSimBehavior processes before the towers turn.
+        self.cross_the_streams();
         // Towers.
         // (BeastHandlerLeash.Process, in the handler's turn: after the bloons' moves, before its
         // pets (recording beast_merge_002 rt 301: the lost bird's Green let go where the bird was).)
