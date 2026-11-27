@@ -2695,6 +2695,8 @@ pub struct AirUnit {
     pub rm_boost: Option<u32>,
     /// SwapProjectile.emitBoth on her weapon (FlightBoostAbility.Activate sets it, Deactivate clears it).
     pub rm_emit_both: bool,
+    /// SpiritTowerMovement's state (Corvus's Spirit).
+    pub sp: Option<Box<SpiritState>>,
     /// DroneIdle's counters (Etienne's drones).
     pub drone: DroneIdleState,
     /// PursuitSettingCustom.lastPositionInsideParent (clone frame).
@@ -3492,6 +3494,33 @@ fn overriding_mutated(b: &Bloon, f: &(Vec<String>, String, String)) -> bool {
         }
     }
     b.is_mutated_by(default)
+}
+
+/// SpiritTowerMovement's target: a bloon, or a point (game frame).
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub enum SpTarget {
+    #[default]
+    None,
+    Bloon(u64),
+    Point([f32; 2]),
+}
+
+/// SpiritTowerMovement's fields (game frame): targetingState (0 Bloon, 1 IdleRetreat, 2
+/// IdleReposition, 3 IdleNoMovement, 4 MoveAlongTrack), currentTarget (and its last position),
+/// movementDirection, lastDirection, currentSpeedPerFrame, isAccelerating, nextIdleMovementAt,
+/// timeOfLastBloonTargetValid, lastTargetSearchElapsed (steps).
+#[derive(Clone, Default, Debug)]
+pub struct SpiritState {
+    state: i32,
+    target: SpTarget,
+    target_pos: [f32; 2],
+    dir: [f32; 2],
+    last_dir: [f32; 2],
+    speed: f32,
+    accel: bool,
+    next_idle: i64,
+    last_valid: i64,
+    last_search: i64,
 }
 
 /// KineticChargeProjectile's fields: its start and deployTo (clone frame), when it was made (step),
@@ -10781,6 +10810,7 @@ impl Game {
                 rm_z: 0.0,
                 rm_boost: None,
                 rm_emit_both: false,
+                sp: None,
                 drone: DroneIdleState::default(),
                 pursuit_inside: None,
                 hm_last_off: [0.0; 2],
@@ -10825,8 +10855,12 @@ impl Game {
             if spec.fighter.is_some() {
                 continue;
             }
-            // (Helis move after their attacks: move_helis; Rosalia too: move_rosalia.)
+            // (Helis move after their attacks: move_helis; Rosalia too: move_rosalia; the Spirit:
+            // spirit_step.)
             if spec.heli.is_some() || spec.rosalia.is_some() {
+                continue;
+            }
+            if spec.spirit_move.is_some() {
                 continue;
             }
             let tw = &mut self.towers[t];
@@ -11237,6 +11271,214 @@ impl Game {
         self.towers[t].air.as_mut().unwrap().pursuit_inside = Some(q);
         q
     }
+
+    /// SpiritTowerMovement.GetRandomPositionInRangeOfParent (VERIFIED-DECOMP @0x180d96180), game
+    /// frame: syncedRandom.Range(0, 360) (its turn unused), then up to 5 tries of (0, 1) turned by
+    /// Range(0, 360) x Range(0, (int)distance) onto the parent until on the map; GetPointWithinMap(-1),
+    /// TruncateVector2(3).
+    fn spirit_random_point(&mut self, parent: [f32; 2], distance: f32) -> [f32; 2] {
+        let _ = self.synced_range(0, 360);
+        let mut p = parent;
+        for _ in 0..5 {
+            let a = self.synced_range(0, 360) as f32;
+            let (dx, dy) = offset_turned(0.0, 1.0, a);
+            let r = self.synced_range(0, distance as i32) as f32;
+            p = [parent[0] + dx * r, parent[1] + dy * r];
+            if on_map([p[0], -p[1]], 0.0) {
+                break;
+            }
+        }
+        let b = -1.0f32;
+        let q = [p[0].clamp(-WORLD_X - b, WORLD_X + b), p[1].clamp(-WORLD_Z - b, WORLD_Z + b)];
+        let tr3 = |v: f32| (((v * 1000.0) as f64).trunc() / 1000.0f32 as f64) as f32;
+        [tr3(q[0]), tr3(q[1])]
+    }
+
+    /// SpiritTowerMovement.GetTarget (VERIFIED-DECOMP @0x180d964c0): BloonManager.GetTarget of the
+    /// parent tower's target type from the parent, range 99999, through IsBloonValid (@0x180d96e00:
+    /// not destroyed, camo only if the spirit sees camo, not invulnerable, on the map).
+    fn spirit_target(&self, t: usize, parent: usize) -> Option<u64> {
+        let camo = self.tier(t).and_then(|tr| tr.attacks.first()).is_some_and(|a| a.camo) || self.buffs.get(t).is_some_and(|b| b.camo);
+        let ok = |g: &Self, b: &Bloon| b.hp > 0 && (camo || !b.camo(&g.defs[b.kind])) && on_map(b.pos, 0.0) && !g.bloon_nontarget(b);
+        let from = self.towers[parent].pos;
+        match self.towers[parent].target {
+            TargetMode::First => self.first_target_from(from, 99999.0, &ok),
+            m => self.typed_target_from_ex(from, 99999.0, m, &ok, false, false),
+        }
+    }
+
+    /// SpiritTowerMovement.Process / UpdateTargetingState (VERIFIED-DECOMP @0x180d96ef0 /
+    /// @0x180d97cb0) and TrackTowards (VERIFIED-DISASM @0x180d97340) for Corvus's Spirit `t`.
+    fn spirit_step(&mut self, t: usize) {
+        let Some(sm) = self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.spirit_move.clone()) else { return };
+        let Some(parent_id) = self.towers[t].sub.as_ref().map(|s| s.parent) else { return };
+        let Some(pi) = self.towers.iter().position(|o| o.id == parent_id) else { return };
+        if self.towers[t].air.is_none() {
+            return;
+        }
+        let now = self.steps as i64;
+        if self.towers[t].air.as_ref().unwrap().sp.is_none() {
+            // Initialise: movementDirection / lastDirection Vector2 static +8, (0, 1) (recording
+            // corvus_l03_r20's R lines: Range 19 heads it 19 degrees off up), state IdleNoMovement,
+            // lastTargetSearchElapsed and nextIdleMovementAt now, timeOfLastBloonTargetValid -1.
+            self.towers[t].air.as_mut().unwrap().sp = Some(Box::new(SpiritState { state: 3, dir: [0.0, 1.0], last_dir: [0.0, 1.0], last_search: now, next_idle: now, last_valid: -1, ..Default::default() }));
+            return;
+        }
+        let mut st = *self.towers[t].air.as_ref().unwrap().sp.clone().unwrap();
+        let pos_c = self.towers[t].air.as_ref().unwrap().pos;
+        let pos = [pos_c[0], -pos_c[1]];
+        let tol2 = sm.tolerance * sm.tolerance;
+        let bloon_pos = |g: &Self, id: u64| bloon_idx(&g.bloons, &g.bidx, id).map(|j| { let p = g.bloons[j].pos; [p[0], -p[1]] });
+        // A bloon target: still valid and not reached, or a point where it was.
+        if let SpTarget::Bloon(id) = st.target {
+            let alive = bloon_idx(&self.bloons, &self.bidx, id).filter(|&j| {
+                let b = &self.bloons[j];
+                let camo = self.tier(t).and_then(|tr| tr.attacks.first()).is_some_and(|a| a.camo) || self.buffs.get(t).is_some_and(|x| x.camo);
+                b.hp > 0 && (camo || !b.camo(&self.defs[b.kind])) && on_map(b.pos, 0.0)
+            });
+            let keep = alive.and_then(|_| bloon_pos(self, id)).is_some_and(|q| tol2 <= (q[0] - pos[0]).powi(2) + (q[1] - pos[1]).powi(2));
+            if keep {
+                st.last_valid = now;
+            } else {
+                let q = bloon_pos(self, id).unwrap_or(st.target_pos);
+                st.target = SpTarget::Point(q);
+                st.target_pos = q;
+                st.last_search = now;
+            }
+        }
+        let chasing = st.state == 0 && matches!(st.target, SpTarget::Bloon(_));
+        if !chasing && st.state != 4 {
+            if now - st.last_search < sm.search_frames {
+                if (1..=3).contains(&st.state) && st.next_idle >= 0 && st.next_idle <= now {
+                    self.spirit_idle_reposition(t, pi, &sm, &mut st, pos);
+                }
+            } else {
+                st.last_search = now;
+                match self.spirit_target(t, pi) {
+                    Some(id) => {
+                        st.target = SpTarget::Bloon(id);
+                        st.target_pos = bloon_pos(self, id).unwrap_or(pos);
+                        st.state = 0;
+                        st.next_idle = -1;
+                    }
+                    None => {
+                        if st.state == 1 {
+                            if st.next_idle >= 0 && st.next_idle <= now {
+                                self.spirit_idle_reposition(t, pi, &sm, &mut st, pos);
+                            }
+                        } else if st.state == 0 && sm.retreat_frames <= now - st.last_valid {
+                            // StartRetreat (@0x180d97240).
+                            st.next_idle = -1;
+                            st.state = 1;
+                            let pp = self.towers[pi].pos;
+                            let q = self.spirit_random_point([pp[0], -pp[1]], sm.distance);
+                            st.target = SpTarget::Point(q);
+                            st.target_pos = q;
+                        }
+                    }
+                }
+            }
+        }
+        let goal = match st.target {
+            SpTarget::None => None,
+            SpTarget::Point(q) => Some(q),
+            SpTarget::Bloon(id) => bloon_pos(self, id).or(Some(st.target_pos)),
+        };
+        if let Some(goal) = goal {
+            if let SpTarget::Bloon(_) = st.target {
+                st.target_pos = goal;
+            }
+            let np = self.spirit_track_towards(t, &sm, &mut st, pos, goal);
+            if (1..=3).contains(&st.state) && (np[0] - goal[0]).powi(2) + (np[1] - goal[1]).powi(2) < tol2 {
+                if st.state == 1 {
+                    st.state = 3;
+                    st.next_idle = now + 120;
+                } else if st.state == 2 {
+                    st.state = 3;
+                    let r = self.synced_range(sm.idle_min_frames as i32, sm.idle_max_frames as i32) as i64;
+                    st.next_idle = r + now;
+                }
+            }
+        }
+        self.towers[t].air.as_mut().unwrap().sp = Some(Box::new(st));
+    }
+
+    /// SpiritTowerMovement.IdleReposition (VERIFIED-DECOMP @0x180d969d0): from IdleRetreat or
+    /// IdleNoMovement, a random point in the parent's range, heading straight for it.
+    fn spirit_idle_reposition(&mut self, _t: usize, pi: usize, sm: &crate::data::SpiritMove, st: &mut SpiritState, pos: [f32; 2]) {
+        if st.state != 1 && st.state != 3 {
+            return;
+        }
+        st.next_idle = -1;
+        st.state = 2;
+        let pp = self.towers[pi].pos;
+        let q = self.spirit_random_point([pp[0], -pp[1]], sm.distance);
+        st.target = SpTarget::Point(q);
+        st.target_pos = q;
+        let d = [q[0] - pos[0], q[1] - pos[1]];
+        let m = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        if m > 1e-5 {
+            st.dir = [d[0] / m, d[1] / m];
+        }
+    }
+
+    /// TrackTowards (VERIFIED-DISASM @0x180d97340), game frame: lastDirection = goal - position when
+    /// over 0.001 apart; angle = Mathf.Round(AngleBetween(movementDirection, lastDirection) x 100) /
+    /// 100; GetAccelerationState; speed +/- accelerationPerFrame, clamped to minSpeedPerFrame ..
+    /// GetMaxSpeedPerFrame, rounded the same; the direction turned by the angle clamped to rotation
+    /// (rounded), normalized, TruncateVector2(3); position + direction x speed, GetPointWithinMap,
+    /// TruncateVector3(3). Returns the new position.
+    fn spirit_track_towards(&mut self, t: usize, sm: &crate::data::SpiritMove, st: &mut SpiritState, pos: [f32; 2], goal: [f32; 2]) -> [f32; 2] {
+        let d2 = (goal[0] - pos[0]).powi(2) + (goal[1] - pos[1]).powi(2);
+        if 0.001 < d2 {
+            st.last_dir = [goal[0] - pos[0], goal[1] - pos[1]];
+        }
+        let r100 = |x: f32| round_half_even(x * 100.0) / 100.0;
+        let angle = r100(angle_between(st.dir, st.last_dir));
+        // GetAccelerationState (VERIFIED-DECOMP @0x180d95d30).
+        let a = r100(angle).abs();
+        st.accel = if st.state == 3 {
+            false
+        } else if a < sm.accel_angle {
+            true
+        } else if sm.decel_angle < a {
+            false
+        } else {
+            st.accel
+        };
+        let max = sm.max_pf;
+        let mut v = if st.accel { 1.0f32 } else { -1.0 } * sm.accel_pf + st.speed;
+        v = if v < sm.min_pf { sm.min_pf } else if max < v { max } else { v };
+        st.speed = r100(v);
+        let rot = if -sm.rotation > angle { -sm.rotation } else if angle > sm.rotation { sm.rotation } else { angle };
+        let rot = r100(rot);
+        let (x, y) = offset_turned(st.dir[0], st.dir[1], rot);
+        let m = (x * x + y * y).sqrt();
+        let n = if m > 1e-5 { [x / m, y / m] } else { [0.0; 2] };
+        let tr3 = |v: f32| (((v * 1000.0) as f64).trunc() / 1000.0f32 as f64) as f32;
+        st.dir = [tr3(n[0]), tr3(n[1])];
+        let np = [pos[0] + st.dir[0] * st.speed, pos[1] + st.dir[1] * st.speed];
+        let np = [np[0].clamp(-WORLD_X, WORLD_X), np[1].clamp(-WORLD_Z, WORLD_Z)];
+        let np = [tr3(np[0]), tr3(np[1])];
+        let target_live = match st.target {
+            SpTarget::Bloon(id) => bloon_idx(&self.bloons, &self.bidx, id).is_some(),
+            SpTarget::Point(_) => st.state != 0,
+            SpTarget::None => false,
+        };
+        // (The Spirit is the tower itself: its Position.)
+        self.towers[t].pos = [np[0], -np[1]];
+        let a = self.towers[t].air.as_mut().unwrap();
+        a.pos = [np[0], -np[1]];
+        // (The tower turns to lastDirection while it accelerates on a target, not idle.)
+        if target_live && st.state != 3 && st.accel {
+            let r = r100(crt_atan2(st.last_dir[0], st.last_dir[1]) * RAD2DEG);
+            a.hm_rot = r;
+            a.angle = (r - 90.0) * DEG2RAD;
+            self.towers[t].game_rot = Some(r);
+        }
+        np
+    }
+
 
     /// RosaliaMovement.GetHeight (VERIFIED-DECOMP @0x180d82980): Map.GetTerrainHeight under the
     /// AirUnit while AirUnitModel.blocksPlacement, else 250.
@@ -13923,8 +14165,9 @@ impl Game {
     fn pet_spot(&self, t: usize, pet: &crate::data::SubTowerSpec) -> Option<[f32; 2]> {
         let h = self.towers[t].pos;
         let r = self.tier(t).map_or(40.0, |x| x.range);
-        // (TowerCreateTowerModel's Phoenix starts on its tower: recording wizard_050.)
-        if (pet.base.is_none() && pet.model.is_none()) || pet.circle.is_some() {
+        // (TowerCreateTowerModel's Phoenix starts on its tower: recording wizard_050; Corvus's
+        // Spirit too: recording corvus_l03_r20 rt 1.)
+        if (pet.base.is_none() && pet.model.is_none()) || pet.circle.is_some() || pet.tier.air.as_ref().is_some_and(|a| a.spirit_move.is_some()) {
             return Some(h);
         }
         let water = pet.areas.contains(&1) && !pet.areas.contains(&2);
@@ -21229,6 +21472,16 @@ impl Game {
                 if let Some(stamp) = self.towers[t].sub.as_ref().filter(|s| s.spec.drone.is_some()).and_then(|_| self.towers[t].attack_born.values().copied().min()) {
                     self.process_bloons_before(stamp, early, round_clock, dots, emits, zones, shoves, leak_voice);
                 }
+                // (Corvus's Spirit: SpiritTowerMovement, first in its behaviours, in its place in the
+                // process list: older bloons have moved (recording corvus_l03_r20 rt 27, it turns for
+                // the Black where it is this frame), and before its attacks (rt 2: its body made where
+                // it has just moved).)
+                if self.tier(t).and_then(|tr| tr.air.as_ref()).is_some_and(|a| a.spirit_move.is_some()) {
+                    if let Some(stamp) = self.towers[t].attack_born.values().copied().min() {
+                        self.process_bloons_before(stamp, early, round_clock, dots, emits, zones, shoves, leak_voice);
+                    }
+                    self.spirit_step(t);
+                }
                 self.drone_idle(t);
                 let tid = self.towers[t].id;
                 if self.drone_queue.iter().any(|q| q.0 == tid) {
@@ -23075,7 +23328,7 @@ impl Game {
                     // Trap 167 frames after the full one goes).
                     let at_limit = weapon.limit.is_some_and(|n| {
                         let id = self.towers[t].id;
-                        let out = self.projectiles.iter().filter(|pr| pr.owner == id && (if weapon.limit_id.is_empty() { pr.spec.eat.is_some() } else { pr.spec.pid == weapon.limit_id }) && !(pr.spec.eat.is_some() && pr.spec.cash.is_some())).count();
+                        let out = self.projectiles.iter().filter(|pr| (pr.owner == id || pr.emitted_by == id) && (if weapon.limit_id.is_empty() { pr.spec.eat.is_some() } else { pr.spec.pid == weapon.limit_id }) && !(pr.spec.eat.is_some() && pr.spec.cash.is_some())).count();
                         let now = self.sim_elapsed as i64;
                         if out >= n as usize && !weapon.limit_destroyed {
                             self.towers[t].weapons[wi].limit_until = now + weapon.limit_delay;
@@ -30670,6 +30923,7 @@ impl Game {
         for t in 0..self.towers.len() {
             self.move_rosalia(t);
         }
+
         self.moab_shove_step();
         self.fly_patterns();
         // InstantDamageEmission.Process: this frame's instant-damage shots hit their targets now,
@@ -31097,6 +31351,26 @@ impl Game {
             for u in ivs {
                 self.interval_shots(Some(u));
             }
+            // SyncProjectileMovementToTower.Process (VERIFIED-DECOMP @0x180ce0f90): on its tower,
+            // TruncateVector3(1) (recording corvus_l03_r20 rt 3: the Spirit's body at (-112.5, -30.1)
+            // under it at (-112.545, -30.115)); gone with the tower.
+            let tr1 = |v: f32| (((v * 10.0) as f64).trunc() / 10.0f32 as f64) as f32;
+            let mut gone = Vec::new();
+            for k in 0..self.projectiles.len() {
+                // (From its first Process, the frame after it is made: recording corvus_l03_r20 rt 2.)
+                if !self.projectiles[k].spec.sync_tower || self.projectiles[k].born >= self.sim_elapsed * 4 {
+                    continue;
+                }
+                let by = self.projectiles[k].emitted_by;
+                match self.towers.iter().find(|o| o.id == by) {
+                    Some(o) => {
+                        let p = o.pos;
+                        self.projectiles[k].pos = [tr1(p[0]), -tr1(-p[1])];
+                    }
+                    None => gone.push(self.projectiles[k].uid),
+                }
+            }
+            self.projectiles.retain(|pr| !gone.contains(&pr.uid));
             let kcs: Vec<u64> = self.projectiles.iter().filter(|pr| pr.kc.is_some()).map(|pr| pr.uid).collect();
             for u in kcs {
                 self.kinetic_step(u);

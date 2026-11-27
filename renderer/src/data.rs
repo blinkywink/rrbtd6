@@ -2268,6 +2268,9 @@ pub struct Retarget {
 
 #[derive(Deserialize, Clone)]
 pub struct Proj {
+    /// SyncProjectileMovementToTowerModel: on its tower's position (TruncateVector3(1)) each frame.
+    #[serde(default)]
+    pub sync_tower: bool,
     /// DelayBloonChildrenSpawningModel.lifespanFrames: the bloon hit (and its children) held where
     /// the shot was that long (PatsBigSqueezeWind), then carried back to the track.
     #[serde(default)]
@@ -3304,6 +3307,25 @@ pub struct AirSpec {
     /// AirUnitModel.blocksPlacement: RosaliaMovement.GetHeight stands it on the terrain (else 250).
     #[serde(default)]
     pub grounded: bool,
+    /// SpiritTowerMovementModel (Corvus's Spirit).
+    #[serde(default)]
+    pub spirit_move: Option<SpiritMove>,
+}
+
+#[derive(Deserialize, Clone, Default, Debug)]
+pub struct SpiritMove {
+    pub distance: f32,
+    pub tolerance: f32,
+    pub accel_pf: f32,
+    pub min_pf: f32,
+    pub max_pf: f32,
+    pub rotation: f32,
+    pub accel_angle: f32,
+    pub decel_angle: f32,
+    pub search_frames: i64,
+    pub retreat_frames: i64,
+    pub idle_min_frames: i64,
+    pub idle_max_frames: i64,
 }
 
 /// RosaliaMovementModel's fields (game names).

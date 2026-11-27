@@ -1175,6 +1175,10 @@ def main():
         if pb.get("DelayBloonChildrenSpawningModel"):
             df = pb["DelayBloonChildrenSpawningModel"][0]["f"]
             out["squeeze_frames"] = df.get("lifespanFrames") or int(df.get("lifespan", 0.0) * 60)
+        # SyncProjectileMovementToTowerModel (Corvus's Spirit's body): Process (VERIFIED-DECOMP
+        # @0x180ce0f90) puts it on its tower's position, TruncateVector3(1).
+        if pb.get("SyncProjectileMovementToTowerModel"):
+            out["sync_tower"] = True
         # IgnoreCollisionAfterCollideModel: Collide (VERIFIED-DISASM @0x180cc0fd0) notes the frame,
         # FilterCollision (@0x180cc1000) lets a bloon through once (now - it) >= (int)(timeAfterCollide x 60)
         # (recording rosalia_l10_r40: a grenade hits at 835 and 838).
@@ -3012,7 +3016,17 @@ def main():
         sm = next((b["f"] for b in items(f["behaviors"]) if b and b["type"] == "SpiritTowerMovementModel"), None)
         if sm and not air:
             air = {"display": prefab_name(f.get("display")), "speed": sm.get("maxSpeed", 100.0),
-                   "accel": sm.get("accelerationPerFrame", 0.1667) * 3600.0, "slowdown": max(sm.get("tolerance", 1.0), 1.0)}
+                   "accel": sm.get("accelerationPerFrame", 0.1667) * 3600.0, "slowdown": max(sm.get("tolerance", 1.0), 1.0),
+                   # SpiritTowerMovement (`spirit_step`); the *Frames fields: (seconds x 60) rounded.
+                   "spirit_move": {"distance": sm.get("distance", 0.0), "tolerance": sm.get("tolerance", 0.0),
+                                   "accel_pf": sm.get("accelerationPerFrame", 0.0), "min_pf": sm.get("minSpeedPerFrame", 0.0),
+                                   "max_pf": sm.get("maxSpeedPerFrame", 0.0), "rotation": sm.get("rotation", 0.0),
+                                   "accel_angle": sm.get("accelerateInAngle", 0.0),
+                                   "decel_angle": sm.get("startDeceleratingIfAngleGreaterThan", 0.0),
+                                   "search_frames": round(sm.get("searchDelay", 0.0) * 60),
+                                   "retreat_frames": round(sm.get("delayUntilNoTargetRetreat", 0.0) * 60),
+                                   "idle_min_frames": round(sm.get("delayBetweenIdleMin", 0.0) * 60),
+                                   "idle_max_frames": round(sm.get("delayBetweenIdleMax", 0.0) * 60)}}
         if air:
             for b in items(f["behaviors"]):
                 if b and b["type"] in ("AttackModel", "AttackAirUnitModel"):
@@ -3056,6 +3070,12 @@ def main():
             if b and b["type"] == "TowerCreateTowerModel":
                 sp = sub_tower(deref(b["f"].get("towerModel")), None)
                 if sp:
+                    # (Corvus's spells' attacks (SpearModel.attack...) are on his Spirit but only act
+                    # while the spell is cast: recording corvus_l03_r20, the Spear never fires.)
+                    spell_attacks = {(deref(x["f"].get("attack")) or {"f": {}})["f"].get("_name") for x in items(tobj["f"]["behaviors"])
+                                     if x and "spellType" in x["f"] and deref(x["f"].get("attack"))}
+                    if spell_attacks and isinstance(sp.get("tier"), dict):
+                        sp["tier"]["attacks"] = [a for a in sp["tier"].get("attacks", []) if a.get("model_name") not in spell_attacks]
                     pets.append(sp)
             # TowerCreateParagonTowerModel (Magus Perfectus's Dark Phoenix): one tower, made once the
             # paragon is active (Process @0x180da3fe0), towerModels[min(degree / 20, 4)]
