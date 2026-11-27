@@ -33,6 +33,7 @@ if [ -z "$EXE" ]; then
 fi
 OUTD=$(mktemp -d)
 root=0
+summary=""
 if [ "${1:-}" = "--root" ]; then root=1; shift; fi
 list=()
 for name in "$@"; do
@@ -61,5 +62,13 @@ for name in "$@"; do
     esac
   done
   echo "== $name: $m/$n match"
+  summary="$summary== $name: $m/$n match
+"
 done
 rm -rf "$OUTD"
+# The website's progress (website/count_progress.py) reads the last result of every set: merge these.
+SITE="$(cd .. && pwd)/website/regression_last.txt"
+if [ -n "$summary" ] && [ -d "$(dirname "$SITE")" ]; then
+  touch "$SITE"
+  { printf '%s' "$summary"; grep -v -F -f <(printf '%s' "$summary" | sed 's/: .*$/: /') "$SITE" || true; } | sort > "$SITE.tmp" && mv "$SITE.tmp" "$SITE"
+fi

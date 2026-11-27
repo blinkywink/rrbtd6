@@ -5,6 +5,15 @@
 # Usage: sh tools/publish.sh [message]
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The website's progress section first: recording counts and the last regression results
+# (website/count_progress.py, build_progress.py), committed on their own when they changed.
+if [ -f website/count_progress.py ] && command -v python >/dev/null 2>&1; then
+  python -I website/count_progress.py >/dev/null && python -I website/build_progress.py >/dev/null || echo "publish: website progress not updated"
+  if ! git diff --quiet -- website/progress.json website/public/index.html website/regression_last.txt 2>/dev/null; then
+    git add -- website/progress.json website/public/index.html website/regression_last.txt
+    git commit -q -m "Website: progress update" -- website/progress.json website/public/index.html website/regression_last.txt && echo "publish: website progress updated"
+  fi
+fi
 REMOTE="${RRBTD6_PUBLIC_REMOTE:-public}"
 REF=refs/public/main
 NAME="blinkywink"
