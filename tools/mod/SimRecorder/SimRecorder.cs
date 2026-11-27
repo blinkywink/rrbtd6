@@ -100,6 +100,8 @@ public class Scenario
     /// After this many recorded frames every ability is activated (Ability.Activate(true): cooldown
     /// ignored); -1 never.
     public int ability { get; set; } = -1;
+    /// With `ability`: only abilities whose model name contains this (empty: all).
+    public string ability_only { get; set; } = "";
     // Every frame (after it, as `ability`), Activate(false) on every ability: each goes off whenever
     // its cooldown allows (to record cooldown effects such as Submerge's).
     public bool ability_auto { get; set; }
@@ -504,6 +506,7 @@ public class Recorder : MelonMod
                 for (int k = 0; k < Sc.towers.Count; k++)
                     if (!string.IsNullOrEmpty(Sc.towers[k].target)) Out.WriteLine($"# target {k} {Sc.towers[k].target}");
                 if (Sc.ability >= 0) Out.WriteLine($"# ability {Sc.ability}");
+                if (!string.IsNullOrEmpty(Sc.ability_only)) Out.WriteLine($"# ability_only {Sc.ability_only}");
                 if (Sc.ability_auto) Out.WriteLine("# ability_auto");
                 for (int k = 0; k < Sc.towers.Count; k++)
                 {
@@ -1552,6 +1555,7 @@ static class SimulatePatch
                 var alts = bridge.GetAllAbilities(bridge.GetInputId(), true);
                 for (int k = 0; k < alts.Count; k++)
                 {
+                    if (!string.IsNullOrEmpty(Recorder.Sc.ability_only) && !alts[k].model.name.Contains(Recorder.Sc.ability_only)) continue;
                     alts[k].ability.Activate(true);
                     MelonLogger.Msg($"SimRecorder ability {alts[k].model.name} activated at frame {Recorder.Recorded}");
                 }

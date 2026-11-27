@@ -1,0 +1,1 @@
+{"name": "dartling_040_mk", "map": "Tutorial", "difficulty": "Hard", "mode": "Standard", "frames": 3600, "quit": true, "round": 40, "seed": 699336078, "towers": [{"id": "DartlingGunner-040", "x": -112.815414, "y": -30.9, "point": [-130.0, -22.9], "target": "Locked"}], "ability": 120, "ability_only": "RocketStorm", "cash": 10000000, "mk": true}

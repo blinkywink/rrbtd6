@@ -33209,6 +33209,7 @@ mod tests {
         let mut hero_levels: Vec<(usize, u8, f32)> = Vec::new();
         let mut points: Vec<(usize, [f32; 2])> = Vec::new();
         let mut ability_at: Option<usize> = None;
+        let mut ability_only: Option<String> = None;
         // SimRecorder's `# ability_auto`: after every frame, Activate(false) on each ready ability.
         let mut ability_auto = false;
         // `# seed`: GameModel.randomSeed (freeplay rounds, the end screens' callout pick).
@@ -33278,6 +33279,7 @@ mod tests {
                 Some("#") if f.get(1) == Some(&"herolevel") => hero_levels.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f.get(6).and_then(|x| x.parse().ok()).unwrap_or(0.0))),
                 Some("#") if f.get(1) == Some(&"point") => points.push((f[2].parse::<usize>().unwrap(), [f[3].parse::<f32>().unwrap(), -f[4].parse::<f32>().unwrap()])),
                 Some("#") if f.get(1) == Some(&"ability") => ability_at = f[2].parse().ok(),
+                Some("#") if f.get(1) == Some(&"ability_only") => ability_only = f.get(2).map(|x| x.to_string()),
                 Some("#") if f.get(1) == Some(&"ability_auto") => ability_auto = true,
                 Some("#") if f.get(1) == Some(&"seed") => seed = f[2].parse().ok(),
                 // `# xpscale <scales> map <mapDifficulty> ...`: the map's XP tier.
@@ -33606,7 +33608,7 @@ mod tests {
                 }
                 // (At most once per tower: an ability with no cooldown would otherwise go on
                 // forever, as Jungle's Bounty did in druid_040.)
-                for name in g.ability_groups().into_iter().map(|a| a.name).collect::<Vec<_>>() {
+                for name in g.ability_groups().into_iter().map(|a| a.name).filter(|n| ability_only.as_ref().is_none_or(|o| n.replace(' ', "").contains(o.as_str()))).collect::<Vec<_>>() {
                     for _ in 0..g.towers.len() {
                         if !g.activate_ability(&name) {
                             break;

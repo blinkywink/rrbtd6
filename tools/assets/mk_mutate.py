@@ -612,6 +612,26 @@ def append_ids(m, holder, field, nid):
         holder["f"][field] = {"$ref": cid}
 
 
+def m_gorgon_storm(tw, mm, target):
+    # GorgonStormModModel.Mutate (VERIFIED-DECOMP @0x1812a6780): in each AbilityModel whose name
+    # contains "RocketStorm", every ProjectileModel whose name contains "Blast" gets clones of the
+    # mod's slowModel (GorgonStormStun, speed 0 for 0.5 s) and moabModifierModel (SlowModifierForTag
+    # Moabs, lifespan 0.1) at the end of its behaviours, both child dependants.
+    sid, mid = tw.m.ref(mm.get("slowModel")), tw.m.ref(mm.get("moabModifierModel"))
+    if sid is None or mid is None:
+        return
+    for ab in tw.descendants({"AbilityModel"}):
+        if "RocketStorm" not in name_of(ab):
+            continue
+        for p in subtree(tw.m, ab["i"], {"ProjectileModel"}):
+            if "Blast" not in name_of(p):
+                continue
+            for src in (sid, mid):
+                cid = clone_model(tw.m, src)
+                append_ids(tw.m, p, "behaviors", cid)
+                add_child(tw.m, p, cid)
+
+
 def m_dmg_tag(tw, mm, target):
     # DamageModifierForTagModModel: each named ProjectileModel; its first DamageModifierForTagModel
     # with tag bloonTag gets damageMultiplier + multiplierAdditive and damageAddative + addative;
@@ -1013,6 +1033,9 @@ MUTATORS = {
     "PaintStripperModModel": m_paint_stripper,
     "ColdFrontModModel": m_cold_front,
     "TinyTornadoesModModel": m_tiny_tornadoes,
+    "GorgonStormModModel": m_gorgon_storm,
+    # EmergencyUnlockModModel.Mutate is the shared "return true" stub (@0x1804ee640): nothing.
+    "EmergencyUnlockModModel": lambda tw, mm, target: None,
     "CreateEffectOnAbilityModModel": m_effect_on_ability,
     "WingmonkeyModModel": m_wingmonkey,
     "BankDepositsModModel": m_bank_deposits,
