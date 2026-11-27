@@ -689,6 +689,10 @@ pub struct Upgrade {
     pub cost: f64,
     pub path: usize,
     pub tier: usize,
+    /// Monkey Knowledge's UpgradeCostModModel steps [percentageReduced, amountReduced]
+    /// (game_mk.json only; `upgrade_cost_mk`).
+    #[serde(default)]
+    pub mk_cost: Vec<(f32, i32)>,
 }
 
 #[derive(Deserialize, Clone)]

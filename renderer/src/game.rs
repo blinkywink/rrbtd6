@@ -4153,6 +4153,23 @@ pub fn upgrade_cost(cost: f64, mult: f32, d: f64) -> f64 {
     round_cost((c + ((mult - 1.0) * c as f32) as i32) as f32, d)
 }
 
+/// `upgrade_cost` with Monkey Knowledge's UpgradeCostModModel steps: on the unscaled int cost each
+/// cost - (int)(cost x p) - a, the cut taken off the difficulty-scaled cost (the game's modded
+/// models, Hard: Artillery Battery 6500 -> 7020 - 600 = 6420, Flying Fortress 90000 -> 97200 - 9000
+/// = 88200), then the discounts' rounding.
+pub fn upgrade_cost_mk(cost: f64, steps: &[(f32, i32)], mult: f32, d: f64) -> f64 {
+    if steps.is_empty() {
+        return upgrade_cost(cost, mult, d);
+    }
+    let c = cost as i32;
+    let mut x = c;
+    for &(p, a) in steps {
+        x = x - (x as f32 * p) as i32 - a;
+    }
+    let scaled = c + ((mult - 1.0) * c as f32) as i32 - (c - x);
+    round_cost(scaled as f32, d)
+}
+
 /// The rounding of GetTowerCost / GetTowerUpgradeCost: (1 - d) x `scaled` to a multiple of 5
 /// (helper @0x18054EEC0).
 pub fn round_cost(scaled: f32, d: f64) -> f64 {
@@ -16752,7 +16769,7 @@ impl Game {
             // recording village_005_std, one farm on Hard: 5000.)
             return Some((name, round_cost((n as f64 * mc.per_farm as f64) as f32, d)));
         }
-        tt.upgrades.iter().find(|u| u.path == path && u.tier == cur).map(|u| (u.name.clone(), upgrade_cost(u.cost, self.cost_mult, d)))
+        tt.upgrades.iter().find(|u| u.path == path && u.tier == cur).map(|u| (u.name.clone(), upgrade_cost_mk(u.cost, &u.mk_cost, self.cost_mult, d)))
     }
 
     /// A Paragon's display level, 1-based (research: ParagonTower.GetDisplayDegreeIndex):
@@ -32841,6 +32858,7 @@ mod tests {
         let text = std::fs::read_to_string(path).expect("recording");
         let mut meta = std::collections::HashMap::new();
         let mut towers: Vec<(String, f32, f32)> = Vec::new();
+        let mut knowledge = false;
         let mut targets: Vec<(usize, String)> = Vec::new();
         // SimRecorder's `# herolevel k level model xp` (Hero.UpgradeToLevel after placing).
         let mut hero_levels: Vec<(usize, u8, f32)> = Vec::new();
@@ -32908,6 +32926,8 @@ mod tests {
                     }
                 }
                 Some("#") if f.get(1) == Some(&"tower") => towers.push((f[2].into(), f[3].parse().unwrap(), f[4].parse().unwrap())),
+                // "# knowledge masks": with any bit set, the game played with Monkey Knowledge.
+                Some("#") if f.get(1) == Some(&"knowledge") => knowledge = f.get(2).is_some_and(|m| m.split(',').any(|x| u64::from_str_radix(x, 16).is_ok_and(|v| v != 0))),
                 // SimRecorder inputs: a tower's targeting mode, and the frame abilities go off after.
                 Some("#") if f.get(1) == Some(&"target") => targets.push((f[2].parse().unwrap(), f[3].to_string())),
                 Some("#") if f.get(1) == Some(&"herolevel") => hero_levels.push((f[2].parse().unwrap(), f[3].parse().unwrap(), f.get(6).and_then(|x| x.parse().ok()).unwrap_or(0.0))),
@@ -32968,7 +32988,8 @@ mod tests {
                 _ => {}
             }
         }
-        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../local_extracted/game/game.json");
+        // (Monkey Knowledge on: game_mk_all.json, mk_mutate.py with every item: the recorder plays the owner's full set.)
+        let p = if knowledge { concat!(env!("CARGO_MANIFEST_DIR"), "/../local_extracted/game/game_mk_all.json") } else { concat!(env!("CARGO_MANIFEST_DIR"), "/../local_extracted/game/game.json") };
         let mut d: crate::data::GameData = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
         // Another map than the exported one (water towers on Logs): its own map.json.
         if let Some(m) = meta.get("map").filter(|m| !m.eq_ignore_ascii_case("Tutorial")) {

@@ -4116,8 +4116,10 @@ def main():
     # map dump (CollisionGrid.orderedNeighborOffsets), and export_overlays.py's overlay table.
     out["effect_type_bonus"] = type_bonus
     gp = os.path.join(root, "game", os.environ.get("RRBTD6_GAME_JSON") or "game.json")
-    if os.path.exists(gp):
-        prev = json.load(open(gp, encoding="utf-8"))
+    # (A new variant file keeps them from game.json.)
+    src = gp if os.path.exists(gp) else os.path.join(root, "game", "game.json")
+    if os.path.exists(src):
+        prev = json.load(open(src, encoding="utf-8"))
         for k in ("grid_offsets", "overlays"):
             if k in prev and k not in out:
                 out[k] = prev[k]

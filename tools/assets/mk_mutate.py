@@ -878,6 +878,11 @@ def main():
     objs = m.objs
     mods = {name_of(o): o for o in objs.values() if o["type"] == "ModModel"}
     active = {name_of(o) for o in objs.values() if o["type"] == "KnowledgeModel"}
+    # --active FILE: the knowledge items to apply (one name per line, or a JSON list); all otherwise.
+    if "--active" in sys.argv:
+        txt = open(sys.argv[sys.argv.index("--active") + 1], encoding="utf-8").read().strip()
+        names = json.loads(txt) if txt.startswith("[") else [x.strip() for x in txt.splitlines() if x.strip()]
+        active &= set(names)
     gm = next(o for o in objs.values() if o["type"] == "GameModel")
     tower_ids = [i for i in m.items(gm["f"]["towers"]) if i in objs]
     missing = collections.Counter()
@@ -926,7 +931,7 @@ def main():
     ups = {name_of(objs[i]): objs[i] for i in m.items(gm["f"].get("upgrades")) if i in objs}
     up_changes = {}
     for k in m.items(gm["f"].get("allKnowledge")):
-        mo = mods.get(name_of(objs[k])) if k in objs else None
+        mo = mods.get(name_of(objs[k])) if k in objs and name_of(objs[k]) in active else None
         for mmid in m.items(mo["f"].get("mutatorMods")) if mo else []:
             mm = objs.get(mmid)
             if not mm or mm["type"] != "UpgradeCostModModel":

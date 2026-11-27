@@ -306,7 +306,54 @@ fn map_keys(root: &std::path::Path) -> Vec<String> {
 
 /// The game data with `hero` in the shop's hero slot (the default hero if unknown) on map `map`
 /// (game.json's own map if it isn't exported).
+/// The models with the profile's Monkey Knowledge applied: game/game_mk.json, built by
+/// tools/assets/build_mk.py for the item set its game_mk.key lists. When the key doesn't match the
+/// owned items, one rebuild starts in the background (about 20 s, the launcher's Python) and the
+/// base models are used until it's done.
+fn knowledge_json(root: &std::path::Path, owned: &std::collections::BTreeSet<String>) -> Option<std::sync::Arc<String>> {
+    static CACHE: std::sync::Mutex<Option<(String, std::sync::Arc<String>)>> = std::sync::Mutex::new(None);
+    static BUILDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let key: String = owned.iter().map(|k| format!("{k}\n")).collect();
+    let on_disk = std::fs::read_to_string(simulation_path(root, "game/game_mk.key")).unwrap_or_default().replace("\r\n", "\n");
+    if on_disk == key {
+        let mut c = CACHE.lock().ok()?;
+        if let Some((k, j)) = c.as_ref().filter(|(k, _)| *k == key).map(|(k, j)| (k.clone(), j.clone())) {
+            let _ = k;
+            return Some(j);
+        }
+        let j = std::sync::Arc::new(std::fs::read_to_string(simulation_path(root, "game/game_mk.json")).ok()?);
+        *c = Some((key, j.clone()));
+        return Some(j);
+    }
+    if !BUILDING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        let install = root.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let script = install.join("tools/assets/build_mk.py");
+        let python = [install.join("python/python.exe"), install.join("tools/.venv/Scripts/python.exe"), install.join("python/bin/python3")]
+            .into_iter().find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from("python"));
+        let items = root.join("game/mk_items.json");
+        let list: Vec<&String> = owned.iter().collect();
+        if script.is_file() && std::fs::write(&items, serde_json::to_string(&list).unwrap_or_default()).is_ok() {
+            let root = root.to_path_buf();
+            std::thread::spawn(move || {
+                let ok = std::process::Command::new(&python).arg("-I").arg(&script).arg(&root).arg(&items)
+                    .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+                eprintln!("Monkey Knowledge models rebuilt: {ok}");
+                BUILDING.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+        } else {
+            BUILDING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    None
+}
+
 fn game_data(root: &std::path::Path, json: &str, hero: Option<&str>, map: &str,local_mods:bool) -> data::GameData {
+    // Monkey Knowledge: the profile's owned items, in every mode but CHIMPS (as the game's knowledge
+    // works); co-op keeps the base models.
+    let mode = read_settings(root)["mode"].as_str().unwrap_or("Medium").to_string();
+    let owned = local_profile::get(root).knowledge;
+    let mk = (local_mods && mode != "CHIMPS" && !owned.is_empty()).then(|| knowledge_json(root, &owned)).flatten();
+    let json: &str = mk.as_deref().map(|s| s.as_str()).unwrap_or(json);
     let compiled=match modding::game_json(root,json,local_mods){Ok(v)=>v,Err(error)=>{eprintln!("Content mods not applied: {error}");None}};
     let mut d = with_hero(compiled.as_deref().unwrap_or(json), hero);
     // The difficulty from settings.json ("mode"), Medium by default.
