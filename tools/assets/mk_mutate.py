@@ -537,7 +537,7 @@ def m_cold_front(tw, mm, target):
 
 def m_tiny_tornadoes(tw, mm, target):
     # TinyTornadoesModModel.Mutate (VERIFIED-DECOMP @0x1812b22a0): a Druid (baseId) with top path 3+:
-    # the projectile of every attack whose name contains "Tornado" gets CreateProjectileOnExpireModel and
+    # the projectile of every weapon whose name contains "Tornado" gets CreateProjectileOnExpireModel and
     # CreateProjectileOnExhaustFractionModel (fraction 1, durationfraction -1, passOnCollidedWith),
     # both "TinyTornadoes", each with a clone of the mod's projectile (middle path 2+: the
     # "HeartOfOak" copy with a RemoveBloonModifiersModel cleansing regrow) and of its emission, then
@@ -575,13 +575,12 @@ def m_tiny_tornadoes(tw, mm, target):
         if bid is not None:
             append_ids(tw.m, tw.m.objs[c], "behaviors", clone_model(tw.m, bid))
         return c
-    # (The check is on the AttackModel's name, AttackModel_TornadoAttack_; GetDescendant<ProjectileModel>:
-    # its first weapon's projectile.)
-    for at in tw.descendants({"AttackModel"}):
-        if "Tornado" not in name_of(at):
+    # (The check is on the WeaponModel's name: WeaponModel_Tornado, and the Superstorm's
+    # WeaponModel_SuperstormTornado (recording druid_500_mk rt 1235); then its projectile.)
+    for w in tw.descendants({"WeaponModel"}):
+        if "Tornado" not in name_of(w):
             continue
-        ws = [x for x in tw.m.items(at["f"].get("weapons")) if x in tw.m.objs]
-        p = tw.m.ref(tw.m.objs[ws[0]]["f"].get("projectile")) if ws else None
+        p = tw.m.ref(w["f"].get("projectile"))
         if p is None:
             continue
         po = tw.m.objs[p]
