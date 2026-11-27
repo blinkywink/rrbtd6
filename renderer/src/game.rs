@@ -22140,7 +22140,7 @@ impl Game {
                 let drone_paused = self.towers[t].air.as_ref().is_some_and(|a| a.drone.inactive > 0 || a.drone.ignore > 0 || a.hm_custom.is_some_and(|c| c.pause))
                     && self.towers[t].sub.as_ref().is_some_and(|s| s.spec.drone.is_some());
                 // (PauseAttack: an attack outside the Magus graveyard's state doesn't act.)
-                if drone_paused || (!self.towers[t].paused_attacks.is_empty() && self.towers[t].paused_attacks.contains(&attack.model_name)) {
+                if drone_paused || attack.spell || (!self.towers[t].paused_attacks.is_empty() && self.towers[t].paused_attacks.contains(&attack.model_name)) {
                     wi += attack.weapons.len();
                     continue;
                 }

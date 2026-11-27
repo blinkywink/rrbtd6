@@ -2766,6 +2766,14 @@ def main():
                 abilities.append(dict(ability(b), attack_pos=len(attacks)))
             if b["type"] in ("AttackModel", "AttackAirUnitModel"):
                 attacks.append(parse_attack(b))
+        # Corvus's spells' attacks (SpearModel / AncestralMightModel / MalevolenceModel ... .attack): on the
+        # tower but acting only while the spell is cast (recording corvus_l10_r40: Ancestral Might's
+        # weapon 2 never fires). `spell` keeps them paused.
+        spell_names = {(deref(x["f"].get("attack")) or {"f": {}})["f"].get("_name") for x in items(f["behaviors"])
+                       if x and "spellType" in x["f"] and deref(x["f"].get("attack"))}
+        for a in attacks:
+            if a.get("model_name") in spell_names:
+                a["spell"] = True
         # Monkeyopolis.Process (VERIFIED-DECOMP @0x180d49350), once: Banana Farms below tier 5 in
         # range are destroyed and their worth summed; crates = max(worth / valueRequiredForCrate,
         # 1); its EmissionMutator (Mutate @0x180d48480) sets every EmissionsPerRoundFilter's
@@ -3033,16 +3041,16 @@ def main():
         if sm and not air:
             air = {"display": prefab_name(f.get("display")), "speed": sm.get("maxSpeed", 100.0),
                    "accel": sm.get("accelerationPerFrame", 0.1667) * 3600.0, "slowdown": max(sm.get("tolerance", 1.0), 1.0),
-                   # SpiritTowerMovement (`spirit_step`); the *Frames fields: (seconds x 60) rounded.
+                   # SpiritTowerMovement (`spirit_step`); the *Frames fields: (int)(seconds x 60) (the recording's R lines: Range(79, 180)).
                    "spirit_move": {"distance": sm.get("distance", 0.0), "tolerance": sm.get("tolerance", 0.0),
                                    "accel_pf": sm.get("accelerationPerFrame", 0.0), "min_pf": sm.get("minSpeedPerFrame", 0.0),
                                    "max_pf": sm.get("maxSpeedPerFrame", 0.0), "rotation": sm.get("rotation", 0.0),
                                    "accel_angle": sm.get("accelerateInAngle", 0.0),
                                    "decel_angle": sm.get("startDeceleratingIfAngleGreaterThan", 0.0),
-                                   "search_frames": round(sm.get("searchDelay", 0.0) * 60),
-                                   "retreat_frames": round(sm.get("delayUntilNoTargetRetreat", 0.0) * 60),
-                                   "idle_min_frames": round(sm.get("delayBetweenIdleMin", 0.0) * 60),
-                                   "idle_max_frames": round(sm.get("delayBetweenIdleMax", 0.0) * 60)}}
+                                   "search_frames": int(sm.get("searchDelay", 0.0) * 60),
+                                   "retreat_frames": int(sm.get("delayUntilNoTargetRetreat", 0.0) * 60),
+                                   "idle_min_frames": int(sm.get("delayBetweenIdleMin", 0.0) * 60),
+                                   "idle_max_frames": int(sm.get("delayBetweenIdleMax", 0.0) * 60)}}
         if air:
             for b in items(f["behaviors"]):
                 if b and b["type"] in ("AttackModel", "AttackAirUnitModel"):

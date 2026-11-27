@@ -1118,6 +1118,9 @@ pub struct Necro {
 
 #[derive(Deserialize, Clone)]
 pub struct Attack {
+    /// A Corvus spell's attack: paused unless the spell is cast.
+    #[serde(default)]
+    pub spell: bool,
     /// A hero's: the level it is unlocked at (0 otherwise); with the model order, its place in
     /// the game's weapon list.
     #[serde(default)]
