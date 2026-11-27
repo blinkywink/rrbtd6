@@ -88,6 +88,7 @@ class Tower:
         # (The tower object itself keeps its id: GameModel.towers points at it.)
         self.root = tid
         memo[tid] = tid
+        self.memo = memo
         o = m.objs[tid]
         for k, v in list(o["f"].items()):
             if isinstance(v, dict) and "$ref" in v:
@@ -100,6 +101,56 @@ class Tower:
                     m.values[cid] = c
                     c["items"] = [cp(e) if isinstance(e, int) and e in m.objs else e for e in c["items"]]
                     o["f"][k] = {"$ref": cid}
+
+    def descendants_all_holders(self):
+        """Every model below the root through any field, not into nested TowerModels."""
+        out, seen = [], set()
+
+        def rec(oid):
+            if oid in seen:
+                return
+            seen.add(oid)
+            o = self.m.objs[oid]
+            if o["type"] == "TowerModel" and oid != self.root:
+                return
+            out.append(o)
+            for k, v in o["f"].items():
+                if k == "childDependants":
+                    continue
+                r = self.m.ref(v)
+                if r is not None:
+                    rec(r)
+                    continue
+                for e in self.m.items(v):
+                    if isinstance(e, int) and e in self.m.objs:
+                        rec(e)
+        rec(self.root)
+        return out
+
+    def descendants_all_towers(self):
+        """TowerModels reachable through any model field below the root (not the root)."""
+        out, seen = [], set()
+
+        def rec(oid):
+            if oid in seen:
+                return
+            seen.add(oid)
+            o = self.m.objs[oid]
+            if o["type"] == "TowerModel" and oid != self.root:
+                out.append(oid)
+                return
+            for k, v in o["f"].items():
+                if k == "childDependants":
+                    continue
+                r = self.m.ref(v)
+                if r is not None:
+                    rec(r)
+                    continue
+                for e in self.m.items(v):
+                    if isinstance(e, int) and e in self.m.objs:
+                        rec(e)
+        rec(self.root)
+        return out
 
     def descendants(self, types=None):
         """Model.GetDescendants: every model under the tower through childDependants, depth first,
@@ -516,6 +567,9 @@ MUTATORS = {
 }
 
 
+LINK_TYPES = set(os.environ.get("MK_LINK_TYPES", "MorphTowerModel").split(","))
+
+
 def main():
     src, out = sys.argv[1], sys.argv[2]
     oracle = sys.argv[sys.argv.index("--oracle") + 1] if "--oracle" in sys.argv else None
@@ -545,6 +599,18 @@ def main():
     views = [Tower(m, tid) for tid in tower_ids]
     for tw in views:
         apply(tw)
+    # HYPOTHESIS P-MKLINK: a tower inside another that is itself a GameModel.towers entry is that
+    # entry, modded (oracle: DanD 3's MorphTowerModel tower is modded once; Buccaneer 4-0-0's own
+    # plane copy is not).
+    if not os.environ.get("MK_NOLINK"):
+        listed = set(tower_ids)
+        for tw in views:
+            inv = {v: k for k, v in tw.memo.items() if isinstance(k, int)}
+            for o in tw.descendants_all_holders():
+                for k, v in list(o["f"].items()):
+                    r = m.ref(v)
+                    if r is not None and inv.get(r) in listed and inv.get(r) != tw.root and o["type"] in LINK_TYPES:
+                        o["f"][k] = {"$ref": inv[r]}
     print("mutators not ported (uses):", missing.most_common(20))
     if oracle:
         compare(m, Model(oracle), tower_ids)
