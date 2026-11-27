@@ -2907,6 +2907,9 @@ pub struct Ability {
     /// AbilityModel.resetCooldownOnTierUpgrade: it starts on its full cooldown.
     #[serde(default)]
     pub full_start: bool,
+    /// EmergencyUnlockModel (Monkey Knowledge): [swivelSpeedMultiplier, durationFrames].
+    #[serde(default)]
+    pub emergency_unlock: Option<[f32; 2]>,
     /// DetectCamoOnAbilityModel.lifespanFrames (Monkey Knowledge): camo detection per activation.
     #[serde(default)]
     pub camo_frames: i64,

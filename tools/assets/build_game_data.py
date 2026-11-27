@@ -2330,6 +2330,10 @@ def main():
                    "full_start": bool(bf.get("resetCooldownOnTierUpgrade")),
                    # DetectCamoOnAbilityModel (Monkey Knowledge's GrantCamoDetectForAbility):
                    # lifespanFrames of camo detection on the tower and its sub-towers per activation.
+                   # EmergencyUnlockModel (Monkey Knowledge's Dartling ability): [swivelSpeedMultiplier,
+                   # durationFrames].
+                   "emergency_unlock": next(([x["f"].get("swivelSpeedMultiplier", 1.0), float(x["f"].get("durationFrames") or int(round(x["f"].get("duration", 0.0) * 60)))]
+                                   for x in items(bf.get("behaviors")) if x and x["type"] == "EmergencyUnlockModel"), None),
                    "camo_frames": next((int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", x["f"].get("lifespan", 0.0)))[0] * 60.0))[0]) for x in items(bf.get("behaviors"))
                                         if x and x["type"] == "DetectCamoOnAbilityModel"), 0),
                    # cooldownSpeedScale (+0x88): Ability.Process (@0x180dfafc0) takes 1 / (1 - it)

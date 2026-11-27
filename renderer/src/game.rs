@@ -16039,6 +16039,22 @@ impl Game {
     }
 
     fn use_ability_effects(&mut self, t: usize, a: &crate::data::Ability) {
+        // EmergencyUnlock.Activate -> EmergencyUnlockSimBehavior.OnActivate (VERIFIED-DECOMP
+        // @0x180e70350): every DartlingGunner of the player on Locked (or TargetIndependant) gets the
+        // EmergencyUnlockMutator for durationFrames (its RotateToPointerModel rates x
+        // swivelSpeedMultiplier, @0x1812835a0) and the target type Normal.
+        if let Some([mult, frames]) = a.emergency_unlock {
+            let _ = t;
+            for o in 0..self.towers.len() {
+                if self.tower_defs[self.towers[o].def].0 != "DartlingGunner" || self.towers[o].sub.is_some() || self.towers[o].target != TargetMode::Point {
+                    continue;
+                }
+                let tw = &mut self.towers[o];
+                tw.target = TargetMode::Pointer;
+                tw.timed_muts.retain(|m| m.0 != "EmergencyUnlock");
+                tw.timed_muts.push(("EmergencyUnlock".into(), "swivel".into(), mult, frames as i64));
+            }
+        }
         // DetectCamoOnAbility.Activate (VERIFIED-DECOMP @0x180e28880): its camo mutator on the tower
         // and its sub-towers (AddMutatorIncludeSubTowers) for lifespanFrames.
         if a.camo_frames > 0 {
@@ -23550,7 +23566,9 @@ impl Game {
                     let tw = &self.towers[t];
                     let fwd = [pos[0] + tw.angle.cos() * 40.0, pos[1] + tw.angle.sin() * 40.0];
                     let aim = match mode {
-                        TargetMode::Pointer => self.coop_pointer(tw.id).unwrap_or(fwd),
+                        // (No cursor yet: a Dartling Emergency Unlock switched from Locked keeps aiming at its
+                        // locked point (recording dartling_400_unlock_mk, the cursor never active).)
+                        TargetMode::Pointer => self.coop_pointer(tw.id).or(tw.point).unwrap_or(fwd),
                         _ => tw.point.unwrap_or(fwd),
                     };
                     // TargetPointer.GetTarget (VERIFIED-DISASM @0xe06e20): the pointer is always a
@@ -23559,7 +23577,9 @@ impl Game {
                     // Dartling shoots at the cursor as soon as it is placed).
                     let has_point = mode == TargetMode::Pointer || self.towers[t].point.is_some();
                     best = (has_point || any_target).then_some((0.0, aim, 0));
-                    if let Some(rate) = attack.turn_rate.filter(|r| *r < 1e5 && !attack.turn_tower) {
+                    // (EmergencyUnlockMutator: RotateToPointerModel rate x swivelSpeedMultiplier.)
+                    let swivel: f32 = self.towers[t].timed_muts.iter().filter(|m| m.1 == "swivel").map(|m| m.2).product();
+                    if let Some(rate) = attack.turn_rate.filter(|r| *r < 1e5 && !attack.turn_tower).map(|r| r * swivel) {
                         // (rotateTower off, Dartling 0-0-4 / 0-0-5: each gun's RotateToPointer turns its
                         // own attack, from 0, the same way; its shots leave along it. Recording
                         // dartling_004: gun 2's volley at rt 19 along -55.06.)
@@ -23575,7 +23595,7 @@ impl Game {
                         tw.aim_rots[ai] = (if new.is_finite() { round_angle(new) } else { cur }, vel);
                         attack_rot = Some(tw.aim_rots[ai].0);
                         turning = true;
-                    } else if let Some(rate) = attack.turn_rate {
+                    } else if let Some(rate) = attack.turn_rate.map(|r| r * swivel) {
                         if !turned && !attack.turn_on_emit {
                             // RotateToPointer.Process (VERIFIED-DISASM @0xdd6270): the point raised by
                             // weaponEjectZ in camera space (Vector2.AdjustHeightInCameraSpace), its
