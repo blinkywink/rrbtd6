@@ -210,6 +210,20 @@ TOWERS.md has the longer per-tower notes.
   (1944 of 2024 tiers change: e.g. Tack 2-0-0 rate 0.63 -> 0.5622, hits Frozen, lifespan 0.23; Dart
   pierce 3; rates x 0.97). Limits: towers sharing a name (Marine, SpiritTower) are ambiguous in the
   dump; Vector3 struct arrays (path / easePath) compare by reference (noise, skipped).
+- tools/assets/mk_mutate.py (2026-11-26): the engine. Per GameModel.towers entry a private copy of its
+  tree (sharing inside it kept: the game changes a shared model once); each ApplyModModel of an active
+  mod runs its ModModel's mutatorMods; Model.GetDescendants = childDependants, not into nested
+  TowerModels (oracle: Buccaneer 4-0-0's plane keeps its rate); HasTargetName: the model's _name (one
+  trailing '_' dropped) ends with a target. Ported (24): reload %, reload reduction, pierce (minTier:
+  any tier >= it), ability cooldown % / time (min 0.05), projectile range % (TravelStrait + Age
+  lifespan), range (tower + attacks without fixedRange), projectile speed / radius, damage type,
+  knockback, retarget, track target, ignore blockers, DoT (min 0.05), push back, wind, tower expire,
+  slow / freeze / slow-for-tag modifiers, increase range, arc count (by weapon name), damage modifier
+  for tag (existing first one with the tag, else a new one). `--oracle local_extracted/decoded_mk`
+  counts differences by (type, field): 17199 -> 5608. Left: TowerXp / TowerSell (tower behaviours),
+  UpgradeCost, hero XP / cost, the economy mods (cash, bank, discount zone...), AddAbility, nested
+  tower models inside abilities (DanD 3's towerModel IS modded: unlike CreateTowerModel's), the
+  comparer's plain-list containers (`$ref` noise).
 - NEXT: the dump can't ship (it needs the modded game), so it is the ORACLE: implement each mutator's
   Mutate (decomp) in the extraction pipeline driven by ApplyModModel, until the result equals the
   dump-applied decoded_mk; then the clone loads game_mk.json in Standard modes with knowledge, and

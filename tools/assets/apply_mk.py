@@ -103,14 +103,61 @@ def main():
     ms = {k: v for k, v in a_ms.items() if n_ms.get(k) != v}
     ma = {k: v for k, v in a_ma.items() if k not in n_ma}
 
-    towers = {}
-    for o in objs.values():
-        if o["type"] == "TowerModel":
-            towers.setdefault(o["f"].get("_name"), o["i"])
-    upgrades = {o["f"].get("_name"): o["i"] for o in objs.values() if o["type"] == "UpgradeModel"}
-
+    # GameModel.towers, each given its own root object (a tower model is also referenced from inside
+    # others, a CreateTowerModel's tower: those keep the base model, as the game's do).
+    gm = next(o for o in objs.values() if o["type"] == "GameModel")
+    gcont = gm["f"]["towers"]["$ref"]
     # Per tower: which object ids are already this tower's own copies.
     own = collections.defaultdict(set)
+
+    def copy_tree(tid, mine):
+        """A copy of the tower's whole model tree, objects shared within it kept shared (the game
+        changes a shared model once, seen from every path; the dump names only the first)."""
+        memo = {}
+
+        def cp(oid):
+            if oid in memo:
+                return memo[oid]
+            nid = new_id()
+            memo[oid] = nid
+            o = copy.deepcopy(objs[oid])
+            o["i"] = nid
+            objs[nid] = o
+            mine.add(nid)
+            for k, v in list(o["f"].items()):
+                if isinstance(v, dict) and "$ref" in v:
+                    r = v["$ref"]
+                    if r in objs:
+                        o["f"][k] = {"$ref": cp(r)}
+                    elif isinstance(values.get(r), dict) and "items" in values[r]:
+                        if ("c", r) not in memo:
+                            cid = new_id()
+                            memo[("c", r)] = cid
+                            c = copy.deepcopy(values[r])
+                            values[cid] = c
+                            mine.add(cid)
+                            c["items"] = [cp(e) if isinstance(e, int) and e in objs else e for e in c["items"]]
+                        o["f"][k] = {"$ref": memo[("c", r)]}
+            return nid
+        return cp(tid)
+
+    towers = {}
+    for k, tid in enumerate(values[gcont]["items"]):
+        if tid not in objs:
+            continue
+        nm = objs[tid]["f"].get("_name")
+        if nm in towers:
+            continue
+        towers[nm] = tid
+    # (All copied from the base model before any change: a tower model is also inside others.)
+    roots = {}
+    for nm, tid in towers.items():
+        roots[nm] = copy_tree(tid, own[nm])
+    for k, tid in enumerate(values[gcont]["items"]):
+        nm = objs[tid]["f"].get("_name") if tid in objs else None
+        if nm in roots and towers[nm] == tid:
+            values[gcont]["items"][k] = roots[nm]
+    towers = roots
 
     def own_obj(tower, oid):
         """This tower's copy of object `oid` (made on first write)."""
@@ -240,7 +287,8 @@ def main():
             return None
         oid = new_id()
         f = {}
-        for name in fields.get(ty, []):
+        # (Its own fields and the inherited Model / behaviour ones.)
+        for name in fields.get(ty, []) + [x for x in ("_name", "collisionPass", "runtimeTypeIndex", "isTower") if x not in fields.get(ty, [])]:
             sub = pre + "/" + name
             if sub + "/$type" in lines:
                 f[name] = {"$ref": build(lines, sub)}
