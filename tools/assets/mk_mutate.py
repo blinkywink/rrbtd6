@@ -487,6 +487,33 @@ def m_alternate_arc(tw, mm, target):
             w["f"]["behaviors"] = {"$ref": vid}
 
 
+def m_paint_stripper(tw, mm, target):
+    # PaintStripperModModel.Mutate (VERIFIED-DECOMP @0x1812aaef0): ProjectileModels with id
+    # "CamoRemoval" or "StripExplosion": every RemoveBloonModifiersModel under them gets a new
+    # bloonTagExcludeList without the comma-separated removeTagsFromExcludeList ("Ddt": the Mortar's
+    # strip works on DDTs).
+    rm = [t for t in (mm.get("removeTagsFromExcludeList") or "").split(",")]
+    for p in tw.descendants({"ProjectileModel"}):
+        if p["f"].get("id") not in ("CamoRemoval", "StripExplosion"):
+            continue
+        for o in subtree(tw.m, p["i"], {"RemoveBloonModifiersModel"}):
+            v = o["f"].get("bloonTagExcludeList")
+            cur = tw.m.values.get(v["$ref"]) if isinstance(v, dict) and "$ref" in v else None
+            old = cur.get("items", []) if isinstance(cur, dict) else cur
+            if not isinstance(old, list):
+                continue
+            new = [x for t in rm for x in old if x != t]
+            cid = tw.m.new_id()
+            if isinstance(cur, dict):
+                c = copy.deepcopy(cur)
+                c["items"] = new
+                c["len"] = len(new)
+            else:
+                c = new
+            tw.m.values[cid] = c
+            o["f"]["bloonTagExcludeList"] = {"$ref": cid}
+
+
 def m_dmg_tag(tw, mm, target):
     # DamageModifierForTagModModel: each named ProjectileModel; its first DamageModifierForTagModel
     # with tag bloonTag gets damageMultiplier + multiplierAdditive and damageAddative + addative;
@@ -885,6 +912,7 @@ MUTATORS = {
     "TargetedPineapplesModModel": m_pineapples,
     "GrantCamoDetectForAbilityModModel": m_grant_camo,
     "AlternateArcModModel": m_alternate_arc,
+    "PaintStripperModModel": m_paint_stripper,
     "CreateEffectOnAbilityModModel": m_effect_on_ability,
     "WingmonkeyModModel": m_wingmonkey,
     "BankDepositsModModel": m_bank_deposits,
