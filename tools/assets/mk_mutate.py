@@ -514,6 +514,27 @@ def m_paint_stripper(tw, mm, target):
             o["f"]["bloonTagExcludeList"] = {"$ref": cid}
 
 
+def m_cold_front(tw, mm, target):
+    # ColdFrontModModel.Mutate (VERIFIED-DECOMP @0x1812a12c0): each ProjectileModel whose name ends
+    # with the target (BallLightningProj) gets a clone of the mod's freeze (FreezeModel, 1.5 s, 4
+    # layers) at the end of its behaviours (then UpdateCollisionPassList).
+    fid = tw.m.ref(mm.get("freeze"))
+    if fid is None:
+        return
+    for p in tw.descendants({"ProjectileModel"}):
+        if not target or not name_of(p).endswith(target):
+            continue
+        cid = clone_model(tw.m, fid)
+        v = p["f"].get("behaviors")
+        c = tw.m.values.get(v["$ref"]) if isinstance(v, dict) and "$ref" in v else None
+        if isinstance(c, dict) and "items" in c:
+            c["items"].append(cid)
+            c["len"] = len(c["items"])
+        elif isinstance(c, list):
+            c.append({"$ref": cid})
+        add_child(tw.m, p, cid)
+
+
 def m_dmg_tag(tw, mm, target):
     # DamageModifierForTagModModel: each named ProjectileModel; its first DamageModifierForTagModel
     # with tag bloonTag gets damageMultiplier + multiplierAdditive and damageAddative + addative;
@@ -913,6 +934,7 @@ MUTATORS = {
     "GrantCamoDetectForAbilityModModel": m_grant_camo,
     "AlternateArcModModel": m_alternate_arc,
     "PaintStripperModModel": m_paint_stripper,
+    "ColdFrontModModel": m_cold_front,
     "CreateEffectOnAbilityModModel": m_effect_on_ability,
     "WingmonkeyModModel": m_wingmonkey,
     "BankDepositsModModel": m_bank_deposits,
