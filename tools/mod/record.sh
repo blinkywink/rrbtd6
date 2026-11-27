@@ -51,6 +51,15 @@ trap 'rm -f "$UD/scenario.json"; rm -rf "$LOCK"' EXIT INT TERM HUP
 # (Process checks through PowerShell: tasklist can hang on this machine.)
 running() { powershell -NoProfile -Command "if (Get-Process BloonsTD6 -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"; }
 kill_game() { powershell -NoProfile -Command "Get-Process BloonsTD6 -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true; }
+# Only SimRecorder plays: every other mod in Mods/ (a bot mod placed its own towers in recordings)
+# goes to DisabledMods/ next to it, and stays there. The game must be closed to move them.
+kill_game
+mkdir -p "$GAME/DisabledMods"
+for m in "$GAME/Mods"/*.dll; do
+  [ -e "$m" ] || continue
+  [ "$(basename "$m")" = "SimRecorder.dll" ] && continue
+  mv -f "$m" "$GAME/DisabledMods/" && echo "record.sh: disabled mod $(basename "$m") (moved to DisabledMods)"
+done
 # One attempt: 0 when the recording came back. A game that stops writing its recording for
 # STALL seconds (a frozen launch or menu) is killed and counts as a failed attempt.
 STALL="${STALL:-90}"

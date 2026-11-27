@@ -36,6 +36,10 @@ pub struct GameData {
     /// amount (the effect's `bonus`, per model) more on a hit whose immunity mask is one of `masks`.
     #[serde(default)]
     pub effect_type_bonus: HashMap<String, TypeBonus>,
+    /// Monkey Knowledge that works on the game, not a model (mk_mutate.py): each mutator's type
+    /// ("ComeOnEverybodyModModel", "StartingCashModModel"...) and fields. Empty in game.json.
+    #[serde(default)]
+    pub mk_sim: Vec<serde_json::Value>,
     pub start: Start,
     pub bloons: HashMap<String, BloonDef>,
     pub towers: HashMap<String, TowerDef>,

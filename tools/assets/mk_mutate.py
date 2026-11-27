@@ -804,7 +804,28 @@ def m_discount_zone(tw, mm, target):
         o["f"]["discountMultiplier"] = f32(fl(o, "discountMultiplier") + f32(mm.get("additionalMultiplier", 0.0)))
 
 
+def m_recurring_rangs(tw, mm, target):
+    # RecurringRangsModModel: a tower whose tiers are within all three [pathNTierMin, pathNTierMax]
+    # ranges: its FollowPathModel (the first one found) takes newPath / newEasePath. (Its three
+    # mutators overlap at the edges: the later one wins.)
+    t = tw.m.objs[tw.root]
+    tr = t["f"].get("tiers")
+    tv = tw.m.values.get(tr["$ref"]) if isinstance(tr, dict) and "$ref" in tr else None
+    if not isinstance(tv, list) or len(tv) < 3:
+        return
+    for k in range(3):
+        if not (mm.get(f"path{k + 1}TierMin", 0) <= tv[k] <= mm.get(f"path{k + 1}TierMax", 5)):
+            return
+    fp = tw.descendants({"FollowPathModel"})
+    if fp:
+        if mm.get("newPath"):
+            fp[0]["f"]["path"] = mm["newPath"]
+        if mm.get("newEasePath"):
+            fp[0]["f"]["easePath"] = mm["newEasePath"]
+
+
 MUTATORS = {
+    "RecurringRangsModModel": m_recurring_rangs,
     "TargetedPineapplesModModel": m_pineapples,
     "GrantCamoDetectForAbilityModModel": m_grant_camo,
     "CreateEffectOnAbilityModModel": m_effect_on_ability,
@@ -925,6 +946,26 @@ def main():
                     r = m.ref(v)
                     if r is not None and inv.get(r) in listed and inv.get(r) != tw.root and o["type"] in LINK_TYPES and k == "towerModel":
                         o["f"][k] = {"$ref": inv[r]}
+    # Game-level knowledge (mods no model's mods list names: ComeOnEverybody, PreGamePrep, MoreCash,
+    # ManaShield, free towers, first-buy discounts...): their mutators' fields go to
+    # GameModel.mkSim for the sim (build_game_data -> game.json mk_sim).
+    listed = set()
+    for o in objs.values():
+        if o["type"] in ("TowerModel", "BloonModel", "PowerModel", "PowerDetailsModel", "PowerProModel"):
+            for a in m.items(o["f"].get("mods")):
+                if a in objs:
+                    listed.add(objs[a]["f"].get("mod"))
+    sim = []
+    for k in m.items(gm["f"].get("allKnowledge")):
+        n = name_of(objs[k]) if k in objs else None
+        if n not in active or n in listed or n not in mods:
+            continue
+        for mmid in m.items(mods[n]["f"].get("mutatorMods")):
+            mm = objs.get(mmid)
+            if mm:
+                sim.append({"type": mm["type"], "knowledge": n,
+                            **{f: v for f, v in mm["f"].items() if f not in ("childDependants", "runtimeTypeIndex", "isTower")}})
+    gm["f"]["mkSim"] = sim
     # UpgradeCostModModel (VERIFIED-DECOMP @0x181133ae0) runs on GameModel.upgrades: the one named
     # upgradeName costs cost - (int)(cost x percentageReduced) - amountReduced. (Each active mod in
     # allKnowledge order; HYPOTHESIS P-MKUPORDER.)

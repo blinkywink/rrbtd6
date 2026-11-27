@@ -4115,6 +4115,15 @@ def main():
     # Kept from the previous game.json: what tools/mod/import_paths.py adds from the real game's
     # map dump (CollisionGrid.orderedNeighborOffsets), and export_overlays.py's overlay table.
     out["effect_type_bonus"] = type_bonus
+    # Monkey Knowledge that works on the game, not a model (mk_mutate.py's GameModel.mkSim): each
+    # mutator's fields, for the sim (ComeOnEverybody, PreGamePrep, StartingCash...).
+    gmo = next((o for o in objs.values() if o["type"] == "GameModel"), None)
+    def mk_field(v):
+        o = deref(v) if isinstance(v, dict) and "$ref" in v else None
+        if o is None:
+            return None if isinstance(v, dict) else v
+        return projectile(o) if isinstance(o, dict) and o.get("type") == "ProjectileModel" else None
+    out["mk_sim"] = [{k: mk_field(v) for k, v in x.items()} for x in ((gmo or {"f": {}})["f"].get("mkSim") or [])]
     gp = os.path.join(root, "game", os.environ.get("RRBTD6_GAME_JSON") or "game.json")
     # (A new variant file keeps them from game.json.)
     src = gp if os.path.exists(gp) else os.path.join(root, "game", "game.json")

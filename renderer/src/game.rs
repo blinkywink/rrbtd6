@@ -4371,6 +4371,10 @@ pub struct Game {
     grid_offsets: Shared<Vec<i32>>,
     /// GameData.effect_type_bonus (IncreaseDamageFromType on a bloon's mutator).
     type_bonus: Shared<HashMap<String, crate::data::TypeBonus>>,
+    /// Monkey Knowledge's ComeOnEverybody (rateMultiplier, discountMultiplier).
+    come_on_everybody: Option<(f32, f32)>,
+    /// Monkey Knowledge's PreGamePrep (distFromEdgeOfMap, its projectile).
+    pre_game_prep: Option<(f32, std::sync::Arc<crate::data::Proj>)>,
     ggrid: GameGrid,
     /// The furthest any bloon moves in a frame (the broad phase looks at frame-start positions).
     max_bloon_step: f32,
@@ -7341,6 +7345,12 @@ impl Game {
             has_grid_rank: !d.grid_offsets.is_empty(),
             grid_offsets: (d.grid_offsets.clone()).into(),
             type_bonus: (d.effect_type_bonus.clone()).into(),
+            pre_game_prep: d.mk_sim.iter().find(|x| x["type"] == "PreGamePrepModModel").and_then(|x| {
+                let p: crate::data::Proj = serde_json::from_value(x["projectileModel"].clone()).ok()?;
+                Some((x["distFromEdgeOfMap"].as_f64().unwrap_or(0.0) as f32, std::sync::Arc::new(p)))
+            }),
+            come_on_everybody: d.mk_sim.iter().find(|x| x["type"] == "ComeOnEverybodyModModel")
+                .map(|x| (x["rateMultiplier"].as_f64().unwrap_or(1.0) as f32, x["discountMultiplier"].as_f64().unwrap_or(0.0) as f32)),
             mutator_data: (d.bloon_mutator_data.clone()).into(),
             ggrid: GameGrid::default(),
             grid_rank: {
@@ -7654,8 +7664,25 @@ impl Game {
         game.power_tower_defs = power_tower_names.into_iter().filter_map(|(pid, name)| Some((pid, game.tower_defs.iter().position(|(n, _)| *n == name)?))).collect();
         game.logic_init_zones();
         game.logic_start();
+        game.pre_game_prep_spikes();
         game.mod_event("on_new_game",None);
         game
+    }
+
+    /// PreGamePrep.OnMatchReady (VERIFIED-DECOMP; Monkey Knowledge): its projectile at
+    /// Map.GetTrackEndPoints(distFromEdgeOfMap) of each path, before anything else (recording
+    /// dart_000_mk: projectile 409 ahead of the tower). HYPOTHESIS P-PREPPOS: the track exit less
+    /// distFromEdgeOfMap, as SingleEmissionAtTrackExit.
+    fn pre_game_prep_spikes(&mut self) {
+        let Some((edge, spec)) = self.pre_game_prep.clone() else { return };
+        let em: Emission = match serde_json::from_value(serde_json::json!({"kind": "Single", "count": 1, "track_exit": edge})) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("PreGamePrep emission: {e}");
+                return;
+            }
+        };
+        self.emit([0.0, 0.0], 0.0, &em, &spec, None, [0; 3], 0);
     }
 
     /// Rounds in this game: the mode's end round, or the whole round set in freeplay.
@@ -18059,6 +18086,14 @@ impl Game {
                 }
                 // MonkeyBoost (a Power, powers.rs): the rate x rateScale while it lasts.
                 b.rate_mult *= self.power_boost(t);
+                // ComeOnEverybody (Monkey Knowledge; ComeOnEverybody.CheckBuffs, VERIFIED-DECOMP): a
+                // Primary tower's rate x rateMultiplier while every Primary tower is below tier 3.
+                if let Some((rm, _)) = self.come_on_everybody {
+                    let primary = |o: usize| self.towers[o].sub.is_none() && self.tier(o).is_some_and(|x| x.set & 1 != 0);
+                    if primary(t) && (0..self.towers.len()).filter(|&o| primary(o)).all(|o| self.towers[o].tiers.iter().all(|&x| x < 3)) {
+                        b.rate_mult *= rm;
+                    }
+                }
                 // Dart Time's TowerTimeSlowMutator: the rate x 1 / towerAttackSpeed.
                 b.rate_mult *= self.dart_time_rate();
                 // OverrideCamoDetection (VERIFIED-DISASM @0xd4fbd0): a camo-detection mutator on the

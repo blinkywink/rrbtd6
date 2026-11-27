@@ -440,6 +440,20 @@ public class Recorder : MelonMod
                     try { ModelDiff.Dump(Game.instance.model, sim.model, Path.Combine(dir, Sc.name + ".mkdump")); }
                     catch (Exception e) { LoggerInstance.Msg("mkdump failed: " + e); }
                 }
+                // Each placed tower's own model (Tower.towerModel) against Simulation.model's by name:
+                // what placement changes ("MD tower path model placed"), to <name>.mkplaced.
+                if (Sc.mkdump || Sc.mk)
+                {
+                    try
+                    {
+                        var pl = new List<(Il2CppAssets.Scripts.Models.Towers.TowerModel, Il2CppAssets.Scripts.Models.Towers.TowerModel)>();
+                        for (int k = 0; k < placed.Count; k++)
+                            if (placed[k] != null && placed[k].towerModel != null)
+                                pl.Add((sim.model.GetTowerFromId(placed[k].towerModel.name), placed[k].towerModel));
+                        ModelDiff.DumpPairs(pl, Path.Combine(dir, Sc.name + ".mkplaced"));
+                    }
+                    catch (Exception e) { LoggerInstance.Msg("mkplaced failed: " + e); }
+                }
                 Out = new StreamWriter(Path.Combine(dir, Sc.name + ".rec"), false, new UTF8Encoding(false));
                 Out.WriteLine($"# SimRecorder {Sc.name} map={Sc.map} difficulty={Sc.difficulty} round={Sc.round} mode={Sc.mode}");
                 // GameModel.randomSeed seeds Simulation.syncedRandom / unsyncedRandom
@@ -2690,6 +2704,20 @@ static class ModelDiff
         }
     }
 
+    public static void DumpPairs(List<(Il2CppAssets.Scripts.Models.Towers.TowerModel, Il2CppAssets.Scripts.Models.Towers.TowerModel)> pairs, string path)
+    {
+        using (W = new StreamWriter(path, false, new UTF8Encoding(false)))
+        {
+            foreach (var (a, b) in pairs)
+            {
+                Tower = b.name;
+                Seen = new HashSet<IntPtr>();
+                W.WriteLine($"# placed {b.name} same-object {(a != null && a.Pointer == b.Pointer)}");
+                if (a != null) Walk(a, b, "", 0);
+            }
+        }
+    }
+
     static string Str(object o) => o switch
     {
         null => "null",
@@ -2850,4 +2878,25 @@ static class ActiveKnowledgePatch
         __result = ak;
         MelonLoader.MelonLogger.Msg("SimRecorder: ActiveKnowledge replaced (mk) " + ak.masks.Length);
     }
+}
+
+/// While recording, the player's own input can't add towers: hotkeys read as not pressed and the
+/// shop's placement mode doesn't start (stray keys from typing elsewhere placed Boomerangs mid-run;
+/// the recorder places through the simulation's InputManager.CreateTowerAt, untouched).
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Unity.UI_New.InGame.InputManager), nameof(Il2CppAssets.Scripts.Unity.UI_New.InGame.InputManager.EnterPlacementMode))]
+static class NoPlayerPlacementPatch
+{
+    static bool Prefix() => Recorder.Out == null;
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Unity.UI_New.InGame.Hotkeys), nameof(Il2CppAssets.Scripts.Unity.UI_New.InGame.Hotkeys.IsHotkeyPressed))]
+static class NoHotkeyPressedPatch
+{
+    static bool Prefix(ref bool __result) { if (Recorder.Out == null) return true; __result = false; return false; }
+}
+
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Unity.UI_New.InGame.Hotkeys), nameof(Il2CppAssets.Scripts.Unity.UI_New.InGame.Hotkeys.IsHotkeyDown))]
+static class NoHotkeyDownPatch
+{
+    static bool Prefix(ref bool __result) { if (Recorder.Out == null) return true; __result = false; return false; }
 }
