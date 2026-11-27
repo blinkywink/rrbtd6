@@ -870,6 +870,9 @@ pub struct Tier {
     /// PerRoundCashBonusTowerModel.cashPerRound: paid at each round end.
     #[serde(default)]
     pub round_cash: f64,
+    /// Corvus's AttunementModel ([maxSpeedMultiplier, maxDamageMultiplier]) and SpiritualWillModel.
+    #[serde(default)]
+    pub corvus: Option<CorvusSpec>,
     #[serde(default)]
     pub round_cash_shared: f64,
     /// SpiritOfTheForestModel (Druid): thorn damage along the track.
@@ -2288,6 +2291,9 @@ pub struct Proj {
     /// the shot was that long (PatsBigSqueezeWind), then carried back to the track.
     #[serde(default)]
     pub squeeze_frames: Option<u64>,
+    /// AddCorvusManaModel.amountOnEmit (Some even when 0: it also gives the damage it does).
+    #[serde(default)]
+    pub mana: Option<i32>,
     /// IgnoreCollisionAfterCollideModel: frames after a collision it hits nothing.
     #[serde(default)]
     pub ignore_after: f32,
@@ -3571,6 +3577,18 @@ pub struct Circle {
 pub struct SwitchDisplay {
     pub display: Option<String>,
     pub lifespan: f32,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct CorvusSpec {
+    #[serde(default)]
+    pub attune: Option<[f32; 2]>,
+    #[serde(default)]
+    pub will: i32,
+    /// BalanceModel: [maxGenerationManaPoolThreshold, maxGenerationRate,
+    /// minGenerationManaPoolThreshold, minGenerationRate].
+    #[serde(default)]
+    pub balance: Option<[f32; 4]>,
 }
 
 #[derive(Deserialize, Clone)]

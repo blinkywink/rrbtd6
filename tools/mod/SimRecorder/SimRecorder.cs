@@ -1811,6 +1811,20 @@ static class SimulatePatch
                 }
                 break;
             }
+            // Corvus's mana (CorvusManager, by the Corvus's owner): "CM owner availableMana
+            // isAttunementActive isRecovering".
+            for (int j = 0; j < ts.Count; j++)
+            {
+                var t0 = ts[j];
+                if (t0 == null || t0.IsDestroyed || t0.towerModel?.baseId != "Corvus") continue;
+                try
+                {
+                    var cm = sim.GetCorvusManager(t0.owner);
+                    if (cm != null) w.WriteLine($"CM {t0.owner} {cm.availableMana} {(cm.isAttunementActive ? 1 : 0)} {(cm.isRecovering ? 1 : 0)}");
+                }
+                catch (Exception) { }
+                break;
+            }
             for (int j = 0; j < ts.Count; j++)
             {
                 var t = ts[j];

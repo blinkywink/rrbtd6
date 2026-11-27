@@ -4330,6 +4330,18 @@ pub struct Game {
     max_bloon_radius: f32,
     /// Health removed from bloons so far (towers are credited with the change around a hit).
     damage_tally: u64,
+    /// CorvusManager.availableMana (0 ..= 800).
+    pub corvus_mana: i32,
+    /// SpiritualWill.framesSinceLastManaGain.
+    corvus_will: i32,
+    /// CorvusManager's attunement multipliers once Attunement.Process activated it.
+    corvus_attune: Option<[f32; 2]>,
+    /// CorvusManager.manaGenerationEquation once Balance.Process set it (its BalanceModel).
+    corvus_balance: Option<[f32; 4]>,
+    /// CorvusManager.hauntedBloonMana (-1: none).
+    corvus_haunt_mana: i32,
+    /// emit's nesting (AddCorvusMana.OnEmit counted once).
+    emit_depth: u32,
     /// Bloons removed for good (popped with no children) so far, and by the last `damage` call:
     /// TheBlazingSun.OnBloonDestroy counts these.
     destroyed_tally: u64,
@@ -5682,6 +5694,15 @@ macro_rules! collide_pass {
             // AddBehaviorToBloon -> Haunt (Attatched @0x180ff5fa0: CorvusManager.HauntedBloonCreated).
             if let Some(h) = $s.projectiles[$p].spec.haunt.clone() {
                 let owner = $s.projectiles[$p].owner;
+                // (HauntedBloonCreated @0x180f98fa0: with none set, hauntedBloonMana =
+                // lowestLayerNumber x manaPerRbe.)
+                #[cfg(test)]
+                if std::env::var("RRBTD6_DBGHAUNT").is_ok() {
+                    eprintln!("DBGAIM haunt_set rt {} bloon {} kind {}", $s.round_clock, $s.bloons[i].id, $s.bloons[i].kind);
+                }
+                if $s.corvus_haunt_mana < 0 {
+                    $s.corvus_haunt_mana = $s.bloons[i].lowest as i32 * h.mana_per_rbe;
+                }
                 $s.bloons[i].haunt = Some((owner, h));
             }
             #[allow(unused_variables)]
@@ -5776,6 +5797,15 @@ macro_rules! collide_pass {
             let hit_z = b.height;
             let mut popped_now = 0u64;
             let mut dmg = pr.crit.unwrap_or(pr.spec.damage);
+            // CorvusManager.UpdateAttunmentRates (VERIFIED-DECOMP @0x180f9ec60): with Attunement the
+            // Spirit's DamageModel is (maxDamageMultiplier - 1) x its level's damage x mana / 800 +
+            // that damage. HYPOTHESIS P-ATTUNEDMG: the Spirit's MainProjectile.
+            if let (Some([_, md]), true) = ($s.corvus_attune, &*pr.spec.pid == "MainProjectile") {
+                if $s.towers.iter().any(|t| t.id == pr.emitted_by && t.air.as_ref().is_some_and(|a| a.sp.is_some())) {
+                    let o = pr.spec.damage;
+                    dmg = (md - 1.0) * o * ($s.corvus_mana as f32 / 800.0) + o;
+                }
+            }
             // (Whether SilasApplyRime finds its Rime: from before this hit, whose own Rime the
             // effects put on first.)
             let silas_rimed = pr.spec.silas_rime.as_ref().is_some_and(|sr| b.effects.iter().any(|e| *e.id == *sr.rime_id.as_str()));
@@ -6239,6 +6269,12 @@ macro_rules! collide_pass {
                 // here still .round(): with the draw, druid 32/35 and mermonkey 34/35, whose clone
                 // damage has fractions the game's doesn't. OPEN P-DMGROUND.)
                 let mut n = $s.damage(i, dmg.round() as i32, &mut $kids);
+                // AddCorvusMana.Collide (VERIFIED-DECOMP @0x180c83d60): the bloon's
+                // damageResult.nonRegrowDamage.
+                if $s.projectiles[$p].spec.mana.is_some() {
+                    let d = ($s.damage_tally - tally0) as i32;
+                    $s.corvus_add_mana(d);
+                }
                 // DetonateEffect.Collide (VERIFIED-DECOMP @0x180cb8d70; collisionPass 0, added after
                 // the DamageModel by the ability's mutator): for each key a timed mutator of it on
                 // what the bloon is now, Bloon.Damage(dps x its frames left / 60) rounded as
@@ -7277,6 +7313,12 @@ impl Game {
             names: names.into(),
             max_bloon_radius,
             damage_tally: 0,
+            corvus_mana: 0,
+            corvus_will: 0,
+            corvus_attune: None,
+            corvus_balance: None,
+            corvus_haunt_mana: -1,
+            emit_depth: 0,
             destroyed_tally: 0,
             last_destroyed: 0,
             has_grid_rank: !d.grid_offsets.is_empty(),
@@ -11464,8 +11506,10 @@ impl Game {
         } else {
             st.accel
         };
-        let max = sm.max_pf;
-        let mut v = if st.accel { 1.0f32 } else { -1.0 } * sm.accel_pf + st.speed;
+        // (scaleBonusesToSpeed: Attunement's scale on the acceleration and GetMaxSpeedPerFrame.)
+        let scale = self.corvus_speed_scale();
+        let max = sm.max_pf * scale;
+        let mut v = if st.accel { 1.0f32 } else { -1.0 } * (sm.accel_pf * scale) + st.speed;
         v = if v < sm.min_pf { sm.min_pf } else if max < v { max } else { v };
         st.speed = r100(v);
         let rot = if -sm.rotation > angle { -sm.rotation } else if angle > sm.rotation { sm.rotation } else { angle };
@@ -11476,6 +11520,10 @@ impl Game {
         let tr3 = |v: f32| (((v * 1000.0) as f64).trunc() / 1000.0f32 as f64) as f32;
         st.dir = [tr3(n[0]), tr3(n[1])];
         let np = [pos[0] + st.dir[0] * st.speed, pos[1] + st.dir[1] * st.speed];
+        #[cfg(test)]
+        if std::env::var("RRBTD6_DBGSP").is_ok() {
+            eprintln!("DBGAIM sp rt {} state {} tgt {:?} goal {:?} pos {:?} dir {:?} last {:?} speed {} accel {} angle {} sm {:?}", self.steps, st.state, st.target, goal, pos, st.dir, st.last_dir, st.speed, st.accel, angle, sm);
+        }
         let np = [np[0].clamp(-WORLD_X, WORLD_X), np[1].clamp(-WORLD_Z, WORLD_Z)];
         let np = [tr3(np[0]), tr3(np[1])];
         let target_live = match st.target {
@@ -21330,14 +21378,22 @@ impl Game {
     /// children: when no other haunted bloon is left, Haunt.EmitProjectile (@0x180ff6030) where it was.
     fn haunt_destroyed(&mut self, id: u64, at: [f32; 2], z: f32, haunt: &Option<(u64, std::sync::Arc<crate::data::HauntSpec>)>) {
         let Some((owner, hs)) = haunt.clone() else { return };
+        #[cfg(test)]
+        if std::env::var("RRBTD6_DBGHAUNT").is_ok() {
+            eprintln!("DBGAIM haunt_destroyed rt {} id {} others {:?}", self.round_clock, id, self.bloons.iter().filter(|b| b.id != id && b.haunt.is_some()).map(|b| (b.id, b.hp, b.kind)).collect::<Vec<_>>());
+        }
         if self.bloons.iter().any(|b| b.id != id && b.haunt.is_some()) {
             return;
         }
+        // (hauntedBloonMana to Corvus first, then -1 after the emit.)
+        let m = self.corvus_haunt_mana;
+        self.corvus_add_mana(m);
         let tiers = self.towers.iter().find(|t| t.id == owner).map_or([0; 3], |t| t.tiers);
         let saved = self.emit_z;
         self.emit_z = z;
         self.emit(at, 0.0, &hs.emission, &hs.explosion, None, tiers, owner);
         self.emit_z = saved;
+        self.corvus_haunt_mana = -1;
     }
 
     fn bloon_destroyed(&mut self, id: u64, at: [f32; 2], z: f32) {
@@ -21512,6 +21568,7 @@ impl Game {
             }
             if only_temp.is_none() {
                 self.collect_zone_step(t);
+                self.corvus_passives(t);
                 // (A drone acts in its place in the process list: the bloons older than it have
                 // moved by then; recording etienne_l03_r20 rt 461, a swarm drone made at 401 takes
                 // Pink 564 where it is after that frame's move.)
@@ -23489,6 +23546,12 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                         Some(y) => y,
                         None => best,
                     };
+                    // An attack with no TargetSupplier (Corvus's Dark Ritual: fireWithoutTarget, no
+                    // Target*Model) has no Target: its Instant shot stays where it was made (recording
+                    // corvus_l20_r80 rt 401, PT -1 on Corvus).
+                    if ambient && attack.targets.is_empty() {
+                        best = None;
+                    }
                     if let Some(Some((_, p, _))) = young_best {
                         self.air_rotate_to(t, 0, buff.attack_range(attack), Some(p));
                     }
@@ -29856,6 +29919,81 @@ impl Game {
     }
 
     fn emit(&mut self, from: [f32; 2], dir: f32, em: &Emission, spec: &Proj, crit: Option<f32>, tiers: [u8; 3], owner: u64) {
+        // AddCorvusMana.OnEmit (VERIFIED-DECOMP @0x180c83ee0): amountOnEmit for each one made.
+        if spec.mana.is_some_and(|n| n > 0) && self.emit_depth == 0 {
+            let start = self.projectiles.len();
+            self.emit_depth += 1;
+            self.emit_body(from, dir, em, spec, crit, tiers, owner);
+            self.emit_depth -= 1;
+            let n = self.projectiles[start..].iter().filter(|p| p.spec.mana.is_some_and(|n| n > 0)).map(|p| p.spec.mana.unwrap_or(0)).collect::<Vec<i32>>();
+            for m in n {
+                self.corvus_add_mana(m);
+            }
+            return;
+        }
+        self.emit_body(from, dir, em, spec, crit, tiers, owner);
+    }
+
+    /// Corvus's passives in its turn: Attunement.Process (VERIFIED-DECOMP @0x180faf000) activates the
+    /// manager's attunement; SpiritualWill.Process (@0x180fc2260): while the round's spawner is
+    /// emitting, a frame counted; past 59, manaPerSecond and 60 off.
+    /// HYPOTHESIS P-WILLEMIT: emitting while spawns are queued.
+    fn corvus_passives(&mut self, t: usize) {
+        let Some(cs) = self.tier(t).and_then(|tr| tr.corvus.clone()) else { return };
+        if let Some(a) = cs.attune {
+            self.corvus_attune = Some(a);
+        }
+        if let Some(b) = cs.balance {
+            self.corvus_balance = Some(b);
+        }
+        if cs.will > 0 {
+            if self.round_active && !self.pending.is_empty() {
+                self.corvus_will += 1;
+            }
+            if self.corvus_will > 59 {
+                self.corvus_add_mana(cs.will);
+                self.corvus_will -= 60;
+            }
+        }
+    }
+
+    /// CorvusManager.AddMana (VERIFIED-DECOMP @0x180f92fc0; manaGenerationEquation null): under 800
+    /// it adds, capped at 800.
+    fn corvus_add_mana(&mut self, n: i32) {
+        // Balance.ManaGenerationEquation (VERIFIED-DECOMP @0x180faf220) of availableMana / 800,
+        // truncated to int, times the amount.
+        let n = match self.corvus_balance {
+            Some([t0, r0, t1, r1]) => {
+                let x = self.corvus_mana as f32 / 800.0;
+                let f = if t0 < x {
+                    if x < t1 {
+                        let k = (r1 - r0) / (t1 - t0);
+                        (r1 - k * t1) + k * x
+                    } else {
+                        r1
+                    }
+                } else {
+                    r0
+                };
+                n * f as i32
+            }
+            None => n,
+        };
+        if self.corvus_mana < 800 {
+            self.corvus_mana = (self.corvus_mana + n).min(800);
+        }
+    }
+
+    /// The Spirit's speed scale (CorvusManager.UpdateAttunmentRates, VERIFIED-DECOMP @0x180f9ec60):
+    /// with Attunement, availableMana / 800 x (maxSpeedMultiplier - 1) + 1.
+    fn corvus_speed_scale(&self) -> f32 {
+        match self.corvus_attune {
+            Some([s, _]) => (self.corvus_mana as f32 / 800.0) * (s - 1.0) + 1.0,
+            None => 1.0,
+        }
+    }
+
+    fn emit_body(&mut self, from: [f32; 2], dir: f32, em: &Emission, spec: &Proj, crit: Option<f32>, tiers: [u8; 3], owner: u64) {
         // SingleEmissionAtTrackExit: its positions are each path's leakDistance less
         // distanceFromEdge along it (recording dand_l20_r80 rt 399: Magic Barrier and Quick
         // Thinking at Tutorial's 1068.22). HYPOTHESIS P-TRACKEXIT: every path with a leakDist.
@@ -32739,6 +32877,9 @@ mod tests {
         // SimRecorder IN lines: the InputManager's cursor in that frame while active and not
         // ignored (FollowTouchSetting reads it).
         let mut cursors: Vec<Option<[f32; 2]>> = Vec::new();
+        // "CM owner availableMana ...": Corvus's mana each frame.
+        let mut manas: Vec<Option<i32>> = Vec::new();
+        let mut first_mana: Option<(i64, i32, i32)> = None;
         // Each tower id's first W line: (frame index, its position), for UsePresetTarget below.
         let mut first_w: Vec<(u64, usize, [f32; 2])> = Vec::new();
         // Per frame: Path.bloonsList as (type, distance), when recorded.
@@ -32793,6 +32934,7 @@ mod tests {
                     places.push(Vec::new());
                     lists.push(None);
                     cursors.push(None);
+                    manas.push(None);
                     ids.clear();
                 }
                 Some("B") if !frames.is_empty() => {
@@ -32811,6 +32953,9 @@ mod tests {
                 Some("HM") if !frames.is_empty() => {
                     has_hm = true;
                     places.last_mut().unwrap().push((2, bits(f[2].parse().unwrap()), bits(f[3].parse().unwrap())));
+                }
+                Some("CM") if !frames.is_empty() && f.len() >= 3 => {
+                    *manas.last_mut().unwrap() = f[2].parse().ok();
                 }
                 Some("IN") if !frames.is_empty() && f[3] == "1" && f[4] == "0" => {
                     *cursors.last_mut().unwrap() = Some([f[1].parse().unwrap(), -f[2].parse::<f32>().unwrap()]);
@@ -33035,6 +33180,12 @@ mod tests {
                     }
                 }
             }
+            // (The frame before's mana, after its abilities.)
+            if let (Some(m), None, true) = (fi.checked_sub(1).and_then(|k| manas[k]), first_mana, fi > 0) {
+                if m != g.corvus_mana {
+                    first_mana = Some((times[fi - 1], m, g.corvus_mana));
+                }
+            }
             let mut guard = 0;
             g.cursor = cursors[fi];
             // Frame by frame on the game's own count (roundTime repeats on the frame between
@@ -33150,7 +33301,7 @@ mod tests {
                     eprintln!("  rt {rt} clone hits {:?} layers {:?}", g.projectiles.iter().map(|p| (p.hit.small.clone(), p.clear_t, p.clear_hits_next)).collect::<Vec<_>>(), g.bloons.iter().map(|b| (b.id, b.layer, b.lineage.clone())).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone subpos {:?}", g.towers.iter().filter(|t| t.sub.is_some()).map(|t| (t.pos, t.game_rot, t.sub.as_ref().and_then(|s| s.path_index))).collect::<Vec<_>>());
                     eprintln!("  rt {rt} clone plist {:?} live {:?}", g.proj_list, g.projectiles.iter().map(|p| p.uid).collect::<Vec<_>>());
-                    eprintln!("  rt {rt} clone clock {} steps {} round {} active {} pending {} elapsed {} end {} won {} freeplay {}", g.round_clock, g.steps, g.round, g.round_active, g.pending.len(), g.sim_elapsed, g.end_round, g.won, g.freeplay);
+                    eprintln!("  rt {rt} clone clock {} steps {} round {} active {} pending {} elapsed {} end {} won {} freeplay {} mana {} will {}", g.round_clock, g.steps, g.round, g.round_active, g.pending.len(), g.sim_elapsed, g.end_round, g.won, g.freeplay, g.corvus_mana, g.corvus_will);
                     eprintln!("  rt {rt} clone list {:?}", g.path_lists.first());
                 }
             }
@@ -33277,6 +33428,9 @@ mod tests {
         if let Some((rt, a, b)) = &first_place {
             let show = |v: &Vec<(u8, u32, u32)>, o: &Vec<(u8, u32, u32)>| v.iter().filter(|x| !o.contains(x)).map(|&(k, x, y)| (match k { 0 => "bloon", 1 => "proj", _ => "plane" }, f32::from_bits(x), f32::from_bits(y))).collect::<Vec<_>>();
             eprintln!("    first position difference at roundTime {rt}: only in game {:?}, only in clone {:?}", show(a, b), show(b, a));
+        }
+        if let Some((t, m, c)) = first_mana {
+            eprintln!("    first mana difference at time {t}: game {m}, clone {c}");
         }
         // The end screens' player stats after the replay (compare a recording's end-screen text).
         let star = g.towers.iter().filter(|t| t.sub.is_none()).max_by_key(|t| t.pops).map(|t| (t.tiers, t.pops));

@@ -1183,6 +1183,10 @@ def main():
         # DelayBloonChildrenSpawningModel (Pat's Big Squeeze): Collide (VERIFIED-DECOMP @0x180cb75e0)
         # gives the bloon's layers a WindMutator -> PatsBigSqueezeWind (startLocation the shot's
         # position, framesToWait lifespanFrames).
+        # AddCorvusManaModel: OnEmit (VERIFIED-DECOMP @0x180c83ee0) gives Corvus amountOnEmit mana when
+        # it is over 0; Collide (@0x180c83d60) the bloon's damageResult.nonRegrowDamage.
+        if pb.get("AddCorvusManaModel"):
+            out["mana"] = pb["AddCorvusManaModel"][0]["f"].get("amountOnEmit", 0)
         if pb.get("DelayBloonChildrenSpawningModel"):
             df = pb["DelayBloonChildrenSpawningModel"][0]["f"]
             out["squeeze_frames"] = df.get("lifespanFrames") or int(df.get("lifespan", 0.0) * 60)
@@ -3346,6 +3350,16 @@ def main():
                 "range_links": [[prefab_name(b["f"].get("displayPath")), b["f"].get("displayRadius", 0.0)]
                                 for b in items(f["behaviors"]) if b and b["type"] == "LinkDisplayScaleToTowerRangeModel"
                                 and prefab_name(b["f"].get("displayPath")) and b["f"].get("displayRadius")],
+                # Corvus's passives: AttunementModel (Attunement.Process -> CorvusManager.ActivateAttunement,
+                # VERIFIED-DECOMP @0x180faf000) and SpiritualWillModel (SpiritualWill.Process @0x180fc2260).
+                "corvus": next(({"attune": next(([a["f"].get("maxSpeedMultiplier", 1.0), a["f"].get("maxDamageMultiplier", 1.0)]
+                                                  for a in items(f["behaviors"]) if a and a["type"] == "AttunementModel"), None),
+                                 "will": next((a["f"].get("manaPerSecond", 0) for a in items(f["behaviors"]) if a and a["type"] == "SpiritualWillModel"), 0),
+                                 # BalanceModel: Balance.ManaGenerationEquation (VERIFIED-DECOMP @0x180faf220).
+                                 "balance": next(([a["f"].get("maxGenerationManaPoolThreshold", 0.0), a["f"].get("maxGenerationRate", 1.0),
+                                                   a["f"].get("minGenerationManaPoolThreshold", 0.0), a["f"].get("minGenerationRate", 1.0)]
+                                                  for a in items(f["behaviors"]) if a and a["type"] == "BalanceModel"), None)}
+                                for b in items(f["behaviors"]) if b and b["type"] in ("AttunementModel", "SpiritualWillModel", "BalanceModel")), None),
                 "attacks": attacks, "pets": pets, "leash_rotate": leash_rotate, "merge_fx": merge_fx, "merged_fx": merged_fx, "power_fx": power_fx, "merge_sound": merge_sound, "leash_power": leash_power, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
                 "round_start_rate": round_start_rate, "vigilante": vigilante, "vigilante_fx": vigilante_fx, "bank": bank, "supports": supports,
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
