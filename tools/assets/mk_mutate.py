@@ -430,6 +430,7 @@ def m_dmg_tag(tw, mm, target):
         c = m.values[beh["$ref"]]
         c["items"].append(nid)
         c["len"] = len(c["items"])
+        add_child(m, p, nid)
         p["f"]["hasDamageModifiers"] = True
 
 
@@ -532,7 +533,36 @@ def m_ceramic_shock(tw, mm, target):
         c["len"] = len(c["items"])
 
 
+def add_child(m, holder, nid):
+    """Model.AddChildDependant: the new model among the holder's childDependants (GetDescendants
+    then finds it)."""
+    v = holder["f"].get("childDependants")
+    c = m.values.get(v["$ref"]) if isinstance(v, dict) and "$ref" in v else None
+    if isinstance(c, dict) and "items" in c:
+        c["items"].append(nid)
+        c["len"] = len(c["items"])
+    else:
+        cid = m.new_id()
+        m.values[cid] = {"_container": "list", "len": 1, "items": [nid]}
+        holder["f"]["childDependants"] = {"$ref": cid}
+
+
+def m_add_ability(tw, mm, target):
+    # AddAbilityToTowerModModel: a clone of abilityModel at the end of the tower's behaviours.
+    src = tw.m.ref(mm.get("abilityModel"))
+    t = tw.m.objs[tw.root]
+    v = t["f"].get("behaviors")
+    if src is None or not (isinstance(v, dict) and "$ref" in v and isinstance(tw.m.values.get(v["$ref"]), dict)):
+        return
+    c = tw.m.values[v["$ref"]]
+    nid = clone_model(tw.m, src)
+    c["items"].append(nid)
+    c["len"] = len(c["items"])
+    add_child(tw.m, t, nid)
+
+
 MUTATORS = {
+    "AddAbilityToTowerModModel": m_add_ability,
     "WeaponReloadPercentageOnTargetPrioModModel": m_reload_prio,
     "CashModModel": m_cash,
     "CashPerRoundModModel": m_cash_per_round,
@@ -609,7 +639,7 @@ def main():
             for o in tw.descendants_all_holders():
                 for k, v in list(o["f"].items()):
                     r = m.ref(v)
-                    if r is not None and inv.get(r) in listed and inv.get(r) != tw.root and o["type"] in LINK_TYPES:
+                    if r is not None and inv.get(r) in listed and inv.get(r) != tw.root and o["type"] in LINK_TYPES and k == "towerModel":
                         o["f"][k] = {"$ref": inv[r]}
     print("mutators not ported (uses):", missing.most_common(20))
     if oracle:
@@ -663,6 +693,12 @@ def compare(a, b, tower_ids):
                     for n, (ex_, ey) in enumerate(zip(ix, iy)):
                         if isinstance(ex_, int) and isinstance(ey, int) and ex_ in a.objs and ey in b.objs:
                             rec(ex_, ey, f"{path}/{k}[{n}]", depth + 1)
+                    continue
+                # (The oracle builds added models from the dump: a field it lacks, or an enum by
+                # name, is unknown there.)
+                if vy is None and vx is not None and k not in oy["f"]:
+                    continue
+                if isinstance(vy, str) and isinstance(vx, (int, float)) and not isinstance(vx, bool):
                     continue
                 if isinstance(vx, float) and isinstance(vy, float):
                     same = f32(vx) == f32(vy)
