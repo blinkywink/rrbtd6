@@ -1099,7 +1099,7 @@ DEFERRED = {"GrantCamoDetectForAbilityModModel"}
 # Mutators on the GameModel / simulation (exported as mk_sim, run by the sim).
 GAME_LEVEL = {"SimTowerDiscountModModel", "ComeOnEverybodyModModel", "FreeTowerModModel", "StartingCashModModel",
               "CrossTheStreamsModModel", "MonkeyMoneyModModel", "StartingShieldModModel", "ParagonOfPowerModModel",
-              "HeroXPBonusModModel", "PreGamePrepModModel"}
+              "HeroXPBonusModModel", "PreGamePrepModModel", "HeroXpInjectionModModel"}
 
 
 def main():

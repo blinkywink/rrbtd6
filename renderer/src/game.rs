@@ -4391,6 +4391,10 @@ pub struct Game {
     type_bonus: Shared<HashMap<String, crate::data::TypeBonus>>,
     /// Monkey Knowledge's ComeOnEverybody (rateMultiplier, discountMultiplier).
     come_on_everybody: Option<(f32, f32)>,
+    /// HeroXpInjectionModModel: (levels, amount).
+    mk_hero_injection: Option<(u8, f32)>,
+    /// Whether a hero has had it (once a game).
+    pub hero_injected: bool,
     /// HeroXPBonusModModel's percentMultiplier.
     hero_xp_bonus: Option<f32>,
     /// TowerInventory.towerDiscounts from Monkey Knowledge's SimTowerDiscountModModels: (base ids,
@@ -7416,6 +7420,9 @@ impl Game {
                 x["subtraction"].as_f64().unwrap_or(0.0) as f32, x["charges"].as_i64().unwrap_or(0) as i32)).collect(),
             free_exclusive: d.mk_sim.iter().filter(|x| x["type"] == "FreeTowerModModel")
                 .filter_map(|x| Some((x["baseTowerID"].as_str()?.to_string(), x["mutuallyExclusiveWith"].as_str()?.to_string()))).collect(),
+            mk_hero_injection: d.mk_sim.iter().find(|x| x["type"] == "HeroXpInjectionModModel")
+                .map(|x| (x["levels"].as_i64().unwrap_or(0) as u8, x["amount"].as_f64().unwrap_or(0.0) as f32)),
+            hero_injected: false,
             hero_xp_bonus: d.mk_sim.iter().find(|x| x["type"] == "HeroXPBonusModModel")
                 .and_then(|x| x["percentMultiplier"].as_f64()).map(|m| m as f32),
             come_on_everybody: d.mk_sim.iter().find(|x| x["type"] == "ComeOnEverybodyModModel")
@@ -7821,6 +7828,11 @@ impl Game {
                 self.emit(at, 0.0, &em, &proj, None, tiers, owner);
             }
         }
+    }
+
+    /// HeroXpInjectionModModel (levels, amount) when that knowledge is on.
+    fn mk_sim_hero_injection(&self) -> Option<(u8, f32)> {
+        self.mk_hero_injection.filter(|x| x.0 > 0 || x.1 > 0.0)
     }
 
     fn pre_game_prep_spikes(&mut self) {
@@ -10786,6 +10798,17 @@ impl Game {
         let t = self.towers.len() - 1;
         if self.hero_def(def).is_some() {
             self.towers[t].tiers = [1, 0, 0];
+            // HeroXpInjection.OnTowerCreated (Monkey Knowledge's EmpoweredHeroes, VERIFIED-DECOMP
+            // @0x180e71a90): the player's first hero placed goes straight up `levels` levels
+            // (Hero.UpgradeToLevel), plus `amount` xp.
+            if !self.hero_injected {
+                if let Some(x) = self.mk_sim_hero_injection() {
+                    self.hero_injected = true;
+                    let max = self.hero_def(def).map_or(20, |h| h.levels.iter().map(|l| l.level).max().unwrap_or(20));
+                    self.towers[t].tiers[0] = (1 + x.0).min(max);
+                    self.towers[t].xp += x.1;
+                }
+            }
         }
         self.init_air(t);
         self.sync_abilities(t);
@@ -33653,7 +33676,9 @@ mod tests {
                     // (At the game's slots: the tier's weapons, then each ability's by ability order.)
                     let extra: usize = tw.temp.iter().map(|x| x.attack.weapons.len()).sum();
                     let base = tw.weapons.len().saturating_sub(extra);
-                    let slots: Vec<usize> = match g.tier(g.towers.iter().position(|o| o.id == tw.id).unwrap()).filter(|tr| tr.abilities.iter().any(|a| a.attack_pos < tr.attacks.len() && !a.activate.is_empty())) {
+                    // (Also when an ability comes before a tier attack by unlock level: a hero's, e.g.
+                    // Psi with EmpoweredHeroes starting at level 3; recording psi_l10_mk.)
+                    let slots: Vec<usize> = match g.tier(g.towers.iter().position(|o| o.id == tw.id).unwrap()).filter(|tr| tr.abilities.iter().any(|a| !a.activate.is_empty() && (a.attack_pos < tr.attacks.len() || tr.attacks.iter().any(|x| x.unlock > a.unlock)))) {
                         Some(tier) => {
                             let mut v = Vec::new();
                             for (ai, a) in tier.attacks.iter().enumerate() {

@@ -3763,7 +3763,13 @@ def main():
         `unlock`: 1 for those in the level-1 model, else 2."""
         if name not in HEROES:
             return tiers
-        first = tiers.get("100") or tiers[min(tiers, key=lambda k: int(k))]
+        # (Monkey Knowledge's EmpoweredHeroes, HeroXpInjection.OnTowerCreated @0x180e71a90: a placed
+        # hero is raised by `levels` at once, so the model it starts from is that level's; recording
+        # psi_l10_mk, Psychic Blast (level 3) listed before the second attack.)
+        gm = next((o for o in objs.values() if o["type"] == "GameModel"), None)
+        inj = next((x.get("levels", 0) for x in ((gm or {"f": {}})["f"].get("mkSim") or []) if x.get("type") == "HeroXpInjectionModModel"), 0)
+        start = str((1 + int(inj or 0)) * 100)
+        first = tiers.get(start) or tiers.get("100") or tiers[min(tiers, key=lambda k: int(k))]
         a1 = {a.get("model_name") for a in first.get("attacks", [])}
         b1 = {b.get("name") for b in first.get("abilities", []) or []}
         for t in tiers.values():
