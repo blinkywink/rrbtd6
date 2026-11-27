@@ -101,7 +101,8 @@ def main():
     # Knowledge-only changes.
     md = {k: v for k, v in a_md.items() if n_md.get(k, (None, None))[1] != v[1]}
     ms = {k: v for k, v in a_ms.items() if n_ms.get(k) != v}
-    ma = {k: v for k, v in a_ma.items() if k not in n_ma}
+    # (Cosmetic pets the profile adds, with or without knowledge, at shifting indices: not knowledge.)
+    ma = {k: v for k, v in a_ma.items() if k not in n_ma and not v.startswith("PetModelUnsynced")}
 
     # GameModel.towers, each given its own root object (a tower model is also referenced from inside
     # others, a CreateTowerModel's tower: those keep the base model, as the game's do).

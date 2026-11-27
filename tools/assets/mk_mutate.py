@@ -153,6 +153,17 @@ class Tower:
         return out
 
     def descendants(self, types=None):
+        if types is not None:
+            types = set(types)
+            for t in list(types):
+                types |= SUBCLASSES.get(t, set())
+        return self._descendants(types)
+
+    def _descendants_into(self, types):
+        """GetDescendants from a nested tower model itself (its root is the walk's start)."""
+        return self._descendants(types)
+
+    def _descendants(self, types=None):
         """Model.GetDescendants: every model under the tower through childDependants, depth first,
         the tower itself first. HYPOTHESIS P-MKCHILDREN (oracle: the Sub's submergeAttackModel
         weapons are left alone)."""
@@ -174,6 +185,16 @@ class Tower:
                     rec(e)
         rec(self.root)
         return out
+
+
+# GetDescendants<T> finds subclasses too (from names and the oracle: TravelCurvy / TravelStraitSlowdown
+# lifespans, DamageOverTimeCustom immunities, AttackAirUnit ranges change with their base's mods).
+SUBCLASSES = {
+    "TravelStraitModel": {"TravelCurvyModel", "TravelStraitSlowdownModel"},
+    "SlowModel": {"SlowForBloonModel", "SlowMinusAbilityDurationModel"},
+    "DamageOverTimeModel": {"DamageOverTimeCustomModel", "DamageOverTimeForTagModel"},
+    "AttackModel": {"AttackAirUnitModel"},
+}
 
 
 def name_of(o):
@@ -357,8 +378,14 @@ def m_wind(tw, mm, target):
 
 
 def m_tower_expire(tw, mm, target):
-    for o in tw.descendants({"TowerExpireModel"}):
-        o["f"]["lifespan"] = f32(fl(o, "lifespan") + f32(mm.get("aditionalTimeBonus", 0.0)))
+    # TowerExpireModModel: each CreateTowerModel's tower, its TowerExpireModels + aditionalTimeBonus
+    # (into the created tower; the tower's own TowerExpireModels are left: the Sentry entry keeps 25).
+    for c in tw.descendants({"CreateTowerModel"}):
+        r = tw.m.ref(c["f"].get("tower"))
+        if r is None:
+            continue
+        for o in Tower(tw.m, r, copy_tree=False)._descendants_into({"TowerExpireModel"}):
+            o["f"]["lifespan"] = f32(fl(o, "lifespan") + f32(mm.get("aditionalTimeBonus", 0.0)))
 
 
 def m_slow(tw, mm, target):
@@ -561,7 +588,143 @@ def m_add_ability(tw, mm, target):
     add_child(tw.m, t, nid)
 
 
+def add_field(typ, field, key, sign=1.0):
+    """A mutator adding mod field `key` to `field` of every `typ`."""
+    def fn(tw, mm, target):
+        for o in tw.descendants({typ}):
+            o["f"][field] = f32(fl(o, field) + f32(sign * mm.get(key, 0.0)))
+    return fn
+
+
+def m_cash_increase(tw, mm, target):
+    for o in tw.descendants({"CashIncreaseModel"}):
+        o["f"]["increase"] = f32(fl(o, "increase") + f32(mm.get("additionalAmount", 0.0)))
+        o["f"]["multiplier"] = f32(fl(o, "multiplier") + f32(mm.get("percentIncrease", 0.0)))
+
+
+def m_acid_pool(tw, mm, target):
+    for o in desc(tw, "AcidPoolModel", target):
+        o["f"]["lifespanIfMisses"] = f32(fl(o, "lifespanIfMisses") + f32(mm.get("additionalTime", 0.0)))
+
+
+def m_dmg_bloon_type(tw, mm, target):
+    # DamageModifierForBloonTypeModModel: damageMultiplier x percentBonus + itself, damageAdditive +
+    # additiveBonus, then percentMultiplierOverride when not 0.
+    for o in tw.descendants({"DamageModifierForBloonTypeModel"}):
+        v = fl(o, "damageMultiplier")
+        o["f"]["damageMultiplier"] = f32(f32(v * f32(mm.get("percentBonus", 0.0))) + v)
+        o["f"]["damageAdditive"] = f32(fl(o, "damageAdditive") + f32(mm.get("additiveBonus", 0.0)))
+        if f32(mm.get("percentMultiplierOverride", 0.0)) != 0.0:
+            o["f"]["damageMultiplier"] = f32(mm["percentMultiplierOverride"])
+
+
+def m_lives(tw, mm, target):
+    # LivesModModel: maximum / minimum + (int)(x percentBonus).
+    p = f32(mm.get("percentBonus", 0.0))
+    for o in tw.descendants({"LivesModel"}):
+        for k in ("maximum", "minimum"):
+            v = fl(o, k)
+            o["f"][k] = f32(float(int(f32(v * p))) + v)
+
+
+def m_imf(tw, mm, target):
+    for o in tw.descendants({"ImfLoanModel"}):
+        o["f"]["amount"] = f32(fl(o, "amount") + f32(mm.get("additionalLoanAmount", 0.0)))
+        o["f"]["incomeRecoveryRate"] = f32(fl(o, "incomeRecoveryRate") - f32(mm.get("interestRateDecreaseAmount", 0.0)))
+        c = tw.m.ref(o["f"].get("imfLoanCollection"))
+        if c is not None:
+            tw.m.objs[c]["f"]["amount"] = o["f"]["amount"]
+            tw.m.objs[c]["f"]["collectionRate"] = o["f"]["incomeRecoveryRate"]
+
+
+def m_ignore_immunity(tw, mm, target):
+    bits = mm.get("bloonProperties", 0)
+    for t in ("DamageModel", "DamageOverTimeModel"):
+        for o in desc(tw, t, target):
+            o["f"]["immuneBloonProperties"] = o["f"].get("immuneBloonProperties", 0) & ~bits
+
+
+def set_flag(typ, field):
+    def fn(tw, mm, target):
+        for o in tw.descendants({typ}):
+            o["f"][field] = True
+    return fn
+
+
+def m_support_global(tw, mm, target):
+    # SupportMaxRangeModModel: support models (named with the target in them, or all) go global.
+    for o in tw.descendants():
+        if o["type"].endswith("SupportModel") and "isGlobal" in o["f"]:
+            if not target or target in name_of(o):
+                o["f"]["isGlobal"] = True
+
+
+def m_turbo(tw, mm, target):
+    for o in tw.descendants({"TurboModel"}):
+        o["f"]["lifespan"] = f32(fl(o, "lifespan") + f32(mm.get("amount", 0.0)))
+    for o in tw.descendants({"AgeingDestroyModel"}):
+        o["f"]["time"] = f32(fl(o, "time") + f32(mm.get("amount", 0.0)))
+
+
+def m_activate_attack(tw, mm, target):
+    # ActivateAttackModModel: under the named abilities, the timed parts + additionalTime.
+    # HYPOTHESIS P-MKACTIVATE (types from the oracle: Alchemist x-4-x).
+    a = f32(mm.get("additionalTime", 0.0))
+    for o in tw.descendants({"ActivateAttackModel", "SwitchDisplayModel", "MorphTowerModel", "CreateEffectOnAbilityEndModel"}):
+        if "lifespan" in o["f"]:
+            o["f"]["lifespan"] = f32(fl(o, "lifespan") + a)
+
+
+def m_bank_deposits(tw, mm, target):
+    # BankDepositsModModel: towerSelectionMenuThemeId, then a BankDepositsModel at the end.
+    t = tw.m.objs[tw.root]
+    t["f"]["towerSelectionMenuThemeId"] = mm.get("towerSelectionMenuThemeId")
+    append_behavior(tw.m, t, "behaviors", "BankDepositsModel",
+                    {"_name": "BankDepositsModel_" + (mm.get("_name") or ""), "depositPercent": f32(mm.get("depositPercent", 0.0)),
+                     "displayPath": mm.get("displayPath"), "displayLifetime": f32(mm.get("displayLifetime", 0.0))})
+
+
+def m_healthy_bananas(tw, mm, target):
+    # HealthyBananasModModel: a Banana Farm with path 3 tier 3 (marketplaceLives) or 4
+    # (centralMarketLives): its BonusLivesPerRoundModel + that, or a new one.
+    t = tw.m.objs[tw.root]
+    if t["f"].get("baseId") != "BananaFarm":
+        return
+    tr = t["f"].get("tiers")
+    tv = tw.m.values.get(tr["$ref"]) if isinstance(tr, dict) and "$ref" in tr else None
+    if not isinstance(tv, list) or len(tv) < 3:
+        return
+    n = mm.get("centralMarketLives", 0) if tv[2] == 4 else mm.get("marketplaceLives", 0) if tv[2] == 3 else 0
+    if n <= 0:
+        return
+    for i in tw.m.items(t["f"].get("behaviors")):
+        o = tw.m.objs.get(i)
+        if o and o["type"] == "BonusLivesPerRoundModel":
+            o["f"]["amount"] = o["f"].get("amount", 0) + n
+            return
+    append_behavior(tw.m, t, "behaviors", "BonusLivesPerRoundModel",
+                    {"_name": "BonusLivesPerRoundModel_HealthyBananas", "amount": n,
+                     "lifespan": f32(mm.get("displayLifespan", 0.0)), "assetId": mm.get("displayPath")})
+
+
 MUTATORS = {
+    "BankDepositsModModel": m_bank_deposits,
+    "HealthyBananasModModel": m_healthy_bananas,
+    "DiscountZoneModModel": add_field("DiscountZoneModel", "discountMultiplier", "additionalMultiplier"),
+    "CashIncreaseModModel": m_cash_increase,
+    "AcidPoolModModel": m_acid_pool,
+    "EatBloonModModel": add_field("EatBloonModel", "rbeCapacity", "additionalTrapAmount"),
+    "DamageModifierForBloonTypeModModel": m_dmg_bloon_type,
+    "BankModModel": add_field("BankModel", "capacity", "additionalCapacity"),
+    "LivesModModel": m_lives,
+    "ImfLoanModModel": m_imf,
+    "CallToArmsModModel": add_field("CallToArmsModel", "lifespan", "additionalTime"),
+    "IgnoreImmunityForBloonTypeModModel": m_ignore_immunity,
+    "DoorGunnerModModel": set_flag("RedeployModel", "isDoorGunnerActive"),
+    "TCBOOModModel": set_flag("MonkeyTempleModel", "checkForThereCanOnlyBeOne"),
+    "SupportMaxRangeModModel": m_support_global,
+    "TurboDurationIncreaseModModel": m_turbo,
+    "ActivateAttackModModel": m_activate_attack,
     "AddAbilityToTowerModModel": m_add_ability,
     "WeaponReloadPercentageOnTargetPrioModModel": m_reload_prio,
     "CashModModel": m_cash,
@@ -641,7 +804,7 @@ def main():
                     r = m.ref(v)
                     if r is not None and inv.get(r) in listed and inv.get(r) != tw.root and o["type"] in LINK_TYPES and k == "towerModel":
                         o["f"][k] = {"$ref": inv[r]}
-    print("mutators not ported (uses):", missing.most_common(20))
+    print("mutators not ported (uses):", missing.most_common(80))
     if oracle:
         compare(m, Model(oracle), tower_ids)
     os.makedirs(os.path.join(out, "named"), exist_ok=True)
@@ -701,7 +864,7 @@ def compare(a, b, tower_ids):
                 if isinstance(vy, str) and isinstance(vx, (int, float)) and not isinstance(vx, bool):
                     continue
                 if isinstance(vx, float) and isinstance(vy, float):
-                    same = f32(vx) == f32(vy)
+                    same = f32(vx) == f32(vy) or (vx != vx and vy != vy)
                 else:
                     same = vx == vy
                 if not same:
@@ -710,7 +873,7 @@ def compare(a, b, tower_ids):
                     ex.setdefault(key, (tname, path + "/" + k, vx, vy))
         rec(ta, tb, "", 0)
     print(f"differences from the oracle: {sum(diff.values())}")
-    for key, n in diff.most_common(40):
+    for key, n in diff.most_common(int(os.environ.get("MK_TOP", "40"))):
         print(f"  {n:6d} {key[0]}.{key[1]}  e.g. {ex.get(key)}")
 
 
