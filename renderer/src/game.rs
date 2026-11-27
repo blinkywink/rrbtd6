@@ -16037,6 +16037,18 @@ impl Game {
     }
 
     fn use_ability_effects(&mut self, t: usize, a: &crate::data::Ability) {
+        // DetectCamoOnAbility.Activate (VERIFIED-DECOMP @0x180e28880): its camo mutator on the tower
+        // and its sub-towers (AddMutatorIncludeSubTowers) for lifespanFrames.
+        if a.camo_frames > 0 {
+            let id = self.towers[t].id;
+            for o in 0..self.towers.len() {
+                if o == t || self.towers[o].sub.as_ref().is_some_and(|s| s.parent == id) {
+                    let tm = &mut self.towers[o].timed_muts;
+                    tm.retain(|m| m.0 != "DetectCamoOnAbility");
+                    tm.push(("DetectCamoOnAbility".into(), "camo".into(), 1.0, a.camo_frames));
+                }
+            }
+        }
         // FinalStrike.Activate / StartCountdown (VERIFIED-DECOMP @0x180e2f340 / @0x180e30520):
         // countingFrom = Simulation.time, currentMissileIndex -1; the Pre-Emptive Strike launcher
         // is paused until EndCountdown.
@@ -18344,6 +18356,7 @@ impl Game {
                     match kind.as_str() {
                         "pierce" => b.pierce_all += *v,
                         "unimmune" => b.immune = Some(b.immune.unwrap_or(u32::MAX) & !(*v as u32)),
+                        "camo" => b.camo = true,
                         _ => {}
                     }
                 }

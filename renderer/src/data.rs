@@ -2907,6 +2907,9 @@ pub struct Ability {
     /// AbilityModel.resetCooldownOnTierUpgrade: it starts on its full cooldown.
     #[serde(default)]
     pub full_start: bool,
+    /// DetectCamoOnAbilityModel.lifespanFrames (Monkey Knowledge): camo detection per activation.
+    #[serde(default)]
+    pub camo_frames: i64,
     /// AbilityModel.cooldownSpeedScale: Ability.Process (@0x180dfafc0) takes 1 / (1 - it) off
     /// the cooldown a frame.
     #[serde(default)]

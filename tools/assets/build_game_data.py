@@ -2328,6 +2328,10 @@ def main():
                    # activateOnPreLeak (Bomb Blitz), maxActivationsPerRound, resetCooldownOnTierUpgrade.
                    "pre_leak": bool(bf.get("activateOnPreLeak")), "on_lives_lost": bool(bf.get("activateOnLivesLost")), "per_round": bf.get("maxActivationsPerRound", 0),
                    "full_start": bool(bf.get("resetCooldownOnTierUpgrade")),
+                   # DetectCamoOnAbilityModel (Monkey Knowledge's GrantCamoDetectForAbility):
+                   # lifespanFrames of camo detection on the tower and its sub-towers per activation.
+                   "camo_frames": next((int(struct.unpack("<f", struct.pack("<f", struct.unpack("<f", struct.pack("<f", x["f"].get("lifespan", 0.0)))[0] * 60.0))[0]) for x in items(bf.get("behaviors"))
+                                        if x and x["type"] == "DetectCamoOnAbilityModel"), 0),
                    # cooldownSpeedScale (+0x88): Ability.Process (@0x180dfafc0) takes 1 / (1 - it)
                    # off the cooldown a frame (a Beast Handler ContributionMutator raises it).
                    "speed_scale": bf.get("cooldownSpeedScale", 0.0),
