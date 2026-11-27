@@ -3823,7 +3823,12 @@ def main():
             "hero": hero,
             "paragon": paragon,
             "tiers": hero_unlock(name, {"".join(str(x) for x in items(r["f"]["tiers"])): tier(r) for r in models}),
-            "upgrades": sorted([{"name": r["f"]["_name"], "cost": r["f"]["cost"], "path": r["f"]["path"], "tier": r["f"]["tier"]}
+            # mk_cost: Monkey Knowledge's UpgradeCostModModel steps [percentageReduced, amountReduced]
+            # (mk_mutate.py): on the unscaled cost, cost - (int)(cost x p) - a each, and the cut taken off
+            # the difficulty-scaled price (the game's mk dump, Hard: Artillery Battery 6500 -> 7020 - 600,
+            # Flying Fortress 90000 -> 97200 - 9000).
+            "upgrades": sorted([{"name": r["f"]["_name"], "cost": r["f"]["cost"], "path": r["f"]["path"], "tier": r["f"]["tier"],
+                                 **({"mk_cost": r["f"]["mkCost"]} if r["f"].get("mkCost") else {})}
                                 for r in objs.values() if r["type"] == "UpgradeModel" and r["f"]["_name"] in names],
                                key=lambda u: (u["path"], u["tier"])),
         }

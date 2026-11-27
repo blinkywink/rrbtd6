@@ -794,6 +794,16 @@ def m_effect_on_ability(tw, mm, target):
             tw.m.objs[e]["f"]["lifespan"] = f32(fl(tw.m.objs[e], "lifespan") + f32(mm.get("additionalLifespan", 0.0)))
 
 
+def m_discount_zone(tw, mm, target):
+    # DiscountZoneModModel: DiscountZoneModels (their name containing specificScriptId, when set):
+    # discountMultiplier + additionalMultiplier.
+    sid = mm.get("specificScriptId") or ""
+    for o in tw.descendants({"DiscountZoneModel"}):
+        if sid and sid not in name_of(o):
+            continue
+        o["f"]["discountMultiplier"] = f32(fl(o, "discountMultiplier") + f32(mm.get("additionalMultiplier", 0.0)))
+
+
 MUTATORS = {
     "TargetedPineapplesModModel": m_pineapples,
     "GrantCamoDetectForAbilityModModel": m_grant_camo,
@@ -801,7 +811,7 @@ MUTATORS = {
     "WingmonkeyModModel": m_wingmonkey,
     "BankDepositsModModel": m_bank_deposits,
     "HealthyBananasModModel": m_healthy_bananas,
-    "DiscountZoneModModel": add_field("DiscountZoneModel", "discountMultiplier", "additionalMultiplier"),
+    "DiscountZoneModModel": m_discount_zone,
     "CashIncreaseModModel": m_cash_increase,
     "AcidPoolModModel": m_acid_pool,
     "EatBloonModModel": add_field("EatBloonModel", "rbeCapacity", "additionalTrapAmount"),
@@ -863,6 +873,7 @@ DEFERRED = {"GrantCamoDetectForAbilityModModel"}
 def main():
     src, out = sys.argv[1], sys.argv[2]
     oracle = sys.argv[sys.argv.index("--oracle") + 1] if "--oracle" in sys.argv else None
+    oracle_dump = sys.argv[sys.argv.index("--dump") + 1] if "--dump" in sys.argv else None
     m = Model(os.path.join(src, "decoded"))
     objs = m.objs
     mods = {name_of(o): o for o in objs.values() if o["type"] == "ModModel"}
@@ -909,6 +920,37 @@ def main():
                     r = m.ref(v)
                     if r is not None and inv.get(r) in listed and inv.get(r) != tw.root and o["type"] in LINK_TYPES and k == "towerModel":
                         o["f"][k] = {"$ref": inv[r]}
+    # UpgradeCostModModel (VERIFIED-DECOMP @0x181133ae0) runs on GameModel.upgrades: the one named
+    # upgradeName costs cost - (int)(cost x percentageReduced) - amountReduced. (Each active mod in
+    # allKnowledge order; HYPOTHESIS P-MKUPORDER.)
+    ups = {name_of(objs[i]): objs[i] for i in m.items(gm["f"].get("upgrades")) if i in objs}
+    up_changes = {}
+    for k in m.items(gm["f"].get("allKnowledge")):
+        mo = mods.get(name_of(objs[k])) if k in objs else None
+        for mmid in m.items(mo["f"].get("mutatorMods")) if mo else []:
+            mm = objs.get(mmid)
+            if not mm or mm["type"] != "UpgradeCostModModel":
+                continue
+            u = ups.get(mm["f"].get("upgradeName"))
+            if u is None:
+                continue
+            # (After the difficulty's scaling: the game's 7020 -> 6420 for Artillery Battery's 600 off
+            # on Hard; so kept as steps for the cost code, not folded into the base cost.)
+            u["f"].setdefault("mkCost", []).append([f32(mm["f"].get("percentageReduced", 0.0)), mm["f"].get("amountReduced", 0)])
+            up_changes[name_of(u)] = u["f"]["mkCost"]
+    if oracle_dump:
+        # (All-knowledge against no-knowledge dump: the difficulty's cost scaling is in both.)
+        def costs(path):
+            out = {}
+            for line in open(path, encoding="utf-8"):
+                p = line.rstrip("\n").split("\t")
+                if p[0] == "MD" and p[1] == "#upgrades" and p[2].endswith("/cost"):
+                    out[p[2].split("/")[1]] = (int(float(p[3])), int(float(p[4])))
+            return out
+        a_c, n_c = costs(oracle_dump), costs(oracle_dump.replace("all.mkdump", "none.mkdump"))
+        changed = {n: (n_c[n][1] if n in n_c else v[0], v[1]) for n, v in a_c.items() if (n_c[n][1] if n in n_c else v[0]) != v[1]}
+        print(f"upgrade costs: {len(changed)} changed by knowledge in the game, {len(up_changes)} by the engine;",
+              "game:", sorted(changed.items())[:8], "engine:", sorted(up_changes.items())[:8])
     print("mutators not ported (uses):", missing.most_common(80))
     if oracle:
         compare(m, Model(oracle), tower_ids)
