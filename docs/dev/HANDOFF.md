@@ -220,7 +220,7 @@ TOWERS.md has the longer per-tower notes.
   knockback, retarget, track target, ignore blockers, DoT (min 0.05), push back, wind, tower expire,
   slow / freeze / slow-for-tag modifiers, increase range, arc count (by weapon name), damage modifier
   for tag (existing first one with the tag, else a new one). `--oracle local_extracted/decoded_mk`
-  counts differences by (type, field): 17199 -> 5608. Left: TowerXp / TowerSell (tower behaviours),
+  counts differences by (type, field): 17199 -> 5608 -> 2341 (2026-11-26 (2): + TowerXp / TowerSell / target-priority reload (tower behaviours appended, named <Type>_<mod>), hero cost to level, cash, cash per round, CeramicShock (a clone of slowModelToUse on every projectile); comparer compares plain-value containers by value; apply_mk builds added models with a decoded object's own keys, inherited fields included). Left: TowerXp / TowerSell (tower behaviours),
   UpgradeCost, hero XP / cost, the economy mods (cash, bank, discount zone...), AddAbility, nested
   tower models inside abilities (DanD 3's towerModel IS modded: unlike CreateTowerModel's), the
   comparer's plain-list containers (`$ref` noise).

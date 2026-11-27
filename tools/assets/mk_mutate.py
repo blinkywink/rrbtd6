@@ -382,7 +382,113 @@ def m_dmg_tag(tw, mm, target):
         p["f"]["hasDamageModifiers"] = True
 
 
+def append_behavior(m, holder, field, typ, fields):
+    """A new model at the end of holder's container field."""
+    v = holder["f"].get(field)
+    if not (isinstance(v, dict) and "$ref" in v and isinstance(m.values.get(v["$ref"]), dict)):
+        return None
+    nid = m.new_id()
+    m.objs[nid] = {"i": nid, "type": typ, "f": fields}
+    c = m.values[v["$ref"]]
+    c["items"].append(nid)
+    c["len"] = len(c["items"])
+    return m.objs[nid]
+
+
+def m_tower_xp(tw, mm, target):
+    # TowerXpModModel @0x1812b37b0: the tower gets a TransformTowerXpModel(multiplier) at the end of
+    # its behaviours, named after the mod.
+    append_behavior(tw.m, tw.m.objs[tw.root], "behaviors", "TransformTowerXpModel",
+                    {"_name": "TransformTowerXpModel_" + (mm.get("_name") or ""), "multiplier": f32(mm.get("multiplier", 0.0))})
+
+
+def m_tower_sell(tw, mm, target):
+    # TowerSellModModel: a TowerSellModel(charges, mutltiplier, additional) at the end.
+    append_behavior(tw.m, tw.m.objs[tw.root], "behaviors", "TowerSellModel",
+                    {"_name": "TowerSellModel_" + (mm.get("_name") or ""), "charges": mm.get("charges", 0),
+                     "multiplier": f32(mm.get("mutltiplier", 0.0)), "additional": f32(mm.get("additional", 0.0))})
+
+
+def m_hero_cost(tw, mm, target):
+    # HeroCostToLevelModModel: named HeroModels, costPerXpToLevel x costMultiplier.
+    for o in desc(tw, "HeroModel", target):
+        o["f"]["costPerXpToLevel"] = f32(fl(o, "costPerXpToLevel") * f32(mm.get("costMultiplier", 1.0)))
+
+
+def clone_model(m, oid):
+    """Model.Clone: a deep copy of a model tree (objects and containers)."""
+    memo = {}
+
+    def cp(x):
+        if x in memo:
+            return memo[x]
+        nid = m.new_id()
+        memo[x] = nid
+        o = copy.deepcopy(m.objs[x])
+        o["i"] = nid
+        m.objs[nid] = o
+        for k, v in list(o["f"].items()):
+            if isinstance(v, dict) and "$ref" in v:
+                r = v["$ref"]
+                if r in m.objs:
+                    o["f"][k] = {"$ref": cp(r)}
+                elif isinstance(m.values.get(r), dict) and "items" in m.values[r]:
+                    cid = m.new_id()
+                    c = copy.deepcopy(m.values[r])
+                    m.values[cid] = c
+                    c["items"] = [cp(e) if isinstance(e, int) and e in m.objs else e for e in c["items"]]
+                    o["f"][k] = {"$ref": cid}
+        return nid
+    return cp(oid)
+
+
+def m_reload_prio(tw, mm, target):
+    # WeaponReloadPercentageOnTargetPrioModModel @0x1812b9bb0: the tower gets a
+    # WeaponReloadPercentageOnTargetPrioModel(multiplier, targetType) at the end of its behaviours.
+    append_behavior(tw.m, tw.m.objs[tw.root], "behaviors", "WeaponReloadPercentageOnTargetPrioModel",
+                    {"_name": "WeaponReloadPercentageOnTargetPrioModel_" + (mm.get("_name") or ""),
+                     "multiplier": f32(mm.get("multiplier", 0.0)), "targetType": mm.get("targetType")})
+
+
+def m_cash(tw, mm, target):
+    # CashModModel: every CashModel, minimum / maximum x percentBonus + itself, bonusMultiplier +
+    # bonusMultiplierBuff.
+    p = f32(mm.get("percentBonus", 0.0))
+    for o in tw.descendants({"CashModel"}):
+        for k in ("maximum", "minimum"):
+            v = fl(o, k)
+            o["f"][k] = f32(f32(v * p) + v)
+        o["f"]["bonusMultiplier"] = f32(fl(o, "bonusMultiplier") + f32(mm.get("bonusMultiplierBuff", 0.0)))
+
+
+def m_cash_per_round(tw, mm, target):
+    for o in tw.descendants({"PerRoundCashBonusTowerModel"}):
+        o["f"]["cashPerRound"] = f32(fl(o, "cashPerRound") + f32(mm.get("additionalMoney", 0.0)))
+
+
+def m_ceramic_shock(tw, mm, target):
+    # CeramicShockModModel: every ProjectileModel gets the mod's slowModelToUse (as a behaviour,
+    # the same model for all; here a clone each) and UpdateCollisionPassList.
+    src = tw.m.ref(mm.get("slowModelToUse"))
+    if src is None:
+        return
+    for p in tw.descendants({"ProjectileModel"}):
+        v = p["f"].get("behaviors")
+        if not (isinstance(v, dict) and "$ref" in v and isinstance(tw.m.values.get(v["$ref"]), dict)):
+            continue
+        c = tw.m.values[v["$ref"]]
+        c["items"].append(clone_model(tw.m, src))
+        c["len"] = len(c["items"])
+
+
 MUTATORS = {
+    "WeaponReloadPercentageOnTargetPrioModModel": m_reload_prio,
+    "CashModModel": m_cash,
+    "CashPerRoundModModel": m_cash_per_round,
+    "CeramicShockModModel": m_ceramic_shock,
+    "TowerXpModModel": m_tower_xp,
+    "TowerSellModModel": m_tower_sell,
+    "HeroCostToLevelModModel": m_hero_cost,
     "DamageModifierForTagModModel": m_dmg_tag,
     "WeaponReloadPercentageModModel": m_weapon_reload_pct,
     "WeaponReloadReductionModModel": m_weapon_reload_reduction,
@@ -474,6 +580,15 @@ def compare(a, b, tower_ids):
                     rec(rx, ry, path + "/" + k, depth + 1)
                     continue
                 ix, iy = a.items(vx), b.items(vy)
+                # (Plain values behind a reference, an empty container or a list of numbers or
+                # strings: by value.)
+                if isinstance(vx, dict) and isinstance(vy, dict) and "$ref" in vx and "$ref" in vy and not ix and not iy:
+                    cx, cy = a.values.get(vx["$ref"]), b.values.get(vy["$ref"])
+                    if cx == cy or (isinstance(cx, dict) and isinstance(cy, dict) and cx.get("len") == cy.get("len") == 0):
+                        continue
+                    if isinstance(cx, dict) and isinstance(cy, dict) and "items" in cx and "items" in cy:
+                        if [a.values.get(i, i) for i in cx["items"]] == [b.values.get(i, i) for i in cy["items"]]:
+                            continue
                 if ix or iy:
                     if len(ix) != len(iy):
                         key = (ox["type"], k + "[len]")

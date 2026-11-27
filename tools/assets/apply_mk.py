@@ -258,9 +258,15 @@ def main():
     # Added elements: built from their MF lines (fields only, per field_offsets.json).
     fo = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", "research", "dumps", "field_offsets.json")))
     fields = {}
+    seen_types = set()
     for full, fl in fo.items():
         short = full.split(".")[-1].split("/")[-1]
         fields.setdefault(short, [n for n, off in fl if off >= 16])
+    # (Better: a decoded object's own keys, inherited fields included.)
+    for o in objs.values():
+        if o["type"] not in seen_types:
+            seen_types.add(o["type"])
+            fields[o["type"]] = [k for k in o["f"] if k != "childDependants"]
     mf_by_tower = {t: dict(v) for t, v in a_mf.items()}
 
     def prim(text):
