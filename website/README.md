@@ -18,10 +18,12 @@ downloads stay under `public/mods/`. Font licenses: `public/fonts/LuckiestGuy-LI
 
 ## Progress section
 
-The home page's Progress bars (and the per-scenario squares behind "Show every recorded scenario") come from `progress.json` (towers: recorded scenarios that match the
-real game / recorded; other areas: rough estimates out of 10). Edit the numbers, then run
-`python website/build_progress.py`; it rewrites the part of `public/index.html` between the
-`progress:start` and `progress:end` markers.
+The home page's Progress bars (and the per-scenario squares behind "Show every recorded scenario") come from `progress.json`: one block per section (Towers, Heroes, Maps, Monkey Knowledge,
+Paragons & combos, Powers), each row recorded scenarios that match the real game / recorded, plus
+other areas as rough estimates out of 10. `python website/count_progress.py` fills the sections from
+the recording folders (counts only) and `website/regression_last.txt` (the `== set: m/n match`
+lines of the last `tools/rec/compare.sh` run); then `python website/build_progress.py` rewrites the
+part of `public/index.html` between the `progress:start` and `progress:end` markers.
 
 ## Images
 

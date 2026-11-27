@@ -3,9 +3,10 @@
     python website/build_progress.py
 
 Replaces everything between the <!-- progress:start --> and <!-- progress:end --> markers in
-website/public/index.html. The totals with one overall bar, then one row and bar per tower (recorded scenarios that match the real game
-frame by frame), with every scenario as a square behind "Show every recorded scenario", and a bar
-per area (a rough estimate out of ten).
+website/public/index.html. The totals with one overall bar, then one block per section (Towers, Heroes, Maps, Monkey Knowledge,
+Paragons & combos, Powers) with a row and bar per item (recorded scenarios that match the real game
+frame by frame; website/count_progress.py fills them), every scenario as a square behind "Show
+every recorded scenario", and a bar per area (a rough estimate out of ten).
 """
 import html
 import json
@@ -27,10 +28,13 @@ def row(name, done, total, count, state=""):
 
 
 def build(data):
-    towers = data["towers"]
-    done = sum(t[1] for t in towers)
-    total = sum(t[2] for t in towers)
+    sections = data["sections"]
+    rows_all = [r for _, rows in sections for r in rows]
+    done = sum(r[1] for r in rows_all)
+    total = sum(r[2] for r in rows_all)
+    towers = next(rows for title, rows in sections if title == "Towers")
     finished = sum(1 for t in towers if t[2] and t[1] == t[2])
+    state = lambda d, t: "done" if t and d == t else ("none" if t == 0 else "")
     out = []
     out.append('  <section id="progress" class="block">')
     out.append("    <h2>Progress</h2>")
@@ -40,18 +44,23 @@ def build(data):
     out.append("    </div>")
     out.append(f'    <div class="poverall"><span class="pbar"><i style="--p:{100 * done / total:.0f}%"></i></span>'
                f'<span class="ppct">{100 * done / total:.0f}%</span></div>')
-    state = lambda d, t: "done" if t and d == t else ("none" if t == 0 else "")
-    out.append('    <ul class="prows">')
-    for name, d, t in towers:
-        out.append(row(name, d, t, f"{d}/{t}" if t else "not recorded", state(d, t)))
-    out.append("    </ul>")
+    for title, rows in sections:
+        d = sum(r[1] for r in rows)
+        t = sum(r[2] for r in rows)
+        out.append(f'    <h3 class="sub">{html.escape(title)} <span>({d}/{t} match)</span></h3>' if t else
+                   f'    <h3 class="sub">{html.escape(title)} <span>(not recorded yet)</span></h3>')
+        out.append('    <ul class="prows">')
+        for name, rd, rt in rows:
+            out.append(row(name, rd, rt, f"{rd}/{rt}" if rt else "not recorded yet", state(rd, rt)))
+        out.append("    </ul>")
     out.append('    <details class="progress-more">')
     out.append('      <summary>Show every recorded scenario</summary>')
     out.append('      <div class="towers-grid">')
-    for name, d, t in towers:
-        count = f"{d}/{t}" if t else "not recorded yet"
-        out.append(f'        <div class="tower-card {state(d, t)}"><div class="tower-head"><strong>{html.escape(name)}</strong><span>{count}</span></div>'
-                   f'<div class="squares">{squares(d, t) if t else squares(0, 10, "sq ghost")}</div></div>')
+    for name, d, t in rows_all:
+        if not t:
+            continue
+        out.append(f'        <div class="tower-card {state(d, t)}"><div class="tower-head"><strong>{html.escape(name)}</strong><span>{d}/{t}</span></div>'
+                   f'<div class="squares">{squares(d, t)}</div></div>')
     out.append("      </div>")
     out.append("    </details>")
     out.append('    <h3 class="sub">Everything else <span>(rough estimates)</span></h3>')

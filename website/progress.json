@@ -1,193 +1,6 @@
 {
-  "_how": "Edit the numbers, then run: python website/build_progress.py. Towers: recorded scenarios that match the real game frame by frame / all recorded. Areas: rough estimates out of 10.",
-  "updated": "2026-11-21",
-  "towers": [
-    [
-      "Dart Monkey",
-      72,
-      72
-    ],
-    [
-      "Boomerang Monkey",
-      100,
-      100
-    ],
-    [
-      "Bomb Shooter",
-      35,
-      35
-    ],
-    [
-      "Tack Shooter",
-      26,
-      26
-    ],
-    [
-      "Ice Monkey",
-      26,
-      26
-    ],
-    [
-      "Glue Gunner",
-      34,
-      34
-    ],
-    [
-      "Desperado",
-      35,
-      35
-    ],
-    [
-      "Sniper Monkey",
-      35,
-      35
-    ],
-    [
-      "Monkey Sub",
-      35,
-      35
-    ],
-    [
-      "Monkey Buccaneer",
-      36,
-      36
-    ],
-    [
-      "Monkey Ace",
-      26,
-      26
-    ],
-    [
-      "Heli Pilot",
-      27,
-      27
-    ],
-    [
-      "Mortar Monkey",
-      27,
-      27
-    ],
-    [
-      "Dartling Gunner",
-      27,
-      27
-    ],
-    [
-      "Wizard Monkey",
-      36,
-      36
-    ],
-    [
-      "Super Monkey",
-      35,
-      35
-    ],
-    [
-      "Ninja Monkey",
-      35,
-      35
-    ],
-    [
-      "Alchemist",
-      35,
-      35
-    ],
-    [
-      "Druid",
-      35,
-      35
-    ],
-    [
-      "Mermonkey",
-      35,
-      35
-    ],
-    [
-      "Banana Farm",
-      25,
-      25
-    ],
-    [
-      "Spike Factory",
-      29,
-      29
-    ],
-    [
-      "Monkey Village",
-      29,
-      29
-    ],
-    [
-      "Engineer Monkey",
-      34,
-      34
-    ],
-    [
-      "Beast Handler",
-      35,
-      35
-    ],
-    [
-      "Skywarden",
-      39,
-      39
-    ],
-    [
-      "Quincy",
-      14,
-      14
-    ],
-    [
-      "Gwendolin",
-      5,
-      5
-    ],
-    [
-      "Striker Jones",
-      3,
-      3
-    ],
-    [
-      "Sauda",
-      3,
-      3
-    ],
-    [
-      "Obyn Greenfoot",
-      3,
-      3
-    ],
-    [
-      "Ezili",
-      3,
-      3
-    ],
-    [
-      "Adora",
-      2,
-      3
-    ],
-    [
-      "Admiral Brickell",
-      2,
-      3
-    ],
-    [
-      "Pat Fusty",
-      2,
-      3
-    ],
-    [
-      "Paragons",
-      12,
-      12
-    ],
-    [
-      "Tower combos",
-      17,
-      19
-    ]
-  ],
+  "_how": "python website/count_progress.py (recording counts + website/regression_last.txt), then python website/build_progress.py. Sections: recorded scenarios that match the real game frame by frame / all recorded. Areas: rough estimates out of 10.",
+  "updated": "2026-11-26",
   "areas": [
     [
       "Bloons & MOABs",
@@ -228,6 +41,298 @@
     [
       "Visuals & effects",
       5
+    ]
+  ],
+  "sections": [
+    [
+      "Towers",
+      [
+        [
+          "Dart Monkey",
+          72,
+          72
+        ],
+        [
+          "Boomerang Monkey",
+          100,
+          100
+        ],
+        [
+          "Bomb Shooter",
+          35,
+          35
+        ],
+        [
+          "Tack Shooter",
+          26,
+          26
+        ],
+        [
+          "Ice Monkey",
+          26,
+          26
+        ],
+        [
+          "Glue Gunner",
+          34,
+          35
+        ],
+        [
+          "Desperado",
+          35,
+          35
+        ],
+        [
+          "Sniper Monkey",
+          35,
+          35
+        ],
+        [
+          "Monkey Sub",
+          35,
+          35
+        ],
+        [
+          "Monkey Buccaneer",
+          36,
+          36
+        ],
+        [
+          "Monkey Ace",
+          26,
+          26
+        ],
+        [
+          "Heli Pilot",
+          27,
+          27
+        ],
+        [
+          "Mortar Monkey",
+          27,
+          27
+        ],
+        [
+          "Dartling Gunner",
+          27,
+          27
+        ],
+        [
+          "Wizard Monkey",
+          36,
+          36
+        ],
+        [
+          "Super Monkey",
+          35,
+          35
+        ],
+        [
+          "Ninja Monkey",
+          35,
+          35
+        ],
+        [
+          "Alchemist",
+          35,
+          35
+        ],
+        [
+          "Druid",
+          35,
+          35
+        ],
+        [
+          "Mermonkey",
+          35,
+          35
+        ],
+        [
+          "Banana Farm",
+          26,
+          26
+        ],
+        [
+          "Spike Factory",
+          29,
+          29
+        ],
+        [
+          "Monkey Village",
+          29,
+          29
+        ],
+        [
+          "Engineer Monkey",
+          34,
+          35
+        ],
+        [
+          "Beast Handler",
+          52,
+          52
+        ],
+        [
+          "Skywarden",
+          39,
+          40
+        ]
+      ]
+    ],
+    [
+      "Heroes",
+      [
+        [
+          "Quincy",
+          14,
+          14
+        ],
+        [
+          "Gwendolin",
+          5,
+          5
+        ],
+        [
+          "Striker Jones",
+          3,
+          3
+        ],
+        [
+          "Obyn Greenfoot",
+          3,
+          3
+        ],
+        [
+          "Rosalia",
+          2,
+          3
+        ],
+        [
+          "Captain Churchill",
+          2,
+          3
+        ],
+        [
+          "Benjamin",
+          3,
+          3
+        ],
+        [
+          "Pat Fusty",
+          3,
+          3
+        ],
+        [
+          "Ezili",
+          3,
+          3
+        ],
+        [
+          "Adora",
+          3,
+          3
+        ],
+        [
+          "Etienne",
+          0,
+          3
+        ],
+        [
+          "Sauda",
+          3,
+          3
+        ],
+        [
+          "Admiral Brickell",
+          3,
+          3
+        ],
+        [
+          "Psi",
+          3,
+          3
+        ],
+        [
+          "Geraldo",
+          3,
+          3
+        ],
+        [
+          "Corvus",
+          2,
+          3
+        ],
+        [
+          "Silas",
+          3,
+          3
+        ],
+        [
+          "DanDMonke",
+          3,
+          3
+        ]
+      ]
+    ],
+    [
+      "Maps",
+      [
+        [
+          "Map spot checks",
+          82,
+          82
+        ],
+        [
+          "Towers on many maps",
+          95,
+          95
+        ],
+        [
+          "Logs (water map)",
+          3,
+          3
+        ]
+      ]
+    ],
+    [
+      "Monkey Knowledge",
+      [
+        [
+          "All knowledge on",
+          6,
+          6
+        ]
+      ]
+    ],
+    [
+      "Paragons & combos",
+      [
+        [
+          "Paragons",
+          12,
+          12
+        ],
+        [
+          "Tower combos",
+          17,
+          20
+        ],
+        [
+          "MOAB-class bloons",
+          5,
+          5
+        ]
+      ]
+    ],
+    [
+      "Powers",
+      [
+        [
+          "Powers",
+          0,
+          0
+        ]
+      ]
     ]
   ]
 }
