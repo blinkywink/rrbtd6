@@ -4708,6 +4708,8 @@ pub struct Game {
     pub has_terrain: bool,
     /// ImmunityModel (Legend of the Night): frames left with leaks costing no lives.
     pub leak_immune: f32,
+    /// Bloon positions at the start of the previous frame and of this one (P-BIRLAG).
+    bir_snap: (Vec<(u64, [f32; 2])>, Vec<(u64, [f32; 2])>),
     /// Mana Shield (StartingShieldModModel + ShieldPerRound): shield, its cap, the per-round refill
     /// and Simulation.hasTakenLeakDamage (a round with leak damage gets no refill next round start).
     pub shield: f32,
@@ -7573,6 +7575,7 @@ impl Game {
             bounds: d.map.terrain.as_ref().map_or(([-WORLD_X, -WORLD_Z], [WORLD_X, WORLD_Z]), |t| (t.min, t.max)),
             has_terrain: d.map.terrain.is_some(),
             leak_immune: 0.0,
+            bir_snap: (Vec::new(), Vec::new()),
             // StartingShieldModModel.Mutate (VERIFIED-DECOMP @0x1812af060): GameModel startingShield and
             // maxShield += the mod's, a ShieldPerRoundModel with shieldPerRound; RemoveManaShieldModModel
             // (Impoppable) drops it.
@@ -11138,6 +11141,21 @@ impl Game {
     }
 
     /// Where tower `t`'s attacks come from and its range is centred: the Heli, else the tower.
+    /// BloonsInRangeAttackSpeed's zone (GetRange @0x180c6b490: the attack's range + 1 round the
+    /// AirUnit). HYPOTHESIS P-BIRLAG: a shot counts the bloons as they were at the end of two frames
+    /// before (bloons made since left out, destroyed ones kept), round the AirUnit where it is now:
+    /// recordings rosalia_l10_r40 (57 shots) and rosalia_l20_r80 fit only that (radius 41, the
+    /// rate rounded). Here: positions kept at each frame's start, the previous frame's used.
+    fn bir_zones(&mut self) {
+        let any = (0..self.towers.len()).any(|t| self.tier(t).is_some_and(|tr| tr.attacks.iter().any(|a| a.weapons.iter().any(|w| w.bir_speed.is_some()))));
+        if !any {
+            self.bir_snap = (Vec::new(), Vec::new());
+            return;
+        }
+        let now: Vec<(u64, [f32; 2])> = self.bloons.iter().map(|b| (b.id, b.pos)).collect();
+        self.bir_snap.0 = std::mem::replace(&mut self.bir_snap.1, now);
+    }
+
     pub fn attack_pos(&self, t: usize) -> [f32; 2] {
         let tw = &self.towers[t];
         tw.air.as_ref().map_or(tw.pos, |a| a.pos)
@@ -24335,15 +24353,11 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                         // from before 951, the cooldown 60 till 1011, 59 after). HYPOTHESIS P-BIRZONE: a
                         // bloon is in it while its centre is within that.
                         let bir_n = weapon.bir_speed.map(|(_, per, max)| {
-                            // (The zone's list as its last Process kept it, as Vagrant's.)
-                            let n = match self.towers[t].weapons[w].zone_in.as_ref() {
-                                Some(z) => z.len() as i32,
-                                None => {
-                                    let c = self.towers[t].air.as_ref().map_or(pos, |a| a.pos);
-                                    let r = range + 1.0;
-                                    self.bloons.iter().filter(|x| (x.pos[0] - c[0]).powi(2) + (x.pos[1] - c[1]).powi(2) <= r * r).count() as i32
-                                }
-                            };
+                            // (P-BIRLAG: the bloons as they were at the end of two frames before,
+                            // round where the AirUnit is now.)
+                            let c = self.towers[t].air.as_ref().map_or(pos, |a| a.pos);
+                            let r = range + 1.0;
+                            let n = self.bir_snap.0.iter().filter(|(_, q)| (q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2) <= r * r).count() as i32;
                             (n / per.max(1)).min(max)
                         });
                         let vagrant_n = vagrant_n.map(|(tw, b)| (tw, self.towers[t].weapons[w].zone_in.as_ref().map_or(b, |z| z.len() as u32)));
@@ -26261,8 +26275,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                     let r = buff.attack_range(attack);
                     for w in &attack.weapons {
                         // (BloonsInRangeAttackSpeed's zone the same, its range + 1: GetRange @0x180c6b490.)
-                        if w.vagrant.is_some() || w.bir_speed.is_some() {
-                            let r = if w.bir_speed.is_some() { attack.range + 1.0 } else { r };
+                        if w.vagrant.is_some() && w.bir_speed.is_none() {
                             let p = self.attack_pos(t);
                             let ids: Vec<u64> = self.bloons.iter().filter(|b| { let q = b.pos; (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) <= r * r }).map(|b| b.id).collect();
                             if let Some(st) = self.towers[t].weapons.get_mut(wi) {
@@ -31053,6 +31066,7 @@ impl Game {
         if self.game_over {
             return;
         }
+        self.bir_zones();
         self.sim_elapsed += 1;
         self.lives_at_step = self.lives;
         self.in_step = true;
