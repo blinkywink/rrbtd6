@@ -29936,9 +29936,17 @@ impl Game {
         }
         st.dup_n = 0;
         let (pos, spec, vel, target, z) = (first.pos, first.spec.clone(), first.vel, first.target, first.z);
-        let g0 = [vel[0], -vel[1]];
-        let m = (g0[0] * g0[0] + g0[1] * g0[1]).sqrt();
-        let g0 = if m > 0.0 { [g0[0] / m, g0[1] / m] } else { [0.0, 1.0] };
+        // (Its Direction as made, not read back from the velocity: recording rosalia_l10_mk rt
+        // 675, knowledge's speed 345 makes the round trip a float step off.)
+        let g0 = match (first.dir, first.grot) {
+            (Some(d), _) => d,
+            (None, Some(r)) => { let d = game_dir(r); [d[0], -d[1]] }
+            _ => {
+                let g0 = [vel[0], -vel[1]];
+                let m = (g0[0] * g0[0] + g0[1] * g0[1]).sqrt();
+                if m > 0.0 { [g0[0] / m, g0[1] / m] } else { [0.0, 1.0] }
+            }
+        };
         for i in 0..de.extra {
             let mut g = g0;
             if de.angle > 0.0 && de.extra > 1 {
