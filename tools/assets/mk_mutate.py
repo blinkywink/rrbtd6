@@ -662,8 +662,7 @@ def m_support_global(tw, mm, target):
 def m_turbo(tw, mm, target):
     for o in tw.descendants({"TurboModel"}):
         o["f"]["lifespan"] = f32(fl(o, "lifespan") + f32(mm.get("amount", 0.0)))
-    for o in tw.descendants({"AgeingDestroyModel"}):
-        o["f"]["time"] = f32(fl(o, "time") + f32(mm.get("amount", 0.0)))
+
 
 
 def m_activate_attack(tw, mm, target):
@@ -707,7 +706,99 @@ def m_healthy_bananas(tw, mm, target):
                      "lifespan": f32(mm.get("displayLifespan", 0.0)), "assetId": mm.get("displayPath")})
 
 
+def m_wingmonkey(tw, mm, target):
+    # WingmonkeyModModel @0x1812ba390: attacks with a CirclePatternModel (HYPOTHESIS P-MKWING: the
+    # oracle's 65 Ace attacks) get wingmonkeyPatternModel as a behaviour and child; then
+    # TowerModel.UpdateTargetProviders (adds the "Wingmonkey" target type; not exported).
+    src = tw.m.ref(mm.get("wingmonkeyPatternModel"))
+    if src is None:
+        return
+    for a in tw.descendants({"AttackModel"}):
+        its = tw.m.items(a["f"].get("behaviors"))
+        if not any(tw.m.objs.get(i, {}).get("type") == "CirclePatternModel" for i in its):
+            continue
+        v = a["f"]["behaviors"]
+        c = tw.m.values[v["$ref"]]
+        nid = clone_model(tw.m, src)
+        c["items"].append(nid)
+        c["len"] = len(c["items"])
+        add_child(tw.m, a, nid)
+
+
+def m_pineapples(tw, mm, target):
+    # TargetedPineapplesModModel: WeaponModels whose name ends with the target get a clone of
+    # checkAirUnitOverTrackScript among their behaviours (unless they have one).
+    src = tw.m.ref(mm.get("checkAirUnitOverTrackScript"))
+    if src is None:
+        return
+    src_t = tw.m.objs[src]["type"]
+    for w in tw.descendants({"WeaponModel"}):
+        if target and not name_of(w).endswith(target):
+            continue
+        v = w["f"].get("behaviors")
+        if isinstance(v, dict) and "$ref" in v and isinstance(tw.m.values.get(v["$ref"]), dict):
+            c = tw.m.values[v["$ref"]]
+        else:
+            cid = tw.m.new_id()
+            c = tw.m.values[cid] = {"_container": "array", "len": 0, "items": []}
+            w["f"]["behaviors"] = {"$ref": cid}
+        if any(tw.m.objs.get(i, {}).get("type") == src_t for i in c["items"]):
+            continue
+        c["items"].append(clone_model(tw.m, src))
+        c["len"] = len(c["items"])
+
+
+def m_grant_camo(tw, mm, target):
+    # GrantCamoDetectForAbilityModModel: AbilityModels whose displayName is in the target string get a
+    # DetectCamoOnAbilityModel(lifespan frames x 1/60, mutatorId): frames (int)(lifespan x 60), or with
+    # useAbilityDuration the ability's TurboModel lifespanFrames.
+    for ab in tw.descendants({"AbilityModel"}):
+        dn = ab["f"].get("displayName") or ""
+        if not dn or dn not in (target or ""):
+            continue
+        frames = int(f32(f32(mm.get("lifespan", 0.0)) * 60.0))
+        life = None
+        if mm.get("useAbilityDuration"):
+            for i in tw.m.items(ab["f"].get("behaviors")):
+                o = tw.m.objs.get(i)
+                if o and o["type"] == "TurboModel":
+                    frames = int(f32(fl(o, "lifespan") * 60.0))
+                elif o and o["type"] == "CreateEffectOnAbilityModel" and life is None:
+                    # HYPOTHESIS P-MKCAMOLIFE: without a TurboModel, the ability effect's lifespan
+                    # (oracle: Perma Charge 20 exactly, its effect 15 -> 20).
+                    e = tw.m.ref(o["f"].get("effectModel"))
+                    if e is not None:
+                        life = fl(tw.m.objs[e], "lifespan")
+            if any(tw.m.objs.get(i, {}).get("type") == "TurboModel" for i in tw.m.items(ab["f"].get("behaviors"))):
+                life = None
+        nid = tw.m.new_id()
+        tw.m.objs[nid] = {"i": nid, "type": "DetectCamoOnAbilityModel", "f": {
+            "_name": "DetectCamoOnAbilityModel_GrantCamoDetectForTurboMod",
+            "lifespan": life if life is not None else f32(frames * f32(1.0 / 60.0)),
+            "mutatorId": mm.get("mutatorId")}}
+        v = ab["f"].get("behaviors")
+        c = tw.m.values[v["$ref"]]
+        c["items"].append(nid)
+        c["len"] = len(c["items"])
+        add_child(tw.m, ab, nid)
+
+
+def m_effect_on_ability(tw, mm, target):
+    # CreateEffectOnAbilityModModel: CreateEffectOnAbilityModels (named the target, or all), their
+    # effectModel's lifespan + additionalLifespan.
+    for o in tw.descendants({"CreateEffectOnAbilityModel"}):
+        if target and name_of(o) != target:
+            continue
+        e = tw.m.ref(o["f"].get("effectModel"))
+        if e is not None:
+            tw.m.objs[e]["f"]["lifespan"] = f32(fl(tw.m.objs[e], "lifespan") + f32(mm.get("additionalLifespan", 0.0)))
+
+
 MUTATORS = {
+    "TargetedPineapplesModModel": m_pineapples,
+    "GrantCamoDetectForAbilityModModel": m_grant_camo,
+    "CreateEffectOnAbilityModModel": m_effect_on_ability,
+    "WingmonkeyModModel": m_wingmonkey,
     "BankDepositsModModel": m_bank_deposits,
     "HealthyBananasModModel": m_healthy_bananas,
     "DiscountZoneModModel": add_field("DiscountZoneModel", "discountMultiplier", "additionalMultiplier"),
@@ -763,6 +854,12 @@ MUTATORS = {
 LINK_TYPES = set(os.environ.get("MK_LINK_TYPES", "MorphTowerModel").split(","))
 
 
+# Mutators run after the tower's others (HYPOTHESIS P-MKLATE: Boomerang 0-4-0's camo detection takes
+# the Turbo's 15 s from LongTurbo, listed after BionicAugmentation; appended behaviours otherwise
+# follow the tower's mods list order).
+DEFERRED = {"GrantCamoDetectForAbilityModModel"}
+
+
 def main():
     src, out = sys.argv[1], sys.argv[2]
     oracle = sys.argv[sys.argv.index("--oracle") + 1] if "--oracle" in sys.argv else None
@@ -773,8 +870,11 @@ def main():
     gm = next(o for o in objs.values() if o["type"] == "GameModel")
     tower_ids = [i for i in m.items(gm["f"]["towers"]) if i in objs]
     missing = collections.Counter()
+
     def apply(tw):
-        for am in m.items(objs[tw.root]["f"].get("mods")):
+        ams = [am for am in m.items(objs[tw.root]["f"].get("mods")) if am in objs]
+        deferred = []
+        for am in ams:
             a = objs.get(am)
             if not a or a["f"].get("mod") not in active or a["f"]["mod"] not in mods:
                 continue
@@ -786,7 +886,12 @@ def main():
                 if fn is None:
                     missing[mm["type"]] += 1
                     continue
+                if mm["type"] in DEFERRED:
+                    deferred.append((fn, mm["f"], a["f"].get("target") or ""))
+                    continue
                 fn(tw, mm["f"], a["f"].get("target") or "")
+        for fn, f, tg in deferred:
+            fn(tw, f, tg)
 
     # (Every tower copied from the base model first: a tower model is also inside others.)
     views = [Tower(m, tid) for tid in tower_ids]

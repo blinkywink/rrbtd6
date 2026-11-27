@@ -31,7 +31,7 @@ ALIAS = {("ArcEmissionModel", "count"): "SliceSize"}
 SKIP = {("ArcEmissionModel", "SliceSize")}
 
 # BloonProperties (flags), as the dump prints them by name.
-BLOON_PROPS = {"None": 0, "Lead": 1, "Black": 2, "White": 4, "Purple": 8, "Frozen": 16}
+BLOON_PROPS = {"None": 0, "Lead": 1, "Black": 2, "White": 4, "Purple": 8, "Frozen": 16, "Glass": 64}
 
 
 def parse_dump(path):
