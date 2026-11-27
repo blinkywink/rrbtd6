@@ -191,6 +191,30 @@ TOWERS.md has the longer per-tower notes.
 
 ## Now (top = next)
 
+### IN PROGRESS (2026-11-26): Monkey Knowledge
+- The owner's profile has every knowledge item, switched off (knowledgeDisabled). SimRecorder scenario
+  keys: `mk` (ProfileModel.get_ActiveKnowledge postfix, armed after the mode pick: a new
+  ActiveKnowledge with the owner's masks ffffffff,3fffffff,3fffff,1fffff,1fff,7fff; the profile is never
+  written; a prefix that flipped knowledgeDisabled crashed the game on entering a match, an
+  InGame.set_ActiveKnowledge prefix came too late) and `mkdump` (ModelDiff: Simulation.model, i.e.
+  GameModel.CreateModded, against Game.instance.model by reflection with runtime-type downcasts; tab
+  separated MD / MS / MA / MF lines, file in the game's UserData/SimRecorder). Scenarios mk_dump (all
+  knowledge) and mk_dump0 (none), Standard Hard; dumps kept in research/dumps/mk/{all,none}.mkdump.
+- Knowledge is per model: TowerModel.mods lists ApplyModModel {mod, target}; each knowledge's ModModel
+  has mutatorMods (86 types: UpgradeCostModModel, ProjectilePierceModModel, DamageModifierForTagModModel,
+  WeaponReloadPercentageModModel (rate - rate x multiplier), RangeModModel, ...).
+- tools/assets/apply_mk.py applies the all-minus-none dump to the decoded set (copy on write per tower;
+  ArcEmissionModel `count` is the decoded `SliceSize`; added behaviours built from MF lines, fields per
+  field_offsets.json) -> local_extracted/decoded_mk; `RRBTD6_DECODED=local_extracted/decoded_mk
+  RRBTD6_GAME_JSON=game_mk.json python -I tools/assets/build_game_data.py ...` exports game_mk.json
+  (1944 of 2024 tiers change: e.g. Tack 2-0-0 rate 0.63 -> 0.5622, hits Frozen, lifespan 0.23; Dart
+  pierce 3; rates x 0.97). Limits: towers sharing a name (Marine, SpiritTower) are ambiguous in the
+  dump; Vector3 struct arrays (path / easePath) compare by reference (noise, skipped).
+- NEXT: the dump can't ship (it needs the modded game), so it is the ORACLE: implement each mutator's
+  Mutate (decomp) in the extraction pipeline driven by ApplyModModel, until the result equals the
+  dump-applied decoded_mk; then the clone loads game_mk.json in Standard modes with knowledge, and
+  Standard + mk recordings check the sim.
+
 ### DONE (2026-11-20): MOAB Takedown order (was HYPOTHESIS P-TAKEDOWN), shared collision circles by family, angle filters regathered by supports
 - MOAB Takedown target order:
   - TargetGrapplable.GetTargets (VERIFIED-DECOMP @0x180de4610): BloonManager.GetTargets First

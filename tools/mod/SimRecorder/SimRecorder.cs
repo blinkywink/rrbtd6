@@ -88,6 +88,13 @@ public class Scenario
     public List<TowerSpec> towers { get; set; } = new();
     public bool quit { get; set; } = true;
     public bool fast { get; set; } = true;
+    /// Monkey Knowledge: write every field where the game's modded tower models (Simulation.model,
+    /// GameModel.CreateModded with this game's knowledge) differ from Game.instance.model's, to
+    /// <name>.mkdump ("MD tower path base modded" / "MS tower path baseCount moddedCount").
+    public bool mkdump { get; set; } = false;
+    /// Play with the owner's acquired Monkey Knowledge even while the profile has it switched off
+    /// (`ActiveKnowledgePatch`; the profile is never changed).
+    public bool mk { get; set; } = false;
     /// A tower the placement UI refuses (CHIMPS: Banana Farm) is made by TowerManager.CreateTower.
     public bool forcePlace { get; set; } = true;
     /// After this many recorded frames every ability is activated (Ability.Activate(true): cooldown
@@ -201,6 +208,8 @@ public class Recorder : MelonMod
     }
 
     internal static Scenario Sc;
+    /// Set once the mode is picked: ActiveKnowledgePatch replaces only the in-game knowledge.
+    internal static bool MkArmed;
     internal static StreamWriter Out;
     internal static System.Collections.Generic.List<string> PreLines = new();
     public static System.Collections.Generic.List<string> LastAreas = new System.Collections.Generic.List<string>();
@@ -335,6 +344,7 @@ public class Recorder : MelonMod
                 if (ms == null || Il2CppAssets.Scripts.Unity.Menu.MenuManager.instance.IsTransitioning) { if (++wait > 60 * 60) Done("no mode screen"); return; }
                 if (++wait < 120) return;
                 LoggerInstance.Msg("mode " + Sc.mode);
+                MkArmed = Sc.mk;
                 ms.OnModeSelected(Sc.mode, false);
                 phase = 1;
                 wait = 0;
@@ -425,6 +435,11 @@ public class Recorder : MelonMod
                 for (int k = 0; k < Sc.towers.Count && k < placed.Count; k++)
                     Recorder.SetPoint(placed[k], Sc.towers[k], k);
                 DumpMap(sim);
+                if (Sc.mkdump)
+                {
+                    try { ModelDiff.Dump(Game.instance.model, sim.model, Path.Combine(dir, Sc.name + ".mkdump")); }
+                    catch (Exception e) { LoggerInstance.Msg("mkdump failed: " + e); }
+                }
                 Out = new StreamWriter(Path.Combine(dir, Sc.name + ".rec"), false, new UTF8Encoding(false));
                 Out.WriteLine($"# SimRecorder {Sc.name} map={Sc.map} difficulty={Sc.difficulty} round={Sc.round} mode={Sc.mode}");
                 // GameModel.randomSeed seeds Simulation.syncedRandom / unsyncedRandom
@@ -2637,5 +2652,202 @@ static class ProjDestroyPatch
             Recorder.Out.WriteLine(sb.ToString());
         }
         catch (Exception) { }
+    }
+}
+
+
+/// Walks two model graphs side by side (Il2CppInterop properties: fields) and writes where they differ.
+static class ModelDiff
+{
+    static StreamWriter W;
+    static HashSet<IntPtr> Seen;
+    static string Tower;
+    static readonly System.Reflection.BindingFlags BF = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public;
+    static readonly Dictionary<Type, System.Reflection.PropertyInfo[]> Props = new();
+
+    public static void Dump(Il2CppAssets.Scripts.Models.GameModel baseM, Il2CppAssets.Scripts.Models.GameModel mod, string path)
+    {
+        using (W = new StreamWriter(path, false, new UTF8Encoding(false)))
+        {
+            var byName = new Dictionary<string, Il2CppAssets.Scripts.Models.Towers.TowerModel>();
+            foreach (var t in baseM.towers) if (t != null) byName[t.name] = t;
+            W.WriteLine($"# towers base {baseM.towers.Length} modded {mod.towers.Length}");
+            foreach (var t in mod.towers)
+            {
+                if (t == null) continue;
+                Tower = t.name;
+                if (!byName.TryGetValue(t.name, out var b)) { W.WriteLine($"MN	{t.name}"); continue; }
+                Seen = new HashSet<IntPtr>();
+                Walk(b, t, "", 0);
+            }
+            foreach (var key in new[] { "upgrades" })
+            {
+                Tower = "#upgrades";
+                Seen = new HashSet<IntPtr>();
+                for (int i = 0; i < Math.Min(baseM.upgrades.Length, mod.upgrades.Length); i++)
+                    Walk(baseM.upgrades[i], mod.upgrades[i], "/" + baseM.upgrades[i].name, 0);
+            }
+        }
+    }
+
+    static string Str(object o) => o switch
+    {
+        null => "null",
+        float f => f.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+        double d => d.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+        string str => "\"" + str.Replace("\n", "\n") + "\"",
+        _ => Convert.ToString(o, System.Globalization.CultureInfo.InvariantCulture)
+    };
+
+    static readonly Dictionary<string, Type> Managed = new();
+    /// The Il2CppInterop wrapper of an object's runtime il2cpp class (array elements come typed as
+    /// their declared base, Model).
+    static object Down(object o)
+    {
+        if (o is not Il2CppSystem.Object io) return o;
+        try
+        {
+            var cls = io.GetIl2CppType();
+            var full = cls.FullName;
+            if (!Managed.TryGetValue(full, out var t))
+            {
+                t = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    t = asm.GetType("Il2Cpp" + full, false) ?? asm.GetType(full, false);
+                    if (t != null) break;
+                }
+                Managed[full] = t;
+            }
+            if (t == null || t == o.GetType() || !typeof(Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase).IsAssignableFrom(t)) return o;
+            return Activator.CreateInstance(t, io.Pointer);
+        }
+        catch { return o; }
+    }
+
+    /// Every field of an object only the modded model has: "MF tower path value".
+    static void Full(object a, string path, int depth)
+    {
+        if (depth > 40 || a == null) { if (a == null) W.WriteLine($"MF	{Tower}	{path}	null"); return; }
+        var ta = a.GetType();
+        if (ta.IsPrimitive || a is string || ta.IsEnum || a is Il2CppSystem.String) { W.WriteLine($"MF	{Tower}	{path}	{Str(a is Il2CppSystem.String ? a.ToString() : a)}"); return; }
+        if (a is not Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase) { W.WriteLine($"MF	{Tower}	{path}	{Str(a)}"); return; }
+        a = Down(a); ta = a.GetType();
+        var oa = (Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase)a;
+        if (!Seen.Add(oa.Pointer)) return;
+        if (a is Il2CppAssets.Scripts.Models.Model mm) W.WriteLine($"MF	{Tower}	{path}/$type	{mm.GetIl2CppType().Name}");
+        var countP = ta.GetProperty("Length", BF) ?? ta.GetProperty("Count", BF);
+        var itemP = ta.GetProperty("Item", BF);
+        if (countP != null && itemP != null && itemP.GetIndexParameters().Length == 1 && itemP.GetIndexParameters()[0].ParameterType == typeof(int))
+        {
+            int n = Convert.ToInt32(countP.GetValue(a));
+            W.WriteLine($"MF	{Tower}	{path}/$count	{n}");
+            for (int i = 0; i < n; i++) Full(itemP.GetValue(a, new object[] { i }), path + "[" + i + "]", depth + 1);
+            return;
+        }
+        if (!Props.TryGetValue(ta, out var ps))
+        {
+            var list = new List<System.Reflection.PropertyInfo>();
+            foreach (var p in ta.GetProperties(BF))
+            {
+                if (p.GetIndexParameters().Length != 0 || !p.CanRead || !p.CanWrite) continue;
+                if (p.DeclaringType == typeof(Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase) || p.Name == "Pointer" || p.Name == "WasCollected" || p.Name == "ObjectClass") continue;
+                list.Add(p);
+            }
+            ps = list.ToArray();
+            Props[ta] = ps;
+        }
+        foreach (var p in ps)
+        {
+            if (p.Name == "childDependants" || p.Name == "parentModel") continue;
+            object va;
+            try { va = p.GetValue(a); } catch { continue; }
+            Full(va, path + "/" + p.Name, depth + 1);
+        }
+    }
+
+    static void Walk(object a, object b, string path, int depth)
+    {
+        if (depth > 40) return;
+        if (a == null || b == null)
+        {
+            if ((a == null) != (b == null)) W.WriteLine($"MD	{Tower}	{path}	{(a == null ? "null" : "obj")}	{(b == null ? "null" : "obj")}");
+            return;
+        }
+        var ta = a.GetType();
+        if (ta.IsPrimitive || a is string || ta.IsEnum)
+        {
+            if (!Equals(a, b)) W.WriteLine($"MD	{Tower}	{path}	{Str(a)}	{Str(b)}");
+            return;
+        }
+        if (a is Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase)
+        {
+            a = Down(a); b = Down(b); ta = a.GetType();
+            var pb = ((Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase)b).Pointer;
+            if (!Seen.Add(pb)) return;
+            if (a is Il2CppSystem.String) { var sa = a.ToString(); var sb = b.ToString(); if (sa != sb) W.WriteLine($"MD	{Tower}	{path}	{Str(sa)}	{Str(sb)}"); return; }
+            // Arrays / lists: by index.
+            var countP = ta.GetProperty("Length", BF) ?? ta.GetProperty("Count", BF);
+            var itemP = ta.GetProperty("Item", BF);
+            if (countP != null && itemP != null && itemP.GetIndexParameters().Length == 1 && itemP.GetIndexParameters()[0].ParameterType == typeof(int))
+            {
+                int na = Convert.ToInt32(countP.GetValue(a)), nb = Convert.ToInt32(countP.GetValue(b));
+                if (na != nb) W.WriteLine($"MS	{Tower}	{path}	{na}	{nb}");
+                for (int i = 0; i < Math.Min(na, nb); i++)
+                {
+                    object ea = itemP.GetValue(a, new object[] { i }), eb = itemP.GetValue(b, new object[] { i });
+                    // (Behaviour lists: name each by its type so inserted ones show up.)
+                    Walk(ea, eb, path + "[" + i + (ea is Il2CppAssets.Scripts.Models.Model ma ? ":" + ma.GetIl2CppType().Name : "") + "]", depth + 1);
+                }
+                for (int i = na; i < nb; i++)
+                {
+                    var eb = itemP.GetValue(b, new object[] { i });
+                    var ip = path + "[" + i + (eb is Il2CppAssets.Scripts.Models.Model mb0 ? ":" + mb0.GetIl2CppType().Name : "") + "]";
+                    W.WriteLine($"MA	{Tower}	{ip}	{(eb is Il2CppAssets.Scripts.Models.Model mb ? mb.GetIl2CppType().Name + " " + mb.name : Str(eb))}");
+                    Full(eb, ip, depth + 1);
+                }
+                return;
+            }
+            if (!Props.TryGetValue(ta, out var ps))
+            {
+                var list = new List<System.Reflection.PropertyInfo>();
+                foreach (var p in ta.GetProperties(BF))
+                {
+                    if (p.GetIndexParameters().Length != 0 || !p.CanRead || !p.CanWrite) continue;
+                    if (p.DeclaringType == typeof(Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase) || p.Name == "Pointer" || p.Name == "WasCollected" || p.Name == "ObjectClass") continue;
+                    list.Add(p);
+                }
+                ps = list.ToArray();
+                Props[ta] = ps;
+            }
+            foreach (var p in ps)
+            {
+                if (p.Name == "childDependants" || p.Name == "parentModel") continue;
+                object va, vb;
+                try { va = p.GetValue(a); vb = p.GetValue(b); } catch { continue; }
+                Walk(va, vb, path + "/" + p.Name, depth + 1);
+            }
+            return;
+        }
+        if (!Equals(a, b)) W.WriteLine($"MD	{Tower}	{path}	{Str(a)}	{Str(b)}");
+    }
+}
+
+/// With `mk`: InGame.ActiveKnowledge set to a new ActiveKnowledge holding the owner's acquired masks
+/// (every item: ffffffff,3fffffff,3fffff,1fffff,1fff,7fff as recorded with Knowledge on), whatever
+/// the profile's on / off switch; the profile itself is never touched.
+[HarmonyPatch(typeof(Il2CppAssets.Scripts.Models.Profile.ProfileModel), nameof(Il2CppAssets.Scripts.Models.Profile.ProfileModel.ActiveKnowledge), MethodType.Getter)]
+static class ActiveKnowledgePatch
+{
+    static void Postfix(ref Il2CppAssets.Scripts.Data.Knowledge.ActiveKnowledge __result)
+    {
+        var value = __result;
+        if (Recorder.Sc == null || !Recorder.Sc.mk || !Recorder.MkArmed || value == null) return;
+        var ak = new Il2CppAssets.Scripts.Data.Knowledge.ActiveKnowledge();
+        var m = new ulong[] { 0xffffffff, 0x3fffffff, 0x3fffff, 0x1fffff, 0x1fff, 0x7fff };
+        ak.masks = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppStructArray<ulong>(m);
+        if (value != null) ak.version = value.version;
+        __result = ak;
+        MelonLoader.MelonLogger.Msg("SimRecorder: ActiveKnowledge replaced (mk) " + ak.masks.Length);
     }
 }

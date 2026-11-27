@@ -44,10 +44,12 @@ def main():
     # Bloon mutators' IncreaseDamageFromTypeModel by mutator id (filled while exporting projectiles).
     type_bonus = {}
     objs = {}
-    for line in open(os.path.join(root, "decoded", "named", "objects.jsonl"), encoding="utf-8"):
+    # RRBTD6_DECODED: another decoded set (apply_mk.py's Monkey Knowledge variant).
+    decoded = os.environ.get("RRBTD6_DECODED") or os.path.join(root, "decoded")
+    for line in open(os.path.join(decoded, "named", "objects.jsonl"), encoding="utf-8"):
         r = json.loads(line)
         objs[r["i"]] = r
-    values = {int(k): v for k, v in json.load(open(os.path.join(root, "decoded", "values.json"))).items()}
+    values = {int(k): v for k, v in json.load(open(os.path.join(decoded, "values.json"))).items()}
     # Display GUIDs whose prefab is an empty placeholder: the game draws nothing for them (the
     # renderer would otherwise draw its stand-in dart).
     try:
@@ -4108,7 +4110,7 @@ def main():
     # Kept from the previous game.json: what tools/mod/import_paths.py adds from the real game's
     # map dump (CollisionGrid.orderedNeighborOffsets), and export_overlays.py's overlay table.
     out["effect_type_bonus"] = type_bonus
-    gp = os.path.join(root, "game", "game.json")
+    gp = os.path.join(root, "game", os.environ.get("RRBTD6_GAME_JSON") or "game.json")
     if os.path.exists(gp):
         prev = json.load(open(gp, encoding="utf-8"))
         for k in ("grid_offsets", "overlays"):
