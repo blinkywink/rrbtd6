@@ -9,7 +9,6 @@
 == bucc: 36/36 match
 == churchill: 2/2 match
 == combo: 17/17 match
-== coop: 0/1 match
 == corvus: 2/2 match
 == dand: 3/3 match
 == dart: 72/72 match
