@@ -4683,6 +4683,12 @@ pub struct Game {
     pub has_terrain: bool,
     /// ImmunityModel (Legend of the Night): frames left with leaks costing no lives.
     pub leak_immune: f32,
+    /// Mana Shield (StartingShieldModModel + ShieldPerRound): shield, its cap, the per-round refill
+    /// and Simulation.hasTakenLeakDamage (a round with leak damage gets no refill next round start).
+    pub shield: f32,
+    pub max_shield: f32,
+    pub shield_per_round: f32,
+    pub took_leak_damage: bool,
     rounds: Shared<Vec<Vec<crate::data::Group>>>,
     /// GameModel.freeplayGroups (rounds past the round set) and FreeplayRoundManager's seed.
     freeplay_groups: Shared<Vec<crate::data::FreeplayGroup>>,
@@ -7235,6 +7241,10 @@ impl Game {
             })
             .collect();
         // The chosen difficulty, else Medium, else the old single-mode start values.
+        let mk_shield = d.mk_sim.iter().filter(|x| x["type"] == "StartingShieldModModel").fold((0.0f32, 0.0f32, 0.0f32), |a, x| {
+            let f = |k: &str| x[k].as_f64().unwrap_or(0.0) as f32;
+            (a.0 + f("startingShield"), a.1 + f("maxShield"), a.2 + f("shieldPerRound"))
+        });
         let mode = d.modes.get(&d.mode).or(d.modes.get("Medium")).cloned().unwrap_or(crate::data::Mode {
             cash_start_mult: 1.0,
             no_mana_shield: false,
@@ -7521,6 +7531,13 @@ impl Game {
             bounds: d.map.terrain.as_ref().map_or(([-WORLD_X, -WORLD_Z], [WORLD_X, WORLD_Z]), |t| (t.min, t.max)),
             has_terrain: d.map.terrain.is_some(),
             leak_immune: 0.0,
+            // StartingShieldModModel.Mutate (VERIFIED-DECOMP @0x1812af060): GameModel startingShield and
+            // maxShield += the mod's, a ShieldPerRoundModel with shieldPerRound; RemoveManaShieldModModel
+            // (Impoppable) drops it.
+            shield: if mode.no_mana_shield { 0.0 } else { mk_shield.0 },
+            max_shield: if mode.no_mana_shield { 0.0 } else { mk_shield.1 },
+            shield_per_round: if mode.no_mana_shield { 0.0 } else { mk_shield.2 },
+            took_leak_damage: false,
             end_round: mode.end_round.min(d.rounds.len()),
             map_difficulty: d.map_difficulty,
             xp_account: 0.0,
@@ -7915,6 +7932,13 @@ impl Game {
         // Black off PathRHStart takes PathRHSplit1 although round 40's MOAB took it before).
         self.routs.iter_mut().for_each(|r| *r = 0);
         self.thrive_round_start();
+        // Simulation.RoundStart (VERIFIED-DECOMP @0x180b4cd40): ShieldPerRound.OnRoundStart (@0x180f29c40)
+        // adds shieldPerRound unless the last round took leak damage, set_Shield caps it at maxShield;
+        // then hasTakenLeakDamage = false.
+        if self.shield_per_round > 0.0 && !self.took_leak_damage {
+            self.shield = (self.shield + self.shield_per_round).min(self.max_shield);
+        }
+        self.took_leak_damage = false;
         // Ability.OnRoundStartSim (VERIFIED-DISASM @0x180dfacd0): activationsThisRound = 0.
         for tw in &mut self.towers {
             tw.ability_round.clear();
@@ -26682,6 +26706,16 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
             let _ = tr;
             if self.leak_immune <= 0.0 {
                 let lost = self.rbe[b.kind] as f64; // P-LEAK
+                // Simulation.TakeDamage (VERIFIED-DECOMP @0x180b50840): the shield takes the damage
+                // first, only what it can't hold reaches health (extraShield is never set here); with a
+                // shield up noLivesLost stays. hasTakenLeakDamage is set either way.
+                let lost = if self.shield > 0.0 {
+                    let left = self.shield - lost as f32;
+                    if left >= 0.0 { self.shield = left; 0.0 } else { self.shield = 0.0; -left as f64 }
+                } else {
+                    lost
+                };
+                self.took_leak_damage = true;
                 self.lives -= lost;
                 self.logic.lives_lost += lost;
                 self.leaked = true;

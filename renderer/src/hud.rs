@@ -253,7 +253,7 @@ impl Hud {
 
         let lg = "LeftGroup/LayoutGroup";
         hide(&mut left, &["LeftGroup/TwitchButton"]);
-        for p in ["ManaShield", "SoulBarrier", "LivesDrain", "BossRushLives"] {
+        for p in ["SoulBarrier", "LivesDrain", "BossRushLives"] {
             left.set_active(&format!("{lg}/HealthGroup/{p}"), false);
         }
         for p in ["ThriveGlow", "CashGoal", "Debt", "DoubleCashMode"] {
@@ -817,6 +817,12 @@ impl Hud {
         // Lives / cash / round.
         let lg = "LeftGroup/LayoutGroup";
         self.left.set_text(&format!("{lg}/HealthGroup/Health"), &format!("{:.0}", game.lives.max(0.0)));
+        // ShieldDisplay.OnUpdate (VERIFIED-DECOMP @0x180ac6d60): shown while the shield is above 0,
+        // text "+" + shield.ToString().
+        self.left.set_active(&format!("{lg}/HealthGroup/ManaShield/HideMe"), game.shield > 0.0);
+        if game.shield > 0.0 {
+            self.left.set_text(&format!("{lg}/HealthGroup/ManaShield/HideMe/ShieldTxt"), &format!("+{}", game.shield));
+        }
         self.left.set_text(&format!("{lg}/CashGroup/Cash"), &money(game.cash));
         // Simulation.ThriveStatusChanged: ThriveGlow by the cash while a Thrive runs.
         self.left.set_active(&format!("{lg}/CashGroup/ThriveGlow"), !game.thrives.is_empty());
