@@ -3362,6 +3362,10 @@ def main():
                                                    a["f"].get("minGenerationManaPoolThreshold", 0.0), a["f"].get("minGenerationRate", 1.0)]
                                                   for a in items(f["behaviors"]) if a and a["type"] == "BalanceModel"), None)}
                                 for b in items(f["behaviors"]) if b and b["type"] in ("AttunementModel", "SpiritualWillModel", "BalanceModel")), None),
+                # TowerSellModel (Monkey Knowledge Better Sell Deals / Flat Pack Buildings): each one's
+                # multiplier joins Tower.GetTotalSaleTransforms (TowerSell.TransformSalePerc while it has
+                # charges: all of them 9999999).
+                "sell_transforms": [b["f"].get("multiplier", 0.0) for b in items(f["behaviors"]) if b and b["type"] == "TowerSellModel"],
                 "attacks": attacks, "pets": pets, "leash_rotate": leash_rotate, "merge_fx": merge_fx, "merged_fx": merged_fx, "power_fx": power_fx, "merge_sound": merge_sound, "leash_power": leash_power, "abilities": abilities, "orbit": orbit, "zones": zones, "vengeance": vengeance, "temple": temple,
                 "round_start_rate": round_start_rate, "vigilante": vigilante, "vigilante_fx": vigilante_fx, "bank": bank, "supports": supports,
                 # PerRoundCashBonusTowerModel (Merchantman, Favored Trades...): cash each round end.
@@ -3932,6 +3936,12 @@ def main():
             "reverse": "ReverseModel" in m, "sandbox": sub == "Sandbox", "apopalypse": sub == "Apopalypse",
             "deflation": "DeflationModel" in m,
             "cash": cash,
+            # GameModel.CalcStartingCash (VERIFIED-DECOMP): (last changeBase or the base) + every
+            # addition, then x each multiplier (not 0 / 1): Monkey Knowledge's MoreCash addition is
+            # scaled by these (Half Cash: (650 + 200) x 0.5).
+            "cash_start_mult": float(__import__("math").prod(x["multiplier"] for x in mods if x["class"] == "StartingCashModModel" and x["multiplier"] not in (0.0, 1.0))),
+            # RemoveManaShieldModModel (Impoppable): no Monkey Knowledge shield.
+            "no_mana_shield": "RemoveManaShieldModModel" in m,
             "lives": g("MaxHealthModModel", "set", None) or lives,
             "sell": g("SellMultiplierModModel", "addition", 0.7),
             "cost_mult": cost_mult,

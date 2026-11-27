@@ -889,6 +889,10 @@ LINK_TYPES = set(os.environ.get("MK_LINK_TYPES", "MorphTowerModel").split(","))
 # the Turbo's 15 s from LongTurbo, listed after BionicAugmentation; appended behaviours otherwise
 # follow the tower's mods list order).
 DEFERRED = {"GrantCamoDetectForAbilityModModel"}
+# Mutators on the GameModel / simulation (exported as mk_sim, run by the sim).
+GAME_LEVEL = {"SimTowerDiscountModModel", "ComeOnEverybodyModModel", "FreeTowerModModel", "StartingCashModModel",
+              "CrossTheStreamsModModel", "MonkeyMoneyModModel", "StartingShieldModModel", "ParagonOfPowerModModel",
+              "HeroXPBonusModModel", "PreGamePrepModModel"}
 
 
 def main():
@@ -946,6 +950,21 @@ def main():
                     r = m.ref(v)
                     if r is not None and inv.get(r) in listed and inv.get(r) != tw.root and o["type"] in LINK_TYPES and k == "towerModel":
                         o["f"][k] = {"$ref": inv[r]}
+    # BloonModels' own mods lists (BigBloonSabotage): BloonHealthModModel (Towers.Mods,
+    # VERIFIED-DECOMP @0x181282400): a bloon that isn't a boss loses (int)(maxHealth x
+    # percentageHealthReduced), at least 1 left (MOAB 200 -> 180: recording supermonkey_000_mk).
+    for bid in [i for i in m.items(gm["f"].get("bloons")) if i in objs]:
+        b = objs[bid]
+        for am in m.items(b["f"].get("mods")):
+            a = objs.get(am)
+            if not a or a["f"].get("mod") not in active or a["f"]["mod"] not in mods:
+                continue
+            for mmid in m.items(mods[a["f"]["mod"]]["f"].get("mutatorMods")):
+                mm = objs.get(mmid)
+                if mm and mm["type"] == "BloonHealthModModel" and not b["f"].get("isBoss"):
+                    h = b["f"].get("maxHealth", 0)
+                    h = h - int(f32(float(h) * f32(mm["f"].get("multiplier", mm["f"].get("percentageHealthReduced", 0.0)))))
+                    b["f"]["maxHealth"] = max(h, 1)
     # Game-level knowledge (mods no model's mods list names: ComeOnEverybody, PreGamePrep, MoreCash,
     # ManaShield, free towers, first-buy discounts...): their mutators' fields go to
     # GameModel.mkSim for the sim (build_game_data -> game.json mk_sim).
@@ -958,11 +977,13 @@ def main():
     sim = []
     for k in m.items(gm["f"].get("allKnowledge")):
         n = name_of(objs[k]) if k in objs else None
-        if n not in active or n in listed or n not in mods:
+        if n not in active or n not in mods:
             continue
         for mmid in m.items(mods[n]["f"].get("mutatorMods")):
             mm = objs.get(mmid)
-            if mm:
+            # (Game-level mutator types, whoever lists the mod: FlatPackBuildings is a tower sell
+            # mod and a first-buy discount.)
+            if mm and (n not in listed or mm["type"] in GAME_LEVEL):
                 sim.append({"type": mm["type"], "knowledge": n,
                             **{f: v for f, v in mm["f"].items() if f not in ("childDependants", "runtimeTypeIndex", "isTower")}})
     gm["f"]["mkSim"] = sim

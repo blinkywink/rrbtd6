@@ -124,6 +124,12 @@ pub struct Start {
 #[derive(Deserialize, Clone)]
 pub struct Mode {
     pub cash: f64,
+    /// StartingCashModModel multipliers (Half Cash 0.5): Monkey Knowledge's addition x this.
+    #[serde(default = "one_f64")]
+    pub cash_start_mult: f64,
+    /// RemoveManaShieldModModel (Impoppable).
+    #[serde(default)]
+    pub no_mana_shield: bool,
     pub lives: f64,
     pub sell: f64,
     /// GlobalCostModModel.multiplier: TowerModel / UpgradeModel costs + (mult - 1) x cost.
@@ -878,6 +884,9 @@ pub struct Tier {
     /// PerRoundCashBonusTowerModel.cashPerRound: paid at each round end.
     #[serde(default)]
     pub round_cash: f64,
+    /// TowerSellModel multipliers (Monkey Knowledge): Tower.GetTotalSaleTransforms.
+    #[serde(default)]
+    pub sell_transforms: Vec<f32>,
     /// Corvus's AttunementModel ([maxSpeedMultiplier, maxDamageMultiplier]) and SpiritualWillModel.
     #[serde(default)]
     pub corvus: Option<CorvusSpec>,

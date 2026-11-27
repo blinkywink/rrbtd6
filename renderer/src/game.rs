@@ -4373,6 +4373,11 @@ pub struct Game {
     type_bonus: Shared<HashMap<String, crate::data::TypeBonus>>,
     /// Monkey Knowledge's ComeOnEverybody (rateMultiplier, discountMultiplier).
     come_on_everybody: Option<(f32, f32)>,
+    /// TowerInventory.towerDiscounts from Monkey Knowledge's SimTowerDiscountModModels: (base ids,
+    /// useAllHeroes, multiplier, subtraction, charges left).
+    sim_discounts: Vec<(Vec<String>, bool, f32, f32, i32)>,
+    /// FreeTowerModModel mutuallyExclusiveWith: (tower, the one its use takes away).
+    free_exclusive: Vec<(String, String)>,
     /// Monkey Knowledge's PreGamePrep (distFromEdgeOfMap, its projectile).
     pre_game_prep: Option<(f32, std::sync::Arc<crate::data::Proj>)>,
     ggrid: GameGrid,
@@ -7231,6 +7236,8 @@ impl Game {
             .collect();
         // The chosen difficulty, else Medium, else the old single-mode start values.
         let mode = d.modes.get(&d.mode).or(d.modes.get("Medium")).cloned().unwrap_or(crate::data::Mode {
+            cash_start_mult: 1.0,
+            no_mana_shield: false,
             cash: d.start.cash,
             lives: d.start.lives,
             sell: SELL_MULTIPLIER,
@@ -7349,6 +7356,12 @@ impl Game {
                 let p: crate::data::Proj = serde_json::from_value(x["projectileModel"].clone()).ok()?;
                 Some((x["distFromEdgeOfMap"].as_f64().unwrap_or(0.0) as f32, std::sync::Arc::new(p)))
             }),
+            sim_discounts: d.mk_sim.iter().filter(|x| x["type"] == "SimTowerDiscountModModel").map(|x| (
+                x["tower"].as_str().unwrap_or("").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+                x["useAllHeroes"].as_bool().unwrap_or(false), x["multiplier"].as_f64().unwrap_or(0.0) as f32,
+                x["subtraction"].as_f64().unwrap_or(0.0) as f32, x["charges"].as_i64().unwrap_or(0) as i32)).collect(),
+            free_exclusive: d.mk_sim.iter().filter(|x| x["type"] == "FreeTowerModModel")
+                .filter_map(|x| Some((x["baseTowerID"].as_str()?.to_string(), x["mutuallyExclusiveWith"].as_str()?.to_string()))).collect(),
             come_on_everybody: d.mk_sim.iter().find(|x| x["type"] == "ComeOnEverybodyModModel")
                 .map(|x| (x["rateMultiplier"].as_f64().unwrap_or(1.0) as f32, x["discountMultiplier"].as_f64().unwrap_or(0.0) as f32)),
             mutator_data: (d.bloon_mutator_data.clone()).into(),
@@ -7562,7 +7575,10 @@ impl Game {
             dist_set: false,
             next_uid: 0,
             active_rbe: 0.0,
-            cash: mode.cash,
+            // GameModel.CalcStartingCash with Monkey Knowledge's MoreCash (StartingCashModModel
+            // addition), scaled by the mode's multipliers (Half Cash).
+            cash: mode.cash + d.mk_sim.iter().filter(|x| x["type"] == "StartingCashModModel")
+                .map(|x| x["addition"].as_f64().unwrap_or(0.0)).sum::<f64>() * mode.cash_start_mult,
             debt: 0.0,
             power_boosts: Vec::new(),
             thrives: Vec::new(),
@@ -7591,7 +7607,9 @@ impl Game {
             vine_fx: Vec::new(),
             effect_seq: 0,
             voice_warned: Vec::new(),
-            free_towers: Vec::new(),
+            // FreeTowerModModel (Monkey Knowledge BonusMonkey / BonusGlueGunner): free towers from the start.
+            free_towers: d.mk_sim.iter().filter(|x| x["type"] == "FreeTowerModModel")
+                .filter_map(|x| Some((x["baseTowerID"].as_str()?.to_string(), x["charges"].as_i64().unwrap_or(1) as i32))).collect(),
             pop_emits: Vec::new(),
             hooks: Vec::new(),
             gw_effects: Vec::new(),
@@ -10211,7 +10229,36 @@ impl Game {
         if self.free_tower_count(def) > 0 {
             return 0.0;
         }
-        game_cost(self.tower_defs[def].1.cost, self.cost_mult, self.discount(def, p, None, None, 0, ""))
+        let d = self.discount(def, p, None, None, 0, "");
+        let (m, sub) = self.inventory_discount(def);
+        if m == 0.0 && sub == 0.0 && self.come_on_everybody.is_none() {
+            return game_cost(self.tower_defs[def].1.cost, self.cost_mult, d);
+        }
+        // (1 - (area + zone + inventory + sim behaviours)) x (the scaled cost - subtraction).
+        let c = self.tower_defs[def].1.cost as f32;
+        round_cost(c + (self.cost_mult - 1.0) * c - sub, d + m as f64 + self.come_on_everybody_discount(def) as f64)
+    }
+
+    /// TowerInventory.GetTowerDiscount (VERIFIED-DECOMP): every towerDiscount with charges left
+    /// whose towers name `def`'s baseId (useAllHeroes: any hero), multipliers and subtractions summed.
+    fn inventory_discount(&self, def: usize) -> (f32, f32) {
+        let name = &self.tower_defs[def].0;
+        let hero = self.hero_def(def).is_some();
+        self.sim_discounts.iter().filter(|(ts, h, _, _, c)| *c > 0 && (ts.iter().any(|t| t == name) || (*h && hero)))
+            .fold((0.0, 0.0), |(m, s), (_, _, dm, ds, _)| (m + dm, s + ds))
+    }
+
+    /// ComeOnEverybody.GetDiscount (VERIFIED-DECOMP): a Primary tower costs discountMultiplier less
+    /// while every Primary tower is tier 3 or 4 (none placed counts).
+    fn come_on_everybody_discount(&self, def: usize) -> f32 {
+        let Some((_, dm)) = self.come_on_everybody else { return 0.0 };
+        let primary_def = self.tower_tiers.get(def).and_then(|x| x.as_ref()).and_then(|tt| tt.tiers.values().next()).is_some_and(|x| x.set & 1 != 0);
+        if !primary_def {
+            return 0.0;
+        }
+        let ok = (0..self.towers.len()).filter(|&o| self.towers[o].sub.is_none() && self.tier(o).is_some_and(|x| x.set & 1 != 0))
+            .all(|o| { let m = *self.towers[o].tiers.iter().max().unwrap_or(&0); m == 3 || m == 4 });
+        if ok { dm } else { 0.0 }
     }
 
     /// TowerInventory.GetFreeTowerCount (VERIFIED-DECOMP @0x180fa9ce0): the counts of every
@@ -10398,6 +10445,19 @@ impl Game {
             let name = self.tower_defs[def].0.clone();
             if let Some(e) = self.free_towers.iter_mut().find(|(n, c)| *n == name && *c >= 1) {
                 e.1 -= 1;
+            }
+            // (FreeTowerModModel mutuallyExclusiveWith: BonusMonkey's Dart takes BonusGlueGunner's
+            // Glue away and back. HYPOTHESIS P-MKFREEX.)
+            let other: Vec<String> = self.free_exclusive.iter().filter(|(t, _)| *t == name).map(|(_, o)| o.clone()).collect();
+            self.free_towers.retain(|(n, _)| !other.contains(n));
+        } else {
+            // (TowerInventory.GetTowerDiscount with use: each matching discount loses a charge.)
+            let name = self.tower_defs[def].0.clone();
+            let hero = self.hero_def(def).is_some();
+            for (ts, h, _, _, c) in &mut self.sim_discounts {
+                if *c > 0 && (ts.iter().any(|t| *t == name) || (*h && hero)) {
+                    *c -= 1;
+                }
             }
         }
         self.cash -= cost;
@@ -17579,7 +17639,9 @@ impl Game {
     /// f; + GetAdditionalSaleAmounts (no behaviour overrides it: 0), x GameModel.sellValueMultiplier
     /// (1), at most 1e7; then (int)Math.Ceiling (roundsd mode 0x0A) of it as a double.
     pub fn sale_value(&self, t: usize) -> f64 {
-        let f = self.sell_fraction(t) + 0.0;
+        // (GetTotalSaleTransforms: the TowerSell behaviours' multipliers, summed in order.)
+        let transforms = self.tier(t).map_or(0.0, |x| x.sell_transforms.iter().fold(0.0f32, |a, m| a + m));
+        let f = self.sell_fraction(t) + transforms;
         let worth = self.towers[t].invested as f32;
         let v = if self.tier(t).is_some_and(|x| x.ignore_max_sell) { worth * f } else { worth.min(f.min(0.95) * worth) };
         let v = ((0.0 + v) * 1.0f32).min(10_000_000.0);
