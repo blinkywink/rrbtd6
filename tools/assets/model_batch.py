@@ -141,7 +141,7 @@ def run(game, jobs, size=16, workers=None, *, progress_offset=0, progress_total=
                             report(index, int(data["done"]), data.get("label", "Preparing models"))
                         else:
                             tail.append(line.rstrip())
-                            if os.environ.get("RRBTD6_SETUP_VERBOSE") == "1":
+                            if os.environ.get("RRBTD6_SETUP_VERBOSE") == "1" or line.startswith("model export failed: "):
                                 with lock:
                                     print(line, end="", flush=True)
                     if not done:

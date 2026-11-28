@@ -35,9 +35,17 @@ def run(game, jobs, compact=True):
             ea.main()
             if compact:
                 ca.convert(out)
-        except Exception:
+        except MemoryError:
             Path(out, "meta.json").unlink(missing_ok=True)
-            raise
+            raise  # model_batch retries the rest with fewer workers
+        except Exception:
+            # One prefab the exporter can't handle (MasquedMacaqueBerserkLVL20) must not take the
+            # rest of its batch with it: everything queued behind it would fall back to effects.
+            Path(out, "meta.json").unlink(missing_ok=True)
+            import traceback
+            error = sys.exc_info()[1]
+            print(traceback.format_exc(), end="", flush=True)
+            print(f"model export failed: {prefab}: {type(error).__name__}: {error}", flush=True)
         finally:
             for name in settings:
                 os.environ.pop(name, None)

@@ -439,6 +439,11 @@ def main():
             col = np.array(h.m_Colors, dtype=np.float64).reshape(len(v), 4) if h.m_Colors else None
             skin = None
             bones = r.get("m_Bones") or []
+            if kind == "SkinnedMeshRenderer" and bones and len(bones) < len(mesh.m_BindPose):
+                # Fewer bones than bind poses (MasquedMacaqueBerserkLVL20's LVL3_Cape: 12 of 15, its
+                # vertices name bones 12-14): Unity logs "Bones do not match bindpose" and doesn't
+                # draw the renderer. INFERRED from Unity's skinning check, not seen in game.
+                continue
             if kind == "SkinnedMeshRenderer" and bones and h.m_BoneWeights:
                 bind = [em.mat4(b) for b in mesh.m_BindPose]
                 w = np.array(h.m_BoneWeights, dtype=np.float64).reshape(len(v), -1)
