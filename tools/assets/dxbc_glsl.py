@@ -1,8 +1,8 @@
 """Translate a Unity shader's forward pass (D3D11 DXBC, shader model 4/5) to GLSL 330.
 
 Used by export_model.py for map materials whose look comes from their shader (water ripples,
-panning water, waterfalls, god rays...). The bytecode is disassembled with d3dcompiler_47's
-D3DDisassemble and each instruction becomes one GLSL statement over vec4 registers, so the
+panning water, waterfalls, god rays...). The bytecode is disassembled (dxbc_disasm.py, the same
+text as d3dcompiler_47's D3DDisassemble on any system) and each instruction becomes one GLSL statement over vec4 registers, so the
 result does exactly what the game's shader does. Integer / mask instructions work on the raw
 bits (floatBitsToUint / uintBitsToFloat), as on the GPU.
 
@@ -26,6 +26,14 @@ _d3d = None
 
 
 def disassemble(code):
+    """The program's text, as d3dcompiler_47's D3DDisassemble writes it, on every system
+    (dxbc_disasm.py; tools/tests/test_dxbc_disasm.py checks they match)."""
+    import dxbc_disasm
+    return dxbc_disasm.disassemble(code)
+
+
+def disassemble_d3d(code):
+    """Windows' own disassembler: the reference dxbc_disasm is tested against."""
     global _d3d
     if _d3d is None:
         _d3d = ctypes.WinDLL("d3dcompiler_47.dll")
