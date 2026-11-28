@@ -43,6 +43,34 @@ def resolve_references(tree):
     return walk(tree)
 
 
+def export_bloon_skins(game, root, items, names):
+    """The MOAB-class skins' models (BloonAssetChange swap targets) to models/bloons/<name>, as
+    export_bloon_models.py exports the originals (existing exports are kept)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from model_batch import run
+    paths = json.loads((root / "all_container_paths.json").read_text(encoding="utf-8"))
+    by_name = {}
+    for path, bundle in paths.items():
+        if path.endswith(".prefab"):
+            by_name.setdefault(Path(path).stem, []).append((path, bundle))
+    jobs = {}
+    for changes in items.values():
+        for c in changes:
+            if c["type"] != "BloonAssetChange" or not c["change"]:
+                continue
+            for swap in c["change"].get("prefabSwaps", []):
+                name = names.get(swap["swapToo"]["guidRef"])
+                found = sorted(by_name.get(name or "", []))
+                if not found:
+                    print("bloon skin prefab not found:", name, flush=True)
+                    continue
+                path, bundle = found[0]
+                out = str(root / "models/bloons" / name)
+                jobs[out] = [out, bundle.rsplit("_", 1)[0], path]
+    print(len(jobs), "bloon skin models", flush=True)
+    run(str(game), list(jobs.values()))
+
+
 def main():
     game, root = Path(sys.argv[1]), Path(sys.argv[2])
     base = game / "BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full"
@@ -68,9 +96,26 @@ def main():
                 change = resolve_references({k: v for k, v in change.items() if k not in SKIP})
             changes.append({"type": ITEM_TYPES[kind] if 0 <= kind < len(ITEM_TYPES) else str(kind), "change": change})
         out[item["id"]] = changes
+    # Every referenced prefab's name (catalog_prefabs.json: GUID -> file name), so the game resolves
+    # swaps without the whole catalog.
+    catalog = json.loads((root / "catalog_prefabs.json").read_text(encoding="utf-8"))
+    names = {}
+
+    def collect(value):
+        if isinstance(value, dict):
+            g = value.get("guidRef")
+            if isinstance(g, str) and g in catalog:
+                names[g] = Path(catalog[g]).stem
+            for v in value.values():
+                collect(v)
+        elif isinstance(value, list):
+            for v in value:
+                collect(v)
+    collect(out)
     dest = root / "game/trophy_changes.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(out, indent=1, sort_keys=True), encoding="utf-8")
+    dest.write_text(json.dumps({"items": out, "names": names}, indent=1, sort_keys=True), encoding="utf-8")
+    export_bloon_skins(game, root, out, names)
     kinds = {}
     for changes in out.values():
         for c in changes:

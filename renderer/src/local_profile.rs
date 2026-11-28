@@ -117,13 +117,30 @@ pub(crate) fn add_experience(p:&mut Profile,xp:u64){
 pub(crate) fn buy_trophy_item(root:&Path,id:&str,price:u64)->bool{
     let p=get(root);
     if p.trophy_items.contains_key(id)||p.trophies<price{return false;}
-    update(root,|p|{p.trophies-=price;p.trophy_items.insert(id.to_owned(),(true,false));}).is_ok()
+    update(root,|p|{p.trophies-=price;p.trophy_items.insert(id.to_owned(),(true,false));disable_exclusive(root,p,id);}).is_ok()
 }
 /// Sets an owned item's enabled / favourite flags.
 pub(crate) fn set_trophy_item(root:&Path,id:&str,enabled:Option<bool>,favourite:Option<bool>){
     let _=update(root,|p|{if let Some(o)=p.trophy_items.get_mut(id){
         if let Some(e)=enabled{o.0=e;}if let Some(f)=favourite{o.1=f;}
+        if enabled==Some(true){disable_exclusive(root,p,id);}
     }});
+}
+/// TrophyStoreScreen.EnableTrophyItem (VERIFIED-DECOMP @0x18053f110): enabling an item turns off
+/// every other owned item with the same non-empty TrophyStoreItem.exclusivity ("BADSkin",
+/// "DartMonkeyPet"...). A purchase enables the item the same way (INFERRED: PurchaseComplete).
+fn disable_exclusive(root:&Path,p:&mut Profile,id:&str){
+    static GROUPS:OnceLock<std::collections::HashMap<String,String>>=OnceLock::new();
+    let groups=GROUPS.get_or_init(||{
+        let items:Vec<Value>=std::fs::read_to_string(root.join("ui/runtime/trophy_items.json")).ok()
+            .and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_default();
+        items.iter().filter_map(|i|Some((i["id"].as_str()?.to_owned(),i["raw"]["exclusivity"].as_str()?.to_owned())))
+            .filter(|(_,g)|!g.is_empty()).collect()
+    });
+    let Some(group)=groups.get(id) else{return};
+    for (other,flags) in p.trophy_items.iter_mut(){
+        if other!=id&&groups.get(other)==Some(group){flags.0=false;}
+    }
 }
 pub(crate) fn record_result(p:&mut Profile,map:&str,mode:&str,coop:bool,won:bool,round:usize){
     p.highest_round=p.highest_round.max(round);

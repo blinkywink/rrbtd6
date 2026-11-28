@@ -14,6 +14,7 @@
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod boss_logic;
+mod trophy_cosmetics;
 mod mem_guard;
 mod map_routes;
 mod anim;
@@ -356,6 +357,8 @@ fn game_data(root: &std::path::Path, json: &str, hero: Option<&str>, map: &str,l
     let json: &str = mk.as_deref().map(|s| s.as_str()).unwrap_or(json);
     let compiled=match modding::game_json(root,json,local_mods){Ok(v)=>v,Err(error)=>{eprintln!("Content mods not applied: {error}");None}};
     let mut d = with_hero(compiled.as_deref().unwrap_or(json), hero);
+    // Enabled Trophy Store bloon skins (cosmetic: the models drawn, nothing simulated).
+    trophy_cosmetics::apply_bloon_skins(root, &mut d);
     // The difficulty from settings.json ("mode"), Medium by default.
     d.mode = read_settings(root)["mode"].as_str().unwrap_or("Medium").to_string();
     d.map_difficulty = std::fs::read(root.join("ui/mapset.json")).ok()
