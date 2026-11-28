@@ -1,0 +1,1 @@
+{"name": "map_parkpath_quincy_l10_r40", "map": "ParkPath", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "Quincy", "x": 46.0, "y": 24.0, "level": 10}], "quit": true, "cash": 10000000, "ability": 400}

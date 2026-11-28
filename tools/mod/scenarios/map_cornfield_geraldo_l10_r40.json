@@ -1,0 +1,1 @@
+{"name": "map_cornfield_geraldo_l10_r40", "map": "Cornfield", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "Geraldo", "x": -10.0, "y": -2.0, "level": 10}], "quit": true, "cash": 10000000, "ability": 400}

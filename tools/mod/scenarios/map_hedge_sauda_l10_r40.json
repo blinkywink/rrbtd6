@@ -1,0 +1,1 @@
+{"name": "map_hedge_sauda_l10_r40", "map": "Hedge", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "Sauda", "x": 30.0, "y": 82.0, "level": 10}], "quit": true, "cash": 10000000, "ability": 400}

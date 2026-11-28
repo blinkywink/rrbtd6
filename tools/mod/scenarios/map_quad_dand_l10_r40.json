@@ -1,0 +1,1 @@
+{"name": "map_quad_dand_l10_r40", "map": "Quad", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "DanDMonke", "x": -98.0, "y": -34.0, "level": 10}], "quit": true, "cash": 10000000, "ability": 400}

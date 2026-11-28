@@ -141,6 +141,18 @@ def main():
         k = args.index("--near")
         near = args[k + 1]
         args = args[:k] + args[k + 2:]
+    # --tower ID [--level N] [--radius R] [--tag TAG] [--mk]: another tower (a hero at a level, its
+    # ability at 400), footprint radius R, scenario map_<key>_<TAG>_r40 (or _mk with all knowledge).
+    opts = {}
+    for flag in ("--tower", "--level", "--radius", "--tag"):
+        if flag in args:
+            k = args.index(flag)
+            opts[flag] = args[k + 1]
+            args = args[:k] + args[k + 2:]
+    mk = "--mk" in args
+    args = [a for a in args if a != "--mk"]
+    global RADIUS
+    RADIUS = float(opts.get("--radius", RADIUS))
     dump_dir, names = args[0], args[1:]
     for name in names:
         areas, paths = load(os.path.join(dump_dir, name + ".map"))
@@ -150,10 +162,18 @@ def main():
             print(name, "no spot")
             continue
         key = name.lower()
-        sc = {"name": f"map_{key}_dart_205_r40", "map": name, "difficulty": "Hard", "mode": "Clicks", "round": 40,
-              "frames": 3600, "seed": 777123, "towers": [{"id": "DartMonkey-205", "x": p[0], "y": p[1]}], "quit": True,
+        tag = opts.get("--tag", "dart_205")
+        sname = f"map_{key}_{tag}_" + ("mk" if mk else "r40")
+        tower = {"id": opts.get("--tower", "DartMonkey-205"), "x": p[0], "y": p[1]}
+        sc = {"name": sname, "map": name, "difficulty": "Hard", "mode": "Standard" if mk else "Clicks", "round": 40,
+              "frames": 3600, "seed": 777123, "towers": [tower], "quit": True,
               "cash": 10000000}
-        out = os.path.join(ROOT, "tools", "mod", "scenarios", f"map_{key}_dart_205_r40.json")
+        if "--level" in opts:
+            tower["level"] = int(opts["--level"])
+            sc["ability"] = 400
+        if mk:
+            sc["mk"] = True
+        out = os.path.join(ROOT, "tools", "mod", "scenarios", f"{sname}.json")
         json.dump(sc, open(out, "w", encoding="utf-8"))
         print(name, p, out)
 

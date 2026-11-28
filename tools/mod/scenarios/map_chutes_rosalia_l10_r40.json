@@ -1,0 +1,1 @@
+{"name": "map_chutes_rosalia_l10_r40", "map": "Chutes", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "Rosalia", "x": -42.0, "y": 78.0, "level": 10}], "quit": true, "cash": 10000000, "ability": 400}

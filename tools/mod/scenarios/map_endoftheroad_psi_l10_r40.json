@@ -1,0 +1,1 @@
+{"name": "map_endoftheroad_psi_l10_r40", "map": "EndOfTheRoad", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "Psi", "x": 90.0, "y": -26.0, "level": 10}], "quit": true, "cash": 10000000, "ability": 400}

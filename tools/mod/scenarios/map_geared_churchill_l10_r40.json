@@ -1,0 +1,1 @@
+{"name": "map_geared_churchill_l10_r40", "map": "Geared", "difficulty": "Hard", "mode": "Clicks", "round": 40, "frames": 3600, "seed": 777123, "towers": [{"id": "CaptainChurchill", "x": -36.0, "y": -58.0, "level": 10}], "quit": true, "cash": 10000000, "ability": 400}
