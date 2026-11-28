@@ -113,7 +113,7 @@ pub struct Hud {
     pub(crate) left: Node,
     right: Node,
     shop: Node,
-    tsm: Node,
+    pub(crate) tsm: Node,
     /// TowerSelectionMenu with only its RemoveBtn: a selected removeable's "Remove for $n".
     remove_menu: Node,
     /// The removeable's cost and whether the player can pay, while one is selected.
@@ -995,7 +995,8 @@ impl Hud {
             out.push(Action::Upgrades(i));
         }
 
-        // Upgrade menu.
+        // Upgrade menu. (Geraldo's shop, when shown, lies over it: its buttons take no clicks.)
+        crate::uitree::block_input(self.mod_ui.modal() || self.geraldo.covers_tsm());
         let tw = selected.and_then(|t| game.towers.get(t).map(|tw| (t, tw)));
         self.tsm.active = tw.is_some();
         // MainHudRightAlign "OpenRight" state: the round panel slides left of an open menu.
@@ -1068,7 +1069,8 @@ impl Hud {
             // VERIFIED-DECOMP @0x180b91720): it shows the shop (TowerSelectionMenu's secondary menu)
             // when hidden, else hides it.
             if theme_id == "Geraldo" && self.tsm.clicked(&format!("{th}/TSMActionButton")) {
-                self.geraldo.open = !self.geraldo.open;
+                let open = !self.geraldo.open;
+                self.geraldo.set_open(open);
             }
             // The camo priority toggle; HYPOTHESIS P-CAMOTICK: its cross shows while it's on.
             // Boomerang Monkey: TSMThemeAmbidextrousRangs.UpdateFromSimInfo (VERIFIED-DISASM
@@ -1682,7 +1684,7 @@ impl Hud {
         draw_tree(&mut self.left, map, &mut ctx);
         draw_tree(&mut self.right, map, &mut ctx);
         draw_tree(&mut self.shop, full, &mut ctx);
-        self.draw_geraldo(game, selected, full, canvas.y, SHOP_W, s, &mut out);
+        self.draw_geraldo(game, selected, canvas.y, s, &mut out);
         // BloonMenu.ShowHideExternal listens to placement-blocking UI, not TSM side.
         crate::uitree::block_input(self.mod_ui.modal());
         self.draw_sandbox(game, full, canvas.y, s, placing.is_some(), &mut out);

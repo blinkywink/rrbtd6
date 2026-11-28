@@ -93,15 +93,20 @@ impl Game {
     /// Can be bought now: Geraldo placed, unlocked, in stock, affordable, and nothing it's
     /// blocked by (blockPurchaseIfTowerPlaced) on the map.
     pub fn item_ready(&self, i: usize) -> bool {
-        let it = &self.geraldo_items[i];
         self.geraldo().is_some()
             && self.item_supported(i)
             && self.item_unlocked(i)
             && self.item_stock(i) > 0
             && self.cash >= self.item_cost(i)
-            // GeraldoItem.CheckLocation (@0x180fa4030): only the buyer's own towers of that name block it.
-            && (it.block_if_placed.is_empty()
-                || !self.towers.iter().any(|t| t.sub.as_ref().is_some_and(|s| s.spec.name == it.block_if_placed && (self.item_player().is_none() || self.item_owner(s.parent) == self.item_player()))))
+            && !self.item_restricted(i)
+    }
+
+    /// A tower of the item's blockPurchaseIfTowerPlaced name is on the map (GeraldoItem.CheckLocation,
+    /// @0x180fa4030: only the buyer's own towers of that name block it).
+    pub fn item_restricted(&self, i: usize) -> bool {
+        let it = &self.geraldo_items[i];
+        !it.block_if_placed.is_empty()
+            && self.towers.iter().any(|t| t.sub.as_ref().is_some_and(|s| s.spec.name == it.block_if_placed && (self.item_player().is_none() || self.item_owner(s.parent) == self.item_player())))
     }
 
     /// The item is used on the map (a point or a tower) rather than at once.

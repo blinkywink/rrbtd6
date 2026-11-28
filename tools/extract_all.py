@@ -382,6 +382,9 @@ def ingame_ui(c):
         # The in-game Powers menu's Animators (its open / close slide).
         ["tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", f"prefab:{p}/PowersMenu.prefab",
          {"RRBTD6_UI_BUNDLES": "*_monoscripts_*.bundle;asset_references_assets_all_*.bundle"}],
+        # Geraldo's shop Animators (its open / close, the item cards' states).
+        ["tools/assets/export_ui_runtime.py", c.game, c.out / "ui/runtime", f"prefab:{p}/GeraldoShop.prefab",
+         {"RRBTD6_UI_BUNDLES": "*_monoscripts_*.bundle;asset_references_assets_all_*.bundle"}],
         ["tools/assets/export_bundle_sprites.py", c.game, c.out / "sprites/_loose", "ui_*.bundle",
          "CircleUi", "ControlBtn", "GlowUi", "GlowyStar", "GodRay", "GodRaySmallUi", "LightGradientWhite", "PerksBtn",
          "ResetIcon", "SmallPanelWhite", "SpeechBubblePoint", "SpeechBubbleSquare", "TowerContainerT5Bottom",
