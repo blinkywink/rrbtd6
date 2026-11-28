@@ -143,3 +143,136 @@ def read_files(self, reader, files):
 if CACHE:
     bundle_module.BundleFile.read_fs = read_fs
     file_module.File.read_files = read_files
+
+
+# ---- object tables in one read ---------------------------------------------------------------
+# SerializedFile.__init__ reads its object table one field at a time: about ten reader calls and an
+# enum lookup per object, ~8 us each. asset_references holds ~880k objects, so every process that
+# opens it spent ~7 s there (2/3 of a typical effects job). Format 22+ records (no big ids) are a
+# fixed 24 bytes after one alignment: read them in one go. This is UnityPy 1.25.4's constructor
+# (checked above) with only that loop replaced; the objects are the same ObjectReaders.
+import struct as _struct  # noqa: E402
+
+serialized_module = sys.modules["UnityPy.files.SerializedFile"]
+from UnityPy.files.ObjectReader import ObjectReader as _ObjectReader  # noqa: E402
+from UnityPy.enums import ClassIDType as _ClassIDType  # noqa: E402
+
+
+def _read_objects(self, reader):
+    header = self.header
+    object_count = reader.read_int()
+    objects = {}
+    if header.version >= 22 and not self.big_id_enabled and object_count:
+        reader.align_stream()
+        types = self.types
+        kinds = {}
+        offset = header.data_offset
+        new = _ObjectReader
+        for path_id, byte_start, byte_size, type_id in _struct.iter_unpack(
+                header.endian + "qqIi", reader.read_bytes(24 * object_count)):
+            typ = types[type_id]
+            kind = kinds.get(type_id)
+            if kind is None:
+                kind = kinds[type_id] = _ClassIDType(typ.class_id)
+            objects[path_id] = new(self, reader, path_id, type_id, typ, typ.class_id, kind,
+                                   byte_start + offset, byte_size, None, None)
+    else:
+        for _ in range(object_count):
+            obj = _ObjectReader.from_reader(self, reader)
+            objects[obj.path_id] = obj
+    return objects
+
+
+def _serialized_init(self, reader, parent=None, name=None, **kwargs):
+    m = serialized_module
+    file_module.File.__init__(self, parent=parent, name=name, **kwargs)
+    self.reader = reader
+    self.unity_version = "2.5.0f5"
+    self.target_platform = m.BuildTarget.UnknownPlatform
+    self._enable_type_tree = True
+    self.types = []
+    self.script_types = []
+    self.externals = []
+    self.objects = {}
+    self._cache = {}
+    self.unknown = 0
+    header = m.SerializedFileHeader(reader)
+    self.header = header
+    if header.version >= 9:
+        header.endian = ">" if reader.read_boolean() else "<"
+        header.reserved = reader.read_bytes(3)
+        if header.version >= 22:
+            header.metadata_size = reader.read_u_int()
+            header.file_size = reader.read_long()
+            header.data_offset = reader.read_long()
+            self.unknown = reader.read_long()
+    else:
+        reader.Position = header.file_size - header.metadata_size
+        header.endian = ">" if reader.read_boolean() else "<"
+    reader.endian = header.endian
+    if header.version >= 7:
+        self.set_version(reader.read_string_to_null())
+    if header.version >= 8:
+        self._m_target_platform = reader.read_int()
+        self.target_platform = m.BuildTarget(self._m_target_platform)
+    if header.version >= 13:
+        self._enable_type_tree = reader.read_boolean()
+    type_count = reader.read_int()
+    self.types = [m.SerializedType(reader, self, False) for _ in range(type_count)]
+    self.big_id_enabled = 0
+    if 7 <= header.version < 14:
+        self.big_id_enabled = reader.read_int()
+    self.objects = _read_objects(self, reader)
+    if header.version >= 11:
+        script_count = reader.read_int()
+        self.script_types = [m.LocalSerializedObjectIdentifier(header, reader) for _ in range(script_count)]
+    externals_count = reader.read_int()
+    self.externals = [m.FileIdentifier(header, reader) for _ in range(externals_count)]
+    if header.version >= 20:
+        ref_type_count = reader.read_int()
+        self.ref_types = [m.SerializedType(reader, self, True) for _ in range(ref_type_count)]
+    if m.config.SERIALIZED_FILE_PARSE_TYPETREE is False:
+        self._enable_type_tree = False
+    if header.version >= 5:
+        self.userInformation = reader.read_string_to_null()
+    for obj in self.objects.values():
+        if obj.type == m.ClassIDType.AssetBundle:
+            self.assetbundle = obj.parse_as_object()
+            self._container = m.ContainerHelper(self.assetbundle)
+            break
+    else:
+        self.assetbundle = None
+        self._container = m.ContainerHelper([])
+
+
+_original_serialized_init = serialized_module.SerializedFile.__init__
+serialized_module.SerializedFile.__init__ = _serialized_init
+
+
+# ---- one parse per distinct type tree --------------------------------------------------------
+# Every serialized file carries its own type trees, and a scene bundle repeats the same few hundred
+# (ui_scenes_all: 7469 trees in 340 files, ~1M nodes, 2/3 of its load time). Parsed trees are only
+# read afterwards (UnityPy and these tools never modify them), so identical blobs share one parse.
+_tree_module = sys.modules["UnityPy.helpers.TypeTreeNode"]
+_TypeTreeNode = _tree_module.TypeTreeNode
+_original_parse_blob = _TypeTreeNode.parse_blob.__func__
+_parsed_trees = {}
+
+
+def _parse_blob(cls, reader, version):
+    start = reader.Position
+    head = 8 if version >= 23 else 0
+    reader.Position = start + head
+    node_count = reader.read_int()
+    strings = reader.read_int()
+    node_struct, _ = _tree_module._get_blob_node_struct(reader.endian, version)
+    reader.Position = start
+    key = (cls, reader.endian, version, reader.read_bytes(head + 8 + node_struct.size * node_count + strings))
+    tree = _parsed_trees.get(key)
+    if tree is None:
+        reader.Position = start
+        tree = _parsed_trees[key] = _original_parse_blob(cls, reader, version)
+    return tree
+
+
+_TypeTreeNode.parse_blob = classmethod(_parse_blob)
