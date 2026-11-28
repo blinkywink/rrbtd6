@@ -127,6 +127,28 @@ def export_decals(game, root, items, names):
                         str(game), *todo], check=True, cwd=str(root.parent))
 
 
+def export_props(game, root, items, names):
+    """The tower props' displays (Prop.display: the Monkey Village flags) to models/props/<name>, as
+    animated models (the flags wave)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from model_batch import run
+    paths = json.loads((root / "all_container_paths.json").read_text(encoding="utf-8"))
+    jobs = {}
+    for changes in items.values():
+        for c in changes:
+            if c["type"] != "Prop" or not c["change"]:
+                continue
+            name = names.get(c["change"]["display"]["guidRef"])
+            found = sorted(p for p in paths if name and p.endswith(f"/{name}.prefab"))
+            if not found:
+                print("prop prefab not found:", name, flush=True)
+                continue
+            out = str(root / "models/props" / name)
+            jobs[out] = [out, paths[found[0]].rsplit("_", 1)[0], found[0]]
+    print(len(jobs), "tower props", flush=True)
+    run(str(game), list(jobs.values()))
+
+
 def main():
     game, root = Path(sys.argv[1]), Path(sys.argv[2])
     base = game / "BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full"
@@ -174,6 +196,7 @@ def main():
     export_bloon_skins(game, root, out, names)
     export_pop_effects(game, root, out, names)
     export_decals(game, root, out, names)
+    export_props(game, root, out, names)
     kinds = {}
     for changes in out.values():
         for c in changes:

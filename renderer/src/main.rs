@@ -897,6 +897,8 @@ async fn game_main() {
     let mut sub_models: HashMap<String, Option<anim::AnimModel>> = HashMap::new();
     // Heli Pilot air units by prefab name (models/air/<name>).
     let mut air_models: HashMap<String, Option<anim::AnimModel>> = HashMap::new();
+    // Trophy Store tower props (the Monkey Village flags) by display name (models/props/<name>).
+    let mut prop_models: HashMap<String, Option<anim::AnimModel>> = HashMap::new();
     // Monkey Fan Club fans by prefab name (models/fans/<name>).
     let mut fan_models: HashMap<String, Option<anim::AnimModel>> = HashMap::new();
     // A tier's extra displays with a mesh (models/extra/<name>: Mermonkey's bases, Arctic Wind's
@@ -2936,6 +2938,22 @@ const VINE_END_FRAMES: i32 = 23;
                         let c = m.idle_clip();
                         m.draw(&shaders, c, t.idle_t, pos, yaw, outline_scale, false, None);
                         m.tilt = None;
+                    }
+                }
+                // Enabled Trophy Store props for this tower (a Village's flag): beside it at the
+                // offset its tiers pick (PropAssetChange.FindOffset; DisplayBehavior position
+                // offset, Unity space, not turned with the tower), idling. INFERRED: facing as
+                // placed.
+                if let Some(props) = trophy_cosmetics::tower_props(&root).get(&game.tower_defs[t.def].0) {
+                    for prop in props {
+                        if !prop_models.contains_key(&prop.display) {
+                            prop_models.insert(prop.display.clone(), prefetch.load(&root.join("models").join("props").join(&prop.display)));
+                        }
+                        if let Some(m) = prop_models.get_mut(&prop.display).and_then(|m| m.as_mut()) {
+                            let o = trophy_cosmetics::prop_offset(&prop.offsets, t.tiers);
+                            let c = m.idle_clip();
+                            m.draw(&shaders, c, t.idle_t, [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]], std::f32::consts::PI, outline_scale, false, None);
+                        }
                     }
                 }
                 let body_dir = (fan_model.is_none() && tier_model.is_some()).then(|| tier_index[t.def].get(&key).cloned()).flatten();

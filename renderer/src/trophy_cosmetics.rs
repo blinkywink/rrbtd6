@@ -97,6 +97,76 @@ fn decals_of(changes: &[Value], names: &HashMap<String, String>) -> HashMap<Stri
     out
 }
 
+/// A tower prop (the Monkey Village flags): its display (models/props/<name>) and
+/// Prop.displayOffsets, "top/middle/bottom" tier patterns ("x" any) -> Unity offset.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TowerProp {
+    pub display: String,
+    pub offsets: Vec<(String, [f32; 3])>,
+}
+
+/// Enabled props by tower id, in profile order (the props group is exclusive, so one per tower
+/// in practice). Cached on the enabled items.
+pub fn tower_props(root: &Path) -> std::sync::Arc<HashMap<String, Vec<TowerProp>>> {
+    type Props = std::sync::Arc<HashMap<String, Vec<TowerProp>>>;
+    static CACHE: std::sync::Mutex<Option<(Vec<String>, Props)>> = std::sync::Mutex::new(None);
+    let enabled = crate::local_profile::enabled_trophy_items(root);
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((_, props)) = cache.as_ref().filter(|(ids, _)| *ids == enabled) {
+        return props.clone();
+    }
+    let (changes, names) = enabled_changes(root);
+    let props = std::sync::Arc::new(props_of(&changes, &names, |n| root.join("models/props").join(n).join("meta.json").is_file()));
+    *cache = Some((enabled, props.clone()));
+    props
+}
+
+fn props_of(changes: &[Value], names: &HashMap<String, String>, exported: impl Fn(&str) -> bool) -> HashMap<String, Vec<TowerProp>> {
+    let mut out: HashMap<String, Vec<TowerProp>> = HashMap::new();
+    for c in changes.iter().filter(|c| c["type"] == "Prop") {
+        let change = &c["change"];
+        let (Some(tower), Some(display)) = (change["towerId"].as_str(), change["display"]["guidRef"].as_str().and_then(|g| names.get(g))) else { continue };
+        if !exported(display) {
+            continue;
+        }
+        let keys = change["displayOffsets"]["keys"].as_array().cloned().unwrap_or_default();
+        let values = change["displayOffsets"]["values"].as_array().cloned().unwrap_or_default();
+        let offsets = keys.iter().zip(&values).filter_map(|(k, v)| {
+            Some((k.as_str()?.to_owned(), [v["x"].as_f64()? as f32, v["y"].as_f64()? as f32, v["z"].as_f64()? as f32]))
+        }).collect();
+        out.entry(tower.to_owned()).or_default().push(TowerProp { display: display.clone(), offsets });
+    }
+    out
+}
+
+/// PropAssetChange.FindOffset (VERIFIED-DECOMP @0x180c25550, IsTierMatch @0x180c25a20, ParseTier
+/// @0x180c25fe0): each "a/b/c" pattern matches when every given tier is at most the tower's; its
+/// distance adds 10 per "x" (or unparsable) and (tower tier - n) per number. The smallest distance
+/// wins, a later entry on a tie. None matching: the default offset (INFERRED: zero).
+pub fn prop_offset(offsets: &[(String, [f32; 3])], tiers: [u8; 3]) -> [f32; 3] {
+    let mut best = (i32::MAX, [0.0; 3]);
+    'entries: for (key, offset) in offsets {
+        let parts: Vec<&str> = key.split('/').collect();
+        let mut distance = 0;
+        for i in 0..3 {
+            match parts.get(i).filter(|p| **p != "x").and_then(|p| p.parse::<i32>().ok()) {
+                None => distance += 10,
+                Some(n) => {
+                    let d = tiers[i] as i32 - n;
+                    if d < 0 {
+                        continue 'entries;
+                    }
+                    distance += d;
+                }
+            }
+        }
+        if distance <= best.0 {
+            best = (distance, *offset);
+        }
+    }
+    best.1
+}
+
 /// bloon id -> {original prefab name: skin prefab name}, the last change per bloon winning.
 fn bloon_skins(changes: &[Value], names: &HashMap<String, String>, exported: impl Fn(&str) -> bool) -> HashMap<String, HashMap<String, String>> {
     let mut per_bloon = HashMap::new();
@@ -152,6 +222,30 @@ mod tests {
         assert_eq!(d["Red"].1, "BeardMed");
         assert_eq!(d["Moab"].1, "HatMoab");
         assert_eq!(d.len(), 2);
+    }
+    #[test]
+    fn prop_offsets_pick_the_closest_tier_pattern() {
+        // The Village flags' table.
+        let o = |k: &str, x: f32| (k.to_owned(), [x, 0.0, 0.0]);
+        let table = vec![o("x/x/x", 1.0), o("x/3/x", 2.0), o("3/x/x", 3.0), o("x/x/3", 4.0), o("x/x/5", 5.0), o("x/5/x", 6.0), o("5/x/x", 7.0)];
+        assert_eq!(prop_offset(&table, [0, 0, 0])[0], 1.0);
+        assert_eq!(prop_offset(&table, [2, 0, 2])[0], 1.0);
+        assert_eq!(prop_offset(&table, [3, 0, 2])[0], 3.0);
+        assert_eq!(prop_offset(&table, [0, 4, 2])[0], 2.0);
+        assert_eq!(prop_offset(&table, [0, 2, 5])[0], 5.0);
+        assert_eq!(prop_offset(&table, [5, 2, 0])[0], 7.0);
+        // A tie goes to the later entry: x/x/3 (20 + 1) against... nothing else at 2/0/4.
+        assert_eq!(prop_offset(&table, [2, 0, 4])[0], 4.0);
+        assert_eq!(prop_offset(&[], [5, 0, 0]), [0.0; 3]);
+    }
+    #[test]
+    fn props_keep_their_tower_and_offsets() {
+        let names: HashMap<String, String> = [("f".to_owned(), "FlagUK".to_owned())].into_iter().collect();
+        let c = json!({"type": "Prop", "change": {"towerId": "MonkeyVillage", "display": {"guidRef": "f"},
+            "displayOffsets": {"keys": ["x/x/x"], "values": [{"x": -10.0, "y": 0.0, "z": -3.0}]}}});
+        let p = props_of(&[c.clone()], &names, |_| true);
+        assert_eq!(p["MonkeyVillage"], vec![TowerProp { display: "FlagUK".into(), offsets: vec![("x/x/x".into(), [-10.0, 0.0, -3.0])] }]);
+        assert!(props_of(&[c], &names, |_| false).is_empty());
     }
     #[test]
     fn the_exported_sepia_skin_maps_every_moab_class_model() {

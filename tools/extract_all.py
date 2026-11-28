@@ -719,7 +719,7 @@ STEP_VERSIONS["particles"] = 4  # 3: Geraldo's buff effects and the Genie's shot
 STEP_VERSIONS["mapset"] = 2
 # finish 10, tower_models 2 and the other model steps' raises: animated models as skin.bin.
 # finish 11: packs pending_models' animations.
-STEP_VERSIONS["finish"] = 13  # 12: packs the Trophy Store bloon skins (frontend 3); 13: and the decals (frontend 5).
+STEP_VERSIONS["finish"] = 14  # 12: packs the Trophy Store bloon skins (frontend 3); 13-14: and the decals and props (frontend 5-6).
 for _step, _version in (("tower_models", 2), ("extended_towers", 2), ("bloon_models", 2), ("home", 2), ("menu_additions", 2)):
     STEP_VERSIONS[_step] = _version
 # extended_towers 3: Geraldo's shop item models.
@@ -742,8 +742,8 @@ STEP_VERSIONS["bloon_models"] = 8  # 3: also game/powers.json; 4: keyed by the P
 STEP_VERSIONS["map_mechanics"] = 4
 # builtin_ui_sprites 3: also buff icons under the names towers ask for.
 STEP_VERSIONS["builtin_ui_sprites"] = 3
-STEP_VERSIONS["frontend"] = 5  # 2: game/trophy_changes.json (what Trophy Store items change); 3: bloon skin models; 4: pop effects; 5: decals.
-STEP_VERSIONS["gpu_assets"] = 2  # 2: compressed textures for the Trophy Store skins, pop effects and decals.
+STEP_VERSIONS["frontend"] = 6  # 2: game/trophy_changes.json (what Trophy Store items change); 3: bloon skin models; 4: pop effects; 5: decals; 6: tower props.
+STEP_VERSIONS["gpu_assets"] = 3  # 2-3: compressed textures for the Trophy Store skins, pop effects, decals and props.
 
 
 def drop_old_game_exports(c):

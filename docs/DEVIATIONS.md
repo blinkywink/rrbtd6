@@ -443,8 +443,9 @@ claimed from the single final capture (concurrent asset work affects timings).
   Time, and quest / Nexus items can be bought too. Prices are the cached store's (50 where it has
   none). Bought items are enabled and can be toggled and favourited; enabling one turns off the
   others of its kind, as the game does. So far MOAB-class bloon skins (the bloons drawn), the
-  all-bloons pop effects (each pop's effect) and bloon decals (hats, beards... drawn on the bloons
-  like the glue and ice overlays) change the game; the pop effects' own pop sounds, the
+  all-bloons pop effects (each pop's effect), bloon decals (hats, beards... drawn on the bloons
+  like the glue and ice overlays) and the Monkey Village flags (beside each Village, placed by its
+  tiers as the game places them) change the game; the pop effects' own pop sounds, the
   Pinata BAD's pop and the other items don't change anything in game yet. Where two enabled skins cover
   the same bloon (an all-MOABs skin and a BAD skin), the game uses the one enabled last; here the
   one whose item id sorts last wins.
