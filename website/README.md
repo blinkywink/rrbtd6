@@ -18,7 +18,7 @@ the full TTFs are in `fonts-src/` and `python website/build_fonts.py` rebuilds t
 
 ## Progress section
 
-The home page's Progress bars (and the "Still to match" list) come from `progress.json`: one block per section (Towers, Heroes, Maps, Monkey Knowledge,
+The home page's Progress (the "Still to match" list, the whole-game estimates, and every tower and hero behind "Show every tower and hero") comes from `progress.json`: one block per section (Towers, Heroes, Maps, Monkey Knowledge,
 Paragons & combos, Powers), each row recorded scenarios that match the real game / recorded, plus
 other areas as rough estimates out of 10. `python website/count_progress.py` fills the sections from
 the recording folders (counts only) and `website/regression_last.txt` (the `== set: m/n match`

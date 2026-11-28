@@ -55,7 +55,7 @@
         [
           "Boomerang Monkey",
           100,
-          101
+          100
         ],
         [
           "Bomb Shooter",
@@ -304,8 +304,8 @@
         ],
         [
           "Upgraded towers",
-          86,
-          88
+          93,
+          98
         ],
         [
           "Tier 5 towers",
@@ -314,8 +314,8 @@
         ],
         [
           "Heroes",
-          41,
-          42
+          43,
+          52
         ]
       ]
     ],

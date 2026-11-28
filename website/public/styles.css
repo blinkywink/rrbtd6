@@ -457,10 +457,9 @@ main .block { position: relative; }
 @media (max-width: 1000px) {
   .block::before, .block::after { display: none; }
 }
-.foot { width: min(var(--width), 100%); margin: 0 auto; display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 28px; }
+.foot { width: min(var(--width), 100%); margin: 0 auto; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 28px; }
 .foot-brand p { margin: 10px 0 0; color: var(--faint); font-size: 14px; line-height: 1.6; max-width: 300px; }
-.foot nav { display: grid; align-content: start; gap: 10px; }
-.foot nav strong { font-size: 13px; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
+.foot nav { display: flex; flex-wrap: wrap; gap: 10px 24px; padding-top: 6px; }
 .foot nav a { font-size: 14px; text-decoration: none; color: var(--muted); }
 .foot nav a:hover { color: var(--ink); text-decoration: underline; }
 .legal { width: min(var(--width), 100%); margin: 32px auto 0; color: var(--faint); font-size: 12px; line-height: 1.6; }
@@ -480,9 +479,13 @@ main .block { position: relative; }
 .todo { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .todo li { padding: 7px 14px; border-radius: 999px; background: var(--paper); color: var(--paper-ink); font-size: 14px; font-weight: 700; }
 .todo span { margin-left: 4px; color: var(--paper-muted); font-size: 12.5px; font-weight: 600; }
-/* Sections that match completely: the same chips, in the page's own blue. */
-.todo.all li { background: var(--card); color: var(--ink); box-shadow: 0 3px 0 var(--deep); }
-.todo.all span { color: var(--faint); }
+/* Every tower and hero, folded away under one button. */
+.progress-more { margin-top: 18px; }
+.progress-more summary { display: inline-flex; align-items: center; gap: 12px; list-style: none; padding: 10px 16px; border-radius: 999px; background: var(--deep); color: var(--ink); font-size: 14px; font-weight: 700; }
+.progress-more summary::-webkit-details-marker { display: none; }
+.progress-more summary:hover { background: var(--deeper); }
+.progress-more .plus { width: 12px; height: 12px; }
+.progress-more .plus::before, .progress-more .plus::after { top: 5px; width: 12px; }
 @media (max-width: 720px) { .prows { grid-template-columns: 1fr; } }
 .progress-total { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 18px; }
 .progress-total > div { padding: 20px 24px; background: var(--card); border-radius: 16px; }
@@ -519,8 +522,6 @@ main .block { position: relative; }
   .snippet { padding: 16px 18px 18px; }
   .snippet code { font-size: 12px; }
   .download { width: 100%; min-width: 0; gap: 10px; padding: 17px 18px 13px; font-size: clamp(17px, 5.6vw, 23px); white-space: nowrap; }
-  .foot { grid-template-columns: 1fr 1fr; }
-  .foot-brand { grid-column: 1 / -1; }
 }
 @media (prefers-reduced-motion: reduce) {
   :root { scroll-behavior: auto; }
