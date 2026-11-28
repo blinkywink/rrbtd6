@@ -304,7 +304,13 @@ def main():
     # it (ParagonGlaiveDominus): by that Animator nothing binds and the model stays in its bind
     # pose. The transform most of the clips' paths hang from is the clips' root.
     if bound * 2 < total:
-        best = max(order, key=lambda tid: sum(1 for h in keyed if h in hashes_from(tid)) if T[tid]["name"] else 0)
+        # Each candidate root's hashes once (computing them per binding made big rigs take minutes).
+        def matches(tid):
+            if not T[tid]["name"]:
+                return 0
+            hashes = hashes_from(tid)
+            return sum(1 for h in keyed if h in hashes)
+        best = max(order, key=matches)
         candidate = hashes_from(best)
         matched = sum(1 for h in keyed if h in candidate)
         if matched > bound:

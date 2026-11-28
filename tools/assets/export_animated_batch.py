@@ -45,5 +45,21 @@ def run(game, jobs, compact=True):
               "label": "Models: " + Path(out).name}), flush=True)
 
 
+def serve(game, compact):
+    """--serve: one job-list file per line on stdin, until an empty line or the end. Importing
+    UnityPy and reading a big bundle's object table cost seconds a process; a worker that stays up
+    pays them once and keeps the bundles it loaded for the next group."""
+    for line in sys.stdin:
+        path = line.strip()
+        if not path:
+            break
+        run(game, json.loads(Path(path).read_text(encoding="utf-8")), compact=compact)
+        print("@@RRBTD6_GROUP_DONE", flush=True)
+
+
 if __name__ == "__main__":
-    run(sys.argv[1], json.loads(Path(sys.argv[2]).read_text(encoding="utf-8")), compact="--keep-floats" not in sys.argv[3:])
+    compact = "--keep-floats" not in sys.argv[2:]
+    if "--serve" in sys.argv[2:]:
+        serve(sys.argv[1], compact)
+    else:
+        run(sys.argv[1], json.loads(Path(sys.argv[2]).read_text(encoding="utf-8")), compact=compact)

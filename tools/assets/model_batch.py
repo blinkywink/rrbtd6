@@ -97,51 +97,89 @@ def run(game, jobs, size=16, workers=None, *, progress_offset=0, progress_total=
             print("@@RRBTD6_PROGRESS " + json.dumps({"done": progress_offset + sum(completed), "total": progress_total if progress_total is not None else total,
                   "label": label}), flush=True)
 
-    def bake(index, group):
-        if stopped.is_set():
-            return
-        fd, manifest = tempfile.mkstemp(prefix="rusttd6-model-jobs-", suffix=".json")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(group, stream)
-            cmd = [sys.executable, "-X", "utf8", "-I", str(Path(__file__).with_name("export_animated_batch.py")), str(game), manifest]
-            if keep_floats:
-                cmd.append("--keep-floats")
-            tail = deque(maxlen=25)
-            # Each exporter already uses a core; avoid NumPy's nested thread pools.
-            env = dict(os.environ, OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
-            with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                  text=True, encoding="utf-8", errors="replace", bufsize=1, env=env) as child:
-                for line in child.stdout:
-                    if line.startswith("@@RRBTD6_PROGRESS "):
-                        data = json.loads(line[len("@@RRBTD6_PROGRESS "):])
-                        report(index, int(data["done"]), data.get("label", "Preparing models"))
-                    else:
-                        tail.append(line.rstrip())
-                        if os.environ.get("RRBTD6_SETUP_VERBOSE") == "1":
-                            with lock:
-                                print(line, end="", flush=True)
-                code = child.wait()
-            if code:
-                stopped.set()
-                with lock:
-                    print("\n".join(tail), flush=True)
-                raise subprocess.CalledProcessError(code, cmd)
-            report(index, len(group), "Models: preparing remaining batches")
-        except BaseException:
-            stopped.set()
-            raise
-        finally:
-            Path(manifest).unlink(missing_ok=True)
+    # Workers stay up across groups (export_animated_batch --serve): importing UnityPy and reading
+    # a big bundle's object table cost seconds a process, more than many groups' own work. Each is
+    # replaced after RECYCLE groups, so what it keeps loaded stays bounded.
+    RECYCLE = 6
+    script = str(Path(__file__).with_name("export_animated_batch.py"))
+    queue = deque(enumerate(groups))
+    failures = []
 
-    failure = None
-    with ThreadPoolExecutor(max_workers=count) as pool:
-        futures = [pool.submit(bake, i, group) for i, group in enumerate(groups)]
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except subprocess.CalledProcessError as error:
-                failure = failure or error
+    def start():
+        cmd = [sys.executable, "-X", "utf8", "-I", script, str(game), "--serve"]
+        if keep_floats:
+            cmd.append("--keep-floats")
+        # Each exporter already uses a core; avoid NumPy's nested thread pools.
+        env = dict(os.environ, OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
+        return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding="utf-8", errors="replace", bufsize=1, env=env), cmd
+
+    def worker():
+        child, cmd, served, tail = None, None, 0, deque(maxlen=25)
+        try:
+            while not stopped.is_set():
+                with lock:
+                    if not queue:
+                        break
+                    index, group = queue.popleft()
+                if child is None:
+                    child, cmd = start()
+                    served = 0
+                fd, manifest = tempfile.mkstemp(prefix="rusttd6-model-jobs-", suffix=".json")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                        json.dump(group, stream)
+                    child.stdin.write(manifest + "\n")
+                    child.stdin.flush()
+                    done = False
+                    for line in child.stdout:
+                        if line.startswith("@@RRBTD6_GROUP_DONE"):
+                            done = True
+                            break
+                        if line.startswith("@@RRBTD6_PROGRESS "):
+                            data = json.loads(line[len("@@RRBTD6_PROGRESS "):])
+                            report(index, int(data["done"]), data.get("label", "Preparing models"))
+                        else:
+                            tail.append(line.rstrip())
+                            if os.environ.get("RRBTD6_SETUP_VERBOSE") == "1":
+                                with lock:
+                                    print(line, end="", flush=True)
+                    if not done:
+                        code = child.wait()
+                        child = None
+                        stopped.set()
+                        with lock:
+                            print("\n".join(tail), flush=True)
+                        failures.append(subprocess.CalledProcessError(code or 1, cmd))
+                        return
+                    report(index, len(group), "Models: preparing remaining batches")
+                finally:
+                    Path(manifest).unlink(missing_ok=True)
+                served += 1
+                if served >= RECYCLE:
+                    child.stdin.close()
+                    child.wait()
+                    child = None
+        except BaseException as error:  # reported by run() below, not lost in this thread
+            stopped.set()
+            failures.append(error)
+        finally:
+            if child is not None:
+                try:
+                    child.stdin.close()
+                except OSError:
+                    pass
+                if child.wait() and not failures and not stopped.is_set():
+                    failures.append(subprocess.CalledProcessError(child.returncode, cmd))
+
+    threads = [threading.Thread(target=worker, daemon=True) for _ in range(count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    failure = failures[0] if failures else None
+    if failure is not None and not isinstance(failure, subprocess.CalledProcessError):
+        raise failure
     if failure is not None:
         if retries <= 0:
             raise failure
