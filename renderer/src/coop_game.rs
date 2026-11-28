@@ -215,7 +215,7 @@ impl Replica{
                     TowerChange::Reverse=>{g.reverse_air(t);true},
                     TowerChange::Hand{left}=>{g.towers[t].flip=*left;true},
                     TowerChange::LeftTarget(code)=>{let Some(&mode)=TARGETS.get(*code as usize)else{return false;};g.towers[t].left_target=mode;true},
-                    TowerChange::DefaultPoint=>{g.towers[t].point=None;true},
+                    TowerChange::DefaultPoint=>{g.default_point(t);true},
                     TowerChange::Stance=>g.toggle_stance(t),
                     TowerChange::CollectBank=>{g.collect_bank(t);true},
                     // (BankDeposits.OnTsmThemeAction: from the tower owner's cash, the actor's here.)

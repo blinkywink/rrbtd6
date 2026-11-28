@@ -4716,7 +4716,7 @@ const VINE_END_FRAMES: i32 = 23;
                     }
                     hud::Action::DefaultPoint => {
                         if let Some(t) = selected {
-                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::DefaultPoint});}else{game.towers[t].point = None;}
+                            if coop_runtime.is_some(){front.coop_input(rrbtd6_coop::Action::Tower{tower:game.towers[t].id,change:rrbtd6_coop::TowerChange::DefaultPoint});}else{game.default_point(t);}
                         }
                     }
                     hud::Action::BankDeposit => {

@@ -1244,16 +1244,24 @@ impl Hud {
             }
             // Mermonkey (TSMThemeSelectInputOrDefault.UpdateFromSimInfo, "SelectInputOrDefault" sim
             // info from TargetSelectedPointOrDefaultModel): Select Target shows while it uses its
-            // default target, Select Default once a point is set. STAND-IN: the 360-frame cooldown
-            // after a change (and its fade) isn't kept.
+            // default target, Select Default once a point is set.
             if theme_id == "MermonkeyTrance" || theme_id == "SelectPointOrDefault" {
                 let default = tw.point.is_none();
                 let input = format!("{th}/SelectTargetPosButton");
                 let back = format!("{th}/SelectDefaultButton");
                 self.tsm.set_active(&input, default);
                 self.tsm.set_active(&back, !default);
-                self.tsm.set_active(&format!("{th}/CooldownEffect"), false);
-                if default && self.tsm.clicked(&input) {
+                // (UpdateFromSimInfo @0x180b940a0: both buttons interactable once now - lastSwapAt
+                // > 359 (and not stunned: tower stuns aren't modelled); till then the
+                // targetButtonCooldownFade shows, filled 1 - age / 360.)
+                let age = game.point_swap_age(t);
+                let ready = age > 359;
+                self.tsm.set_active(&format!("{th}/CooldownEffect"), !ready);
+                if let Some(i) = self.tsm.find_mut(&format!("{th}/CooldownEffect")).and_then(|n| n.img.as_mut()) {
+                    i.fill_amount = if ready { 0.0 } else { 1.0 - age as f32 / 360.0 };
+                }
+                if !ready {
+                } else if default && self.tsm.clicked(&input) {
                     out.push(Action::SetPoint);
                 } else if !default && self.tsm.clicked(&back) {
                     out.push(Action::DefaultPoint);

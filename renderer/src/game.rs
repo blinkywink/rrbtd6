@@ -4819,6 +4819,8 @@ pub struct Game {
     /// BeastHandlerLeash.timesOfLastMoves per handler id: Simulation.time of each slot's last pet
     /// move (Initialise: -999999999).
     pub pet_moves: HashMap<u64, [i64; 2]>,
+    /// TargetSelectedPointOrDefault.lastSwapAt per tower (Simulation time; 0 at Initialise).
+    pub point_swaps: HashMap<u64, i64>,
     /// Paragon purchases for the renderer's sacrifice effects (display only).
     pub sacrifices: Vec<Sacrifice>,
     /// Towers placed this frame: (position, placement effect prefab, scale).
@@ -7716,6 +7718,7 @@ impl Game {
             upgrade_fx: Vec::new(),
             fan_leaders: Vec::new(),
             pet_moves: HashMap::new(),
+            point_swaps: HashMap::new(),
             sacrifices: Vec::new(),
             place_fx: Vec::new(),
             vine_fx: Vec::new(),
@@ -14743,6 +14746,19 @@ impl Game {
     /// the handler turns to it (RotateToLeashedTower @0x180d00ae0, rotateToLeashedTower),
     /// timesOfLastMoves[slot] = Simulation.time, then Tower.OnPlace (its CreateEffectOnPlace).
     /// False when the point isn't valid (the input stays).
+    /// TargetSelectedPointOrDefault.OnTsmThemeAction("SelectDefault") (VERIFIED-DECOMP
+    /// @0x180dea780): back to the default target, lastSwapAt = now.
+    pub fn default_point(&mut self, t: usize) {
+        self.towers[t].point = None;
+        let (id, now) = (self.towers[t].id, self.sim_elapsed as i64);
+        self.point_swaps.insert(id, now);
+    }
+
+    /// Frames since the tower's lastSwapAt (TSMThemeSelectInputOrDefault: its buttons wait 360).
+    pub fn point_swap_age(&self, t: usize) -> i64 {
+        self.sim_elapsed as i64 - self.point_swaps.get(&self.towers[t].id).copied().unwrap_or(0)
+    }
+
     pub fn move_pet(&mut self, t: usize, slot: usize, p: [f32; 2]) -> bool {
         if self.pet_move_state(t, slot).is_none() || !self.pet_move_ok(t, slot, p) {
             return false;
