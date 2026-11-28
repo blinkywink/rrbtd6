@@ -119,6 +119,44 @@ impl Game {
         self.geraldo_items[i].params.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32
     }
 
+    /// Whether item `i` could be used at `p` now, as `use_item`'s checks, without using it: the
+    /// placement icon's colour (InGameObjects.IconUpdate @0x1815b7330: white where it can go, red
+    /// (1, 0, 0) where it can't).
+    pub fn item_spot_ok(&self, i: usize, p: [f32; 2]) -> bool {
+        if !self.item_ready(i) {
+            return false;
+        }
+        let it = &self.geraldo_items[i];
+        let Some(g) = self.geraldo() else { return false };
+        match it.kind.as_str() {
+            "tower" => self.for_level(&it.towers).is_some_and(|spec| {
+                self.land_clear(p, spec.radius)
+                    && !self.towers.iter().any(|t| {
+                        let r = spec.radius + self.tower_defs[t.def].1.radius;
+                        t.sub.is_none() && (t.pos[0] - p[0]).powi(2) + (t.pos[1] - p[1]).powi(2) < r * r
+                    })
+            }),
+            "track" => self.for_level(&it.projectiles).is_some() && self.track_within(p, 10.0),
+            "sauce" => match (self.tower_at(p), self.for_level(&it.towers)) {
+                (Some(t), Some(spec)) => self.towers[t].sub.is_none()
+                    && !self.towers.iter().any(|o| o.sub.as_ref().is_some_and(|s| s.parent == self.towers[t].id && s.spec.name == spec.name)),
+                _ => false,
+            },
+            "rabbit" => self.for_level(&it.towers).is_some() && (self.land_clear(p, 0.0) || self.track_within(p, 10.0)) && {
+                let (gp, r) = (self.towers[g].pos, self.tier(g).map_or(0.0, |t| t.range));
+                (gp[0] - p[0]).powi(2) + (gp[1] - p[1]).powi(2) <= r * r
+            },
+            "rejuv" => true,
+            "cape" => self.tower_at(p).is_some_and(|t| {
+                self.tower_defs[self.towers[t].def].0 == it.params.get("targetTowerBaseId").and_then(|v| v.as_str()).unwrap_or("DartMonkey")
+                    && (0..3).all(|k| self.towers[t].tiers[k] as f32 <= self.param(i, &format!("path{}TierMax", k + 1)))
+                    && self.tower_defs.iter().any(|(n, _)| n == it.params.get("resultingTowerName").and_then(|v| v.as_str()).unwrap_or("SuperMonkey"))
+            }),
+            "pickles" | "stone" | "potion" | "fertilizer" => self.tower_at(p).is_some_and(|t| self.towers[t].sub.is_none()),
+            _ => false,
+        }
+    }
+
     /// Buys item `i` and uses it at `p` (a spot for towers and track items, the tower there
     /// for boosts). False (nothing spent) when it can't be used there.
     pub fn use_item(&mut self, i: usize, p: [f32; 2]) -> bool {

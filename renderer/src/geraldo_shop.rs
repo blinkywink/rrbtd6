@@ -24,6 +24,8 @@ pub struct GeraldoShop {
     selected: Option<usize>,
     /// Item in hand: the next map click uses it (set back by main.rs).
     pub armed: Option<usize>,
+    /// Whether the item in hand can be used under the cursor (main.rs: Game::item_spot_ok).
+    pub armed_ok: bool,
     /// Item indices of the cards, in order.
     shown: Vec<usize>,
 }
@@ -37,7 +39,7 @@ impl GeraldoShop {
             g.children.clear();
             c
         });
-        Self { node, card, selected: None, armed: None, shown: Vec::new() }
+        Self { node, card, selected: None, armed: None, armed_ok: false, shown: Vec::new() }
     }
 }
 
@@ -139,7 +141,10 @@ impl Hud {
             if let Some(sp) = self.sprites.get(&name) {
                 let (mx, my) = mouse_position();
                 let size = 180.0 * s;
-                draw_texture_ex(&sp.tex, mx - size / 2.0, my - size / 2.0, Color::new(1.0, 1.0, 1.0, 0.85),
+                // InGameObjects.IconUpdate (VERIFIED-DECOMP @0x1815b7330): the powerIcon image's colour
+                // is (1, 1, 1, 1) where the item can go, (1, 0, 0, 1) where it can't.
+                let tint = if self.geraldo.armed_ok { WHITE } else { Color::new(1.0, 0.0, 0.0, 1.0) };
+                draw_texture_ex(&sp.tex, mx - size / 2.0, my - size / 2.0, tint,
                     DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });
             }
         }

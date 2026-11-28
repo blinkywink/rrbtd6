@@ -4526,7 +4526,9 @@ const VINE_END_FRAMES: i32 = 23;
         if let Some(h) = hud.as_mut() {
             let t0 = get_time();
             h.geraldo.armed = item_pick;
+            h.geraldo.armed_ok = item_pick.is_some_and(|i| in_map && game.item_spot_ok(i, mouse_world));
             h.powers.armed = power_pick.clone();
+            h.powers.armed_ok = power_pick.as_ref().is_some_and(|id| in_map && h.powers.behaviors(id).is_some_and(|b| game.power_ok(id, b, mouse_world)));
             let coop_blocked=h.coop_blocks(mouse_position().into());
             // In game no front-end popup owns the input: a block a menu left set (the saved-game
             // warning's Start New used to) must not leave every HUD button dead.

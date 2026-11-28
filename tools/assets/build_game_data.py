@@ -763,9 +763,13 @@ def main():
                       "max_turn": float(af.get("maxTurnAngle", 0.0) or 0.0),
                       "above_moab": bool(af.get("positionAboveMoabTypes", False))}
         cash = None
-        if pb.get("CashModel"):
-            cf = pb["CashModel"][0]["f"]
+        # (A pickup with a LivesModel and no CashModel, the Support Chinook's lives crate: a cash
+        # entry of 0 carrying the lives, so it is picked up like the cash crate.)
+        if pb.get("CashModel") or (pb.get("PickupModel") and pb.get("LivesModel")):
+            cf = pb["CashModel"][0]["f"] if pb.get("CashModel") else {"minimum": 0.0, "maximum": 0.0}
+            lf = pb["LivesModel"][0]["f"] if pb.get("LivesModel") else {}
             cash = {"min": cf["minimum"], "max": cf["maximum"], "bonus": cf.get("bonusMultiplier", 0.0),
+                    "lives": float(lf.get("minimum", 0.0)), "lives_max": float(lf.get("maximum", 0.0)),
                     "pickup": (pb.get("PickupModel") or [{"f": {}}])[0]["f"].get("collectRadius"),
                     # PickupModel.delayFrames (a float: (float)(int)(delay x 60), ctor @0x1811e9fa0)
                     # and isCamoPickup, which CollectCashZone.Process checks.

@@ -3835,6 +3835,11 @@ pub struct Cash {
     pub pickup_camo: bool,
     #[serde(default)]
     pub bonus_shared: bool,
+    /// LivesModel (the Support Chinook's lives crate): minimum / maximum lives given when picked up.
+    #[serde(default)]
+    pub lives: f32,
+    #[serde(default)]
+    pub lives_max: f32,
 }
 
 /// BankModel (Monkey Bank): income is stored up to `capacity` and grows by `interest` each round.

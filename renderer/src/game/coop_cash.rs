@@ -44,6 +44,12 @@ impl Game{
         if let (Some(w),Some(s))=(&mut self.coop_wallets,slot){w.borrow(s,amount,repayment);}self.coop_restore_cash();
     }
     pub(super) fn collect_projectile_cash(&mut self,pr:&Projectile){
+        // Lives.Pickup (VERIFIED-DECOMP @0x180ccbf70): get_Amount (@0x180ccc140) = NextDouble x (maximum -
+        // minimum) + minimum, a synced draw every time, AddHealth((int)amount) (recording
+        // helipilot_040_ab_mk rt 428: the Support Chinook's lives crate).
+        if let Some((lo,hi))=pr.spec.cash.as_ref().filter(|c|c.lives>0.0||c.lives_max>0.0).map(|c|(c.lives,c.lives_max)){
+            let d=self.synced_double();let a=(d*(hi-lo) as f64+lo as f64) as f32;self.lives+=a as i32 as f64;
+        }
         if let Some(t)=self.towers.iter_mut().find(|t|t.id==pr.owner){t.cash_earned+=pr.value;}
         // The end screens' Cash Generated (ecoEarned): a 0-0-3 Farm's 1,260 over rounds 39-41.
         self.stats.eco+=pr.value;

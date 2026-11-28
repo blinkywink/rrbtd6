@@ -23,6 +23,8 @@ struct Item {
     between_rounds: bool,
     /// Its game/powers.json behaviours (what using it does).
     behaviors: Value,
+    /// Its icon sprite (the button's, and InGameObjects.powerIcon's while it is placed).
+    icon: Option<String>,
 }
 
 pub struct PowersMenu {
@@ -40,6 +42,8 @@ pub struct PowersMenu {
     scroll: f32,
     /// The Power in hand (main.rs), shown selected.
     pub armed: Option<String>,
+    /// Whether it can be used under the cursor (main.rs: Game::power_ok).
+    pub armed_ok: bool,
 }
 
 impl PowersMenu {
@@ -94,14 +98,15 @@ impl PowersMenu {
                 buttons.push(b);
                 let between_rounds = rules[&id]["between_rounds"] == true;
                 let behaviors = rules[&id]["behaviors"].clone();
-                items.push(Item { id, cost, store, between_rounds, behaviors });
+                let icon = p["icon"].as_str().and_then(|s| s.strip_suffix(".png")).map(str::to_owned);
+                items.push(Item { id, cost, store, between_rounds, behaviors, icon });
             }
             if let Some(sorter) = n.find_mut(SORTER) {
                 sorter.children = buttons;
             }
             n
         });
-        let mut menu = Self { node, root: root.to_owned(), runtime, items, open: false, changed: None, wide: false, scroll: 0.0, armed: None };
+        let mut menu = Self { node, root: root.to_owned(), runtime, items, open: false, changed: None, wide: false, scroll: 0.0, armed: None, armed_ok: false };
         if let Some(n) = &mut menu.node {
             crate::frontend::apply_animation(n, &menu.runtime, "PowersSlideOut", "PowersSlideOutIdle", None);
         }
@@ -209,6 +214,17 @@ impl Hud {
         }
         let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h, clip: None };
         draw_tree(n, full, &mut ctx);
+        // BasePowersMenu.StartPowerPlacement -> InGameObjects.IconStart / IconUpdate (VERIFIED-DECOMP
+        // @0x1815b72e0 / @0x1815b7330): the Power's icon at the cursor, colour (1, 1, 1, 1) where it can
+        // be used and (1, 0, 0, 1) where it can't (the same powerIcon Geraldo's shop items use).
+        let armed = menu.armed.as_ref().and_then(|id| menu.items.iter().find(|i| &i.id == id)).and_then(|i| i.icon.clone());
+        if let Some(sp) = armed.and_then(|name| self.sprites.get(&name)) {
+            let (mx, my) = mouse_position();
+            let size = 180.0 * s;
+            let tint = if menu.armed_ok { WHITE } else { Color::new(1.0, 0.0, 0.0, 1.0) };
+            draw_texture_ex(&sp.tex, mx - size / 2.0, my - size / 2.0, tint,
+                DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });
+        }
     }
 }
 

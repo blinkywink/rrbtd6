@@ -3390,6 +3390,10 @@ pub struct Projectile {
     /// CollectCashZoneModel.minEmitWaitTimeFrames count from it).
     farmer_pickup: bool,
     made_at: u64,
+    /// Pickup.collectPoint / foundPoint: the cursor spot that claimed it (Pickup.UpdateInputCursorLocation);
+    /// `collect_frames`: Pickup.currentCollectFrames.
+    cursor_point: Option<[f32; 2]>,
+    collect_frames: u32,
     /// TravelAlongPath.OnPathChangedCallback: the tower whose SwordCharge made it
     /// (SwordCharge.OnProjectilePathChanged runs when its path changes).
     charge_cb: Option<u64>,
@@ -5826,7 +5830,7 @@ macro_rules! collide_pass {
                     // 100, its cash overwritten. INFERRED: eating pays no pop cash here, so its value
                     // carries the whole RBE x rbeCashMultiplier; the game pops the bloons (their pop
                     // cash) and pays (multiplier - 1) x the eaten layers.)
-                    std::sync::Arc::make_mut(&mut pr.spec).cash = Some(eat.full_cash.clone().map(|c| crate::data::Cash { min: 0.0, max: 0.0, ..c }).unwrap_or(crate::data::Cash { min: 0.0, max: 0.0, bonus: 0.0, pickup: Some(60.0), pickup_delay: 0.0, pickup_camo: false, bonus_shared: false }));
+                    std::sync::Arc::make_mut(&mut pr.spec).cash = Some(eat.full_cash.clone().map(|c| crate::data::Cash { min: 0.0, max: 0.0, ..c }).unwrap_or(crate::data::Cash { min: 0.0, max: 0.0, bonus: 0.0, pickup: Some(60.0), pickup_delay: 0.0, pickup_camo: false, bonus_shared: false, lives: 0.0, lives_max: 0.0 }));
                     std::sync::Arc::make_mut(&mut pr.spec).no_hit = true;
                     // (EmitCash makes the Full trap in its place, gone after its AgeModel
                     // lifespan: recording map_geared_engineer_204_r40, full at rt 2169, gone at 2470.)
@@ -16836,6 +16840,54 @@ impl Game {
         }
     }
 
+    /// Pickup.Process (VERIFIED-DECOMP @0x180ccf400) for every cash pickup: while the InputManager's
+    /// cursor is active, UpdateInputCursorLocation (@0x180ccf840): not a camo pickup, at least
+    /// PickupModel.delayFrames old, and the cursor within collectRadius of it (2D) makes the cursor
+    /// its collectPoint (z 0) and foundPoint. Once found: currentCollectFrames + 1; within
+    /// innerCollectRadius (10, Pickup..ctor @0x180ccfa90) of the point (2D) or after
+    /// maxCollectFrames (120) it is picked up, else Position = Vector3.Lerp(Position, collectPoint,
+    /// 0.25) (recording helipilot_040_ab_mk rt 424: the Support Chinook's crates fly to the resting
+    /// cursor at -22.14, 15.66, z 250 x 0.75 a frame).
+    fn pickup_cursor_step(&mut self) {
+        let cursor = self.cursor;
+        let now = self.sim_elapsed;
+        let mut i = 0;
+        while i < self.projectiles.len() {
+            let pr = &self.projectiles[i];
+            let Some(c) = pr.spec.cash.as_ref().filter(|c| c.pickup.is_some()) else {
+                i += 1;
+                continue;
+            };
+            if let (Some(cur), true) = (cursor, !c.pickup_camo) {
+                let age = now.saturating_sub(pr.made_at) as f32;
+                let r = c.pickup.unwrap_or(0.0);
+                if age >= c.pickup_delay && (cur[0] - pr.pos[0]).hypot(cur[1] - pr.pos[1]) < r {
+                    self.projectiles[i].cursor_point = Some(cur);
+                }
+            }
+            let pr = &mut self.projectiles[i];
+            let Some(cp) = pr.cursor_point else {
+                i += 1;
+                continue;
+            };
+            pr.collect_frames += 1;
+            let d = (cp[0] - pr.pos[0]).hypot(cp[1] - pr.pos[1]);
+            if d < 10.0 || pr.collect_frames >= 120 {
+                let pr = self.projectiles.remove(i);
+                self.collect_projectile_cash(&pr);
+                self.sound(&pr.spec.pickup_sounds, None);
+                self.cash_pops.push((pr.pos, pr.value));
+                continue;
+            }
+            pr.moving = 0.0;
+            pr.vel = [0.0, 0.0];
+            pr.arrive_at = None;
+            pr.pos = [pr.pos[0] + (cp[0] - pr.pos[0]) * 0.25, pr.pos[1] + (cp[1] - pr.pos[1]) * 0.25];
+            pr.z += (0.0 - pr.z) * 0.25;
+            i += 1;
+        }
+    }
+
     /// CollectCashZone.Process (VERIFIED-DECOMP @0x180d09440), in its tower's turn (Banana Farm
     /// x-x-5, Banana Farmer). collectPoint = the tower's Position; over the Pickup factory, each
     /// cash projectile whose PickupModel.isCamoPickup equals onlyAttractsCamo, made at least
@@ -16870,6 +16922,7 @@ impl Game {
                 || (z.wait >= 1 && (age as i64) < z.wait)
                 || self.cash_owner(pr.owner) != slot
                 || pr.farmer_pickup
+                || pr.cursor_point.is_some()
                 || (age as f32) < c.pickup_delay
                 || filtered
             {
@@ -23102,6 +23155,12 @@ impl Game {
                     }
                     // FilterOnlyCamoIn.FilterBloon (@0xc20590): bloon.bloonModel.isCamo.
                     if attack.only_camo && !b.camo(d) {
+                        continue;
+                    }
+                    // TargetMoab as the attack's only supplier (OnlyTargetsMoab true, VERIFIED-DECOMP
+                    // @0x1804ee640): MOAB-class bloons only (recording bombshooter_050_ab_mk rt 400,
+                    // MOAB Eliminator with no MOAB out throws nothing).
+                    if attack.prio_moab && attack.targets.is_empty() && !d.tags.iter().any(|t| t == "Moabs") {
                         continue;
                     }
                     if !attack.require_tags.iter().all(|t| d.tags.contains(t)) || (!buff.unfilter && attack.exclude_tags.iter().any(|t| d.tags.contains(t))) {
@@ -31040,6 +31099,8 @@ impl Game {
                 bolt_from: None,
                 moving: 0.0,
                 farmer_pickup: false,
+                cursor_point: None,
+                collect_frames: 0,
                 made_at: self.sim_elapsed,
                 charge_cb: None,
                 dz: 0.0,
@@ -31427,6 +31488,7 @@ impl Game {
         let mut cand = std::mem::take(&mut self.grid_cand);
         let sim_now = self.sim_elapsed;
         let mut due_retargets: Vec<u64> = Vec::new();
+        self.pickup_cursor_step();
         // The collision pass (CollisionChecker.Process), as a macro so InstantDamageEmission can run it
         // again for its own projectiles after the towers act.
         collide_pass!(None::<&[u64]>, self, p, kids, exhausted, subs, contacts, cand, sim_now);

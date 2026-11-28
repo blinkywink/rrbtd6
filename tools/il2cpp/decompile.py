@@ -31,7 +31,10 @@ def headless():
     found = sorted(glob.glob(os.path.join(EXT, "ghidra", "ghidra_*", "support", "analyzeHeadless.bat")))
     if not found:
         raise SystemExit("Ghidra not found under tools/external/ghidra")
-    return found[0]
+    # RRBTD6_GHIDRA picks a version by substring (e.g. 12.2: the one that takes the bundled JDK 25).
+    want = os.environ.get("RRBTD6_GHIDRA")
+    pick = [f for f in found if want and want in f]
+    return (pick or found)[0]
 
 
 def same_build():
