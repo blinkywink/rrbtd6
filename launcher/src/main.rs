@@ -245,7 +245,7 @@ impl Problem {
         }
         if has(&["btd6 is out of date"]) {
             return Problem { heading: "Update Bloons TD 6 first", retry: false, pick_folder: false,
-                body: "Your BTD6 is older than the version RustTD6 matches, and RustTD6 reads its stats and art from your copy. Update BTD6 (in Steam: restart Steam, or right-click Bloons TD 6 > Properties > Updates), then press Try again." };
+                body: "Your BTD6 is older than the version RustTD6 matches, and RustTD6 reads its stats and art from your copy. Update BTD6, then press Try again. Steam: restart Steam, or right-click Bloons TD 6 > Properties > Updates. Epic: open the Epic Games Launcher; it updates BTD6 from your Library." };
         }
         if has(&["not enough free disk space"]) {
             return Problem { heading: "Not enough disk space", retry: false, pick_folder: false,

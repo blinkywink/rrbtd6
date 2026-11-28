@@ -143,7 +143,7 @@ async fn host(endpoint:&Endpoint,options:&Options,settings:Settings,mut commands
                         Wire::Hello{version,token:provided,identity,name}=>{
                             if version!=VERSION{Err("Client protocol versions differ".into())}
                             else if !same_token(&token,&provided){Err("Invite is invalid or has expired".into())}
-                            else if identity!=options.identity{Err("Game builds or extracted data differ".into())}
+                            else if identity!=options.identity{Err("You and the host are on different versions (game builds or extracted data differ). Close RustTD6 and open it again to update it, and keep BTD6 updated in Steam or Epic.".into())}
                             else if flow.start.is_some(){Err("Match is already in progress".into())}
                             else{state.join(&name).map(|slot|{generation+=1;peers.push(Peer{slot,generation,tx});(slot,generation,state.room.clone())})}
                         },_=>Err("Invalid join request".into()),
