@@ -86,7 +86,7 @@
   </section>
 
   <!-- progress:start -->
-  <section id="progress" class="block">
+  <section id="progress" class="block band">
     <h2>Progress</h2>
     <p class="intro">Runs recorded in the real game are replayed in RustTD6 and compared frame by frame.</p>
     <div class="psummary">
@@ -203,7 +203,7 @@
     <h2>Make it yours</h2>
     <div class="mods">
       <div class="mods-text">
-        <p>Modding RustTD6 is designed to be as accessible as possible, and almost anything can be changed: towers, projectiles, bloons, modes, shop layouts, upgrades, models, event scripts and custom UI.</p>
+        <p>Change almost anything with a few lines of Python: towers, bloons, rounds, modes, the shop, models and even your own UI.</p>
         <a class="pill-link" href="/docs/">Read the Mod API docs <span aria-hidden="true">→</span></a>
       </div>
       <div class="code-window">
@@ -219,49 +219,45 @@ mod.mode(<span class="s">"training"</span>, base=<span class="s">"Medium"</span>
     </div>
   </section>
 
-  <section id="faq" class="block">
+  <section id="faq" class="block band">
     <h2>FAQ</h2>
     <div class="faq">
-      <details name="faq">
-        <summary>Do I need to own BTD6?<span class="plus" aria-hidden="true"></span></summary>
-        <p>Yes. RustTD6 doesn't include the game. It's built from the files in your own copy.</p>
-      </details>
-      <details name="faq">
-        <summary>Will it run on my PC?<span class="plus" aria-hidden="true"></span></summary>
-        <p>It needs Windows 10 or 11 (64-bit), BTD6 from Steam or Epic with MelonLoader 0.7.3, 8 GB of RAM, OpenGL 3.1 graphics, and about 3.5 GB of disk space (9 GB free while the first setup runs).</p>
-      </details>
-      <details name="faq">
-        <summary>Is it finished?<span class="plus" aria-hidden="true"></span></summary>
-        <p>Not yet. Nearly every tower and hero already plays exactly like the real game, but bosses, some game modes, co-op and parts of the visuals are still in progress. See <a href="#progress">Progress</a> for where things stand.</p>
-      </details>
-      <details name="faq">
-        <summary>Why are some modes missing?<span class="plus" aria-hidden="true"></span></summary>
-        <p>The store and online modes like Races, Boss Rush, Contested Territory and Odyssey have been removed, along with the Legends DLC, to prevent cheating and piracy.</p>
-      </details>
-      <details name="faq">
-        <summary>Does it change my BTD6 save or account?<span class="plus" aria-hidden="true"></span></summary>
-        <p>No. RustTD6 keeps its own local progress. The installer and launcher only contact GitHub, python.org and PyPI; they never contact Ninja Kiwi and never change BTD6, your save or your account.</p>
-      </details>
-      <details name="faq">
-        <summary>Can I play it on a Mac or Linux?<span class="plus" aria-hidden="true"></span></summary>
-        <p>Yes, with a personal build. Set it up on Windows first, copy the extracted game data across, and run the build script for your system. The steps are in the <button type="button" class="link" popovertarget="install">install guide</button>.</p>
-      </details>
-      <details name="faq">
-        <summary>Is it safe?<span class="plus" aria-hidden="true"></span></summary>
-        <p>The code is open source, so anyone can read exactly what it does. It's still unofficial software, so use it at your own discretion.</p>
-      </details>
-      <details name="faq">
-        <summary>Does it cost anything?<span class="plus" aria-hidden="true"></span></summary>
-        <p>No. It's free. If you want to support Ninja Kiwi, buy things through the official game or their webstore.</p>
-      </details>
-      <details name="faq">
-        <summary>Is this from Ninja Kiwi?<span class="plus" aria-hidden="true"></span></summary>
-        <p>No. It's an unofficial fan project, not affiliated with or endorsed by Ninja Kiwi.</p>
-      </details>
-      <details name="faq">
-        <summary>Where can I get help or report a bug?<span class="plus" aria-hidden="true"></span></summary>
-        <p>Ask on <a href="https://discord.gg/GBah4crmpC">Discord</a>, or open an issue on <a href="https://github.com/blinkywink/rrbtd6/issues">GitHub</a>. Say what happened and what you expected, with a screenshot if it helps.</p>
-      </details>
+      <div class="faq-col">
+        <details name="faq">
+          <summary>Do I need to own BTD6?<span class="plus" aria-hidden="true"></span></summary>
+          <p>Yes. RustTD6 doesn't include the game. It's built from the files in your own copy.</p>
+        </details>
+        <details name="faq">
+          <summary>Will it run on my PC?<span class="plus" aria-hidden="true"></span></summary>
+          <p>It needs Windows 10 or 11 (64-bit), BTD6 from Steam or Epic with MelonLoader 0.7.3, 8 GB of RAM, OpenGL 3.1 graphics, and about 3.5 GB of disk space (9 GB free while the first setup runs).</p>
+        </details>
+        <details name="faq">
+          <summary>Is it finished?<span class="plus" aria-hidden="true"></span></summary>
+          <p>Not yet. Nearly every tower and hero already plays exactly like the real game, but bosses, some game modes, co-op and parts of the visuals are still in progress. See <a href="#progress">Progress</a> for where things stand.</p>
+        </details>
+        <details name="faq">
+          <summary>Why are some modes missing?<span class="plus" aria-hidden="true"></span></summary>
+          <p>The store and online modes like Races, Boss Rush, Contested Territory and Odyssey have been removed, along with the Legends DLC, to prevent cheating and piracy.</p>
+        </details>
+      </div>
+      <div class="faq-col">
+        <details name="faq">
+          <summary>Does it change my BTD6 save or account?<span class="plus" aria-hidden="true"></span></summary>
+          <p>No. RustTD6 keeps its own local progress. The installer and launcher only contact GitHub, python.org and PyPI; they never contact Ninja Kiwi and never change BTD6, your save or your account.</p>
+        </details>
+        <details name="faq">
+          <summary>Can I play it on a Mac or Linux?<span class="plus" aria-hidden="true"></span></summary>
+          <p>Yes, with a personal build. Set it up on Windows first, copy the extracted game data across, and run the build script for your system. The steps are in the <button type="button" class="link" popovertarget="install">install guide</button>.</p>
+        </details>
+        <details name="faq">
+          <summary>Is it free and safe?<span class="plus" aria-hidden="true"></span></summary>
+          <p>It's free and open source, so anyone can read exactly what it does. It's an unofficial fan project, not made or endorsed by Ninja Kiwi. To support them, buy things in the official game.</p>
+        </details>
+        <details name="faq">
+          <summary>Where can I get help or report a bug?<span class="plus" aria-hidden="true"></span></summary>
+          <p>Ask on <a href="https://discord.gg/GBah4crmpC">Discord</a>, or open an issue on <a href="https://github.com/blinkywink/rrbtd6/issues">GitHub</a>. Say what happened and what you expected, with a screenshot if it helps.</p>
+        </details>
+      </div>
     </div>
   </section>
 

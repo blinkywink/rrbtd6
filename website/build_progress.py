@@ -35,7 +35,7 @@ def build(data):
     finished = sum(1 for t in towers if t[2] and t[1] == t[2])
     state = lambda d, t: "done" if t and d == t else ("none" if t == 0 else "")
     out = []
-    out.append('  <section id="progress" class="block">')
+    out.append('  <section id="progress" class="block band">')
     out.append("    <h2>Progress</h2>")
     day = datetime.date.fromisoformat(data["updated"])
     pct = f"{100 * done / total:.0f}%"
