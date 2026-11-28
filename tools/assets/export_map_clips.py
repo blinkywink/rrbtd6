@@ -48,7 +48,7 @@ def index(env):
     return {(o.assets_file.name.lower(), o.path_id): o for o in env.objects}
 
 
-CABS = json.load(open(os.path.join(OUT, "..", "cab_index.json"), encoding="utf-8"))
+CABS = json.load(open(os.path.normpath(os.path.join(OUT, "..", "cab_index.json")), encoding="utf-8"))
 loaded = {}
 failed = {}
 

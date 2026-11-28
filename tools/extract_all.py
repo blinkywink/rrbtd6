@@ -763,10 +763,31 @@ def asset_revision():
     return hashlib.sha256(json.dumps(STEP_VERSIONS, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def raise_open_file_limit():
+    """macOS allows 256 open files per process by default and Linux often 1024; reading the game's
+    bundles opens far more. Raise this process's limit (its workers inherit it) as far as the system
+    allows. Windows has no such limit."""
+    if os.name != "posix":
+        return
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    for want in (65536, 24576, 10240, 4096):
+        if hard != resource.RLIM_INFINITY:
+            want = min(want, hard)
+        if want <= soft:
+            return
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+            return
+        except (ValueError, OSError):
+            continue
+
+
 def main():
     if sys.argv[1:] == ["--asset-revision"]:
         print(asset_revision())
         return
+    raise_open_file_limit()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--game", required=True, help="BTD6 install folder")
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]), help="folder holding tools/")

@@ -205,7 +205,7 @@ def main():
     if args.models.is_symlink() or os.path.isjunction(args.models):parser.error("refusing linked model root")
     root=args.models.resolve(strict=True);directories=[]
     install=(args.root or root.parent.parent).resolve(strict=True)
-    client=next((install/name for name in ("rrbtd6.exe","BTD6.exe") if (install/name).is_file()),None)
+    client=next((install/name for name in ("rrbtd6.exe","BTD6.exe","rrbtd6") if (install/name).is_file()),None)
     if not args.keep_original and client is None:parser.error("matching client required for the native acceptance gate")
     for directory,dirs,names in os.walk(root,followlinks=False):
         dirs[:]=[n for n in dirs if not Path(directory,n).is_symlink() and not os.path.isjunction(Path(directory,n))]

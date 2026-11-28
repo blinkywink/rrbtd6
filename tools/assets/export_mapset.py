@@ -25,7 +25,7 @@ maps = [{"id": m["id"], "difficulty": m["difficulty"], "music": m.get("mapMusic"
 # Map select image (MapImages atlas). Most are MapSelect<Id>Button / <Id>MapButton; a few names
 # differ from the id (the mapSprite reference isn't resolvable offline).
 ALIAS = {"Tutorial": "MonkeyMeadow", "SkullTweak": "SkullPeak", "QuietStreet": "QuietSteet", "Cornfield": "Cornfields"}
-imgs = {f[:-4].lower(): f[:-4] for f in os.listdir(os.path.join(os.path.dirname(OUT), "..", "sprites", "MapImages")) if f.endswith(".png")}
+imgs = {f[:-4].lower(): f[:-4] for f in os.listdir(os.path.normpath(os.path.join(os.path.dirname(OUT), "..", "sprites", "MapImages"))) if f.endswith(".png")}
 for m in maps:
     n = ALIAS.get(m["id"], m["id"])
     m["sprite"] = next((imgs[k.lower()] for k in (f"MapSelect{n}Button", f"MapSelect{n}MapButton", f"MapSelect{n}") if k.lower() in imgs), None)

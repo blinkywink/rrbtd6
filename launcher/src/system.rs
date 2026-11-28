@@ -235,8 +235,8 @@ pub fn sha256_hex(bytes: &[u8]) -> Option<String> {
     }
     #[cfg(not(windows))]
     {
-        let _ = bytes;
-        None
+        use sha2::Digest;
+        Some(sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect())
     }
 }
 
@@ -271,10 +271,17 @@ pub fn pick_folder(title: &str) -> Option<PathBuf> {
         let n = path.iter().position(|&c| c == 0).unwrap_or(0);
         (ok && n > 0).then(|| PathBuf::from(String::from_utf16_lossy(&path[..n])))
     }
+    // macOS: its own folder chooser; Linux: zenity or kdialog when installed.
     #[cfg(not(windows))]
     {
-        let _ = title;
-        None
+        let run = |cmd: &mut std::process::Command| cmd.output().ok().filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|p| !p.is_empty()).map(PathBuf::from);
+        if cfg!(target_os = "macos") {
+            let script = format!("POSIX path of (choose folder with prompt \"{}\")", title.replace('"', "'"));
+            return run(std::process::Command::new("osascript").args(["-e", &script]));
+        }
+        run(std::process::Command::new("zenity").args(["--file-selection", "--directory", "--title", title]))
+            .or_else(|| run(std::process::Command::new("kdialog").args(["--getexistingdirectory", ".", "--title", title])))
     }
 }
 
@@ -326,7 +333,6 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
     }
 
-    #[cfg(windows)]
     #[test]
     fn sha256_matches_a_known_digest() {
         assert_eq!(sha256_hex(b"abc").unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");

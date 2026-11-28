@@ -11,7 +11,7 @@ import sys
 def run(root, models):
     root = Path(root).resolve(strict=True)
     models = Path(models).resolve(strict=True)
-    executable = next((root / n for n in ("rrbtd6.exe", "BTD6.exe") if (root / n).is_file()), None)
+    executable = next((root / n for n in ("rrbtd6.exe", "BTD6.exe", "rrbtd6") if (root / n).is_file()), None)
     if executable is None:
         raise FileNotFoundError("A matching RustTD6 client is required for animation conversion")
     subprocess.run([str(executable), "--canonicalize-anims", str(models)], check=True, cwd=root)

@@ -17,7 +17,7 @@ const TIPS: &[&str] = &[
 ];
 
 #[derive(Default)]
-#[cfg_attr(not(windows), allow(dead_code))]
+#[allow(dead_code)] // some fields are read by one platform's window only
 struct State {
     open: bool,
     hwnd: isize,
@@ -36,6 +36,8 @@ struct State {
     hits: Vec<(i32, i32, i32, i32)>,
     check_hits: Vec<(i32, i32, i32, i32)>,
     hover: Option<usize>,
+    // The launcher's work is over (macOS / Linux: the window thread can end).
+    done: bool,
 }
 
 fn state() -> &'static (Mutex<State>, Condvar) {
@@ -57,12 +59,44 @@ pub fn open() {
         s.tip = (std::process::id() as usize) % TIPS.len();
     }
     #[cfg(windows)]
+    std::thread::spawn(win::run);
+    // macOS / Linux: the main thread (run_main_thread) opens it when asked.
+    #[cfg(not(windows))]
+    cv.notify_all();
+    // Wait (briefly) until the window exists, so the first stage shows.
+    let s = lock.lock().unwrap();
+    let _ = cv.wait_timeout_while(s, std::time::Duration::from_secs(5), |s| s.hwnd == 0 && s.open).unwrap();
+}
+
+/// macOS / Linux: the launcher's work runs on another thread and this one, the main thread (where
+/// macOS needs windows), shows the window when `open` is called. Returns when the work is done.
+#[cfg(not(windows))]
+pub fn run_main_thread() {
+    let (lock, cv) = state();
     {
-        std::thread::spawn(win::run);
-        // Wait (briefly) until the window exists, so the first stage shows.
-        let s = lock.lock().unwrap();
-        let _ = cv.wait_timeout_while(s, std::time::Duration::from_secs(3), |s| s.hwnd == 0 && s.open).unwrap();
+        let s = cv.wait_while(lock.lock().unwrap(), |s| !s.open && !s.done).unwrap();
+        if s.done && !s.open {
+            return;
+        }
     }
+    // No desktop (a terminal over SSH): carry on without a window; output goes to the terminal.
+    let desktop = cfg!(target_os = "macos") || std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+    if desktop {
+        mq::run();
+    }
+    let mut s = lock.lock().unwrap();
+    s.hwnd = 0;
+    s.open = false;
+    cv.notify_all();
+    drop(cv.wait_while(s, |s| !s.done).unwrap());
+}
+
+/// macOS / Linux: the launcher's work is over; the window (if any) closes.
+#[cfg(not(windows))]
+pub fn finish() {
+    let (lock, cv) = state();
+    lock.lock().unwrap().done = true;
+    cv.notify_all();
 }
 
 pub fn is_open() -> bool {
@@ -142,6 +176,11 @@ pub fn ask_checks(heading: &str, body: &str, checks: &[(&str, bool)], buttons: &
 
 pub fn close() {
     let mut s = state().0.lock().unwrap();
+    #[cfg(not(windows))]
+    {
+        s.done = true;
+        state().1.notify_all();
+    }
     s.open = false;
     #[cfg(windows)]
     if s.hwnd != 0 {
@@ -612,6 +651,228 @@ mod win {
             if (logical - want_height).abs() > 2 {
                 resize(h, want_height);
             }
+        }
+    }
+}
+
+/// The macOS / Linux window, drawn with macroquad like the game: the same screens as the Windows one.
+#[cfg(not(windows))]
+mod mq {
+    use super::{state, TIPS};
+    use macroquad::prelude::*;
+
+    const BLUE: Color = Color::new(0.184, 0.502, 0.961, 1.0);
+    const BLUE_DARK: Color = Color::new(0.106, 0.373, 0.800, 1.0);
+    const TRACK: Color = Color::new(0.867, 0.906, 0.969, 1.0);
+    const SOFT: Color = Color::new(0.918, 0.949, 1.0, 1.0);
+    const INK: Color = Color::new(0.075, 0.188, 0.420, 1.0);
+    const MUTED: Color = Color::new(0.290, 0.373, 0.525, 1.0);
+    const WIDTH: f32 = 520.0;
+
+    /// A system font that reads well at small sizes (macroquad's own is a pixel font).
+    fn system_font() -> Option<Font> {
+        let paths = [
+            "/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        ];
+        paths.iter().find_map(|p| std::fs::read(p).ok()).and_then(|b| load_ttf_font_from_bytes(&b).ok())
+    }
+
+    fn conf() -> Conf {
+        Conf { window_title: "RustTD6 Setup".into(), window_width: WIDTH as i32, window_height: 250, high_dpi: true,
+               window_resizable: false, ..Default::default() }
+    }
+
+    pub fn run() {
+        macroquad::Window::from_config(conf(), main_loop());
+    }
+
+    /// Lines of `text` that fit `width` at `size`.
+    fn wrap(font: Option<&Font>, text: &str, size: u16, width: f32) -> Vec<String> {
+        let mut lines = Vec::new();
+        for para in text.split('\n') {
+            let mut line = String::new();
+            for word in para.split(' ') {
+                let trial = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+                if measure_text(&trial, font, size, 1.0).width > width && !line.is_empty() {
+                    lines.push(std::mem::replace(&mut line, word.to_string()));
+                } else {
+                    line = trial;
+                }
+            }
+            lines.push(line);
+        }
+        lines
+    }
+
+    fn text(font: Option<&Font>, s: &str, x: f32, y: f32, size: u16, color: Color) {
+        draw_text_ex(s, x, y, TextParams { font, font_size: size, color, ..Default::default() });
+    }
+
+    async fn main_loop() {
+        prevent_quit();
+        let font = system_font();
+        let f = font.as_ref();
+        let (lock, cv) = state();
+        {
+            lock.lock().unwrap().hwnd = 1;
+            cv.notify_all();
+        }
+        let mut confirm_stop = false;
+        let mut height = 250.0;
+        loop {
+            let (mx, my) = mouse_position();
+            let mouse = vec2(mx, my);
+            let clicked = is_mouse_button_pressed(MouseButton::Left);
+            let quit = is_quit_requested();
+            let mut s = lock.lock().unwrap();
+            if s.done && s.message.is_none() {
+                break;
+            }
+            s.ticks += 1;
+            s.sweep = (s.sweep + 0.012) % 1.3;
+            if s.ticks % 240 == 0 {
+                s.tip = (s.tip + 7) % TIPS.len();
+            }
+            clear_background(WHITE);
+            draw_rectangle(0.0, 0.0, WIDTH, 64.0, BLUE);
+            text(f, "RustTD6", 28.0, 41.0, 26, WHITE);
+            let pad = 28.0;
+            let mut want = 250.0;
+            // Closing the window: during a message it's the last button; while working, ask first.
+            if quit {
+                if let Some((_, _, buttons)) = &s.message {
+                    s.choice = Some(buttons.len().saturating_sub(1));
+                    cv.notify_all();
+                } else {
+                    confirm_stop = true;
+                }
+            }
+            let stopping = confirm_stop && s.message.is_none();
+            let message = if stopping {
+                Some(("Stop setting up RustTD6?".to_string(),
+                      "Everything finished so far is kept, so next time it carries on from here.".to_string(),
+                      vec!["Keep going".to_string(), "Stop".to_string()]))
+            } else {
+                s.message.clone()
+            };
+            if let Some((heading, body, buttons)) = message {
+                let mut y = 100.0;
+                for line in wrap(f, &heading, 20, WIDTH - 2.0 * pad) {
+                    text(f, &line, pad, y, 20, INK);
+                    y += 26.0;
+                }
+                y += 4.0;
+                for line in wrap(f, &body, 15, WIDTH - 2.0 * pad) {
+                    text(f, &line, pad, y, 15, MUTED);
+                    y += 21.0;
+                }
+                // Tick boxes, the whole row clickable.
+                let mut toggled = None;
+                y += 6.0;
+                for (i, (label, on)) in s.checks.iter().enumerate() {
+                    let row = Rect::new(pad, y, WIDTH - 2.0 * pad, 28.0);
+                    let b = Rect::new(pad, y + 4.0, 20.0, 20.0);
+                    if *on {
+                        draw_rectangle(b.x, b.y, b.w, b.h, BLUE);
+                        draw_line(b.x + 5.0, b.y + 10.0, b.x + 9.0, b.y + 15.0, 2.5, WHITE);
+                        draw_line(b.x + 9.0, b.y + 15.0, b.x + 16.0, b.y + 5.0, 2.5, WHITE);
+                    } else {
+                        draw_rectangle_lines(b.x, b.y, b.w, b.h, 2.0, MUTED);
+                    }
+                    text(f, label, b.x + 30.0, y + 20.0, 16, INK);
+                    if clicked && row.contains(mouse) {
+                        toggled = Some(i);
+                    }
+                    y += 32.0;
+                }
+                if let Some(i) = toggled {
+                    s.checks[i].1 = !s.checks[i].1;
+                }
+                // Buttons, right-aligned rows (wrapping when they don't fit); the first is the main one.
+                y += 14.0;
+                let widths: Vec<f32> = buttons.iter().map(|b| measure_text(b, f, 16, 1.0).width + 36.0).collect();
+                let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
+                let mut used = 0.0;
+                for (i, w) in widths.iter().enumerate() {
+                    let empty = rows.last().unwrap().is_empty();
+                    let need = if empty { *w } else { used + 10.0 + w };
+                    if need > WIDTH - 2.0 * pad && !empty {
+                        rows.push(Vec::new());
+                        used = *w;
+                    } else {
+                        used = need;
+                    }
+                    rows.last_mut().unwrap().push(i);
+                }
+                let mut pressed = None;
+                for row in &rows {
+                    let total: f32 = row.iter().map(|&i| widths[i]).sum::<f32>() + 10.0 * (row.len() as f32 - 1.0);
+                    let mut x = WIDTH - pad - total;
+                    for &i in row {
+                        let r = Rect::new(x, y, widths[i], 38.0);
+                        let hover = r.contains(mouse);
+                        let (bg, fg) = if i == 0 { (if hover { BLUE_DARK } else { BLUE }, WHITE) } else { (if hover { TRACK } else { SOFT }, INK) };
+                        draw_rectangle(r.x, r.y, r.w, r.h, bg);
+                        let tw = measure_text(&buttons[i], f, 16, 1.0).width;
+                        text(f, &buttons[i], r.x + (r.w - tw) / 2.0, r.y + 25.0, 16, fg);
+                        if clicked && hover {
+                            pressed = Some(i);
+                        }
+                        x += widths[i] + 10.0;
+                    }
+                    y += 48.0;
+                }
+                if let Some(i) = pressed {
+                    if stopping {
+                        if i == 1 {
+                            drop(s);
+                            crate::stop_children();
+                            std::process::exit(0);
+                        }
+                        confirm_stop = false;
+                    } else {
+                        s.choice = Some(i);
+                        cv.notify_all();
+                    }
+                }
+                want = y + 10.0;
+            } else {
+                let stage = s.stage.clone();
+                text(f, &stage, pad, 106.0, 19, INK);
+                let bar = Rect::new(pad, 126.0, WIDTH - 2.0 * pad, 14.0);
+                draw_rectangle(bar.x, bar.y, bar.w, bar.h, TRACK);
+                match s.percent {
+                    Some(p) => draw_rectangle(bar.x, bar.y, (bar.w * p / 100.0).max(14.0), bar.h, BLUE),
+                    None => {
+                        let seg = bar.w / 4.0;
+                        let start = bar.x + (s.sweep - 0.3) * bar.w;
+                        let (a, b) = (start.max(bar.x), (start + seg).min(bar.x + bar.w));
+                        if b > a {
+                            draw_rectangle(a, bar.y, b - a, bar.h, BLUE);
+                        }
+                    }
+                }
+                if let Some(p) = s.percent {
+                    text(f, &format!("{}%", p as i32), pad, 164.0, 15, MUTED);
+                }
+                let eta_w = measure_text(&s.eta, f, 15, 1.0).width;
+                text(f, &s.eta, WIDTH - pad - eta_w, 164.0, 15, MUTED);
+                let tip = TIPS[s.tip % TIPS.len()];
+                let tw = measure_text(tip, f, 14, 1.0).width;
+                text(f, tip, (WIDTH - tw) / 2.0, 198.0, 14, MUTED);
+                let note = "You can minimise this window. Closing it pauses setup.";
+                let nw = measure_text(note, f, 13, 1.0).width;
+                text(f, note, (WIDTH - nw) / 2.0, 226.0, 13, Color::new(0.53, 0.60, 0.71, 1.0));
+            }
+            drop(s);
+            if (want - height).abs() > 1.0 {
+                height = want;
+                request_new_screen_size(WIDTH, height);
+            }
+            next_frame().await;
         }
     }
 }

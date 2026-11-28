@@ -403,7 +403,7 @@ def export(key, scripts):
     # Which scene object each model part of models/map_<key> is: export_model.py writes the parts in
     # this order, a renderer's submeshes in a row; a renderer it dropped simply has no parts.
     parts = []
-    meta = os.path.join(OUT, "..", "models", f"map_{key}", "meta.json")
+    meta = os.path.normpath(os.path.join(OUT, "..", "models", f"map_{key}", "meta.json"))
     if os.path.exists(meta):
         names = [q["name"] for q in json.load(open(meta, encoding="utf-8"))["parts"]]
         i = 0

@@ -31,6 +31,23 @@ const PYTHON_VERSION: &str = "3.13.1";
 const USER_AGENT: &str = "rrbtd6-launcher";
 const DISCORD: &str = "https://discord.gg/GBah4crmpC";
 
+/// This system's file names: the game and the launcher in the install folder, and their names
+/// among a release's files (version.json lists each file's SHA-256 under that name).
+#[cfg(windows)]
+pub const GAME: &str = "rrbtd6.exe";
+#[cfg(not(windows))]
+pub const GAME: &str = "rrbtd6";
+#[cfg(windows)]
+pub const LAUNCHER: &str = "rrbtd6-launcher.exe";
+#[cfg(not(windows))]
+pub const LAUNCHER: &str = "rrbtd6-launcher";
+#[cfg(windows)]
+const ASSETS: (&str, &str) = ("rrbtd6.exe", "rrbtd6-launcher.exe");
+#[cfg(target_os = "macos")]
+const ASSETS: (&str, &str) = ("rrbtd6-macos", "rrbtd6-launcher-macos");
+#[cfg(all(unix, not(target_os = "macos")))]
+const ASSETS: (&str, &str) = ("rrbtd6-linux", "rrbtd6-launcher-linux");
+
 enum Update{Installed,Current,KeepInstalled}
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -92,6 +109,20 @@ fn attach_console() {
 }
 
 fn main() {
+    // macOS / Linux: windows belong to the main thread, so the work runs on another one.
+    #[cfg(not(windows))]
+    {
+        std::thread::spawn(|| {
+            app();
+            ui::finish();
+        });
+        ui::run_main_thread();
+    }
+    #[cfg(windows)]
+    app();
+}
+
+fn app() {
     attach_console();
     let dir = match std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
         Some(d) => d,
@@ -250,7 +281,7 @@ impl Problem {
 fn repair(dir: &Path) {
     say!("Repairing: fresh tools and Python packages on the next try.");
     let _ = fs::remove_file(dir.join("python/requirements.installed"));
-    if dir.join("rrbtd6.exe").is_file() {
+    if dir.join(GAME).is_file() {
         // An unreadable version.json makes the update step download the release again.
         let _ = fs::remove_file(dir.join("version.json"));
     }
@@ -288,7 +319,7 @@ fn run(dir: &Path) -> Result<()> {
             Ok(Update::Current) => say!("Up to date."),
             Ok(Update::KeepInstalled) => say!("Starting the installed version."),
             // Offline or GitHub unreachable: keep playing the installed build if there is one.
-            Err(e) if dir.join("rrbtd6.exe").exists() && !transaction::pending(dir) && !first_run => say!("Update check skipped: {e}"),
+            Err(e) if dir.join(GAME).exists() && !transaction::pending(dir) && !first_run => say!("Update check skipped: {e}"),
             Err(e) => return Err(e),
         }
     }
@@ -304,11 +335,16 @@ fn run(dir: &Path) -> Result<()> {
     let fresh: serde_json::Value = fs::read_to_string(dir.join("rrbtd6.json")).ok()
         .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     if first_run && ui::is_open() && !fresh["shortcuts_asked"].as_bool().unwrap_or(false) {
-        let launcher = dir.join("rrbtd6-launcher.exe");
-        let (choice, ticked) = ui::ask_checks("RustTD6 is ready",
-            &format!("Setup is done. Choose where you'd like a shortcut to start it from next time. You can also start it from {}.", launcher.display()),
-            &[("Desktop shortcut", true), ("Start menu", true)],
-            &["Play RustTD6", "Close"]);
+        let launcher = dir.join(LAUNCHER);
+        // A Mac starts it from the app in Applications, so there's nothing to choose there.
+        let (choice, ticked) = if cfg!(target_os = "macos") {
+            (ui::ask("RustTD6 is ready", "Setup is done. Start RustTD6 from its app any time; it keeps itself up to date.", &["Play RustTD6", "Close"]), vec![false, false])
+        } else {
+            ui::ask_checks("RustTD6 is ready",
+                &format!("Setup is done. Choose where you'd like a shortcut to start it from next time. You can also start it from {}.", launcher.display()),
+                &[("Desktop shortcut", true), (if cfg!(windows) { "Start menu" } else { "App menu" }, true)],
+                &["Play RustTD6", "Close"])
+        };
         shortcuts(&launcher, dir, ticked[0], ticked[1]);
         let mut config = if fresh.is_object() { fresh } else { serde_json::json!({}) };
         config["shortcuts_asked"] = serde_json::Value::Bool(true);
@@ -321,10 +357,10 @@ fn run(dir: &Path) -> Result<()> {
     if ui::is_open() {
         ui::stage("Starting RustTD6");
     }
-    let mut game_process=Command::new(dir.join("rrbtd6.exe"));
+    let mut game_process=Command::new(dir.join(GAME));
     game_process.arg("--from-launcher").current_dir(dir)
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    game_process.spawn().map_err(|e| format!("Couldn't start rrbtd6.exe ({e})"))?;
+    game_process.spawn().map_err(|e| format!("Couldn't start {GAME} ({e})"))?;
     Ok(())
 }
 
@@ -349,7 +385,13 @@ fn drop_depot_download(game: &Path) {
 
 /// The folder RustTD6 installs into: per-user, always writable, not synced.
 fn recommended_dir() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("RustTD6"))
+    if cfg!(windows) {
+        return std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("RustTD6"));
+    }
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    Some(if cfg!(target_os = "macos") { home.join("Library/Application Support/RustTD6") } else {
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("RustTD6")
+    })
 }
 
 /// Why RustTD6 can't go in `folder` (None: it can).
@@ -376,7 +418,7 @@ fn folder_problem(folder: &Path) -> Option<String> {
 /// without asking and carry on from there (shortcuts are offered when setup finishes). If that folder
 /// can't be used, the player picks one. True when this run handed over and should end.
 fn standalone_install(dir: &Path) -> Result<bool> {
-    let installed = dir.join("rrbtd6.json").exists() || dir.join("version.json").exists() || dir.join("rrbtd6.exe").exists();
+    let installed = dir.join("rrbtd6.json").exists() || dir.join("version.json").exists() || dir.join(GAME).exists();
     let Some(mut target) = recommended_dir() else { return Ok(false) };
     if installed || std::env::args().any(|a| a == "--from-installer" || a == "--here") || dir == target {
         return Ok(false);
@@ -393,10 +435,20 @@ fn standalone_install(dir: &Path) -> Result<bool> {
     }
     fs::create_dir_all(&target)?;
     let me = std::env::current_exe()?;
-    let copy = target.join("rrbtd6-launcher.exe");
-    // Already installed there and running? Its copy is in use; just start it.
-    if fs::copy(&me, &copy).is_err() && !copy.is_file() {
-        return Err(format!("Couldn't copy RustTD6 into {}", target.display()).into());
+    let copy = target.join(LAUNCHER);
+    // Already installed there: keep that launcher (it updates itself and may be newer than this
+    // download) and just start it.
+    if !copy.is_file() {
+        fs::copy(&me, &copy).map_err(|e| format!("Couldn't copy RustTD6 into {} ({e})", target.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&copy, fs::Permissions::from_mode(0o755));
+        }
+        // macOS: the copy keeps the download's quarantine flag, which would stop it starting; the
+        // player already chose to open the app it came from.
+        #[cfg(target_os = "macos")]
+        let _ = Command::new("xattr").args(["-d", "com.apple.quarantine"]).arg(&copy).output();
     }
     Command::new(&copy).current_dir(&target).spawn()?;
     Ok(true)
@@ -404,6 +456,38 @@ fn standalone_install(dir: &Path) -> Result<bool> {
 
 /// "RustTD6" shortcuts to the launcher on the desktop and in the Start menu (a convenience, so
 /// failures are ignored).
+#[cfg(not(windows))]
+fn shortcuts(launcher: &Path, dir: &Path, desktop: bool, menu: bool) {
+    // Linux: a .desktop entry in the app menu and/or on the desktop.
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+    let entry = format!("[Desktop Entry]
+Type=Application
+Name=RustTD6
+Comment=Bloons TD 6, built to go further
+Exec=\"{}\"
+Path={}
+Terminal=false
+Categories=Game;
+",
+        launcher.display(), dir.display());
+    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
+    let mut places = Vec::new();
+    if menu {
+        places.push(data.join("applications"));
+    }
+    if desktop {
+        places.push(home.join("Desktop"));
+    }
+    for place in places {
+        let file = place.join("rusttd6.desktop");
+        if fs::create_dir_all(&place).and_then(|_| fs::write(&file, &entry)).is_ok() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&file, fs::Permissions::from_mode(0o755));
+        }
+    }
+}
+
+#[cfg(windows)]
 fn shortcuts(launcher: &Path, dir: &Path, desktop: bool, start_menu: bool) {
     let places: Vec<&str> = [("'Desktop'", desktop), ("'Programs'", start_menu)].iter().filter(|p| p.1).map(|p| p.0).collect();
     if places.is_empty() {
@@ -415,7 +499,7 @@ fn shortcuts(launcher: &Path, dir: &Path, desktop: bool, start_menu: bool) {
         places.join(","),
         q(launcher),
         q(dir),
-        q(&dir.join("rrbtd6.exe"))
+        q(&dir.join(GAME))
     );
     let mut ps = Command::new("powershell.exe");
     ps.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
@@ -489,29 +573,29 @@ fn update(dir: &Path,game:&Path,refresh_assets:bool) -> Result<Update> {
     let build = remote["build"].as_u64().ok_or("release version has no valid build number")?;
     let local: serde_json::Value = fs::read_to_string(dir.join("version.json")).ok()
         .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    if local["build"].as_u64().is_some_and(|installed|installed>=build) && dir.join("rrbtd6.exe").is_file()
+    if local["build"].as_u64().is_some_and(|installed|installed>=build) && dir.join(GAME).is_file()
         && dir.join("tools/extract_all.py").is_file() && dir.join("tools/requirements.txt").is_file() {
         return Ok(Update::Current);
     }
     let assets:serde_json::Value=fs::read(dir.join("local_extracted/assets_version.json")).ok()
         .and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or_default();
     let needs_assets=compatibility::needs_assets(&remote,&assets);
-    if needs_assets && dir.join("rrbtd6.exe").is_file() && !refresh_assets && !compatibility::update_now(build) {
+    if needs_assets && dir.join(GAME).is_file() && !refresh_assets && !compatibility::update_now(build) {
         say!("Keeping installed build until its replacement assets have been extracted.");
         return Ok(Update::KeepInstalled);
     }
     ui::open();
-    ui::stage(if dir.join("rrbtd6.exe").is_file() { "Downloading the RustTD6 update" } else { "Downloading RustTD6" });
+    ui::stage(if dir.join(GAME).is_file() { "Downloading the RustTD6 update" } else { "Downloading RustTD6" });
     say!("Installing build {}...", remote["build"]);
     let payload = transaction::prepare(dir)?;
     let staging = transaction::staging(dir);
-    download(asset("rrbtd6.exe").ok_or("release has no rrbtd6.exe")?, &payload.join("rrbtd6.exe"))?;
-    verify(&remote, "rrbtd6.exe", &payload.join("rrbtd6.exe"))?;
+    download(asset(ASSETS.0).ok_or("this release has no game for this system")?, &payload.join(GAME))?;
+    verify(&remote, ASSETS.0, &payload.join(GAME))?;
     download(asset("rrbtd6-tools.zip").ok_or("release has no rrbtd6-tools.zip")?, &staging.join("tools.zip"))?;
     verify(&remote, "rrbtd6-tools.zip", &staging.join("tools.zip"))?;
-    if let Some(url) = asset("rrbtd6-launcher.exe") {
-        download(url, &payload.join("rrbtd6-launcher.exe"))?;
-        verify(&remote, "rrbtd6-launcher.exe", &payload.join("rrbtd6-launcher.exe"))?;
+    if let Some(url) = asset(ASSETS.1) {
+        download(url, &payload.join(LAUNCHER))?;
+        verify(&remote, ASSETS.1, &payload.join(LAUNCHER))?;
     }
     // Tools: replace the folder wholesale so removed scripts disappear too.
     let tools_new = staging.join("tools_new");
@@ -575,7 +659,7 @@ fn preserve_user_tree(source:&Path,destination:&Path)->Result<()>{
 fn ensure_python(dir:&Path)->Result<PathBuf>{ensure_python_from(dir,&dir.join("tools"))}
 fn ensure_python_from(dir: &Path,tools:&Path) -> Result<PathBuf> {
     let root = dir.join("python");
-    let python = root.join("python.exe");
+    let python = python_bin(&root);
     let requirements = fs::read_to_string(tools.join("requirements.txt"))?;
     let stamp = root.join("requirements.installed");
     if python.exists() && fs::read_to_string(&stamp).ok().as_deref() == Some(requirements.as_str()) {
@@ -583,6 +667,7 @@ fn ensure_python_from(dir: &Path,tools:&Path) -> Result<PathBuf> {
     }
     // The release's prepared runtime first (one GitHub download, no python.org / PyPI, nothing
     // built); without it, set one up from python.org and PyPI as before.
+    #[cfg(windows)]
     match bundled_python(&root, &requirements) {
         Ok(true) => return Ok(python),
         Ok(false) => {}
@@ -599,10 +684,21 @@ fn ensure_python_from(dir: &Path,tools:&Path) -> Result<PathBuf> {
     if !runtime_ready {
         ui::stage("Setting up Python (first time only)");
         fs::create_dir_all(&root)?;
-        let archive = root.join("python.zip");
-        download(&format!("https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip"), &archive)?;
-        zip::ZipArchive::new(fs::File::open(&archive)?)?.extract(&root)?;
-        fs::remove_file(&archive)?;
+        #[cfg(not(windows))]
+        {
+            // A standalone build (python-build-standalone): unpacks to python/ beside the launcher.
+            let archive = dir.join("python.tgz");
+            download(&unix_python_url(), &archive)?;
+            check(Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(dir))?;
+            fs::remove_file(&archive)?;
+        }
+        #[cfg(windows)]
+        {
+            let archive = root.join("python.zip");
+            download(&format!("https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip"), &archive)?;
+            zip::ZipArchive::new(fs::File::open(&archive)?)?.extract(&root)?;
+            fs::remove_file(&archive)?;
+        }
         // The embeddable build ignores site-packages until `import site` is enabled in its ._pth.
         for entry in fs::read_dir(&root)? {
             let path = entry?.path();
@@ -623,23 +719,40 @@ fn ensure_python_from(dir: &Path,tools:&Path) -> Result<PathBuf> {
     if !pip_ready {
         let get_pip = root.join("get-pip.py");
         download("https://bootstrap.pypa.io/get-pip.py", &get_pip)?;
-        check(Command::new(&python).arg(&get_pip).arg("--no-warn-script-location"))?;
+        check(Command::new(&python).current_dir(&root).arg(&get_pip).arg("--no-warn-script-location"))?;
     }
     ui::stage("Installing setup packages (first time only)");
     // Embeddable Python's ._pth intentionally ignores PYTHONPATH, including
     // pip's temporary build environment. tpk_ar ships as a source distribution:
     // give its backend an explicit home instead of relying on build isolation.
-    check(Command::new(&python).args(["-m", "pip", "install", "--no-warn-script-location",
+    check(Command::new(&python).current_dir(&root).args(["-m", "pip", "install", "--no-warn-script-location",
         "setuptools==80.9.0", "wheel==0.45.1"]))?;
-    check(Command::new(&python).args(["-m", "pip", "install", "--no-warn-script-location", "--no-build-isolation", "-r"])
+    check(Command::new(&python).current_dir(&root).args(["-m", "pip", "install", "--no-warn-script-location", "--no-build-isolation", "-r"])
         .arg(tools.join("requirements.txt")))?;
     fs::write(&stamp, requirements)?;
     Ok(python)
 }
 
+/// The Python executable inside a runtime folder.
+fn python_bin(root: &Path) -> PathBuf {
+    if cfg!(windows) { root.join("python.exe") } else { root.join("bin").join("python3") }
+}
+
+/// Python for macOS and Linux: python-build-standalone's install-only build of PYTHON_VERSION
+/// (the same release on every system, so extraction runs the same Python everywhere).
+#[cfg(not(windows))]
+fn unix_python_url() -> String {
+    const TAG: &str = "20241219";
+    let triple = if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" }
+    } else if cfg!(target_arch = "aarch64") { "aarch64-unknown-linux-gnu" } else { "x86_64-unknown-linux-gnu" };
+    format!("https://github.com/astral-sh/python-build-standalone/releases/download/{TAG}/cpython-{PYTHON_VERSION}+{TAG}-{triple}-install_only.tar.gz")
+}
+
 /// The release tag of the prepared runtime for these requirements (release.yml makes it when
 /// the requirements or the Python version change): `python-runtime-` + the first 16 hex digits
 /// of SHA-256(requirements.txt + PYTHON_VERSION).
+#[cfg(windows)]
 fn runtime_tag(requirements: &str) -> Option<String> {
     let hex = system::sha256_hex(format!("{requirements}{PYTHON_VERSION}").as_bytes())?;
     Some(format!("python-runtime-{}", &hex[..16]))
@@ -647,6 +760,7 @@ fn runtime_tag(requirements: &str) -> Option<String> {
 
 /// Unpacks the prepared runtime (embeddable Python with tools/requirements.txt installed, its
 /// stamp included) into `root`. Ok(false): this build has none published.
+#[cfg(windows)]
 fn bundled_python(root: &Path, requirements: &str) -> Result<bool> {
     let Some(tag) = runtime_tag(requirements) else { return Ok(false) };
     let url = format!("https://github.com/{REPO}/releases/download/{tag}/rrbtd6-python.zip");

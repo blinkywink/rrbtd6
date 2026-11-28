@@ -171,7 +171,7 @@ def main():
     # there's no 2D terrain image (the renderer uses the 3D scene and the game's world bounds).
     tex_obj = next((o for o in env.objects if o.type.name == "Texture2D" and "Terrain" in o.read().m_Name), None)
     tex_name = tex_obj.read().m_Name if tex_obj else None
-    cab_index = json.load(open(os.path.join(out, "..", "cab_index.json")))
+    cab_index = json.load(open(os.path.normpath(os.path.join(out, "..", "cab_index.json"))))
     candidates = []
     for o in env.objects if tex_obj else []:
         if o.type.name != "MeshRenderer":

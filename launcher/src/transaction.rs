@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 
-const COMPONENTS: [&str; 5] = ["tools", "rrbtd6.exe", "rrbtd6-launcher.exe", "local_extracted", "version.json"];
+const COMPONENTS: [&str; 5] = ["tools", crate::GAME, crate::LAUNCHER, "local_extracted", "version.json"];
 
 pub fn staging(dir: &Path) -> PathBuf {
     dir.join("update")
@@ -110,7 +110,7 @@ pub fn prepare(dir: &Path) -> Result<PathBuf> {
 fn begin(dir: &Path) -> Result<Vec<&'static str>> {
     let payload = payload(dir);
     for name in [
-        "rrbtd6.exe",
+        crate::GAME,
         "version.json",
         "tools/extract_all.py",
         "tools/requirements.txt",

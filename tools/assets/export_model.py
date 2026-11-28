@@ -211,7 +211,7 @@ TRANSLATED = {
 _le = os.path.abspath(OUT)
 while os.path.basename(_le) != "local_extracted" and os.path.dirname(_le) != _le:
     _le = os.path.dirname(_le)
-SHADER_DIR = os.path.join(_le, "shaders") if os.path.basename(_le) == "local_extracted" else os.path.join(os.path.dirname(os.path.abspath(OUT)), "..", "shaders")
+SHADER_DIR = os.path.join(_le, "shaders") if os.path.basename(_le) == "local_extracted" else os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(OUT)), "..", "shaders"))
 shader_done = {}
 
 
