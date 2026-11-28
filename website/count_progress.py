@@ -34,7 +34,7 @@ HEROES = [("Quincy", "quincy"), ("Gwendolin", "gwen"), ("Striker Jones", "jones"
           ("Ezili", "ezili"), ("Adora", "adora"), ("Etienne", "etienne"), ("Sauda", "sauda"),
           ("Admiral Brickell", "brickell"), ("Psi", "psi"), ("Geraldo", "geraldo"), ("Corvus", "corvus"),
           ("Silas", "silas"), ("DanDMonke", "dand")]
-OTHER = [("Maps", [("Map spot checks", ["maps"]), ("Towers on many maps", ["maptowers"]), ("Logs (water map)", ["logs"])]),
+OTHER = [("Maps", [("Map spot checks", ["maps"]), ("Towers on many maps", ["maptowers"]), ("Heroes on other maps", ["hero_maps"]), ("Logs (water map)", ["logs"])]),
          ("Monkey Knowledge", [("All knowledge on", ["mk"]), ("Upgraded towers", ["mk_up"]), ("Tier 4 towers", ["mk_t4"]), ("Tier 5 towers", ["mk_t5"]), ("Abilities", ["mk_ab"]), ("Combos", ["mk_combo"]), ("Heroes", ["mk_hero"]), ("Every map", ["mk_maps"])]),
          ("Paragons & combos", [("Paragons", ["paragon"]), ("Tower combos", ["combo", "combo_open"]), ("MOAB-class bloons", ["moab"])]),
          ("Powers", [("Powers", ["powers"])])]
