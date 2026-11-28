@@ -81,8 +81,17 @@ def main():
     parser.add_argument("assets", type=Path)
     args = parser.parse_args()
     before = after = changed = count = 0
-    for path in files(args.assets):
-        old, new = compact(path)
+    # Files are independent: spread over processes (parsing is CPU-bound; one big JSON peaked at
+    # ~2.2 GB, so workers are sized by free memory).
+    import sys
+    from concurrent.futures import ProcessPoolExecutor
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from model_batch import worker_count
+    paths = list(files(args.assets))
+    workers = max(1, min(worker_count(per_worker=1 << 30, max_workers=12), int(os.environ.get("RRBTD6_SETUP_WORKERS", "12"))))
+    with ProcessPoolExecutor(workers) as pool:
+        results = list(pool.map(compact, paths, chunksize=64))
+    for old, new in results:
         before += old
         after += new
         changed += old != new

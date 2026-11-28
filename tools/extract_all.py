@@ -158,6 +158,26 @@ class Ctx:
             done += 1
             report()
 
+    def beside(self, script, *args):
+        """Start one exporter in the background (its own progress isn't shown) while the step goes
+        on; the returned function waits for it and raises its error. Only for an exporter whose
+        output nothing before that wait reads, and which reads nothing written meanwhile."""
+        error = []
+
+        def go():
+            try:
+                self.py(script, *args, progress=(0., 0.))
+            except BaseException as e:
+                error.append(e)
+        thread = threading.Thread(target=go)
+        thread.start()
+
+        def wait():
+            thread.join()
+            if error:
+                raise error[0]
+        return wait
+
     def bundle(self, pattern):
         found = sorted(glob.glob(str(self.aa / pattern)))
         if not found:
@@ -474,9 +494,10 @@ def audio(c):
 
 
 def bloon_models(c):
+    # Boss tiers' behaviours and models (game/bosses.json, models/bosses): read by nothing below
+    # until compact_anims, so they export beside the rest.
+    bosses = c.beside("tools/assets/export_bosses.py", c.game)
     c.py("tools/assets/export_bloon_models.py", c.game)
-    # Boss tiers' behaviours and models (game/bosses.json, models/bosses).
-    c.py("tools/assets/export_bosses.py", c.game)
     c.py("tools/assets/export_powers.py")
     # The Power projectiles' displays it planned (Cash Drop's crate, the track items).
     plan = json.loads((c.out / "display_plans/Powers.json").read_text(encoding="utf-8"))
@@ -488,6 +509,7 @@ def bloon_models(c):
     # The towers Powers place (game.json power_towers): display plans, models and portraits.
     game = json.loads((c.out / "game/game.json").read_text(encoding="utf-8"))
     c.py("tools/assets/export_tower_assets.py", c.game, *sorted({t["name"] for t in game.get("power_towers", {}).values()}))
+    bosses()
     c.py("tools/assets/compact_anims.py", c.out / "models")
 
 
