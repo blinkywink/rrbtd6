@@ -187,6 +187,8 @@ jobs:
           key: game-macos
       - name: Build game and launcher
         run: cargo build -p btd6-game -p rrbtd6-launcher --release
+      - name: Test launcher Python setup
+        run: python3 -I tools/tests/test_launcher_bootstrap.py target/release/rrbtd6-launcher
       - name: Package
         run: |
           mkdir -p dist
@@ -242,6 +244,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y pkg-config libx11-dev libxi-dev libgl1-mesa-dev libasound2-dev
       - name: Build game and launcher
         run: cargo build -p btd6-game -p rrbtd6-launcher --release
+      - name: Test launcher Python setup
+        run: python3 -I tools/tests/test_launcher_bootstrap.py target/release/rrbtd6-launcher
       - name: Package
         run: |
           mkdir -p dist pack
