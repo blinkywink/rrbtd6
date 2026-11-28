@@ -1308,9 +1308,15 @@ impl Hud {
                 let short = format!("{th}/ShortStanceButton");
                 self.tsm.set_active(&long, stance && !tw.focus);
                 self.tsm.set_active(&short, stance && tw.focus);
-                // STAND-IN: the 360-frame cooldown after a switch (and its fade) isn't kept.
-                self.tsm.set_active(&format!("{th}/CooldownEffect"), false);
-                if stance && (self.tsm.clicked(&long) || self.tsm.clicked(&short)) {
+                // (UpdateFromSimInfo @0x180babc80: interactable once now - lastSwapAt > 359; the
+                // targetButtonCooldownFade fills 1 - age / 360 till then.)
+                let age = game.point_swap_age(t);
+                let ready = age > 359;
+                self.tsm.set_active(&format!("{th}/CooldownEffect"), stance && !ready);
+                if let Some(i) = self.tsm.find_mut(&format!("{th}/CooldownEffect")).and_then(|n| n.img.as_mut()) {
+                    i.fill_amount = if ready { 0.0 } else { 1.0 - age as f32 / 360.0 };
+                }
+                if stance && ready && (self.tsm.clicked(&long) || self.tsm.clicked(&short)) {
                     out.push(Action::Stance);
                 }
                 self.tsm.set_active(&format!("{th}/TSMActionButton"), game.uses_point(t));

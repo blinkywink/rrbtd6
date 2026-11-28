@@ -4819,7 +4819,8 @@ pub struct Game {
     /// BeastHandlerLeash.timesOfLastMoves per handler id: Simulation.time of each slot's last pet
     /// move (Initialise: -999999999).
     pub pet_moves: HashMap<u64, [i64; 2]>,
-    /// TargetSelectedPointOrDefault.lastSwapAt per tower (Simulation time; 0 at Initialise).
+    /// TargetSelectedPointOrDefault.lastSwapAt / ToggleFocusStance.lastSwapAt per tower
+    /// (Simulation time; 0 at Initialise).
     pub point_swaps: HashMap<u64, i64>,
     /// Paragon purchases for the renderer's sacrifice effects (display only).
     pub sacrifices: Vec<Sacrifice>,
@@ -13720,6 +13721,9 @@ impl Game {
     pub fn toggle_stance(&mut self, t: usize) -> bool {
         if self.tier(t).is_some_and(|tr| tr.stance.is_some()) {
             self.towers[t].focus = !self.towers[t].focus;
+            // ToggleFocusStance.OnTsmThemeAction (VERIFIED-DECOMP @0x180da3320): lastSwapAt = now.
+            let (id, now) = (self.towers[t].id, self.sim_elapsed as i64);
+            self.point_swaps.insert(id, now);
             return true;
         }
         false
