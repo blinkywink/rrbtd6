@@ -65,6 +65,38 @@ fn global_pop(changes: &[Value], names: &HashMap<String, String>, exported: impl
     fx
 }
 
+/// Decals: overlay class ("Red", "RedRegrow", "Moab"...) -> (BloonDecal.layer, decal prefab name).
+/// CosmeticHelper.AddBloonDecal (VERIFIED-DECOMP @0x18105a9b0) sets bloonDecals[overlay layer] to
+/// the decal's id for each of its bloonOverlayLayers, overwriting: per class the last enabled decal
+/// wins. Its prefabs are exported to models/projectiles/<name> like the bloon overlays. Cached on the
+/// enabled items.
+pub fn bloon_decals(root: &Path) -> std::sync::Arc<HashMap<String, (i32, String)>> {
+    type Decals = std::sync::Arc<HashMap<String, (i32, String)>>;
+    static CACHE: std::sync::Mutex<Option<(Vec<String>, Decals)>> = std::sync::Mutex::new(None);
+    let enabled = crate::local_profile::enabled_trophy_items(root);
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((_, decals)) = cache.as_ref().filter(|(ids, _)| *ids == enabled) {
+        return decals.clone();
+    }
+    let (changes, names) = enabled_changes(root);
+    let decals = std::sync::Arc::new(decals_of(&changes, &names));
+    *cache = Some((enabled, decals.clone()));
+    decals
+}
+
+fn decals_of(changes: &[Value], names: &HashMap<String, String>) -> HashMap<String, (i32, String)> {
+    let mut out = HashMap::new();
+    for c in changes.iter().filter(|c| c["type"] == "BloonDecal") {
+        let layer = c["change"]["layer"].as_i64().unwrap_or(0) as i32;
+        for l in c["change"]["bloonOverlayLayers"].as_array().into_iter().flatten() {
+            if let (Some(class), Some(name)) = (l["bloonOverlayLayer"].as_str(), l["decal"]["guidRef"].as_str().and_then(|g| names.get(g))) {
+                out.insert(class.to_owned(), (layer, name.clone()));
+            }
+        }
+    }
+    out
+}
+
 /// bloon id -> {original prefab name: skin prefab name}, the last change per bloon winning.
 fn bloon_skins(changes: &[Value], names: &HashMap<String, String>, exported: impl Fn(&str) -> bool) -> HashMap<String, HashMap<String, String>> {
     let mut per_bloon = HashMap::new();
@@ -109,6 +141,17 @@ mod tests {
         assert_eq!(global_pop(&[pop("p", 1), pop("r", 1)], &names, |_| true).as_deref(), Some("HeartsPop"));
         assert_eq!(global_pop(&[pop("p", 1), pop("r", 1)], &names, |n| n != "HeartsPop").as_deref(), Some("BonePop"));
         assert_eq!(global_pop(&[pop("q", 0)], &names, |_| true), None);
+    }
+    #[test]
+    fn the_last_enabled_decal_per_overlay_class_wins() {
+        let names: HashMap<String, String> = [("h", "HatMed"), ("H", "HatMoab"), ("b", "BeardMed")]
+            .into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+        let decal = |layers: &[(&str, &str)]| json!({"type": "BloonDecal", "change": {"layer": 0,
+            "bloonOverlayLayers": layers.iter().map(|(c, g)| json!({"bloonOverlayLayer": c, "decal": {"guidRef": g}})).collect::<Vec<_>>()}});
+        let d = decals_of(&[decal(&[("Red", "h"), ("Moab", "H")]), decal(&[("Red", "b")])], &names);
+        assert_eq!(d["Red"].1, "BeardMed");
+        assert_eq!(d["Moab"].1, "HatMoab");
+        assert_eq!(d.len(), 2);
     }
     #[test]
     fn the_exported_sepia_skin_maps_every_moab_class_model() {

@@ -615,11 +615,15 @@ impl LayerAnim {
 /// BloonModel.overlayClass under each mutator overlayType it has (AlchemistGold on a Red:
 /// RedRubberToGold; without that table: "<class><overlayType>", e.g. WhiteRegrowGlueBasic,
 /// MiniLych's LychMini...), one per distinct overlay, lowest displayLayer first.
-/// HYPOTHESIS: every distinct overlay it has shows at once.
-fn bloon_overlays(table: &HashMap<String, data::OverlayDef>, d: &data::BloonDef, b: &game::Bloon) -> Vec<String> {
+/// HYPOTHESIS: every distinct overlay it has shows at once. An enabled Trophy Store decal for the
+/// bloon's overlay class (trophy_cosmetics::bloon_decals) is one more, at its BloonDecal.layer.
+fn bloon_overlays(table: &HashMap<String, data::OverlayDef>, decals: &HashMap<String, (i32, String)>, d: &data::BloonDef, b: &game::Bloon) -> Vec<String> {
     let mut out: Vec<(i32, String)> = Vec::new();
     if d.overlay_class.is_empty() {
         return Vec::new();
+    }
+    if let Some((layer, name)) = decals.get(&d.overlay_class) {
+        out.push((*layer, name.clone()));
     }
     let class = if d.overlay_class == "MiniLych" { "LychMini" } else { d.overlay_class.as_str() };
     for e in &b.effects {
@@ -3072,10 +3076,13 @@ const VINE_END_FRAMES: i32 = 23;
                 }
             }
             let bloon_viewport = if scaled { None } else { cam.viewport };
-            // Overlay prefabs (glue, ice, bleed...) seen for the first time (models/projectiles/<name>).
+            // Overlay prefabs (glue, ice, bleed... and Trophy Store decals) seen for the first time
+            // (models/projectiles/<name>).
+            let decals = trophy_cosmetics::bloon_decals(&root);
+            let has_overlay = |b: &game::Bloon| b.effects.iter().any(|e| !e.overlay.is_empty()) || decals.contains_key(&game.defs[b.kind].overlay_class);
             for b in &game.bloons {
-                if b.effects.iter().any(|e| !e.overlay.is_empty()) {
-                    for n in bloon_overlays(&game.overlays, &game.defs[b.kind], b) {
+                if has_overlay(b) {
+                    for n in bloon_overlays(&game.overlays, &decals, &game.defs[b.kind], b) {
                         if proj_tried.insert(n.clone()) {
                             if let Some(d) = load_work::complete_asset(load_proj(mod_assets::projectile(&root, &n))) {
                                 proj_displays.insert(n, d);
@@ -3087,7 +3094,7 @@ const VINE_END_FRAMES: i32 = 23;
             for &(p, i) in &bloon_order {
                 let b = &game.bloons[i];
                 let d = &game.defs[b.kind];
-                let overlays = if b.effects.iter().any(|e| !e.overlay.is_empty()) { bloon_overlays(&game.overlays, d, b) } else { Vec::new() };
+                let overlays = if has_overlay(b) { bloon_overlays(&game.overlays, &decals, d, b) } else { Vec::new() };
                 let overlays: Vec<&ProjDisplay> = overlays.iter().filter_map(|n| proj_displays.get(n)).collect();
                 let model_name = d.model_at(b.hp as f32 / d.max_health.max(1) as f32);
                 let model = model_name.and_then(|m| bloon_models.get_mut(m)).and_then(|m| m.as_mut());

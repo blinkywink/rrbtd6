@@ -93,6 +93,40 @@ def export_pop_effects(game, root, items, names):
                         str(game), str(root / "effects"), *todo], check=True)
 
 
+def export_decals(game, root, items, names):
+    """The decals' prefabs (BloonDecal.bloonOverlayLayers[].decal, Assets/Bloons/Graphics/CosmeticOverlays)
+    to models/projectiles/<name>, as the bloon overlays (glue, ice...) are: a display plan
+    (display_plans/TrophyDecals.json) that export_projectiles.py reads."""
+    import subprocess
+    paths = json.loads((root / "all_container_paths.json").read_text(encoding="utf-8"))
+    by_name = {}
+    for path in paths:
+        if path.endswith(".prefab"):
+            by_name.setdefault(Path(path).stem, []).append(path)
+    plan = {}
+    for changes in items.values():
+        for c in changes:
+            if c["type"] != "BloonDecal" or not c["change"]:
+                continue
+            for layer in c["change"].get("bloonOverlayLayers", []):
+                guid = layer["decal"]["guidRef"]
+                found = sorted(by_name.get(names.get(guid, ""), []))
+                if found:
+                    plan[guid] = {"name": names[guid], "prefab": found[0]}
+                else:
+                    print("decal prefab not found:", names.get(guid, guid), flush=True)
+    plans = root / "display_plans"
+    plans.mkdir(parents=True, exist_ok=True)
+    (plans / "TrophyDecals.json").write_text(json.dumps({"projectiles": plan}, indent=1, sort_keys=True), encoding="utf-8")
+    wanted = sorted({p["name"] for p in plan.values()})
+    todo = [n for n in wanted if not (root / "models/projectiles" / n).is_dir()]
+    print(len(wanted), "decals,", len(todo), "to export", flush=True)
+    if todo:
+        # export_projectiles.py works from the folder that holds local_extracted.
+        subprocess.run([sys.executable, "-X", "utf8", "-I", str(Path(__file__).with_name("export_projectiles.py")),
+                        str(game), *todo], check=True, cwd=str(root.parent))
+
+
 def main():
     game, root = Path(sys.argv[1]), Path(sys.argv[2])
     base = game / "BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full"
@@ -139,6 +173,7 @@ def main():
     dest.write_text(json.dumps({"items": out, "names": names}, indent=1, sort_keys=True), encoding="utf-8")
     export_bloon_skins(game, root, out, names)
     export_pop_effects(game, root, out, names)
+    export_decals(game, root, out, names)
     kinds = {}
     for changes in out.values():
         for c in changes:
