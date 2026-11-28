@@ -11,6 +11,9 @@ import re
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "public", "docs")
 GH = "https://github.com/blinkywink/rrbtd6"
+DISCORD = "https://discord.gg/GBah4crmpC"
+GH_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>'
+DC_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 4.4A19.6 19.6 0 0 0 15.4 3l-.6 1.3a18.2 18.2 0 0 0-5.5 0L8.6 3a19.5 19.5 0 0 0-4.9 1.5C.6 9.1-.3 13.6.2 18.1a19.7 19.7 0 0 0 6 3l1.3-2.1c-.7-.3-1.4-.6-2-1l.5-.4a14 14 0 0 0 12 0l.5.4c-.6.4-1.3.7-2 1l1.3 2.1a19.6 19.6 0 0 0 6-3c.5-5.2-.9-9.7-3.5-13.7zM8.1 15.3c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4zm7.8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4z"/></svg>'
 
 
 def code(src, lang=""):
@@ -120,6 +123,53 @@ custom-mode selector with <em>training</em>.</p>
 <p>Change the script, build again, then press Reload Mods. Changes apply to the next new or restarted game.
 A match already in progress keeps the definitions it started with.</p>
 {note("Hiding the Mods button doesn't disable enabled mods. Enabling and selecting are separate: the switch controls whether a mod is active.", "tip")}
+""")
+
+page("first-script", "Getting started", "Your first script",
+     "Step by step: a mod that pays a growing bonus after every round.",
+     f"""
+<p class="lead">Content edits change the game's data. Scripts add behaviour that runs during a match. This
+tutorial builds a small script mod from an empty folder.</p>
+
+<h2 id="folder">1. Make the folder</h2>
+<p>Create <code>mods/round-bonus/</code> next to your game, with two files in it.</p>
+
+<h2 id="mod">2. Write mod.py</h2>
+{code('''mod = Mod("round-bonus", "Round Bonus", description="Extra cash every round.")
+mod.script("bonus", file="bonus.rhai")''', "python")}
+<p>The mod has no content edits, just one script. <code>file</code> is read from the same folder when you build.</p>
+
+<h2 id="script">3. Write bonus.rhai</h2>
+{code('''fn on_new_game(ctx) {
+    this.bonus = 50;
+    [#{op: "popup", title: "Round Bonus", body: "You get extra cash after every round."}]
+}
+
+fn on_round_end(ctx) {
+    if ctx.sandbox { return []; }
+    let paid = this.bonus;
+    this.bonus += 25;
+    [#{op: "cash", amount: paid}]
+}''', "rhai")}
+<ul>
+  <li><code>on_new_game</code> runs once when the match starts. It stores the first bonus in <code>this</code> and shows a popup.</li>
+  <li><code>on_round_end</code> runs after every round. It skips Sandbox, pays the bonus, and raises it by 25 for next time.</li>
+  <li>Each callback returns a list of commands. An empty list, <code>[]</code>, means "do nothing".</li>
+</ul>
+
+<h2 id="build">4. Build and play</h2>
+{code("python tools/modsdk.py build mods/round-bonus/mod.py", "shell")}
+<p>Open <strong>Mods</strong>, press <strong>Reload Mods</strong>, switch on <em>Round Bonus</em> and start a new
+game. The popup appears, and your cash jumps after each round: 50, then 75, then 100.</p>
+
+<h2 id="next">Take it further</h2>
+<ul>
+  <li>Scale with progress instead: <code>[#{{op: "cash", amount: 50 + ctx.round * 10}}]</code>.</li>
+  <li>Send extra bloons at the start of each round with <code>on_round_start</code> and a <code>spawn</code> command.</li>
+  <li>Add a button and a panel with <a href="/docs/ui/">Custom UI</a>.</li>
+</ul>
+{note("If a callback errors or returns a bad command, that script is switched off for the rest of the match. See <a href='/docs/troubleshooting/'>Troubleshooting</a>.", "tip")}
+<p>Every hook, field and command is listed in <a href="/docs/scripts/">Event scripts</a>.</p>
 """)
 
 page("recipes", "Getting started", "Recipes",
@@ -694,7 +744,89 @@ page("coop", "Playing", "Co-op",
 <p>Official-server interoperability isn't implemented. Use a private RustTD6 room.</p>
 """)
 
+page("sharing", "Playing", "Sharing a mod",
+     "Pack a mod so someone else can install it, and what never to include.",
+     f"""
+<h2 id="send">What to send</h2>
+<p>Zip your mod's folder. Only <code>mod.json</code> is needed; everything else is optional.</p>
+{table(["File", "Needed?"], [
+    ["<code>mod.json</code>", "Yes. The built manifest is the mod; scripts are embedded in it."],
+    ["<code>icon.png</code>", "Optional artwork for the Mods menu"],
+    ["<code>assets/</code>", "Only if the mod uses <a href='/docs/models/'>custom models</a>"],
+    ["<code>mod.py</code>, <code>.rhai</code> files", "Optional. Include them if you want others to edit and rebuild it."],
+])}
+
+<h2 id="install">Installing someone else's mod</h2>
+<ol class="flow">
+  <li>In RustTD6, open <strong>Mods</strong> and press <strong>Open Mods Folder</strong>.</li>
+  <li>Unzip the mod so its folder, with <code>mod.json</code> inside, sits in <code>mods/</code>.</li>
+  <li>Press <strong>Reload Mods</strong>, switch it on and start a new game.</li>
+</ol>
+
+<h2 id="versions">Updates</h2>
+<p>Raise the version when you change a mod, for example <code>Mod("round-bonus", "Round Bonus", version="1.1.0")</code>,
+rebuild, and send the new folder. Players replace the old folder and press Reload Mods. Keep the same mod ID, or it
+installs as a separate mod.</p>
+
+<h2 id="coop">Playing it together</h2>
+<p>To play a data mod with friends, the host doesn't need to send files at all: a private co-op room shares its mods
+with everyone who joins. Scripts and custom art can't be shared that way yet. See <a href="/docs/coop/">Co-op</a>.</p>
+
+{note("Never include files extracted from BTD6 (textures, models, sounds or data from your install), and never include DLLs. Mods are original work plus edits to the player's own copy of the game.", "warn")}
+""")
+
 # ---------------------------------------------------------------- Reference
+
+page("cheat-sheet", "Reference", "Cheat sheet",
+     "Every SDK call, script hook and command on one page.",
+     f"""
+<h2 id="mod">Mod</h2>
+{table(["Call", "Does"], [
+    ["<code>Mod(id, name, version=\"1.0.0\", description=\"\")</code>", "Starts the mod. IDs are lowercase letters, digits, <code>.</code>, <code>_</code> and <code>-</code>."],
+    ["<code>mod.tower(name, base=\"DartMonkey\", **stats)</code>", "Clones a tower; returns a tower handle"],
+    ["<code>mod.existing_tower(id)</code>", "A handle on a game tower, without cloning it"],
+    ["<code>mod.bloon(name, base=\"Red\", **fields)</code>", "Clones a bloon"],
+    ["<code>mod.mode(name, base=\"Medium\", **fields)</code>", "Adds a custom mode"],
+    ["<code>mod.all_modes(**fields)</code>", "Changes every mode"],
+    ["<code>mod.projectile(name, base_tower=, base_tier=, **fields)</code>", "A projectile template to give towers"],
+    ["<code>mod.script(name, source | file=, tick_interval=60)</code>", "Embeds an event script"],
+    ["<code>mod.menu(page, path, text=, visible=)</code>", "Changes a menu node's text or visibility"],
+    ["<code>mod.set</code> / <code>insert</code> / <code>remove</code> / <code>copy</code>", "Raw edits by JSON Pointer path"],
+])}
+
+<h2 id="tower">Tower handle</h2>
+{table(["Call", "Does"], [
+    ["<code>.stats(**fields)</code>", "Sets tower fields such as <code>cost</code> or <code>range</code>"],
+    ["<code>.weapon(tier=\"000\", attack=0, weapon=0, **fields)</code>", "Sets weapon fields such as <code>rate</code>"],
+    ["<code>.projectile(template=None, tier=\"000\", **fields)</code>", "Sets projectile fields such as <code>damage</code>, <code>pierce</code>"],
+    ["<code>.upgrade(path, tier, cost=, stats=, weapon=, projectile=, model=)</code>", "Edits an upgrade (paths 0–2, tiers 1–5)"],
+    ["<code>.shop(before= | after= | index=, visible=, category=)</code>", "Moves, hides or recategorises it in the shop"],
+    ["<code>.model(asset, tiers=None)</code>", "Uses a baked custom model"],
+])}
+
+<h2 id="hooks">Script hooks</h2>
+<p><code>on_new_game</code>, <code>on_round_start</code>, <code>on_round_end</code>, <code>on_tower_placed</code>,
+<code>on_tower_sold</code>, <code>on_towers_changed</code>, <code>on_pop</code>, <code>on_tick</code>,
+<code>on_query</code>. Details in <a href="/docs/scripts/#hooks">Event scripts</a>.</p>
+
+<h2 id="commands">Script commands</h2>
+{table(["Command", "Does"], [
+    ["<code>cash</code>", "Adds cash (negative subtracts)"],
+    ["<code>lives</code>", "Sets lives"],
+    ["<code>spawn</code>", "Sends bloons"],
+    ["<code>clear_bloons</code>", "Removes every bloon"],
+    ["<code>reset_cooldowns</code>", "Readies every ability"],
+    ["<code>popup</code>", "Shows a message"],
+    ["<code>ui</code> / <code>remove_ui</code>", "Opens or closes a <a href='/docs/ui/'>custom panel</a>"],
+    ["<code>inspect</code>", "Asks for live <a href='/docs/entities/'>entity</a> data"],
+    ["<code>entity_patch</code> / <code>damage_bloon</code>", "Edits a live tower, bloon or projectile"],
+    ["<code>listen</code>", "Turns a behaviour interceptor on or off"],
+])}
+
+<h2 id="build">Build and reload</h2>
+{code('''python tools/modsdk.py build mods/<id>/mod.py
+# then in the client: Mods -> Reload Mods -> switch it on -> new game''', "shell")}
+""")
 
 page("examples", "Reference", "Examples & downloads",
      "Complete example mods to copy and learn from.",
@@ -927,7 +1059,7 @@ def render(i, p):
 <meta property="og:image" content="https://rusttd6.com/social.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="RustTD6: Bloons TD 6, on a new engine.">
+<meta property="og:image:alt" content="RustTD6: Built to Go Further.">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/logo.png" type="image/png">
 <link rel="apple-touch-icon" href="/logo.png">
@@ -936,15 +1068,16 @@ def render(i, p):
 </head>
 <body>
 <header class="bar"><div class="bar-inner">
-  <a class="logo" href="/docs/">RustTD6 <span>Mod API</span></a>
+  <a class="logo" href="/"><img src="/logo.png" width="32" height="32" alt="">RustTD6</a>
   <nav class="bar-links" aria-label="Site">
     <a href="/">Home</a>
-    <a href="{GH}">GitHub</a>
-    <a class="pill" href="/docs/quick-start/">Get started</a>
+    <a href="/docs/" aria-current="true">Mod API</a>
+    <a class="icon-link" href="{GH}" aria-label="GitHub" title="GitHub">{GH_SVG}</a>
+    <a class="icon-link" href="{DISCORD}" aria-label="Discord" title="Discord">{DC_SVG}</a>
   </nav>
   <details class="menu">
     <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
-    <nav class="menu-panel" aria-label="Documentation">{nav}<p class="side-group">Site</p><ul><li><a href="/">Home</a></li><li><a href="{GH}">GitHub</a></li></ul></nav>
+    <nav class="menu-panel" aria-label="Documentation">{nav}<p class="side-group">Site</p><ul><li><a href="/">Home</a></li><li><a href="{GH}">GitHub</a></li><li><a href="{DISCORD}">Discord</a></li></ul></nav>
   </details>
 </div></header>
 <div class="layout">
@@ -955,10 +1088,19 @@ def render(i, p):
     <p class="summary">{p["summary"]}</p>
     {p["body"]}
     {pager}
-    <footer class="foot">Unofficial fan project. Not affiliated with Ninja Kiwi. <a href="/">rusttd6.com</a></footer>
   </main>
   {toc(p["body"])}
 </div>
+<footer class="site-foot">
+  <div class="site-foot-inner">
+    <div>
+      <a class="logo" href="/"><img src="/logo.png" width="32" height="32" alt="">RustTD6</a>
+      <p>Bloons TD 6, built to go further. Free, open source and fan-made.</p>
+    </div>
+    <nav aria-label="Links"><a href="{GH}">GitHub</a><a href="{DISCORD}">Discord</a><a href="/">Home</a></nav>
+  </div>
+  <p class="legal">Unofficial fan project. Not affiliated with Ninja Kiwi. Bloons TD 6 is a trademark of Ninja Kiwi.</p>
+</footer>
 <script src="/docs/nav.js" defer></script>
 </body>
 </html>

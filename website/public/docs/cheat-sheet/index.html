@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2f80f5">
+<title>Cheat sheet | RustTD6 Mod Docs</title>
+<meta name="description" content="Every SDK call, script hook and command on one page.">
+<link rel="canonical" href="https://rusttd6.com/docs/cheat-sheet/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="RustTD6">
+<meta property="og:title" content="Cheat sheet | RustTD6 Mod Docs">
+<meta property="og:description" content="Every SDK call, script hook and command on one page.">
+<meta property="og:url" content="https://rusttd6.com/docs/cheat-sheet/">
+<meta property="og:image" content="https://rusttd6.com/social.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="RustTD6: Built to Go Further.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/logo.png" type="image/png">
+<link rel="apple-touch-icon" href="/logo.png">
+<link rel="preload" href="/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/docs/docs.css">
+</head>
+<body>
+<header class="bar"><div class="bar-inner">
+  <a class="logo" href="/"><img src="/logo.png" width="32" height="32" alt="">RustTD6</a>
+  <nav class="bar-links" aria-label="Site">
+    <a href="/">Home</a>
+    <a href="/docs/" aria-current="true">Mod API</a>
+    <a class="icon-link" href="https://github.com/blinkywink/rrbtd6" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg></a>
+    <a class="icon-link" href="https://discord.gg/GBah4crmpC" aria-label="Discord" title="Discord"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 4.4A19.6 19.6 0 0 0 15.4 3l-.6 1.3a18.2 18.2 0 0 0-5.5 0L8.6 3a19.5 19.5 0 0 0-4.9 1.5C.6 9.1-.3 13.6.2 18.1a19.7 19.7 0 0 0 6 3l1.3-2.1c-.7-.3-1.4-.6-2-1l.5-.4a14 14 0 0 0 12 0l.5.4c-.6.4-1.3.7-2 1l1.3 2.1a19.6 19.6 0 0 0 6-3c.5-5.2-.9-9.7-3.5-13.7zM8.1 15.3c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4zm7.8 0c-1.2 0-2.2-1.1-2.2-2.4s1-2.4 2.2-2.4 2.2 1.1 2.2 2.4-1 2.4-2.2 2.4z"/></svg></a>
+  </nav>
+  <details class="menu">
+    <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
+    <nav class="menu-panel" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/first-script/">Your first script</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li><li><a href="/docs/sharing/">Sharing a mod</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/cheat-sheet/" aria-current="page">Cheat sheet</a></li><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul><p class="side-group">Site</p><ul><li><a href="/">Home</a></li><li><a href="https://github.com/blinkywink/rrbtd6">GitHub</a></li><li><a href="https://discord.gg/GBah4crmpC">Discord</a></li></ul></nav>
+  </details>
+</div></header>
+<div class="layout">
+  <nav class="side" aria-label="Documentation"><p class="side-group">Getting started</p><ul><li><a href="/docs/">Overview</a></li><li><a href="/docs/quick-start/">Quick start</a></li><li><a href="/docs/first-script/">Your first script</a></li><li><a href="/docs/recipes/">Recipes</a></li><li><a href="/docs/mods-menu/">The Mods menu</a></li></ul><p class="side-group">Content API</p><ul><li><a href="/docs/manifest/">The manifest</a></li><li><a href="/docs/content/">Content operations</a></li><li><a href="/docs/python-sdk/">Python SDK</a></li><li><a href="/docs/upgrades/">Upgrades</a></li><li><a href="/docs/bloons-rounds-modes/">Bloons, rounds & modes</a></li><li><a href="/docs/shop/">Shop layout</a></li><li><a href="/docs/menus/">Menus</a></li></ul><p class="side-group">Assets</p><ul><li><a href="/docs/models/">Custom models</a></li></ul><p class="side-group">Scripting</p><ul><li><a href="/docs/scripts/">Event scripts</a></li><li><a href="/docs/ui/">Custom UI</a></li><li><a href="/docs/entities/">Entities & hooks</a></li></ul><p class="side-group">Playing</p><ul><li><a href="/docs/coop/">Co-op</a></li><li><a href="/docs/sharing/">Sharing a mod</a></li></ul><p class="side-group">Reference</p><ul><li><a href="/docs/cheat-sheet/" aria-current="page">Cheat sheet</a></li><li><a href="/docs/examples/">Examples & downloads</a></li><li><a href="/docs/limits/">Limits & roadmap</a></li><li><a href="/docs/units/">Units & coordinates</a></li><li><a href="/docs/troubleshooting/">Troubleshooting</a></li><li><a href="/docs/faq/">Modder FAQ</a></li></ul></nav>
+  <main class="content">
+    <p class="crumb">Reference</p>
+    <h1>Cheat sheet</h1>
+    <p class="summary">Every SDK call, script hook and command on one page.</p>
+    
+<h2 id="mod">Mod</h2>
+<div class="table"><table><thead><tr><th>Call</th><th>Does</th></tr></thead><tbody><tr><td><code>Mod(id, name, version="1.0.0", description="")</code></td><td>Starts the mod. IDs are lowercase letters, digits, <code>.</code>, <code>_</code> and <code>-</code>.</td></tr><tr><td><code>mod.tower(name, base="DartMonkey", **stats)</code></td><td>Clones a tower; returns a tower handle</td></tr><tr><td><code>mod.existing_tower(id)</code></td><td>A handle on a game tower, without cloning it</td></tr><tr><td><code>mod.bloon(name, base="Red", **fields)</code></td><td>Clones a bloon</td></tr><tr><td><code>mod.mode(name, base="Medium", **fields)</code></td><td>Adds a custom mode</td></tr><tr><td><code>mod.all_modes(**fields)</code></td><td>Changes every mode</td></tr><tr><td><code>mod.projectile(name, base_tower=, base_tier=, **fields)</code></td><td>A projectile template to give towers</td></tr><tr><td><code>mod.script(name, source | file=, tick_interval=60)</code></td><td>Embeds an event script</td></tr><tr><td><code>mod.menu(page, path, text=, visible=)</code></td><td>Changes a menu node's text or visibility</td></tr><tr><td><code>mod.set</code> / <code>insert</code> / <code>remove</code> / <code>copy</code></td><td>Raw edits by JSON Pointer path</td></tr></tbody></table></div>
+
+<h2 id="tower">Tower handle</h2>
+<div class="table"><table><thead><tr><th>Call</th><th>Does</th></tr></thead><tbody><tr><td><code>.stats(**fields)</code></td><td>Sets tower fields such as <code>cost</code> or <code>range</code></td></tr><tr><td><code>.weapon(tier="000", attack=0, weapon=0, **fields)</code></td><td>Sets weapon fields such as <code>rate</code></td></tr><tr><td><code>.projectile(template=None, tier="000", **fields)</code></td><td>Sets projectile fields such as <code>damage</code>, <code>pierce</code></td></tr><tr><td><code>.upgrade(path, tier, cost=, stats=, weapon=, projectile=, model=)</code></td><td>Edits an upgrade (paths 0–2, tiers 1–5)</td></tr><tr><td><code>.shop(before= | after= | index=, visible=, category=)</code></td><td>Moves, hides or recategorises it in the shop</td></tr><tr><td><code>.model(asset, tiers=None)</code></td><td>Uses a baked custom model</td></tr></tbody></table></div>
+
+<h2 id="hooks">Script hooks</h2>
+<p><code>on_new_game</code>, <code>on_round_start</code>, <code>on_round_end</code>, <code>on_tower_placed</code>,
+<code>on_tower_sold</code>, <code>on_towers_changed</code>, <code>on_pop</code>, <code>on_tick</code>,
+<code>on_query</code>. Details in <a href="/docs/scripts/#hooks">Event scripts</a>.</p>
+
+<h2 id="commands">Script commands</h2>
+<div class="table"><table><thead><tr><th>Command</th><th>Does</th></tr></thead><tbody><tr><td><code>cash</code></td><td>Adds cash (negative subtracts)</td></tr><tr><td><code>lives</code></td><td>Sets lives</td></tr><tr><td><code>spawn</code></td><td>Sends bloons</td></tr><tr><td><code>clear_bloons</code></td><td>Removes every bloon</td></tr><tr><td><code>reset_cooldowns</code></td><td>Readies every ability</td></tr><tr><td><code>popup</code></td><td>Shows a message</td></tr><tr><td><code>ui</code> / <code>remove_ui</code></td><td>Opens or closes a <a href='/docs/ui/'>custom panel</a></td></tr><tr><td><code>inspect</code></td><td>Asks for live <a href='/docs/entities/'>entity</a> data</td></tr><tr><td><code>entity_patch</code> / <code>damage_bloon</code></td><td>Edits a live tower, bloon or projectile</td></tr><tr><td><code>listen</code></td><td>Turns a behaviour interceptor on or off</td></tr></tbody></table></div>
+
+<h2 id="build">Build and reload</h2>
+<pre class="code" data-lang="shell"><code>python tools/modsdk.py build mods/&lt;id&gt;/mod.py
+# then in the client: Mods -&gt; Reload Mods -&gt; switch it on -&gt; new game</code></pre>
+
+    <nav class="pager" aria-label="Previous and next"><a class="prev" href="/docs/sharing/"><span>Previous</span>Sharing a mod</a><a class="next" href="/docs/examples/"><span>Next</span>Examples & downloads</a></nav>
+  </main>
+  <aside class="toc"><p>On this page</p><ul><li><a href="#mod">Mod</a></li><li><a href="#tower">Tower handle</a></li><li><a href="#hooks">Script hooks</a></li><li><a href="#commands">Script commands</a></li><li><a href="#build">Build and reload</a></li></ul></aside>
+</div>
+<footer class="site-foot">
+  <div class="site-foot-inner">
+    <div>
+      <a class="logo" href="/"><img src="/logo.png" width="32" height="32" alt="">RustTD6</a>
+      <p>Bloons TD 6, built to go further. Free, open source and fan-made.</p>
+    </div>
+    <nav aria-label="Links"><a href="https://github.com/blinkywink/rrbtd6">GitHub</a><a href="https://discord.gg/GBah4crmpC">Discord</a><a href="/">Home</a></nav>
+  </div>
+  <p class="legal">Unofficial fan project. Not affiliated with Ninja Kiwi. Bloons TD 6 is a trademark of Ninja Kiwi.</p>
+</footer>
+<script src="/docs/nav.js" defer></script>
+</body>
+</html>
