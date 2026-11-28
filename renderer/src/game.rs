@@ -6182,7 +6182,7 @@ macro_rules! collide_pass {
                 if let Some(re) = $s.projectiles[$p].spec.rod_emit.clone() {
                     $s.rod_emit_hit(id, $p, dmg, &re);
                 }
-                $s.pre_damage_effects(i, $p, dmg);
+                $s.pre_damage_effects(i, $p, dmg, immune_destroyed);
             }
             // Projectile.CollideBloon runs the behaviours in order (VERIFIED-DECOMP
             // @0x180c8b970): a WindModel listed before the DamageModel (the Super Monkey's
@@ -6321,7 +6321,7 @@ macro_rules! collide_pass {
                 if let Some(re) = $s.projectiles[$p].spec.rod_emit.clone() {
                     $s.rod_emit_hit(id, $p, dmg, &re);
                 }
-                $s.pre_damage_effects(i, $p, dmg);
+                $s.pre_damage_effects(i, $p, dmg, false);
                 let tally0 = $s.damage_tally;
                 // (Was it a MOAB-class bloon before this hit?)
                 let hit_moab = $s.defs[$s.bloons[i].kind].tags.iter().any(|t| t == "Moabs");
@@ -28766,7 +28766,7 @@ impl Game {
         b.psi_active = false;
     }
 
-    fn pre_damage_effects(&mut self, i: usize, p: usize, dmg: f32) {
+    fn pre_damage_effects(&mut self, i: usize, p: usize, dmg: f32, destroyed: bool) {
         if self.projectiles[p].spec.psi.is_some() {
             self.psi_hit(i, p);
         }
@@ -28910,6 +28910,14 @@ impl Game {
                 // ends after 3 s though the MOAB was hit again meanwhile.)
                 let b = &self.bloons[i];
                 spec.effects.retain(|e| !(e.first_hit_only && b.effects.iter().any(|x| *x.id == *e.id)));
+            }
+            // SilasApplyRime is collisionPass 1: a shot an immune bloon destroyed in pass 0's
+            // Damage.Collide puts no Rime on (recording silas_l03_mk rt 3219: shot 1907 exhausted
+            // on a White, which moves on at full speed).
+            if destroyed {
+                if let Some(rid) = spec.silas_rime.as_ref().map(|r| r.rime_id.clone()) {
+                    spec.effects.retain(|e| *e.id != *rid.as_str());
+                }
             }
             self.apply_effects(i, &spec, owner, dmg, false);
         }
