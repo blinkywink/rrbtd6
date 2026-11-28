@@ -472,11 +472,17 @@ def m_alternate_arc(tw, mm, target):
             continue
         e = tw.m.ref(w["f"].get("emission"))
         e = tw.m.objs.get(e) if isinstance(e, int) else e
-        if not e or e["type"] != "ArcEmissionModel":
+        # (Else a ParallelEmissionModel's clone with count + increase (the Mutate's second
+        # GetBehavior, field +0x38: the Dart Paragon's Juggernaut row, recording dart_paragon_mk rt
+        # 273, four balls).)
+        if not e or e["type"] not in ("ArcEmissionModel", "ParallelEmissionModel"):
             continue
         cid = clone_model(tw.m, e["i"])
         c = tw.m.objs[cid]
-        c["f"]["SliceSize"] = c["f"].get("SliceSize", 0) + mm.get("increase", 0)
+        if e["type"] == "ArcEmissionModel":
+            c["f"]["SliceSize"] = c["f"].get("SliceSize", 0) + mm.get("increase", 0)
+        else:
+            c["f"]["count"] = c["f"].get("count", 0) + mm.get("increase", 0)
         fields = {"_name": mm.get("_name") or "", "projectile": w["f"].get("projectile"), "emissionModel": {"$ref": cid},
                   "interval": mm.get("shotCount", 0), "alternateAnimation": -1, "priority": 0}
         if append_behavior(tw.m, w, "behaviors", "AlternateProjectileModel", fields) is None:
