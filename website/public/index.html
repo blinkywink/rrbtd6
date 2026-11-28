@@ -30,7 +30,7 @@
   <a class="brand" href="/"><img src="/logo.png" width="32" height="32" alt="">RustTD6</a>
   <nav class="nav-desktop" aria-label="Sections">
     <a href="#about">About</a>
-    <a href="#install">Install</a>
+    <button type="button" class="nav-button" popovertarget="install">Install</button>
     <a href="#progress">Progress</a>
     <a href="#faq">FAQ</a>
     <a href="/docs/">Mod API</a>
@@ -41,7 +41,7 @@
     <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
     <nav aria-label="Sections">
       <a href="#about">About</a>
-      <a href="#install">Install</a>
+      <button type="button" class="nav-button" popovertarget="install">Install</button>
       <a href="#progress">Progress</a>
       <a href="#faq">FAQ</a>
       <a href="/docs/">Mod API</a>
@@ -58,13 +58,12 @@
     <h1>Built to Go Further.</h1>
     <p class="lede">The game you love, rebuilt for an optimized experience.</p>
     <div class="cta">
-      <a class="download" href="#install">
+      <button type="button" class="download" popovertarget="install">
         Install on Windows
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 5v14m0 0-6-6m6 6 6-6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </a>
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
-    <p class="fine release" id="release" hidden></p>
-    <p class="fine">Free and open source. Needs your own copy of BTD6. Also on <a href="#platforms">macOS &amp; Linux</a>.</p>
+    <p class="fine">Free and open source. Needs your own copy of BTD6. Also on <button type="button" class="link" popovertarget="install">macOS &amp; Linux</button>.</p>
   </section>
 
   <section id="about" class="block">
@@ -86,50 +85,18 @@
     <p class="aside">The store and many online modes have been removed to prevent cheating and piracy. This includes Races, Boss Rush, Contested Territory, Odyssey and the Legends DLC.</p>
   </section>
 
-  <section id="install" class="block">
-    <h2>Install</h2>
-    <ol class="steps">
-      <li>
-        <span class="num">1</span>
-        <span>Install <a href="https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3">MelonLoader 0.7.3</a> into BTD6 and launch the game once.</span>
-      </li>
-      <li>
-        <span class="num">2</span>
-        <span>Download <code>RRBTD6Installer.dll</code> and put it in BTD6's <code>Mods</code> folder.</span>
-        <a class="download small" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">Download <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
-      </li>
-      <li>
-        <span class="num">3</span>
-        <span>Open BTD6 and choose a folder for RustTD6. The launcher sets up the rest, and keeps RustTD6 up to date from then on.</span>
-      </li>
-    </ol>
-    <p class="aside">The first setup can take around 10 minutes on a modern machine. The more memory that's available, the faster it goes.</p>
-    <div class="platforms" id="platforms">
-      <div class="platform">
-        <span class="tag tag-soft">Build it yourself</span>
-        <strong><svg class="os" viewBox="0 0 24 24" aria-hidden="true"><path d="M16.4 1.4c0 1.1-.4 2.2-1.2 3.1-1 1-2.2 1.7-3.5 1.6v-.4c0-1.1.5-2.3 1.3-3.2.4-.5 1-.9 1.6-1.2.7-.3 1.3-.5 1.8-.5v.6zM20.6 17.3c-.3.8-.7 1.5-1.2 2.1-.6.9-1.1 1.5-1.5 1.8-.6.6-1.3.9-2 .9-.5 0-1.1-.1-1.8-.4-.7-.3-1.4-.4-2-.4s-1.3.1-2 .4c-.7.3-1.3.4-1.7.5-.7 0-1.3-.3-2-.9-.4-.4-1-1-1.6-1.9-.7-1-1.3-2.1-1.7-3.4-.5-1.4-.7-2.7-.7-4 0-1.5.3-2.8 1-3.9.5-.8 1.2-1.5 2-2s1.8-.8 2.7-.8c.5 0 1.2.2 2.1.5.9.3 1.4.5 1.7.5.2 0 .8-.2 1.9-.6 1-.4 1.9-.5 2.6-.5 1.9.2 3.4.9 4.3 2.3-1.7 1-2.6 2.5-2.5 4.4 0 1.4.5 2.7 1.6 3.6.5.4 1 .8 1.6 1-.2.4-.3.7-.4 1.1z"/></svg>macOS</strong>
-        <p>Copy your game data from a Windows install, then run <code>tools/build_macos.sh</code> to build <code>RustTD6.app</code>. Apple Silicon.</p>
-      </div>
-      <div class="platform">
-        <span class="tag tag-soft">Build it yourself</span>
-        <strong><svg class="os" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1.5c-2.9 0-4.6 2.3-4.6 5.3 0 1.4-.5 2.5-1.3 3.7C4.8 12.4 3.8 14.5 3.8 16.8c0 1.2.4 2.2 1.1 3l-1.4 1.3c-.4.4-.1 1 .4 1h4.4c1.1.4 2.4.6 3.7.6s2.6-.2 3.7-.6h4.4c.5 0 .8-.6.4-1l-1.4-1.3c.7-.8 1.1-1.8 1.1-3 0-2.3-1-4.4-2.3-6.3-.8-1.2-1.3-2.3-1.3-3.7 0-3-1.7-5.3-4.6-5.3z"/><ellipse class="cut" cx="12" cy="15.6" rx="4.3" ry="5"/><circle class="cut" cx="10.3" cy="6.6" r="1"/><circle class="cut" cx="13.7" cy="6.6" r="1"/><path class="cut" d="M10.4 8.9h3.2L12 10.6z"/></svg>Linux</strong>
-        <p>Copy your game data from a Windows install, then run <code>tools/build_linux.sh</code>. Needs the X11, OpenGL and ALSA development packages.</p>
-      </div>
-    </div>
-    <p class="aside">macOS and Linux builds are for personal use and aren't distributed. Instructions are in the <a href="https://github.com/blinkywink/rrbtd6#building-developers">README</a>.</p>
-  </section>
-
   <!-- progress:start -->
   <section id="progress" class="block">
     <h2>Progress</h2>
     <p class="intro">Each scenario is a short run recorded in the real game, then replayed in RustTD6 and compared frame by frame. These counts cover what has been recorded so far; the estimates at the bottom cover the rest. <span class="updated">Updated 27 November 2026.</span></p>
     <div class="progress-total">
-      <div><span class="pnum">1477</span><span class="of">of 1492</span><p>recorded scenarios match</p></div>
-      <div><span class="pnum">23</span><span class="of">of 26</span><p>towers fully matched</p></div>
+      <div><span class="pnum">1477</span><span class="of">of 1493</span><p>recorded scenarios match</p></div>
+      <div><span class="pnum">22</span><span class="of">of 26</span><p>towers fully matched</p></div>
     </div>
     <div class="poverall"><span class="pbar"><i style="--p:99%"></i></span><span class="ppct">99%</span></div>
     <h3 class="sub">Still to match</h3>
     <ul class="todo">
+      <li>Boomerang Monkey <span>1 of 101 left</span></li>
       <li>Glue Gunner <span>1 of 35 left</span></li>
       <li>Engineer Monkey <span>1 of 35 left</span></li>
       <li>Skywarden <span>1 of 40 left</span></li>
@@ -146,10 +113,10 @@
       <li>Maps <span>all 180 match</span></li>
       <li>Powers <span>all 14 match</span></li>
     </ul>
-    <h3 class="sub">Towers <span>(961/964 match)</span></h3>
+    <h3 class="sub">Towers <span>(961/965 match)</span></h3>
     <ul class="prows">
       <li class="prow done"><span class="pname">Dart Monkey</span><span class="pbar"><i style="--p:100%"></i></span><span class="pcount">72/72</span></li>
-      <li class="prow done"><span class="pname">Boomerang Monkey</span><span class="pbar"><i style="--p:100%"></i></span><span class="pcount">100/100</span></li>
+      <li class="prow "><span class="pname">Boomerang Monkey</span><span class="pbar"><i style="--p:99%"></i></span><span class="pcount">100/101</span></li>
       <li class="prow done"><span class="pname">Bomb Shooter</span><span class="pbar"><i style="--p:100%"></i></span><span class="pcount">35/35</span></li>
       <li class="prow done"><span class="pname">Tack Shooter</span><span class="pbar"><i style="--p:100%"></i></span><span class="pcount">26/26</span></li>
       <li class="prow done"><span class="pname">Ice Monkey</span><span class="pbar"><i style="--p:100%"></i></span><span class="pcount">26/26</span></li>
@@ -266,7 +233,7 @@ mod.mode(<span class="s">"training"</span>, base=<span class="s">"Medium"</span>
       </details>
       <details name="faq">
         <summary>Can I play it on a Mac or Linux?<span class="plus" aria-hidden="true"></span></summary>
-        <p>Yes, with a personal build. Set it up on Windows first, copy the extracted game data across, and run the build script for your system. The steps are under <a href="#platforms">Install</a>.</p>
+        <p>Yes, with a personal build. Set it up on Windows first, copy the extracted game data across, and run the build script for your system. The steps are in the <button type="button" class="link" popovertarget="install">install guide</button>.</p>
       </details>
       <details name="faq">
         <summary>Is it safe?<span class="plus" aria-hidden="true"></span></summary>
@@ -288,6 +255,36 @@ mod.mode(<span class="s">"training"</span>, base=<span class="s">"Medium"</span>
   </section>
 
 </main>
+
+<div id="install" class="modal" popover aria-labelledby="install-title">
+  <div class="modal-head">
+    <h2 id="install-title">How to install</h2>
+    <button type="button" class="close" popovertarget="install" popovertargetaction="hide" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <ol class="steps">
+    <li>
+      <span class="num">1</span>
+      <div>
+        <p>Install <strong>MelonLoader 0.7.3</strong> into BTD6 with its installer, then launch the game once.</p>
+        <p class="step-links"><a class="download small" href="https://github.com/LavaGang/MelonLoader/releases/download/v0.7.3/MelonLoader.Installer.exe">Get MelonLoader <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></a><a href="https://melonwiki.xyz/">What's MelonLoader?</a></p>
+      </div>
+    </li>
+    <li>
+      <span class="num">2</span>
+      <div>
+        <p>Download <code>RRBTD6Installer.dll</code> and put it in BTD6's <code>Mods</code> folder.</p>
+        <p class="step-links"><a class="download small" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RRBTD6Installer.dll">Get RustTD6 <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></a><span class="fine release" id="release" hidden></span></p>
+      </div>
+    </li>
+    <li>
+      <span class="num">3</span>
+      <div><p>Open BTD6 and choose a folder for RustTD6. The launcher sets up the rest, and keeps RustTD6 up to date from then on.</p></div>
+    </li>
+  </ol>
+  <p class="aside">The first setup takes around 10 minutes on a modern machine. The more memory that's available, the faster it goes.</p>
+  <h3 class="sub">On macOS or Linux</h3>
+  <p class="aside">Set it up on Windows first and copy the game data across, then run <code>tools/build_macos.sh</code> (Apple Silicon) or <code>tools/build_linux.sh</code> (needs the X11, OpenGL and ALSA development packages). These builds are for personal use and aren't distributed; the steps are in the <a href="https://github.com/blinkywink/rrbtd6#building-developers">README</a>.</p>
+</div>
 
 <footer>
   <div class="foot">

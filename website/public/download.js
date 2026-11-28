@@ -1,22 +1,4 @@
-// On a Mac or Linux the main button leads to the build instructions instead (the installer is for
-// Windows), and the line under it offers the Windows download. The Windows button just jumps to the
-// install steps, where step 2 has the download.
-(function () {
-  var hero = document.querySelector(".hero a.download"), also = document.querySelector(".hero .fine:not(.release)");
-  if (!hero || !also) return;
-  var platform = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "").toLowerCase();
-  var agent = navigator.userAgent.toLowerCase();
-  if (/android|iphone|ipad|ipod/.test(agent) || (/mac/.test(platform) && navigator.maxTouchPoints > 1)) return;
-  var os = /mac/.test(platform) ? "macOS" : /linux/.test(platform) ? "Linux" : null;
-  if (!os) return;
-  var step = document.querySelector(".steps a.download"), installer = step ? step.href : "#install";
-  hero.firstChild.textContent = "Build for " + os + " ";
-  hero.href = "#platforms";
-  hero.classList.add("for-build");
-  also.innerHTML = 'On Windows? <a href="' + installer + '">Download the installer</a>';
-})();
-
-// Under the button: the current version ("Version 0.651", the release title), its age and the
+// Next to the install guide's RustTD6 button: the current version ("Version 0.651", the release title), its age and the
 // installer size, from GitHub's API (kept for ten minutes per tab). A release is published whenever
 // VERSION is raised, so this isn't written into the page; when the request fails the line stays
 // hidden.

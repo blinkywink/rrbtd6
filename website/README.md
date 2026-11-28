@@ -3,9 +3,8 @@
 Static home page (`public/index.html`, `public/styles.css`) and a separate mod API docs site
 (`public/docs/`, its own `docs.css`), with self-hosted Luckiest Guy (headings), Inter (text) and Comic Neue (the wordmark, where Comic Sans
 isn't installed).
-Little JavaScript, none of it needed: `download.js` points the main button (which
-otherwise jumps to the install steps, where step 2 has the download) at the build instructions on a Mac or Linux, and
-shows the latest build under the button (from GitHub's API, the only cross-origin request; the
+Little JavaScript, none of it needed. The install guide is a popup (the browser's `popover`, no script needed) opened by the hero
+button, the header's Install and a few links. `download.js` shows the latest build next to the guide's RustTD6 button (from GitHub's API, the only cross-origin request; the
 CSP's `connect-src` allows just that); `site.js` marks the header link for the section being read,
 and copies the mod example; and `docs/nav.js` keeps the docs sidebar's scroll between pages (the CSP allows same-origin
 scripts only). Menus are CSS-only `<details>`. No

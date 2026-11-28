@@ -250,8 +250,6 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .lede { max-width: 580px; margin: 0 auto 36px; color: var(--muted); font-size: 18px; line-height: 1.6; }
 .hero .lede { color: var(--ink); text-shadow: 0 2px 10px rgba(10, 40, 100, .55); }
 .hero .fine { color: var(--ink); text-shadow: 0 1px 6px rgba(10, 40, 100, .7); }
-.hero .release { margin-top: 16px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-.hero .release + .fine { margin-top: 6px; }
 .cta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 14px 18px; }
 
 .download {
@@ -273,7 +271,7 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 }
 .download svg { margin-top: -4px; }
 /* The smaller Download button inside install step 2. */
-.download.small { flex: none; min-width: 0; margin-left: auto; gap: 8px; padding: 12px 18px 9px; font-size: 18px; border-radius: 12px; box-shadow: 0 4px 0 var(--paper-shadow); }
+.download.small { flex: none; min-width: 0; gap: 8px; padding: 11px 16px 8px; font-size: 17px; border-radius: 12px; box-shadow: 0 4px 0 var(--paper-shadow); }
 .download.small svg { width: 17px; height: 17px; }
 .download:focus-visible { outline-offset: 6px; }
 /* The white buttons stand on a pale edge. */
@@ -291,14 +289,13 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .sub { margin: 32px 0 12px; font-size: 20px; text-shadow: 0 2px 0 var(--deep); }
 .sub span { color: var(--faint); font-family: Inter, sans-serif; font-size: 13px; font-weight: 700; }
 /* Cards stand on a darker bottom edge, like the download button and the code box. */
-.list li, .steps li, .platform, .faq details, .mods-text, .prows, .progress-total > div {
+.list li, .steps li, .faq details, .mods-text, .prows, .progress-total > div {
   box-shadow: 0 4px 0 var(--deep);
 }
 /* The white badges (feature icons, step numbers) stand on the same pale edge as the white buttons;
    the game font's numbers and names get the headings' shadow. */
 .icon, .num { box-shadow: 0 3px 0 var(--paper-shadow); }
 .progress-total .pnum { text-shadow: 0 3px 0 var(--deep); }
-.platform strong { text-shadow: 0 2px 0 var(--deep); }
 .aside { margin: 14px 0 0; padding: 0 4px; color: var(--faint); font-size: 14px; line-height: 1.6; }
 
 .list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
@@ -316,7 +313,7 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .steps li {
   display: flex;
   gap: 16px;
-  align-items: center;
+  align-items: flex-start;
   padding: 18px 24px;
   background: var(--card);
   border-radius: 16px;
@@ -336,6 +333,39 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
   background: var(--paper);
 }
 
+.steps li > div { flex: 1; min-width: 0; padding-top: 7px; }
+.steps p { margin: 0; }
+.step-links { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 14px !important; }
+.step-links .release { margin: 0; color: var(--faint); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* Buttons that open the install guide, dressed as the links or nav items they sit among. */
+button.download, .nav-button, button.link { border: 0; font: inherit; }
+button.download { font-family: "Luckiest Guy", sans-serif; font-size: 26px; }
+.nav-button { padding: 4px 0; background: none; color: var(--muted); font-size: 14px; font-weight: 600; }
+.nav-button:hover { color: var(--ink); }
+.menu nav .nav-button { padding: 14px 16px; border-radius: 12px; color: var(--blue-text); font-size: 17px; text-align: left; }
+.menu nav .nav-button:hover { background: #eaf2ff; }
+button.link { padding: 0; background: none; color: var(--ink); font-weight: 600; text-decoration: underline; text-decoration-color: rgba(255, 255, 255, .45); text-underline-offset: 3px; }
+button.link:hover { text-decoration-color: var(--ink); }
+button:focus-visible { outline: 3px solid var(--ink); outline-offset: 4px; border-radius: 8px; }
+
+/* The install guide: a popup over a dimmed page (the browser's popover; Esc or a click outside
+   closes it). */
+.modal { width: min(600px, calc(100% - 32px)); max-height: calc(100% - 48px); margin: auto; padding: 28px; overflow: auto;
+  border: 0; border-radius: 22px; background: var(--bg); color: var(--ink); box-shadow: 0 8px 0 var(--deep), 0 30px 80px rgba(5, 25, 70, .45); }
+.modal::backdrop { background: rgba(8, 30, 80, .55); }
+:root:has(.modal:popover-open) { overflow: hidden; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.modal h2 { font-size: clamp(26px, 5vw, 32px); text-shadow: 0 3px 0 var(--deep); }
+.modal .sub { margin-top: 26px; }
+.modal .aside { padding: 0; }
+.close { flex: none; display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 12px; background: var(--deep); color: var(--ink); }
+.close:hover { background: var(--deeper); }
+.close svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; }
+@media (max-width: 640px) {
+  .modal { padding: 20px; width: calc(100% - 20px); max-height: calc(100% - 20px); }
+}
+
 /* Mods teaser */
 .mods { display: grid; grid-template-columns: 1fr 1.15fr; gap: 12px; align-items: stretch; }
 .mods-text { padding: 24px; background: var(--card); border-radius: 16px; color: var(--muted); font-size: 15px; line-height: 1.65; display: flex; flex-direction: column; justify-content: space-between; gap: 18px; }
@@ -353,17 +383,6 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .snippet code { padding: 0; background: none; color: inherit; font-size: 13px; line-height: 1.75; white-space: pre; overflow-wrap: normal; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
 .snippet .s { color: #1f6fe8; }
 .snippet .n { color: #c2410c; }
-
-/* Platforms */
-.platforms { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 28px; }
-.platform { padding: 24px; background: var(--card); border-radius: 16px; color: var(--muted); font-size: 15px; line-height: 1.6; }
-.platform strong { display: block; font-family: "Luckiest Guy", sans-serif; font-weight: 400; font-size: 24px; margin: 10px 0 2px; }
-.platform p { margin: 0; }
-.platform strong:has(.os) { display: flex; align-items: center; gap: 10px; }
-.os { flex: none; width: 24px; height: 24px; margin-top: -4px; fill: var(--ink); filter: drop-shadow(0 2px 0 var(--deep)); }
-.os .cut { fill: var(--card); }
-.tag { display: inline-block; padding: 3px 10px 2px; border-radius: 999px; background: var(--paper); color: var(--blue-text); font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
-.tag-soft { background: var(--deep); color: var(--ink); }
 
 /* FAQ */
 /* One answer open at a time (the details share a name). */
@@ -428,8 +447,6 @@ main .block { position: relative; }
 .block:nth-of-type(odd)::before, .block:nth-of-type(even)::after { --shape: url("/decor/cloud-b.webp"); }
 #about::before     { --w: 420px; --in: .75; top: 60px;  --dur: 80s; --delay: -50s; }
 #about::after      { --w: 380px; --in: .75; top: 320px; --delay: -12s; }
-#install::before   { --w: 360px; --in: .7;  top: 330px; --delay: -40s; }
-#install::after    { --w: 220px; --in: .55; top: 580px; --o: .6; --dur: 95s; --dx: 18px; --delay: -8s; }
 #progress::before  { --w: 200px; --in: .5;  top: 160px; --o: .55; --dur: 90s; --dx: 16px; --delay: -15s; }
 #progress::after   { --w: 340px; --in: .7;  top: 620px; --dur: 80s; --delay: -55s; }
 #mods::before      { --w: 400px; --in: .75; top: 120px; --dur: 75s; --delay: -35s; }
@@ -487,12 +504,10 @@ main .block { position: relative; }
 /* Phones: the hero hugs its text instead of filling the screen, and cards and Progress tighten up. */
 @media (max-width: 640px) {
   .hero { min-height: 0; padding: 64px 0 40px; }  .lede { font-size: 16px; margin-bottom: 28px; }
-  .platforms { grid-template-columns: 1fr; }  .block { padding: 48px 0; }
+  .block { padding: 48px 0; }
   .block h2 { margin-bottom: 18px; }
-  .list li, .platform, .mods-text { padding: 20px; }
-  .steps li { padding: 16px 18px; gap: 14px; flex-wrap: wrap; }
-  .steps li > span:not(.num) { flex: 1 1 0; min-width: 0; }
-  .download.small { width: 100%; margin-left: 0; font-size: 18px; padding: 12px 18px 9px; }
+  .list li, .mods-text { padding: 20px; }
+  .steps li { padding: 16px 18px; gap: 14px; }
   footer { margin-top: 96px; }
   .progress-total > div { padding: 16px 18px; }
   .progress-total .pnum { font-size: 32px; }
