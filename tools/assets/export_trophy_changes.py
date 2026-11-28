@@ -1,0 +1,82 @@
+"""What each Trophy Store item changes in game, from the game's own data.
+
+Usage: python -I export_trophy_changes.py GAME EXTRACTED
+
+Every TrophyStoreItem (Assets/Data/TrophyStore/*.asset) lists itemTypes: an itemType
+(Assets.Scripts.Data.TrophyStore.TrophyItemType) and an itemTarget, an AssetChangeItem in the same
+file: TowerAssetChange (prefab / animation / audio swaps for some towers), Pet, Prop, BloonAssetChange
+(prefab swaps for one bloon), BloonDecal (overlay layers), BloonPopFX, PowerAssetChange, and the
+music / avatar / banner / emote items the menus already read. Writes
+<EXTRACTED>/game/trophy_changes.json: {item id: [{"type": <TrophyItemType name>, "change": {...}}]}
+with each change's fields as the game stores them (GUID references as {"guidRef": ...}; managed
+references such as a pet's behaviours resolved inline). Proprietary data: local use only.
+"""
+import glob
+import json
+import sys
+from pathlib import Path
+
+import UnityPy
+
+# Assets.Scripts.Data.TrophyStore.TrophyItemType, in declaration order (Invalid is not stored).
+ITEM_TYPES = ["TowerAssetChange", "TowerPet", "NamedMonkeys", "CoopEmote", "BloonAssetChange", "BloonDecal",
+              "BloonPopEffect", "Invalid", "MusicTrack", "Avatar", "PowerAssetChange", "Prop", "Banner"]
+SKIP = {"m_GameObject", "m_Enabled", "m_Script"}
+
+
+def resolve_references(tree):
+    """Managed references ([SerializeReference]: {"rid": n} pointing into references.RefIds) inline,
+    each as {"class": <type name>, **its data}."""
+    refs = {r["rid"]: r for r in (tree.get("references") or {}).get("RefIds", [])}
+    if not refs:
+        return {k: v for k, v in tree.items() if k != "references"}
+
+    def walk(value):
+        if isinstance(value, dict):
+            if set(value) == {"rid"} and value["rid"] in refs:
+                r = refs[value["rid"]]
+                return {"class": r["type"]["class"], **walk(r.get("data") or {})}
+            return {k: walk(v) for k, v in value.items() if k != "references"}
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+    return walk(tree)
+
+
+def main():
+    game, root = Path(sys.argv[1]), Path(sys.argv[2])
+    base = game / "BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full"
+    env = UnityPy.load(glob.glob(str(base / "game_data_assets_all_*.bundle"))[0])
+    out, seen = {}, set()
+    for path, pointer in sorted(env.container.items()):
+        if not path.startswith("Assets/Data/TrophyStore/") or not path.endswith(".asset") or path in seen:
+            continue
+        seen.add(path)
+        obj = pointer.deref() if hasattr(pointer, "deref") else pointer
+        item = obj.read_typetree()
+        if not item.get("id") or "itemTypes" not in item:
+            continue
+        changes = []
+        for entry in item["itemTypes"]:
+            kind = entry["itemType"]
+            target = entry.get("itemTarget") or {}
+            change = None
+            if target.get("m_PathID"):
+                if target.get("m_FileID"):
+                    raise ValueError(f"{item['id']}: change in another file")
+                change = obj.assets_file.objects[target["m_PathID"]].read_typetree()
+                change = resolve_references({k: v for k, v in change.items() if k not in SKIP})
+            changes.append({"type": ITEM_TYPES[kind] if 0 <= kind < len(ITEM_TYPES) else str(kind), "change": change})
+        out[item["id"]] = changes
+    dest = root / "game/trophy_changes.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=1, sort_keys=True), encoding="utf-8")
+    kinds = {}
+    for changes in out.values():
+        for c in changes:
+            kinds[c["type"]] = kinds.get(c["type"], 0) + 1
+    print(len(out), "trophy items' changes:", ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())), flush=True)
+
+
+if __name__ == "__main__":
+    main()

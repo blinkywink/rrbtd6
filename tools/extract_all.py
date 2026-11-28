@@ -541,6 +541,8 @@ def frontend(c):
          "Assets/UI - New/Prefabs/Store/Loot/SmallInstaTowerLootItem.prefab")
     c.py("tools/assets/export_store_menu.py", c.game, c.out)
     c.py("tools/assets/export_menu_catalogs.py", c.game, c.out, "--images")
+    # What each Trophy Store item changes in game (game/trophy_changes.json).
+    c.py("tools/assets/export_trophy_changes.py", c.game, c.out)
     c.py("tools/assets/export_menu_chrome.py", c.game, c.out)
 
 
@@ -740,6 +742,7 @@ STEP_VERSIONS["bloon_models"] = 8  # 3: also game/powers.json; 4: keyed by the P
 STEP_VERSIONS["map_mechanics"] = 4
 # builtin_ui_sprites 3: also buff icons under the names towers ask for.
 STEP_VERSIONS["builtin_ui_sprites"] = 3
+STEP_VERSIONS["frontend"] = 2  # 2: game/trophy_changes.json (what Trophy Store items change).
 
 
 def drop_old_game_exports(c):
