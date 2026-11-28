@@ -219,13 +219,37 @@ def _pptr(af, pp):
     if pp["m_FileID"] == 0:
         return af.objects.get(pp["m_PathID"])
     ext = af.externals[pp["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
-    for f in af.environment.files.values():
-        for k, sf in getattr(f, "files", {}).items():
-            if str(k).lower() == ext and hasattr(sf, "objects"):
-                o = sf.objects.get(pp["m_PathID"])
-                if o is not None:
-                    return o
+    for sf in _files_named(af.environment, ext):
+        o = sf.objects.get(pp["m_PathID"])
+        if o is not None:
+            return o
     return None
+
+
+_named_files = {}
+
+
+def _files_named(env, name, loose=False):
+    """The environment's serialized files called `name` (lowercase), in its own order (loose: also
+    files loaded on their own, by base name, as the material lookup reads them). Scanning every
+    loaded file per lookup took 2/3 of a map's effects job (scene:encrypted: 89M lower() calls);
+    the index is rebuilt only when more files have been loaded."""
+    signature = tuple((id(f), len(getattr(f, "files", None) or ())) for f in env.files.values())
+    cached = _named_files.get((id(env), loose))
+    if cached is None or cached[0] is not env or cached[1] != signature:
+        index = {}
+        for key, f in env.files.items():
+            if loose and hasattr(f, "objects"):
+                subs = {os.path.basename(str(key)): f}
+            elif loose:
+                subs = getattr(f, "files", None) or {}
+            else:
+                subs = getattr(f, "files", {})
+            for k, sf in subs.items():
+                if hasattr(sf, "objects"):
+                    index.setdefault(str(k).lower(), []).append(sf)
+        cached = _named_files[(id(env), loose)] = (env, signature, index)
+    return cached[2].get(name, ())
 
 
 def uvzw_variant(file):
@@ -333,10 +357,8 @@ def renderer(r, out_tex):
             if mo is None:
                 # In another bundle (load_bundle loads it): look it up as materials are below.
                 ext = r.assets_file.externals[meshes[0]["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
-                for f in r.assets_file.environment.files.values():
-                    for k, sf in getattr(f, "files", {}).items():
-                        if str(k).lower() == ext and hasattr(sf, "objects"):
-                            mo = sf.objects.get(meshes[0]["m_PathID"]) or mo
+                for sf in _files_named(r.assets_file.environment, ext):
+                    mo = sf.objects.get(meshes[0]["m_PathID"]) or mo
             if mo is not None:
                 mesh = mo.read()
                 out["mesh"] = mesh.m_Name
@@ -380,12 +402,9 @@ def renderer(r, out_tex):
     mo = r.assets_file.objects.get(mats[0]["m_PathID"]) if mats[0]["m_FileID"] == 0 else None
     if mo is None:
         ext = r.assets_file.externals[mats[0]["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
-        for name, f in r.assets_file.environment.files.items():
-            # (A bundle's serialized files, or a loose one: unity default resources.)
-            subs = getattr(f, "files", None) if not hasattr(f, "objects") else {os.path.basename(str(name)): f}
-            for k, sf in (subs or {}).items():
-                if str(k).lower() == ext and hasattr(sf, "objects"):
-                    mo = sf.objects.get(mats[0]["m_PathID"])
+        # (A bundle's serialized files, or a loose one: unity default resources.) The last match.
+        for sf in _files_named(r.assets_file.environment, ext, loose=True):
+            mo = sf.objects.get(mats[0]["m_PathID"])
     if mo is None:
         return out
     m = mo.read_typetree()
@@ -432,10 +451,8 @@ def renderer(r, out_tex):
             to = mo.assets_file.objects.get(tex_pp["m_PathID"]) if tex_pp["m_FileID"] == 0 else None
             if to is None:
                 ext = mo.assets_file.externals[tex_pp["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
-                for f in mo.assets_file.environment.files.values():
-                    for kk, sf in getattr(f, "files", {}).items():
-                        if str(kk).lower() == ext and hasattr(sf, "objects"):
-                            to = sf.objects.get(tex_pp["m_PathID"])
+                for sf in _files_named(mo.assets_file.environment, ext):
+                    to = sf.objects.get(tex_pp["m_PathID"])
             if to is not None:
                 tx = to.read()
                 name = f"{tx.m_Name}.png"
@@ -475,11 +492,8 @@ def trail_material(r, pp, out_tex):
     mo = r.assets_file.objects.get(pp["m_PathID"]) if pp["m_FileID"] == 0 else None
     if mo is None:
         ext = r.assets_file.externals[pp["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
-        for name, f in r.assets_file.environment.files.items():
-            subs = getattr(f, "files", None) if not hasattr(f, "objects") else {os.path.basename(str(name)): f}
-            for k, sf in (subs or {}).items():
-                if str(k).lower() == ext and hasattr(sf, "objects"):
-                    mo = sf.objects.get(pp["m_PathID"]) or mo
+        for sf in _files_named(r.assets_file.environment, ext, loose=True):
+            mo = sf.objects.get(pp["m_PathID"]) or mo
     if mo is None:
         return None
     m = mo.read_typetree()
@@ -520,10 +534,8 @@ def trail_material(r, pp, out_tex):
             to = mo.assets_file.objects.get(tex_pp["m_PathID"]) if tex_pp["m_FileID"] == 0 else None
             if to is None:
                 ext = mo.assets_file.externals[tex_pp["m_FileID"] - 1].path.lower().rsplit("/", 1)[-1]
-                for f in mo.assets_file.environment.files.values():
-                    for kk, sf in getattr(f, "files", {}).items():
-                        if str(kk).lower() == ext and hasattr(sf, "objects"):
-                            to = sf.objects.get(tex_pp["m_PathID"])
+                for sf in _files_named(mo.assets_file.environment, ext):
+                    to = sf.objects.get(tex_pp["m_PathID"])
             if to is not None:
                 tx = to.read()
                 name = f"{tx.m_Name}.png"
