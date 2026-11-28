@@ -18,7 +18,10 @@ def export(game, root, all_art=True):
 
     def run(script, *arguments):
         subprocess.run([sys.executable, '-X', 'utf8', '-I', str(tools / script), *map(str, arguments)], env=env, check=True)
-    run('dump_ui_prefab.py', game, root / 'ui/prefabs',
+    sys.path.insert(0, str(tools))
+    from run_together import together
+    # The scene dump and its animations write different files: side by side where memory allows.
+    together([([sys.executable, '-X', 'utf8', '-I', str(tools / 'dump_ui_prefab.py'), str(game), str(root / 'ui/prefabs'),
         'scenefile:Assets/UI - New/Scenes/TrophyStoreUI.unity=TrophyStoreUI',
         'field:TrophyStoreScreen/TrophyStoreScreen.trophyPrefab=TrophyStoreCard',
         'scenefile:Assets/UI - New/Scenes/PlayerStatsUI.unity=PlayerStatsUI',
@@ -26,9 +29,10 @@ def export(game, root, all_art=True):
         'field:PlayerStatsScreen/PlayerStatsScreen.prefabStat=ProfileStat',
         'field:PlayerStatsScreen/PlayerStatsScreen.medalPrefab=ProfileMedal',
         'field:PlayerStatsScreen/PlayerStatsScreen.avatarItemPrefab=ProfileAvatarItem',
-        'field:PlayerStatsScreen/PlayerStatsScreen.bannerItemPrefab=ProfileBannerItem')
+        'field:PlayerStatsScreen/PlayerStatsScreen.bannerItemPrefab=ProfileBannerItem'], dict(env)),
+        ([sys.executable, '-X', 'utf8', '-I', str(tools / 'export_ui_runtime.py'), str(game), str(root / 'ui/runtime'), 'PlayerStatsUI'],
+         dict(env, RRBTD6_UI_BUNDLES='*_monoscripts_*.bundle;ui_scenes_all_*.bundle'))])
     env['RRBTD6_UI_BUNDLES'] = '*_monoscripts_*.bundle;ui_scenes_all_*.bundle'
-    run('export_ui_runtime.py', game, root / 'ui/runtime', 'PlayerStatsUI')
     run('resolve_ui_sprites.py', game, root, 'asset_references_assets_all_*.bundle',
         'TrophyStoreUI', 'TrophyStoreCard', 'PlayerStatsUI', 'ProfileStat', 'ProfileTopTower', 'ProfileMedal', 'ProfileAvatarItem', 'ProfileBannerItem')
     run('export_rank_info.py', game, root)
