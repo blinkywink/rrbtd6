@@ -442,8 +442,9 @@ claimed from the single final capture (concurrent asset work affects timings).
 - The Trophy Store sells every item, all always available: nothing is hidden, nothing says Limited
   Time, and quest / Nexus items can be bought too. Prices are the cached store's (50 where it has
   none). Bought items are enabled and can be toggled and favourited; enabling one turns off the
-  others of its kind, as the game does. So far only MOAB-class bloon skins change the game (the
-  bloons drawn); the other items don't change anything in game yet. Where two enabled skins cover
+  others of its kind, as the game does. So far MOAB-class bloon skins (the bloons drawn) and the
+  all-bloons pop effects (each pop's effect) change the game; the pop effects' own pop sounds, the
+  Pinata BAD's pop and the other items don't change anything in game yet. Where two enabled skins cover
   the same bloon (an all-MOABs skin and a BAD skin), the game uses the one enabled last; here the
   one whose item id sorts last wins.
 - Monkey Teams isn't in this game: the victory screen never shows its card.

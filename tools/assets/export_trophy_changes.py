@@ -71,6 +71,28 @@ def export_bloon_skins(game, root, items, names):
     run(str(game), list(jobs.values()))
 
 
+def export_pop_effects(game, root, items, names):
+    """The pop effects' prefabs (BloonPopFX.popFX: particle systems, not the default Pop flipbook) to
+    effects/<name>, as the other effects are exported."""
+    import subprocess
+    paths = json.loads((root / "all_container_paths.json").read_text(encoding="utf-8"))
+    wanted = set()
+    for changes in items.values():
+        for c in changes:
+            if c["type"] == "BloonPopEffect" and c["change"]:
+                name = names.get(c["change"]["popFX"]["guidRef"])
+                found = sorted(p for p in paths if name and p.endswith(f"/{name}.prefab"))
+                if found:
+                    wanted.add(found[0])
+                else:
+                    print("pop effect prefab not found:", name, flush=True)
+    todo = sorted(p for p in wanted if not (root / "effects" / Path(p).stem / "effect.json").exists())
+    print(len(wanted), "pop effects,", len(todo), "to export", flush=True)
+    if todo:
+        subprocess.run([sys.executable, "-X", "utf8", "-I", str(Path(__file__).with_name("export_particles.py")),
+                        str(game), str(root / "effects"), *todo], check=True)
+
+
 def main():
     game, root = Path(sys.argv[1]), Path(sys.argv[2])
     base = game / "BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64/Full"
@@ -116,6 +138,7 @@ def main():
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps({"items": out, "names": names}, indent=1, sort_keys=True), encoding="utf-8")
     export_bloon_skins(game, root, out, names)
+    export_pop_effects(game, root, out, names)
     kinds = {}
     for changes in out.values():
         for c in changes:

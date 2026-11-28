@@ -119,6 +119,10 @@ pub(crate) fn buy_trophy_item(root:&Path,id:&str,price:u64)->bool{
     if p.trophy_items.contains_key(id)||p.trophies<price{return false;}
     update(root,|p|{p.trophies-=price;p.trophy_items.insert(id.to_owned(),(true,false));disable_exclusive(root,p,id);}).is_ok()
 }
+/// The enabled Trophy Store items' ids, in profile order (cheap: no profile copy).
+pub(crate) fn enabled_trophy_items(root:&Path)->Vec<String>{
+    state(root).lock().unwrap().trophy_items.iter().filter(|(_,f)|f.0).map(|(id,_)|id.clone()).collect()
+}
 /// Sets an owned item's enabled / favourite flags.
 pub(crate) fn set_trophy_item(root:&Path,id:&str,enabled:Option<bool>,favourite:Option<bool>){
     let _=update(root,|p|{if let Some(o)=p.trophy_items.get_mut(id){

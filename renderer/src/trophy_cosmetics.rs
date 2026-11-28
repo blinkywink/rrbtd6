@@ -36,6 +36,35 @@ pub fn apply_bloon_skins(root: &Path, data: &mut crate::data::GameData) {
     }
 }
 
+/// The pop effect every bloon shows instead of the Pop flipbook, if an enabled item sets one:
+/// CosmeticHelper.AddBloonPopFX (VERIFIED-DECOMP @0x18105ac00) stores an applyGlobal change's id as
+/// globalBloonPopFX, the last enabled one winning. Its popFX prefab is exported to effects/<name>
+/// (a particle effect); None when none is enabled or it isn't exported yet. Cached on the enabled
+/// items, so it's cheap per frame.
+pub fn global_pop_fx(root: &Path) -> Option<String> {
+    static CACHE: std::sync::Mutex<Option<(Vec<String>, Option<String>)>> = std::sync::Mutex::new(None);
+    let enabled = crate::local_profile::enabled_trophy_items(root);
+    let mut cache = CACHE.lock().unwrap();
+    if let Some((ids, fx)) = cache.as_ref().filter(|(ids, _)| *ids == enabled) {
+        let _ = ids;
+        return fx.clone();
+    }
+    let (changes, names) = enabled_changes(root);
+    let fx = global_pop(&changes, &names, |n| root.join("effects").join(n).join("effect.json").is_file());
+    *cache = Some((enabled, fx.clone()));
+    fx
+}
+
+fn global_pop(changes: &[Value], names: &HashMap<String, String>, exported: impl Fn(&str) -> bool) -> Option<String> {
+    let mut fx = None;
+    for c in changes.iter().filter(|c| c["type"] == "BloonPopEffect" && c["change"]["applyGlobal"].as_i64() == Some(1)) {
+        if let Some(name) = c["change"]["popFX"]["guidRef"].as_str().and_then(|g| names.get(g)).filter(|n| exported(n)) {
+            fx = Some(name.clone());
+        }
+    }
+    fx
+}
+
 /// bloon id -> {original prefab name: skin prefab name}, the last change per bloon winning.
 fn bloon_skins(changes: &[Value], names: &HashMap<String, String>, exported: impl Fn(&str) -> bool) -> HashMap<String, HashMap<String, String>> {
     let mut per_bloon = HashMap::new();
@@ -70,6 +99,16 @@ mod tests {
         assert_eq!(skins.len(), 1);
         assert_eq!(skins["Bad"].get("Bad3D").map(String::as_str), Some("BadPinata"));
         assert!(!skins["Bad"].contains_key("BadDamageState3D1"));
+    }
+    #[test]
+    fn the_last_enabled_global_pop_effect_wins() {
+        let names: HashMap<String, String> = [("p", "BonePop"), ("q", "PinataPop"), ("r", "HeartsPop")]
+            .into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+        let pop = |g: &str, global: i64| json!({"type": "BloonPopEffect", "change": {"applyGlobal": global, "popFX": {"guidRef": g}}});
+        assert_eq!(global_pop(&[pop("p", 1), pop("q", 0)], &names, |_| true).as_deref(), Some("BonePop"));
+        assert_eq!(global_pop(&[pop("p", 1), pop("r", 1)], &names, |_| true).as_deref(), Some("HeartsPop"));
+        assert_eq!(global_pop(&[pop("p", 1), pop("r", 1)], &names, |n| n != "HeartsPop").as_deref(), Some("BonePop"));
+        assert_eq!(global_pop(&[pop("q", 0)], &names, |_| true), None);
     }
     #[test]
     fn the_exported_sepia_skin_maps_every_moab_class_model() {

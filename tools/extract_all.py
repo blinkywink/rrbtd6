@@ -742,7 +742,7 @@ STEP_VERSIONS["bloon_models"] = 8  # 3: also game/powers.json; 4: keyed by the P
 STEP_VERSIONS["map_mechanics"] = 4
 # builtin_ui_sprites 3: also buff icons under the names towers ask for.
 STEP_VERSIONS["builtin_ui_sprites"] = 3
-STEP_VERSIONS["frontend"] = 3  # 2: game/trophy_changes.json (what Trophy Store items change); 3: bloon skin models.
+STEP_VERSIONS["frontend"] = 4  # 2: game/trophy_changes.json (what Trophy Store items change); 3: bloon skin models; 4: pop effects.
 
 
 def drop_old_game_exports(c):

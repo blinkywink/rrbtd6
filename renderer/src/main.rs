@@ -3448,6 +3448,14 @@ const VINE_END_FRAMES: i32 = 23;
             }
             // Pops: flipbook at the bloon's display position.
             let now = get_time() as f32;
+            // A Trophy Store pop effect (BonePop, ConfettiPop...) replaces the Pop flipbook.
+            if !game.pops.is_empty() {
+                if let Some(fx) = trophy_cosmetics::global_pop_fx(&root) {
+                    for p in game.pops.drain(..) {
+                        particles.spawn(&fx, [p[0], 0.0, p[1]], 1.0);
+                    }
+                }
+            }
             pops.extend(game.pops.drain(..).map(|p| (p, now)));
             pops.retain(|(_, t0)| now - t0 < pop_life.max(0.05) * (speed as f32).recip() + 0.2);
             // Batched per flipbook frame (one draw call per frame texture, not per pop).
