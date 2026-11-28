@@ -43,6 +43,10 @@ pub enum TowerChange{
     DefaultPoint,Stance,CollectBank,
     /// Bank Deposits (Monkey Knowledge): the owner's cash into the bank.
     BankDeposit,
+    /// Beast Handler: leashed pet `slot` moved to `at` (DeployInput, BeastHandlerLeash).
+    MovePet{slot:u8,at:[f32;2]},
+    /// Beast Handler: merge slot `slot`'s beast into tower `into` (BeastHandlerMergeInput).
+    Merge{slot:u8,into:u64},
 }
 impl Action{
     pub fn valid(&self)->bool{
@@ -52,6 +56,8 @@ impl Action{
             Self::Place{kind,at}=>!kind.is_empty()&&kind.len()<=96&&kind.bytes().all(|b|b.is_ascii_alphanumeric()||b"._-".contains(&b))&&point(at),
             Self::Upgrade{path,..}=>*path<3,Self::Target{mode,..}|Self::Tower{change:TowerChange::LeftTarget(mode),..}=>*mode<32,
             Self::Point{at,..}|Self::Pointer{at}|Self::Collect{at}=>point(at),
+            Self::Tower{change:TowerChange::MovePet{slot,at},..}=>*slot<2&&point(at),
+            Self::Tower{change:TowerChange::Merge{slot,..},..}=>*slot<8,
             Self::Ability{index,at,target,..}=>*index<256&&at.as_ref().is_none_or(point)&&!(at.is_some()&&target.is_some()),Self::Speed{value}=>matches!(value,1|3),Self::Removeable{index}=>*index<1024,
             Self::Paragon{extra,..}=>extra.is_finite()&&*extra>=0.0&&*extra<1e9,
             Self::Item{index,at}=>*index<256&&at.as_ref().is_none_or(point),

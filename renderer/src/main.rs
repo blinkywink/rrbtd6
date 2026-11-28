@@ -2310,7 +2310,11 @@ const VINE_END_FRAMES: i32 = 23;
             }
             match (best, game.towers.iter().position(|t| t.id == id)) {
                 (Some((dst, _)), Some(src)) => {
-                    game.merge_beast(src, slot, dst);
+                    if coop_runtime.is_some() {
+                        front.coop_input(rrbtd6_coop::Action::Tower{tower: id, change: rrbtd6_coop::TowerChange::Merge{slot: slot as u8, into: game.towers[dst].id}});
+                    } else {
+                        game.merge_beast(src, slot, dst);
+                    }
                     merge_pick = None;
                 }
                 _ => merge_invalid = other,
@@ -2320,7 +2324,13 @@ const VINE_END_FRAMES: i32 = 23;
             // custom input (BeastHandlerLeash.ApplyCustomInputData) and the mode ends; an invalid
             // one keeps it.
             if let Some(t) = game.towers.iter().position(|t| t.id == id) {
-                if game.move_pet(t, slot, mouse_world) {
+                if coop_runtime.is_some() {
+                    // (The point is checked here as DeployInput does; the replica applies it.)
+                    if game.pet_move_state(t, slot).is_some() && game.pet_move_ok(t, slot, mouse_world) {
+                        front.coop_input(rrbtd6_coop::Action::Tower{tower: id, change: rrbtd6_coop::TowerChange::MovePet{slot: slot as u8, at: mouse_world}});
+                        pet_pick = None;
+                    }
+                } else if game.move_pet(t, slot, mouse_world) {
                     pet_pick = None;
                 }
             }
@@ -4690,15 +4700,11 @@ const VINE_END_FRAMES: i32 = 23;
                         }
                     }
                     hud::Action::SetPoint => picking = selected,
-                    // STAND-IN: co-op has no pet move action yet, so the button does nothing there.
                     hud::Action::MovePet(slot) => {
-                        if coop_runtime.is_none() {
-                            pet_pick = selected.and_then(|t| game.towers.get(t)).map(|t| (t.id, slot));
-                        }
+                        pet_pick = selected.and_then(|t| game.towers.get(t)).map(|t| (t.id, slot));
                     }
-                    // STAND-IN: co-op has no merge action yet, so the button does nothing there.
                     hud::Action::MergeBeast(path) => {
-                        if let Some(t) = selected.filter(|_| coop_runtime.is_none()) {
+                        if let Some(t) = selected {
                             // BeastHandlerLeash.GetTowerBehaviorCustomInputData, MergeButton /
                             // MergeButtonSecond (VERIFIED-DECOMP @0x180cfc930): the towers
                             // IsTowerValidForMerge accepts, in the tower list's order.

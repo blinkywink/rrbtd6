@@ -220,6 +220,13 @@ impl Replica{
                     TowerChange::CollectBank=>{g.collect_bank(t);true},
                     // (BankDeposits.OnTsmThemeAction: from the tower owner's cash, the actor's here.)
                     TowerChange::BankDeposit=>{let v=g.bank_deposit_amount(t);if v<=0.0{return false;}g.bank_deposit(t);true},
+                    TowerChange::MovePet{slot,at}=>g.move_pet(t,*slot as usize,*at),
+                    // (Only a tower BeastHandlerLeash's merge list holds for that slot.)
+                    TowerChange::Merge{slot,into}=>{
+                        let slot=*slot as usize;
+                        let Some(dst)=g.merge_targets(t,slot).into_iter().find(|&d|g.towers[d].id==*into)else{return false;};
+                        g.merge_beast(t,slot,dst)
+                    },
                 }
             },
             // Map.SellRemoveable takes the cash of the player who bought it; anyone may.

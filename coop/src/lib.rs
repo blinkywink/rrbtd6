@@ -9,7 +9,7 @@ pub use match_flow::{Action,TowerChange,Input,Frame,MatchStart,STEPS_PER_FRAME,I
 pub use transport::{Client, Options};
 use serde::{Deserialize,Serialize};
 
-pub const VERSION:u32=12;
+pub const VERSION:u32=13;
 pub const MAX_PLAYERS:usize=4;
 pub const MAX_FRAME:usize=64*1024;
 pub const ALPN:&[u8]=b"rrbtd6/private-coop/1";
