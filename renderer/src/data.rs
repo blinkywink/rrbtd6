@@ -3925,6 +3925,9 @@ pub struct StateMod {
     /// bloonState alone (empty: none).
     #[serde(default)]
     pub state: String,
+    /// DamageModifierForBloonStateModel.mustBeModified.
+    #[serde(default)]
+    pub must_mod: bool,
 }
 
 /// BeastHandlerPetModel (tier, basePower, maxPower, enableContribution, cooldownScaleRange,

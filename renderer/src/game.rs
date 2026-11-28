@@ -1208,6 +1208,15 @@ impl Bloon {
         }
     }
 
+    /// `in_state`, counting only mutators that changed the bloon: a slow whose factor for it is 1
+    /// (MOAB-class bloons under a stun or glue that doesn't reach them) didn't.
+    pub fn in_state_mutated(&self, state: &str) -> bool {
+        match state {
+            "Ice" | "Frozen" | "Glue" => self.in_state(state),
+            _ => self.effects.iter().any(|e| e.id.contains(state) && !matches!(e.kind, EffectKind::Slow { mult, .. } if mult == 1.0)),
+        }
+    }
+
     pub fn has_effect(&self, id: &str) -> bool {
         self.effects.iter().any(|e| &*e.id == id)
     }
@@ -5892,7 +5901,11 @@ macro_rules! collide_pass {
             for m in &pr.spec.state_mods {
                 // (Its own behaviours before the DamageModel collide first: recording mermonkey_050
                 // rt 121, the Snowstorm's slow "Freeze:Popseidon:Normal" makes its own hit +70.)
-                if m.states.iter().any(|s| b.in_state(s) || (s != "Ice" && s != "Frozen" && s != "Glue" && pr.spec.effects.iter().any(|e| !e.after_damage && e.kind != "freeze" && e.id.contains(s.as_str())))) {
+                // (mustBeModified: only a mutator that mutated the bloon (BehaviorMutator.WasModelMutated,
+                // IsCheckPassed VERIFIED-DECOMP @0x180cb3000): a slow that leaves this bloon's speed as
+                // it is, a weak stun on a DDT, doesn't count; recording combo2_big_mk rt 1291, a 0-2-4
+                // Ninja's shuriken does 3, not 3 + 4, to a weakly stunned DDT.)
+                if m.states.iter().any(|s| (if m.must_mod { b.in_state_mutated(s) } else { b.in_state(s) }) || (s != "Ice" && s != "Frozen" && s != "Glue" && pr.spec.effects.iter().any(|e| !e.after_damage && e.kind != "freeze" && e.id.contains(s.as_str())))) {
                     dmg = dmg * m.mult + m.add;
                 }
             }

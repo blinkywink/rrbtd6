@@ -1064,6 +1064,12 @@ impl Hud {
             if point_theme && self.tsm.clicked(&format!("{th}/TSMActionButton")) {
                 out.push(Action::SetPoint);
             }
+            // Geraldo: the theme's action button is "ShopButton" (TSMThemeGeraldo.OnButtonPress,
+            // VERIFIED-DECOMP @0x180b91720): it shows the shop (TowerSelectionMenu's secondary menu)
+            // when hidden, else hides it.
+            if theme_id == "Geraldo" && self.tsm.clicked(&format!("{th}/TSMActionButton")) {
+                self.geraldo.open = !self.geraldo.open;
+            }
             // The camo priority toggle; HYPOTHESIS P-CAMOTICK: its cross shows while it's on.
             // Boomerang Monkey: TSMThemeAmbidextrousRangs.UpdateFromSimInfo (VERIFIED-DISASM
             // @0xb8bd20) makes the hand in use's button non-interactable and the other one

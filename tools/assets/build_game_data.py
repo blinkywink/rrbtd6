@@ -1146,7 +1146,9 @@ def main():
                               + [t for t in items(sf.get("bloonStates")) if isinstance(t, str)],
                               "mult": sf.get("damageMultiplier", 1.0), "add": sf.get("damageAdditive", 0.0),
                               # bloonState alone: ContributionMutator.Mutate tests it for "Stun".
-                              "state": sf.get("bloonState") or ""}
+                              "state": sf.get("bloonState") or "",
+                              # mustBeModified: the state's mutator must have mutated the bloon.
+                              "must_mod": bool(sf.get("mustBeModified"))}
                              for sf in (s["f"] for s in pb.get("DamageModifierForBloonStateModel", []))]
         # SilasApplyRimeModel (Silas): hit bloons get Rime, a lasting slow (speedModifier, MOABs
         # moabSpeedModifier), and IncreaseDamageFromTypeModel adds `amount` damage to hits on

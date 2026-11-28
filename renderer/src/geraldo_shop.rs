@@ -28,6 +28,10 @@ pub struct GeraldoShop {
     pub armed_ok: bool,
     /// Item indices of the cards, in order.
     shown: Vec<usize>,
+    /// TowerSelectionMenu's secondary menu shown (TSMThemeGeraldo.OnButtonPress, "ShopButton":
+    /// ShowSecondarySelectionMenu / its hide), for the Geraldo tower `open_for`.
+    pub open: bool,
+    pub open_for: Option<u64>,
 }
 
 impl GeraldoShop {
@@ -39,7 +43,7 @@ impl GeraldoShop {
             g.children.clear();
             c
         });
-        Self { node, card, selected: None, armed: None, armed_ok: false, shown: Vec::new() }
+        Self { node, card, selected: None, armed: None, armed_ok: false, shown: Vec::new(), open: false, open_for: None }
     }
 }
 
@@ -50,7 +54,14 @@ impl Hud {
     }
 
     pub(crate) fn draw_geraldo(&mut self, game: &Game, selected: Option<usize>, ui: R, canvas_h: f32, shop_w: f32, s: f32, out: &mut Vec<Action>) {
-        let open = selected.filter(|&t| game.towers.get(t).is_some_and(|tw| tw.sub.is_none() && game.tower_defs[tw.def].0 == "Geraldo"));
+        // (Only while the theme's Shop button has it shown, for the selected Geraldo: VERIFIED-DECOMP
+        // TSMThemeGeraldo.OnButtonPress @0x180b91720; another selection starts with it hidden.)
+        let gid = selected.and_then(|t| game.towers.get(t)).filter(|tw| tw.sub.is_none() && game.tower_defs[tw.def].0 == "Geraldo").map(|tw| tw.id);
+        if gid != self.geraldo.open_for {
+            self.geraldo.open = false;
+            self.geraldo.open_for = gid;
+        }
+        let open = selected.filter(|_| gid.is_some() && self.geraldo.open);
         let Some(n) = self.geraldo.node.as_mut() else { return };
         n.active = open.is_some();
         let Some(g) = open else {
@@ -130,8 +141,9 @@ impl Hud {
             }
             n.set_text(&format!("{INFO}/ShopItemDescription"), &d);
         }
+        // (GeraldoShopMenuUi.Close: the shop alone hides; Geraldo stays selected.)
         if n.clicked(&format!("{TOP}/GamepadCloseContainer/CloseButton")) {
-            out.push(Action::Close);
+            self.geraldo.open = false;
         }
         let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h, clip: None };
         draw_tree(n, parent, &mut ctx);
