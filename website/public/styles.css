@@ -250,6 +250,8 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .lede { max-width: 580px; margin: 0 auto 36px; color: var(--muted); font-size: 18px; line-height: 1.6; }
 .hero .lede { color: var(--ink); text-shadow: 0 2px 10px rgba(10, 40, 100, .55); }
 .hero .fine { color: var(--ink); text-shadow: 0 1px 6px rgba(10, 40, 100, .7); }
+.hero .fine + .fine { margin-top: 6px; }
+.hero .fine.small { font-size: 13px; color: var(--muted); }
 .cta { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 14px 18px; }
 
 .download {
@@ -270,9 +272,6 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
   border-radius: 16px;
 }
 .download svg { margin-top: -4px; }
-/* The smaller Download button inside install step 2. */
-.download.small { flex: none; min-width: 0; gap: 8px; padding: 11px 16px 8px; font-size: 17px; border-radius: 12px; box-shadow: 0 4px 0 var(--paper-shadow); }
-.download.small svg { width: 16px; height: 16px; }
 .download:focus-visible { outline-offset: 6px; }
 /* The white buttons stand on a pale edge. */
 .download { box-shadow: 0 6px 0 var(--paper-shadow); }
@@ -282,9 +281,6 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .fine { margin: 20px 0 0; color: var(--faint); font-size: 14px; }
 
 /* Sections */
-/* A slightly darker band, edge to edge, behind every other section. isolation keeps the margin
-   clouds (z-index -1) above the band rather than behind it. */
-.band { isolation: isolate; background: #2b79ee; box-shadow: 0 0 0 100vmax #2b79ee; clip-path: inset(0 -100vmax); }
 .block { padding: 72px 0; scroll-margin-top: 0; }
 /* Section headings share the hero title's chunky drop shadow. */
 .block h2 { font-size: clamp(28px, 4vw, 36px); margin-bottom: 22px; text-shadow: 0 3px 0 var(--deep); }
@@ -297,7 +293,7 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 }
 /* The white badges (feature icons, step numbers) stand on the same pale edge as the white buttons;
    the game font's numbers and names get the headings' shadow. */
-.icon, .num { box-shadow: 0 3px 0 var(--paper-shadow); }
+.icon { box-shadow: 0 3px 0 var(--paper-shadow); }
 .aside { margin: 14px 0 0; padding: 0 4px; color: var(--faint); font-size: 14px; line-height: 1.6; }
 
 .list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
@@ -310,51 +306,6 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
 .card-head strong { line-height: 1.25; }
 .icon { display: grid; place-items: center; width: 40px; height: 40px; margin-bottom: 14px; border-radius: 12px; background: var(--paper); }
 .icon svg { width: 22px; height: 22px; fill: none; stroke: var(--blue-text); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-
-/* Install guide steps: number, what to do, and a download where there is one. */
-.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; }
-.steps li { display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 16px; }
-.steps strong { display: block; font-size: 16px; }
-.steps p { margin: 2px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
-.num {
-  display: grid;
-  place-items: center;
-  width: 40px; height: 40px;
-  padding-top: 4px;
-  border-radius: 12px;
-  font-family: "Luckiest Guy", sans-serif;
-  font-size: 20px;
-  color: var(--blue-text);
-  background: var(--paper);
-}
-
-/* Buttons that open the install guide, dressed as the links or nav items they sit among. */
-button.download, .nav-button, button.link { border: 0; font: inherit; }
-button.download { font-family: "Luckiest Guy", sans-serif; font-size: 26px; }
-.nav-button { padding: 4px 0; background: none; color: var(--muted); font-size: 14px; font-weight: 600; }
-.nav-button:hover { color: var(--ink); }
-.menu nav .nav-button { padding: 14px 16px; border-radius: 12px; color: var(--blue-text); font-size: 17px; text-align: left; }
-.menu nav .nav-button:hover { background: #eaf2ff; }
-button.link { padding: 0; background: none; color: var(--ink); font-weight: 600; text-decoration: underline; text-decoration-color: rgba(255, 255, 255, .45); text-underline-offset: 3px; }
-button.link:hover { text-decoration-color: var(--ink); }
-button:focus-visible { outline: 3px solid var(--ink); outline-offset: 4px; border-radius: 8px; }
-
-/* The install guide: a popup over a dimmed page (the browser's popover; Esc or a click outside
-   closes it). */
-.modal { width: min(600px, calc(100% - 32px)); max-height: calc(100% - 48px); margin: auto; padding: 28px; overflow: auto;
-  border: 0; border-radius: 22px; background: var(--bg); color: var(--ink); box-shadow: 0 8px 0 var(--deep), 0 30px 80px rgba(5, 25, 70, .45); }
-.modal::backdrop { background: rgba(8, 30, 80, .55); }
-:root:has(.modal:popover-open) { overflow: hidden; }
-.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.modal h2 { font-size: clamp(26px, 5vw, 32px); text-shadow: 0 3px 0 var(--deep); }
-.modal-head { margin-bottom: 26px; }
-.modal-foot { margin: 28px 0 0; color: var(--faint); font-size: 14px; }
-.close { flex: none; display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 12px; background: var(--deep); color: var(--ink); }
-.close:hover { background: var(--deeper); }
-.close svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; }
-@media (max-width: 640px) {
-  .modal { padding: 20px; width: calc(100% - 20px); max-height: calc(100% - 20px); }
-}
 
 /* Mods teaser */
 .mods { display: grid; grid-template-columns: 1fr 1.2fr; gap: 32px; align-items: center; }
@@ -501,8 +452,6 @@ main .block { position: relative; }
   .block h2 { margin-bottom: 18px; }
   .list li { padding: 20px; }
   .mods-text { padding: 0; font-size: 16px; }
-  .steps li { grid-template-columns: 40px 1fr; gap: 10px 14px; }
-  .steps .download.small { grid-column: 2; justify-self: start; width: auto; }
   footer { margin-top: 96px; }
   .psummary { padding: 20px; }
   .psummary-top { gap: 14px; }

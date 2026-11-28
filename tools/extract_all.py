@@ -169,12 +169,10 @@ UI_WORKER = 2 << 30
 def metadata(c):
     dumps = c.root / "research/dumps"
     dumps.mkdir(parents=True, exist_ok=True)
-    assembly = c.game / "MelonLoader/Il2CppAssemblies/Assembly-CSharp.dll"
-    if not assembly.exists():
-        raise FileNotFoundError("MelonLoader's Il2CppAssemblies/Assembly-CSharp.dll is missing: "
-                                "install MelonLoader and start BTD6 once.")
+    # Field and base types straight from the game's files (tools/il2cpp/type_dump.py), so setup needs
+    # neither MelonLoader nor a first start of BTD6.
     c.parallel("Game metadata", [
-        ["tools/dotnet_meta/dotnet_meta.py", assembly, dumps / "Assembly-CSharp.txt", "--json", dumps / "Assembly-CSharp.jsonl"],
+        ["tools/il2cpp/type_dump.py", c.meta, c.game / "GameAssembly.dll", dumps / "types.jsonl"],
         ["tools/il2cpp/il2cpp_meta.py", c.meta, c.game / "GameAssembly.dll", dumps / "methods-all.jsonl", "*"],
         ["tools/il2cpp/field_offsets.py", c.meta, c.game / "GameAssembly.dll", dumps / "field_offsets.json"]], UI_WORKER)
     c.py("tools/il2cpp/setter_schema.py", c.game / "GameAssembly.dll", dumps / "methods-all.jsonl", dumps / "setter_schemas.json")
@@ -193,7 +191,9 @@ def sim_model(c):
             (gm / f"{t.m_Name}.bytes").write_bytes(data)
     c.py("tools/sim_model/decode.py", c.game / "GameAssembly.dll", dumps / "methods-all.jsonl",
          dumps / "setter_schemas.json", gm / "sim_model.bytes", c.out / "decoded")
-    c.py("tools/sim_model/name_records.py", c.out / "decoded", dumps / "field_offsets.json", dumps / "Assembly-CSharp.jsonl")
+    # types.jsonl; installs prepared before it existed have MelonLoader's dump in the same shape.
+    types = dumps / "types.jsonl" if (dumps / "types.jsonl").exists() else dumps / "Assembly-CSharp.jsonl"
+    c.py("tools/sim_model/name_records.py", c.out / "decoded", dumps / "field_offsets.json", types)
 
 
 def cab_index(c):
@@ -768,7 +768,7 @@ def main():
         print(asset_revision())
         return
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--game", required=True, help="BTD6 install folder (with MelonLoader)")
+    ap.add_argument("--game", required=True, help="BTD6 install folder")
     ap.add_argument("--root", default=str(Path(__file__).resolve().parents[1]), help="folder holding tools/")
     ap.add_argument("--only", nargs="*", help="run just these steps")
     ap.add_argument("--force", action="store_true", help="ignore recorded progress")
@@ -796,7 +796,7 @@ def main():
     selected = [name for name in names if not args.only or name in args.only]
     history_path = c.out / ".extract_timings.json"
     c.progress = Progress(selected, load_history(history_path))
-    print("RustTD6 setup - you can follow progress here in the MelonLoader terminal.", flush=True)
+    print("RustTD6 setup", flush=True)
     print("Time remaining is an estimate and will adjust as stages finish.", flush=True)
     print("Setup uses a lot of CPU, memory and disk. It goes faster with more free memory: close programs you aren't using, then let it finish.", flush=True)
     print(f"Install data: {c.out} | Free space: {shutil.disk_usage(c.out).free / 1e9:.1f} GB", flush=True)

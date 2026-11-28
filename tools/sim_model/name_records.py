@@ -3,14 +3,14 @@
 Inputs (all local, git-ignored):
   local_extracted/decoded/records.jsonl, values.json   (decode.py)
   research/dumps/field_offsets.json                     (il2cpp/field_offsets.py)
-  research/dumps/Assembly-CSharp.jsonl                  (dotnet_meta: property types)
+  research/dumps/types.jsonl                            (il2cpp/type_dump.py: field types)
 
 Writes local_extracted/decoded/named/objects.jsonl: {"i", "type", "f": {name: value}}
 where object references are {"$ref": i} and arrays/lists/dicts are resolved
 to their element refs.
 
 Usage:
-    python -I name_records.py <decoded_dir> <field_offsets.json> <Assembly-CSharp.jsonl>
+    python -I name_records.py <decoded_dir> <field_offsets.json> <types.jsonl>
 """
 import json
 import os
@@ -27,7 +27,7 @@ def main():
         by_short.setdefault(full.replace("/", ".").split(".")[-1], []).append(full)
         by_short.setdefault(full.replace(".", "_").replace("/", "_"), []).append(full)
 
-    # Property types from the interop dump; enums -> int.
+    # Field types (type_dump.py, or MelonLoader's older interop dump); enums -> int.
     enums, ptypes, parent = set(), {}, {}
     for line in open(asm_path, encoding="utf-8"):
         t = json.loads(line)
@@ -60,7 +60,7 @@ def main():
         base = t.split("<")[0]
         if base in enums or base.split(".")[-1] in PRIMS:
             return False
-        if base.startswith(("Il2CppSystem.Nullable",)):
+        if base.startswith(("Il2CppSystem.Nullable", "System.Nullable")):
             return False
         return True
 

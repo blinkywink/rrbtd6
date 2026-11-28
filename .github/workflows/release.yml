@@ -123,6 +123,8 @@ jobs:
           mkdir -p dist
           cp target/release/btd6-game.exe dist/rrbtd6.exe
           cp target/release/rrbtd6-launcher.exe dist/rrbtd6-launcher.exe
+          # The same program under the name players download: run it and it installs itself.
+          cp target/release/rrbtd6-launcher.exe dist/RustTD6Setup.exe
           cp installer_out/RRBTD6Installer.dll dist/RRBTD6Installer.dll
           python -I tools/package_tools.py dist/rrbtd6-tools.zip
           revision="$(python -I tools/extract_all.py --asset-revision)"
@@ -171,9 +173,9 @@ jobs:
           version="${{ steps.version.outputs.version }}"
           notes="RustTD6 version $version (${{ github.sha }}).
 
-          Install: put RRBTD6Installer.dll in your BTD6 Mods folder (MelonLoader 0.7.3) and start BTD6, or run rrbtd6-launcher.exe on its own.
+          Install: download RustTD6Setup.exe and run it. It finds BTD6, installs itself and sets everything up.
           Game data is not included; it is extracted from your own BTD6 install."
-          gh release create "v$version" dist/rrbtd6.exe dist/rrbtd6-launcher.exe dist/RRBTD6Installer.dll \
+          gh release create "v$version" dist/RustTD6Setup.exe dist/rrbtd6.exe dist/rrbtd6-launcher.exe dist/RRBTD6Installer.dll \
             dist/rrbtd6-tools.zip dist/version.json -R "$GITHUB_REPOSITORY" --title "Version $version" --notes "$notes" --latest
 
       # Only the current version (and the current Python runtime) stay on the releases page.

@@ -3,8 +3,8 @@
 Static home page (`public/index.html`, `public/styles.css`) and a separate mod API docs site
 (`public/docs/`, its own `docs.css`), with self-hosted Luckiest Guy (headings), Inter (text) and Comic Neue (the wordmark, where Comic Sans
 isn't installed).
-Little JavaScript, none of it needed. The install guide is a popup (the browser's `popover`, no script needed) opened by the hero
-button, the header's Install and a few links. `site.js` marks the header link for the section being read,
+Little JavaScript, none of it needed. The Download buttons link straight to the latest release's
+`RustTD6Setup.exe`, which installs itself. `site.js` marks the header link for the section being read,
 and copies the mod example; and `docs/nav.js` keeps the docs sidebar's scroll between pages (the CSP allows same-origin
 scripts only). Menus are CSS-only `<details>`. No
 analytics, and no game art apart from the hero's silhouettes (also cut up as decorations) and the cursor's shape (see Images).

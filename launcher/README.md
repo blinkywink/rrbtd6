@@ -1,3 +1,26 @@
+# Setup
+
+The launcher is also the installer. Releases ship it twice: `rrbtd6-launcher.exe` (what installs
+update) and `RustTD6Setup.exe` (what players download). Run from anywhere that isn't an install, it
+copies itself to `%LOCALAPPDATA%\RustTD6` (or a folder the player picks if that one can't be used),
+adds desktop and Start menu shortcuts and carries on from there. It finds BTD6 itself (Steam on any
+drive, Epic, default folders; "Find BTD6 myself" if not), so neither MelonLoader nor a running BTD6
+is needed: extraction reads the game's own files (`tools/il2cpp/type_dump.py`).
+
+It's a window program (`ui.rs`): a small setup window shows the stage, a bar, the time left and
+tips while it installs, updates or extracts, and an up-to-date install starts the game with no
+window. Everything is also written to `setup.log` in the install folder (and the console, when
+started from one).
+
+When something fails it fixes what it can first: a retry (finished extraction stages are kept), then
+a retry after a repair (fresh tools and Python packages). Downloads retry three times. Extraction
+counts as stuck after 3 minutes without output or 30 minutes without its progress line changing, and
+is stopped and retried. If it still can't finish, the window says what happened in plain words
+(no BTD6, disk space, memory, network, antivirus, an unsupported BTD6 build) with Try again, Open setup
+log and, when BTD6 wasn't found, Find BTD6 myself. Closing the window mid-setup asks first; finished
+stages are kept for next time. An update that needs new game data asks "Update now" or "Play now,
+update later". `--unattended` (tests) turns off the window, retries and questions.
+
 # Launcher updates
 
 The launcher downloads a complete release into `update/payload`, validates the

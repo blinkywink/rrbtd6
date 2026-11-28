@@ -1,5 +1,9 @@
 # Installer mod
 
+**Legacy.** Players now download `RustTD6Setup.exe` (the [launcher](../launcher/README.md)), which
+installs itself and needs neither MelonLoader nor BTD6 running. This mod still ships in releases for
+anyone who already uses it; it starts the same launcher.
+
 `RRBTD6Installer.dll`, the one-time setup players download. It's a MelonLoader mod for BTD6 that
 installs RustTD6 into a folder they choose, then hands over to the
 [launcher](../launcher/README.md), which downloads the game and extracts the data from their BTD6

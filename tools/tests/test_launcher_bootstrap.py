@@ -49,7 +49,7 @@ def main():
             path.write_text(path.read_text().replace("#import site", "import site"))
         # Deliberately interrupted setup: runtime unpacked, pip not yet installed.
         for attempt in range(2):
-            result = subprocess.run([str(root / "rrbtd6-launcher.exe"), "--offline"],
+            result = subprocess.run([str(root / "rrbtd6-launcher.exe"), "--offline", "--unattended"],
                                     input="", capture_output=True, text=True, encoding="utf-8",
                                     errors="replace", timeout=300, cwd=root)
             output = result.stdout + result.stderr
@@ -57,7 +57,7 @@ def main():
                 raise AssertionError(f"Bootstrap attempt {attempt + 1} failed:\n{output}")
             assert (python / "requirements.installed").read_bytes() == requirements
             if attempt == 1:
-                assert "downloading" not in output and "Installing extraction packages" not in output, output
+                assert "downloading" not in output and "Installing setup packages" not in output, output
         print("Embedded Python recovered, full requirements imported, second launch reused setup.")
 
 

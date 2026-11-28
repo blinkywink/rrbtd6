@@ -3,7 +3,7 @@
 `python -I tools/extract_all.py --game "<BTD6 folder>" --root "<install folder>"`
 runs the same extraction used by the launcher. The install folder must contain
 the shipped tools and the interpreter must have `requirements.txt` installed.
-MelonLoader's generated interop assembly is needed; start official BTD6 once first.
+Field and base types come from the game's own files (tools/il2cpp/type_dump.py); MelonLoader isn't needed.
 No Ninja Kiwi service is contacted by this driver.
 
 The recipe includes the map scene data, geometry and shaders, sprites and fonts,

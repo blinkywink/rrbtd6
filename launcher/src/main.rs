@@ -1,56 +1,271 @@
-//! rrbtd6 launcher: keeps an install folder up to date and starts the game.
+//! rrbtd6 launcher: installs RustTD6, keeps it up to date and starts the game. It's also the
+//! setup program: run it from anywhere and it installs itself, finds BTD6 and extracts the data.
 //!
 //! Layout of the install folder (the launcher's own folder):
 //!   rrbtd6-launcher.exe   this program
-//!   rrbtd6.json           {"game": "<BTD6 folder>"} (written by the BTD6 installer mod)
+//!   rrbtd6.json           {"game": "<BTD6 folder>"} (found automatically, or picked by the player)
 //!   version.json          the installed release ({"build": N, ...})
 //!   rrbtd6.exe            the game, from the latest GitHub release
 //!   tools/                the extraction scripts, from the same release
 //!   python/               a private Python with tools/requirements.txt
 //!   local_extracted/      game data extracted from your own BTD6 install (never redistributed)
+//!   setup.log             what the last setup or update did, for troubleshooting
 //!
 //! Only GitHub and python.org / PyPI are contacted, never Ninja Kiwi.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod transaction;
 mod compatibility;
 mod system;
+mod ui;
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 const REPO: &str = "blinkywink/rrbtd6";
 const PYTHON_VERSION: &str = "3.13.1";
 const USER_AGENT: &str = "rrbtd6-launcher";
+const DISCORD: &str = "https://discord.gg/GBah4crmpC";
 
-enum Update{Installed,Current,KeepInstalled,SetupOpened}
+enum Update{Installed,Current,KeepInstalled}
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+static LOG: OnceLock<Mutex<Option<fs::File>>> = OnceLock::new();
+static CHILDREN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// A line for setup.log (and the console, when started from one).
+pub fn log(text: &str) {
+    println!("{text}");
+    if let Some(lock) = LOG.get() {
+        if let Some(file) = lock.lock().unwrap().as_mut() {
+            let _ = writeln!(file, "{text}");
+        }
+    }
+}
+
+macro_rules! say { ($($t:tt)*) => { log(&format!($($t)*)) } }
+
+fn open_log(dir: &Path) {
+    let path = dir.join("setup.log");
+    // Keep the log small: start over when it passes 4 MB.
+    let big = fs::metadata(&path).map(|m| m.len() > 4 << 20).unwrap_or(false);
+    let file = if big { fs::File::create(&path) } else { fs::OpenOptions::new().create(true).append(true).open(&path) };
+    let _ = LOG.set(Mutex::new(file.ok()));
+    let version = env!("CARGO_PKG_VERSION");
+    say!("\n==== RustTD6 launcher {version} ({}) ====", std::env::args().skip(1).collect::<Vec<_>>().join(" "));
+}
+
+/// Ends every process the launcher started (and their children): setup was stopped.
+pub fn stop_children() {
+    for pid in CHILDREN.lock().unwrap().drain(..) {
+        let mut kill = Command::new("taskkill");
+        kill.args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
+        hide_console(&mut kill);
+        let _ = kill.status();
+    }
+}
+
+/// Console programs started by the launcher (Python, pip, taskkill) get no window of their own.
+fn hide_console(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
+/// Started from a terminal: print there too (the launcher is a window program).
+fn attach_console() {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" { fn AttachConsole(pid: u32) -> i32; }
+        unsafe { AttachConsole(u32::MAX) };
+    }
+}
+
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("\nrrbtd6 launcher failed: {e}");
-        if !std::env::args().any(|a|a=="--from-installer"){pause();}
-        std::process::exit(1);
+    attach_console();
+    let dir = match std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) {
+        Some(d) => d,
+        None => { system::ask("RustTD6", "RustTD6 couldn't tell which folder it's in. Download it again and run it from your Downloads folder.", false); return }
+    };
+    // Run from a download: install into the recommended folder and continue from there.
+    match standalone_install(&dir) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            system::ask("RustTD6", &format!("RustTD6 couldn't install itself.\n\n{e}\n\nTry running it again. If it keeps happening, ask for help on Discord: {DISCORD}"), false);
+            std::process::exit(1);
+        }
+    }
+    open_log(&dir);
+    let mut attempt = 0u32;
+    loop {
+        let outcome = run(&dir);
+        stop_children();
+        let error = match outcome {
+            Ok(()) => { ui::close(); return; }
+            Err(e) => e,
+        };
+        say!("Setup stopped: {error}");
+        // Started again while another launcher is working in this folder (a second click on the
+        // shortcut): that one carries on, so this one just ends.
+        if error.to_string().contains("Another launcher is installing") {
+            ui::close();
+            return;
+        }
+        // --unattended (tests, scripts): no window, no retries, just the exit code.
+        if unattended() {
+            eprintln!("
+rrbtd6 launcher failed: {error}");
+            std::process::exit(1);
+        }
+        let problem = Problem::of(&error.to_string());
+        attempt += 1;
+        // Fix it ourselves first: once as it was, then after a repair (fresh tools and Python
+        // packages). Setup keeps finished stages, so a retry carries on where it stopped.
+        if problem.retry && attempt <= 2 {
+            if attempt == 2 {
+                repair(&dir);
+            }
+            if ui::is_open() {
+                ui::stage("Something went wrong, trying again");
+            }
+            std::thread::sleep(Duration::from_secs(3));
+            continue;
+        }
+        let mut buttons = vec!["Try again"];
+        if problem.pick_folder {
+            buttons.insert(0, "Find BTD6 myself");
+            #[cfg(target_os = "macos")]
+            buttons.insert(0, "Open Steam console");
+        }
+        buttons.extend(["Open setup log", "Close"]);
+        loop {
+            // The error itself only when it says more than the heading.
+            let detail = error.to_string();
+            let body = if detail.to_ascii_lowercase().starts_with(&problem.heading.to_ascii_lowercase()) {
+                problem.body.to_string()
+            } else {
+                format!("{}\n\nWhat went wrong: {}", problem.body, short(&detail))
+            };
+            let choice = buttons[ui::ask(problem.heading, &body, &buttons)];
+            match choice {
+                "Find BTD6 myself" => match system::pick_folder("Choose your Bloons TD 6 folder (the one with BloonsTD6.exe)") {
+                    Some(p) if p.join("GameAssembly.dll").is_file() => {
+                        let _ = fs::write(dir.join("rrbtd6.json"), serde_json::json!({"game": p}).to_string());
+                        break;
+                    }
+                    Some(_) => { ui::ask("That isn't the BTD6 folder", "Choose the folder that has BloonsTD6.exe and GameAssembly.dll in it. In Steam: right-click Bloons TD 6 > Manage > Browse local files.", &["OK"]); }
+                    None => {}
+                },
+                "Open Steam console" => {
+                    let _ = Command::new("open").arg("steam://open/console").spawn();
+                }
+                "Open setup log" => {
+                    let _ = Command::new("notepad.exe").arg(dir.join("setup.log")).spawn();
+                }
+                "Try again" => break,
+                _ => { ui::close(); std::process::exit(1); }
+            }
+        }
+        attempt = 0;
+        ui::stage("Trying again");
     }
 }
 
-fn pause() {
-    eprint!("Press Enter to close...");
-    let _ = io::stdin().read_line(&mut String::new());
+pub fn unattended() -> bool {
+    std::env::args().any(|a| a == "--unattended")
 }
 
-fn run() -> Result<()> {
-    let dir = std::env::current_exe()?.parent().ok_or("no install folder")?.to_path_buf();
-    // Started on its own from a download folder (no installer mod): offer the recommended folder.
-    if standalone_install(&dir)? {
-        return Ok(());
+fn short(e: &str) -> String {
+    let e = e.trim();
+    if e.chars().count() > 300 { format!("{}...", e.chars().take(300).collect::<String>()) } else { e.to_string() }
+}
+
+/// What to tell the player about an error, and whether to retry it automatically.
+struct Problem { heading: &'static str, body: &'static str, retry: bool, pick_folder: bool }
+
+impl Problem {
+    fn of(error: &str) -> Problem {
+        let e = error.to_ascii_lowercase();
+        let has = |words: &[&str]| words.iter().any(|w| e.contains(w));
+        // A Mac runs RustTD6 from BTD6's Windows files, which Steam downloads on request.
+        #[cfg(target_os = "macos")]
+        if has(&["couldn't find bloons td 6"]) {
+            return Problem { heading: "Get BTD6's Windows files", retry: false, pick_folder: true,
+                body: "RustTD6 reads the game's art and sounds from the Windows version of BTD6, which Steam can download on a Mac too (about 3 GB; RustTD6 deletes it again when it's done).
+
+1. Press Open Steam console (Steam must be running).
+2. Type:  download_depot 960090 960091  and press Enter.
+3. Wait until Steam says the depot download is complete, then press Try again." };
+        }
+        if has(&["couldn't find bloons td 6"]) {
+            return Problem { heading: "Couldn't find Bloons TD 6", retry: false, pick_folder: true,
+                body: "RustTD6 needs BTD6 installed on this PC (Steam or Epic), because it reads the game's art and sounds from your own copy. Install BTD6 and press Try again, or show RustTD6 where it is." };
+        }
+        if has(&["not enough free disk space"]) {
+            return Problem { heading: "Not enough disk space", retry: false, pick_folder: false,
+                body: "Setup needs about 15 GB free the first time (the game data is about 7 GB). Free up some space, then press Try again." };
+        }
+        if has(&["memoryerror", "out of memory", "0xc0000017", "unable to allocate", "not enough memory"]) {
+            return Problem { heading: "Your PC ran out of memory", retry: false, pick_folder: false,
+                body: "Setup uses a lot of memory. Close other programs (browsers and games especially), then press Try again. It carries on from where it stopped." };
+        }
+        if has(&["stuck"]) {
+            return Problem { heading: "Setup got stuck", retry: true, pick_folder: false,
+                body: "Setup stopped making progress, so RustTD6 stopped it. Press Try again, or close RustTD6 and open it again: it carries on from where it stopped." };
+        }
+        if has(&["setup understands", "only v39", "newer unity", "type table"]) {
+            return Problem { heading: "This BTD6 version isn't supported yet", retry: false, pick_folder: false,
+                body: "BTD6 has updated in a way RustTD6's setup doesn't understand yet. RustTD6 updates itself when support is added, so try again in a day or two." };
+        }
+        if has(&["dns", "connect", "timed out", "timeout", "network", "resolve", "github", "403", "429", "502", "503", "certificate", "tls"]) {
+            return Problem { heading: "Couldn't download RustTD6", retry: true, pick_folder: false,
+                body: "RustTD6 couldn't reach GitHub, where it downloads from. Check your internet connection, then press Try again. School and work networks sometimes block GitHub." };
+        }
+        if has(&["os error 5", "access is denied", "permission", "os error 32", "being used by another process", "os error 225", "virus"]) {
+            return Problem { heading: "Windows blocked a file", retry: true, pick_folder: false,
+                body: "Windows or an antivirus program stopped RustTD6 from using one of its files. Press Try again. If it keeps happening, allow RustTD6's folder in your antivirus." };
+        }
+        if has(&["another launcher is installing"]) {
+            return Problem { heading: "RustTD6 is already setting up", retry: false, pick_folder: false,
+                body: "Another RustTD6 window is already setting up. Let that one finish, or close it and press Try again." };
+        }
+        Problem { heading: "Setup couldn't finish", retry: true, pick_folder: false,
+            body: "Something went wrong while setting up RustTD6. Press Try again: it carries on from where it stopped. If it keeps happening, ask for help on Discord (discord.gg/GBah4crmpC) and attach setup.log." }
     }
-    let _install_lock = transaction::lock(&dir)?;
-    transaction::recover(&dir)?;
+}
+
+/// Before the second automatic retry: get fresh tools and Python packages next time. The
+/// extracted data and finished stages are kept.
+fn repair(dir: &Path) {
+    say!("Repairing: fresh tools and Python packages on the next try.");
+    let _ = fs::remove_file(dir.join("python/requirements.installed"));
+    if dir.join("rrbtd6.exe").is_file() {
+        // An unreadable version.json makes the update step download the release again.
+        let _ = fs::remove_file(dir.join("version.json"));
+    }
+}
+
+fn run(dir: &Path) -> Result<()> {
+    let _install_lock = transaction::lock(dir)?;
+    transaction::recover(dir)?;
     let skip_update = std::env::args().any(|a| a == "--offline");
     let refresh_assets=std::env::args().any(|a|a=="--refresh-assets");
+    let first_run = !setup_complete(dir);
+    if first_run {
+        ui::open();
+        ui::stage("Looking for Bloons TD 6");
+    }
     let config: serde_json::Value = fs::read_to_string(dir.join("rrbtd6.json")).ok()
         .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let configured = config["game"].as_str().map(PathBuf::from).filter(|g| g.join("GameAssembly.dll").exists());
@@ -58,89 +273,154 @@ fn run() -> Result<()> {
         Some(g) => g,
         // Moved or never set: Steam (any library on any drive), Epic, the default folders.
         None => {
-            let found = system::find_btd6().ok_or(
-                "Couldn't find Bloons TD 6. RustTD6 reads its data from your own BTD6 install (Steam or Epic). \
-                 Install BTD6, start it once, then start RustTD6 again. If BTD6 is installed somewhere unusual, \
-                 write {\"game\": \"<BTD6 folder>\"} to rrbtd6.json in this folder.")?;
+            let found = system::find_btd6().ok_or("Couldn't find Bloons TD 6")?;
             let mut config = if config.is_object() { config.clone() } else { serde_json::json!({}) };
             config["game"] = serde_json::Value::String(found.to_string_lossy().into_owned());
             let _ = fs::write(dir.join("rrbtd6.json"), serde_json::to_string(&config)?);
-            println!("Found BTD6 at {}", found.display());
+            say!("Found BTD6 at {}", found.display());
             found
         }
     };
 
     if !skip_update {
-        match update(&dir,&game,refresh_assets) {
-            Ok(Update::Installed) => println!("Updated to the latest build."),
-            Ok(Update::Current) => println!("Up to date."),
-            Ok(Update::KeepInstalled) => println!("Starting the installed version."),
-            Ok(Update::SetupOpened) => return Ok(()),
+        match update(dir,&game,refresh_assets) {
+            Ok(Update::Installed) => say!("Updated to the latest build."),
+            Ok(Update::Current) => say!("Up to date."),
+            Ok(Update::KeepInstalled) => say!("Starting the installed version."),
             // Offline or GitHub unreachable: keep playing the installed build if there is one.
-            Err(e) if dir.join("rrbtd6.exe").exists() && !transaction::pending(&dir) => println!("Update check skipped: {e}"),
+            Err(e) if dir.join("rrbtd6.exe").exists() && !transaction::pending(dir) && !first_run => say!("Update check skipped: {e}"),
             Err(e) => return Err(e),
         }
     }
     // A working install is playable offline and while a new asset revision is deferred.
-    if !dir.join("local_extracted/game/game.json").is_file() {
-        let python = ensure_python(&dir)?;
-        extract(&dir, &python, &game)?;
+    if !setup_complete(dir) {
+        ui::open();
+        let python = ensure_python(dir)?;
+        extract(dir, &python, &game)?;
+        drop_depot_download(&game);
     }
 
-    println!("Starting rrbtd6...");
-    let mut game_process=Command::new(dir.join("rrbtd6.exe"));
-    game_process.arg("--from-launcher").current_dir(&dir);
-    if std::env::args().any(|a|a=="--from-installer"){
-        game_process.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    // The first setup ends on a "ready" screen: where to put shortcuts, then Play.
+    let fresh: serde_json::Value = fs::read_to_string(dir.join("rrbtd6.json")).ok()
+        .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    if first_run && ui::is_open() && !fresh["shortcuts_asked"].as_bool().unwrap_or(false) {
+        let launcher = dir.join("rrbtd6-launcher.exe");
+        let (choice, ticked) = ui::ask_checks("RustTD6 is ready",
+            &format!("Setup is done. Choose where you'd like a shortcut to start it from next time. You can also start it from {}.", launcher.display()),
+            &[("Desktop shortcut", true), ("Start menu", true)],
+            &["Play RustTD6", "Close"]);
+        shortcuts(&launcher, dir, ticked[0], ticked[1]);
+        let mut config = if fresh.is_object() { fresh } else { serde_json::json!({}) };
+        config["shortcuts_asked"] = serde_json::Value::Bool(true);
+        let _ = fs::write(dir.join("rrbtd6.json"), serde_json::to_string(&config)?);
+        if choice != 0 {
+            return Ok(());
+        }
     }
-    game_process.spawn()?;
+    say!("Starting rrbtd6...");
+    if ui::is_open() {
+        ui::stage("Starting RustTD6");
+    }
+    let mut game_process=Command::new(dir.join("rrbtd6.exe"));
+    game_process.arg("--from-launcher").current_dir(dir)
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    game_process.spawn().map_err(|e| format!("Couldn't start rrbtd6.exe ({e})"))?;
     Ok(())
 }
 
-/// The folder `standalone_install` offers: per-user, always writable, not synced.
+/// Whether extraction finished: assets_version.json is the last thing it writes. game.json alone
+/// isn't enough, because it's written partway through, so a setup that stopped later would look
+/// complete and start a game with missing data.
+fn setup_complete(dir: &Path) -> bool {
+    dir.join("local_extracted/game/game.json").is_file() && dir.join("local_extracted/assets_version.json").is_file()
+}
+
+/// BTD6's Windows files downloaded with Steam's download_depot (a Mac) are only needed while setup
+/// reads them: delete them afterwards (about 3 GB). Steam's own installs are never touched.
+fn drop_depot_download(game: &Path) {
+    let depot = format!("steamapps/content/app_{}/depot_{}", system::BTD6_APP, system::BTD6_WINDOWS_DEPOT);
+    if game.to_string_lossy().replace('\\', "/").ends_with(&depot) && game.join("GameAssembly.dll").is_file() {
+        match fs::remove_dir_all(game) {
+            Ok(()) => say!("Removed the downloaded Windows files ({}); setup has what it needs.", game.display()),
+            Err(e) => say!("Couldn't remove {} ({e}); you can delete it yourself.", game.display()),
+        }
+    }
+}
+
+/// The folder RustTD6 installs into: per-user, always writable, not synced.
 fn recommended_dir() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("RustTD6"))
 }
 
-/// Started on its own (downloaded from the releases page, no installer mod) in a folder that is no
-/// install yet: install to the recommended folder (copy itself there, a desktop shortcut, start
-/// there) or into this folder. True when this run handed over and should end.
+/// Why RustTD6 can't go in `folder` (None: it can).
+fn folder_problem(folder: &Path) -> Option<String> {
+    let text = folder.display().to_string();
+    // Windows limits paths to 260 characters and the game data goes about 160 deep.
+    if text.chars().count() > 95 {
+        return Some(format!("The folder path is {} characters long; Windows limits file paths to 260 and the game data goes about 160 deep.", text.chars().count()));
+    }
+    for var in ["ProgramFiles", "ProgramFiles(x86)", "SystemRoot"] {
+        if let Some(root) = std::env::var_os(var) {
+            if folder.starts_with(PathBuf::from(root)) {
+                return Some("Windows only lets administrators change files there, so RustTD6 couldn't save its data.".into());
+            }
+        }
+    }
+    if fs::create_dir_all(folder).and_then(|_| fs::write(folder.join(".write-test"), b"ok")).and_then(|_| fs::remove_file(folder.join(".write-test"))).is_err() {
+        return Some("RustTD6 can't write to that folder.".into());
+    }
+    None
+}
+
+/// Run from anywhere that isn't an install yet (a download): install into the recommended folder
+/// without asking and carry on from there (shortcuts are offered when setup finishes). If that folder
+/// can't be used, the player picks one. True when this run handed over and should end.
 fn standalone_install(dir: &Path) -> Result<bool> {
     let installed = dir.join("rrbtd6.json").exists() || dir.join("version.json").exists() || dir.join("rrbtd6.exe").exists();
-    let Some(target) = recommended_dir() else { return Ok(false) };
+    let Some(mut target) = recommended_dir() else { return Ok(false) };
     if installed || std::env::args().any(|a| a == "--from-installer" || a == "--here") || dir == target {
         return Ok(false);
     }
-    let text = format!(
-        "Install RustTD6 to {}? (recommended)\n\nYes: install there and put a shortcut on the desktop.\nNo: install into this folder ({}).\nCancel: quit.",
-        target.display(),
-        dir.display()
-    );
-    match system::ask("RustTD6 Setup", &text, true) {
-        6 => {
-            fs::create_dir_all(&target)?;
-            let me = std::env::current_exe()?;
-            let copy = target.join("rrbtd6-launcher.exe");
-            fs::copy(&me, &copy)?;
-            desktop_shortcut(&copy, &target);
-            Command::new(&copy).current_dir(&target).spawn()?;
-            Ok(true)
+    while let Some(problem) = folder_problem(&target) {
+        let text = format!("RustTD6 can't install to {}.\n\n{problem}\n\nChoose another folder? A short path like C:\\Games works well.", target.display());
+        if system::ask("RustTD6 Setup", &text, true) != 6 {
+            std::process::exit(0);
         }
-        7 => Ok(false),
-        _ => std::process::exit(0),
+        match system::pick_folder("Choose where to install RustTD6") {
+            Some(p) => target = p.join("RustTD6"),
+            None => std::process::exit(0),
+        }
     }
+    fs::create_dir_all(&target)?;
+    let me = std::env::current_exe()?;
+    let copy = target.join("rrbtd6-launcher.exe");
+    // Already installed there and running? Its copy is in use; just start it.
+    if fs::copy(&me, &copy).is_err() && !copy.is_file() {
+        return Err(format!("Couldn't copy RustTD6 into {}", target.display()).into());
+    }
+    Command::new(&copy).current_dir(&target).spawn()?;
+    Ok(true)
 }
 
-/// A desktop shortcut "RustTD6" to the launcher (as the installer mod makes; a convenience, so
+/// "RustTD6" shortcuts to the launcher on the desktop and in the Start menu (a convenience, so
 /// failures are ignored).
-fn desktop_shortcut(launcher: &Path, dir: &Path) {
+fn shortcuts(launcher: &Path, dir: &Path, desktop: bool, start_menu: bool) {
+    let places: Vec<&str> = [("'Desktop'", desktop), ("'Programs'", start_menu)].iter().filter(|p| p.1).map(|p| p.0).collect();
+    if places.is_empty() {
+        return;
+    }
     let q = |p: &Path| p.display().to_string().replace('\'', "''");
     let script = format!(
-        "$d=[Environment]::GetFolderPath('Desktop');$s=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d 'RustTD6.lnk'));$s.TargetPath='{}';$s.WorkingDirectory='{}';$s.Save()",
+        "foreach($f in {}){{$d=[Environment]::GetFolderPath($f);if($d){{$s=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d 'RustTD6.lnk'));$s.TargetPath='{}';$s.WorkingDirectory='{}';$s.IconLocation='{}';$s.Save()}}}}",
+        places.join(","),
         q(launcher),
-        q(dir)
+        q(dir),
+        q(&dir.join("rrbtd6.exe"))
     );
-    let _ = Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &script]).status();
+    let mut ps = Command::new("powershell.exe");
+    ps.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    hide_console(&mut ps);
+    let _ = ps.status();
 }
 
 fn get(url: &str) -> Result<ureq::Response> {
@@ -171,16 +451,33 @@ fn verify(remote: &serde_json::Value, name: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Downloads `url` to `to`, trying up to three times (flaky Wi-Fi, a GitHub hiccup). A 404 isn't
+/// retried: the file isn't there.
 fn download(url: &str, to: &Path) -> Result<()> {
-    println!("  downloading {}", url.rsplit('/').next().unwrap_or(url));
-    let mut body = get(url)?.into_reader();
-    let part = to.with_extension("part");
-    let mut file = fs::File::create(&part)?;
-    io::copy(&mut body, &mut file)?;
-    file.flush()?;
-    drop(file);
-    fs::rename(&part, to)?;
-    Ok(())
+    say!("  downloading {}", url.rsplit('/').next().unwrap_or(url));
+    let mut last = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_secs(2 << attempt));
+            say!("  retrying the download");
+        }
+        let result = (|| -> Result<()> {
+            let mut body = get(url)?.into_reader();
+            let part = to.with_extension("part");
+            let mut file = fs::File::create(&part)?;
+            io::copy(&mut body, &mut file)?;
+            file.flush()?;
+            drop(file);
+            fs::rename(&part, to)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => return Ok(()),
+            Err(e) if e.to_string().contains("404") => return Err(e),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| "download failed".into()))
 }
 
 /// Installs the latest release when it is newer than version.json. Returns whether it changed.
@@ -199,12 +496,13 @@ fn update(dir: &Path,game:&Path,refresh_assets:bool) -> Result<Update> {
     let assets:serde_json::Value=fs::read(dir.join("local_extracted/assets_version.json")).ok()
         .and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or_default();
     let needs_assets=compatibility::needs_assets(&remote,&assets);
-    if needs_assets && dir.join("rrbtd6.exe").is_file() && !refresh_assets {
-        if compatibility::extraction_notice(game,build){return Ok(Update::SetupOpened);}
-        println!("Keeping installed build until its replacement assets have been extracted.");
+    if needs_assets && dir.join("rrbtd6.exe").is_file() && !refresh_assets && !compatibility::update_now(build) {
+        say!("Keeping installed build until its replacement assets have been extracted.");
         return Ok(Update::KeepInstalled);
     }
-    println!("Installing build {}...", remote["build"]);
+    ui::open();
+    ui::stage(if dir.join("rrbtd6.exe").is_file() { "Downloading the RustTD6 update" } else { "Downloading RustTD6" });
+    say!("Installing build {}...", remote["build"]);
     let payload = transaction::prepare(dir)?;
     let staging = transaction::staging(dir);
     download(asset("rrbtd6.exe").ok_or("release has no rrbtd6.exe")?, &payload.join("rrbtd6.exe"))?;
@@ -222,6 +520,7 @@ fn update(dir: &Path,game:&Path,refresh_assets:bool) -> Result<Update> {
     fs::rename(extracted_tools, payload.join("tools"))?;
     fs::write(payload.join("version.json"), serde_json::to_string(&remote)?)?;
     if needs_assets {
+        ui::stage("Updating game data");
         // Extract beside the staged release: never mutate the playable asset tree on failure.
         seed_assets(dir,&payload)?;
         let python=ensure_python_from(dir,&payload.join("tools"))?;
@@ -287,15 +586,18 @@ fn ensure_python_from(dir: &Path,tools:&Path) -> Result<PathBuf> {
     match bundled_python(&root, &requirements) {
         Ok(true) => return Ok(python),
         Ok(false) => {}
-        Err(e) => println!("Prepared Python runtime unavailable ({e}); setting one up instead."),
+        Err(e) => say!("Prepared Python runtime unavailable ({e}); setting one up instead."),
     }
     // A cancelled ZIP extraction can leave python.exe present without its DLLs
     // or standard library. Probe it before treating the runtime as installed.
-    let runtime_ready = python.exists() && Command::new(&python)
-        .args(["-X", "utf8", "-I", "-c", "import ssl, zipfile, sysconfig"])
-        .output().is_ok_and(|out| out.status.success());
+    let runtime_ready = python.exists() && {
+        let mut probe = Command::new(&python);
+        probe.args(["-X", "utf8", "-I", "-c", "import ssl, zipfile, sysconfig"]);
+        hide_console(&mut probe);
+        probe.output().is_ok_and(|out| out.status.success())
+    };
     if !runtime_ready {
-        println!("Setting up Python {PYTHON_VERSION} (first run only)...");
+        ui::stage("Setting up Python (first time only)");
         fs::create_dir_all(&root)?;
         let archive = root.join("python.zip");
         download(&format!("https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip"), &archive)?;
@@ -312,14 +614,18 @@ fn ensure_python_from(dir: &Path,tools:&Path) -> Result<PathBuf> {
     }
     // get-pip may have been interrupted after the runtime was unpacked. Retry
     // bootstrap independently instead of getting stuck on 'No module named pip'.
-    let pip_ready = Command::new(&python).args(["-X", "utf8", "-I", "-m", "pip", "--version"])
-        .output().is_ok_and(|out| out.status.success());
+    let pip_ready = {
+        let mut probe = Command::new(&python);
+        probe.args(["-X", "utf8", "-I", "-m", "pip", "--version"]);
+        hide_console(&mut probe);
+        probe.output().is_ok_and(|out| out.status.success())
+    };
     if !pip_ready {
         let get_pip = root.join("get-pip.py");
         download("https://bootstrap.pypa.io/get-pip.py", &get_pip)?;
         check(Command::new(&python).arg(&get_pip).arg("--no-warn-script-location"))?;
     }
-    println!("Installing extraction packages...");
+    ui::stage("Installing setup packages (first time only)");
     // Embeddable Python's ._pth intentionally ignores PYTHONPATH, including
     // pip's temporary build environment. tpk_ar ships as a source distribution:
     // give its backend an explicit home instead of relying on build isolation.
@@ -346,7 +652,7 @@ fn bundled_python(root: &Path, requirements: &str) -> Result<bool> {
     let url = format!("https://github.com/{REPO}/releases/download/{tag}/rrbtd6-python.zip");
     let parent = root.parent().ok_or("no install folder")?;
     let archive = parent.join("python-runtime.zip");
-    println!("Setting up Python (first run only)...");
+    ui::stage("Setting up Python (first time only)");
     if let Err(e) = download(&url, &archive) {
         let _ = fs::remove_file(&archive);
         // 404: not published for these requirements.
@@ -356,8 +662,10 @@ fn bundled_python(root: &Path, requirements: &str) -> Result<bool> {
     let _ = fs::remove_dir_all(&unpack);
     let result = (|| -> Result<()> {
         zip::ZipArchive::new(fs::File::open(&archive)?)?.extract(&unpack)?;
-        let ok = Command::new(unpack.join("python.exe")).args(["-X", "utf8", "-I", "-c", "import ssl, zipfile, UnityPy, numpy, PIL"])
-            .output().is_ok_and(|out| out.status.success());
+        let mut probe = Command::new(unpack.join("python.exe"));
+        probe.args(["-X", "utf8", "-I", "-c", "import ssl, zipfile, UnityPy, numpy, PIL"]);
+        hide_console(&mut probe);
+        let ok = probe.output().is_ok_and(|out| out.status.success());
         if !ok || fs::read_to_string(unpack.join("requirements.installed")).ok().as_deref() != Some(requirements) {
             return Err("the prepared runtime doesn't start or doesn't match these requirements".into());
         }
@@ -396,16 +704,80 @@ fn check_space(dir: &Path) -> Result<()> {
 /// tools/extract_all.py skips finished steps and invalidates them by game fingerprint/output version.
 fn extract(dir: &Path, python: &Path, game: &Path) -> Result<()> {
     check_space(dir)?;
-    println!("Checking game data (the first run extracts it from your BTD6 install; this takes a while)...");
+    ui::stage("Reading your BTD6 files");
+    say!("Checking game data (the first run extracts it from your BTD6 install; this takes a while)...");
     // -X utf8: text as UTF-8 whatever the Windows code page (-I ignores PYTHONUTF8).
     check(Command::new(python).args(["-X", "utf8", "-I"]).arg(dir.join("tools/extract_all.py"))
         .arg("--game").arg(game).arg("--root").arg(dir).current_dir(dir))
 }
 
+/// How long setup may go without any output, or without its progress line changing, before it
+/// counts as stuck. The progress line repeats every 5 s while a stage works, so silence means the
+/// process itself hung; an unchanged percentage means a stage stopped moving.
+const SILENT: Duration = Duration::from_secs(3 * 60);
+const UNCHANGED: Duration = Duration::from_secs(30 * 60);
+
+/// Runs a setup program with no console window: its output goes to setup.log and moves the setup
+/// window's bar. Fails if it fails, or if it gets stuck (then it's stopped).
 fn check(cmd: &mut Command) -> Result<()> {
-    let status = cmd.status()?;
+    hide_console(cmd);
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("Couldn't start {:?} ({e})", cmd.get_program()))?;
+    CHILDREN.lock().unwrap().push(child.id());
+    let (send, lines) = std::sync::mpsc::channel::<String>();
+    for pipe in [child.stdout.take().map(|p| Box::new(p) as Box<dyn io::Read + Send>), child.stderr.take().map(|p| Box::new(p) as Box<dyn io::Read + Send>)].into_iter().flatten() {
+        let send = send.clone();
+        std::thread::spawn(move || {
+            for line in io::BufReader::new(pipe).lines().map_while(std::result::Result::ok) {
+                if send.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    drop(send);
+    let mut tail: Vec<String> = Vec::new();
+    let (mut heard, mut moved, mut last_progress) = (Instant::now(), Instant::now(), String::new());
+    loop {
+        match lines.recv_timeout(Duration::from_secs(1)) {
+            Ok(line) => {
+                heard = Instant::now();
+                log(&line);
+                ui::line(&line);
+                // "[###---]  12.3% | Preparing maps | ETA..." : the part that changes when work moves.
+                if line.starts_with('[') {
+                    let key: String = line.split('|').take(2).collect();
+                    if key != last_progress {
+                        last_progress = key;
+                        moved = Instant::now();
+                    }
+                } else {
+                    moved = Instant::now();
+                }
+                if !line.trim().is_empty() {
+                    tail.push(line);
+                    if tail.len() > 12 {
+                        tail.remove(0);
+                    }
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if heard.elapsed() > SILENT || moved.elapsed() > UNCHANGED {
+            say!("No progress for a long time: stopping it.");
+            stop_children();
+            let _ = child.wait();
+            return Err("Setup got stuck".into());
+        }
+    }
+    let status = child.wait()?;
+    CHILDREN.lock().unwrap().retain(|&p| p != child.id());
     if !status.success() {
-        return Err(format!("{:?} failed ({status})", cmd.get_program()).into());
+        // The last error lines say what went wrong (a Python traceback ends with it).
+        let reason = tail.iter().rev().find(|l| l.contains("Error") || l.contains("error") || l.contains("Exception"))
+            .cloned().unwrap_or_else(|| tail.last().cloned().unwrap_or_default());
+        return Err(format!("{:?} stopped ({status}): {reason}", cmd.get_program().to_string_lossy().rsplit(['\\', '/']).next().unwrap_or("")).into());
     }
     Ok(())
 }

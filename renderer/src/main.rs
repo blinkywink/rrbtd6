@@ -408,15 +408,6 @@ fn game_icon(_root: &std::path::Path) -> Option<miniquad::conf::Icon> {
 }
 
 fn conf() -> macroquad::conf::Conf {
-    // Installed builds enter through the updater even when their EXE is opened directly.
-    if std::env::var_os("RRBTD6_AUTOTEST").is_none()&&!std::env::args().any(|a|a=="--from-launcher") {
-        if let Some(dir)=std::env::current_exe().ok().and_then(|p|p.parent().map(std::path::Path::to_path_buf)) {
-            let launcher=dir.join("rrbtd6-launcher.exe");
-            if dir.join("version.json").is_file()&&launcher.is_file(){
-                if std::process::Command::new(launcher).current_dir(dir).spawn().is_ok(){std::process::exit(0);}
-            }
-        }
-    }
     if std::env::args().nth(1).as_deref()==Some("--audit-animation-codec"){
         let args:Vec<_>=std::env::args().collect();
         let result=(||->std::io::Result<()>{
@@ -433,6 +424,16 @@ fn conf() -> macroquad::conf::Conf {
         match runtime_anim_export::run(std::path::Path::new(&path)) {
             Ok(())=>std::process::exit(0),
             Err(error)=>{eprintln!("animation migration failed: {error}");std::process::exit(1)}
+        }
+    }
+    // Installed builds enter through the updater even when their EXE is opened directly. After the
+    // tool modes above: setup runs this EXE as a tool (--canonicalize-anims) and must get the tool.
+    if std::env::var_os("RRBTD6_AUTOTEST").is_none()&&!std::env::args().any(|a|a=="--from-launcher") {
+        if let Some(dir)=std::env::current_exe().ok().and_then(|p|p.parent().map(std::path::Path::to_path_buf)) {
+            let launcher=dir.join("rrbtd6-launcher.exe");
+            if dir.join("version.json").is_file()&&launcher.is_file(){
+                if std::process::Command::new(launcher).current_dir(dir).spawn().is_ok(){std::process::exit(0);}
+            }
         }
     }
     let adv = advanced::Advanced::load(&read_settings(&root()));

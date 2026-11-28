@@ -38,16 +38,16 @@ has the checklist.
 
 ## Installing (players)
 
-1. Own Bloons TD 6 on PC and install [MelonLoader 0.7.3](https://github.com/LavaGang/MelonLoader/releases/tag/v0.7.3) into it.
-2. Download `RRBTD6Installer.dll` from the [latest release](https://github.com/blinkywink/rrbtd6/releases/latest)
-   and put it in BTD6's `Mods` folder.
-3. Start BTD6. At the main menu it offers to install RustTD6: pick a folder.
-4. The launcher (`rrbtd6-launcher.exe`, also on your desktop if you ask for a shortcut) downloads
-   the game, sets up a private Python, extracts the art and data from your BTD6 install and starts it.
+1. Own Bloons TD 6 on PC (Steam or Epic).
+2. Download `RustTD6Setup.exe` from the [latest release](https://github.com/blinkywink/rrbtd6/releases/latest) and run it.
+   If Windows warns you, choose More info, then Run anyway.
+3. That's it. It installs itself into `%LOCALAPPDATA%\RustTD6`, adds desktop and Start menu shortcuts, finds BTD6,
+   reads the art and data from your copy (the first time takes 10 to 30 minutes) and starts the game.
 
-The first setup is the slow part, and it uses a lot of memory and CPU while it runs, so it goes
-faster with other programs closed. Start RustTD6 from the launcher from then on: it updates itself
-and the game every time, and extracts again after BTD6 updates.
+Start RustTD6 from its shortcut from then on: it updates itself and the game every time, and reads your BTD6 files
+again after BTD6 updates. BTD6 doesn't need to be running, and MelonLoader isn't needed. If something goes wrong,
+setup retries and repairs itself first; if it still can't finish it says what to do, and `setup.log` in the install
+folder has the details.
 
 The installer and launcher only contact GitHub, python.org and PyPI. They never contact Ninja Kiwi.
 

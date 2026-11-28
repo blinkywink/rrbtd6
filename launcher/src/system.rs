@@ -92,6 +92,7 @@ fn steam_libraries(steam: &Path) -> Vec<PathBuf> {
 }
 
 /// Epic install locations (its launcher's `.item` manifests) named Bloons TD 6.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn epic_installs() -> Vec<PathBuf> {
     let dir = std::env::var_os("ProgramData").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:/ProgramData"));
     let mut out = Vec::new();
@@ -113,6 +114,11 @@ fn epic_installs() -> Vec<PathBuf> {
 
 /// The BTD6 install: Steam (any library on any drive), Epic, then the default folders.
 pub fn find_btd6() -> Option<PathBuf> {
+    // Debug builds only: see the "not found" screen on a PC that has BTD6.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("RRBTD6_PRETEND_NO_BTD6").is_some() {
+        return None;
+    }
     let mut candidates: Vec<PathBuf> = Vec::new();
     #[cfg(windows)]
     {
@@ -125,10 +131,45 @@ pub fn find_btd6() -> Option<PathBuf> {
             }
         }
     }
-    candidates.extend(epic_installs());
-    candidates.push(PathBuf::from("C:/Program Files (x86)/Steam/steamapps/common/BloonsTD6"));
-    candidates.push(PathBuf::from("C:/Program Files/Epic Games/BloonsTD6"));
+    #[cfg(windows)]
+    {
+        candidates.extend(epic_installs());
+        candidates.push(PathBuf::from("C:/Program Files (x86)/Steam/steamapps/common/BloonsTD6"));
+        candidates.push(PathBuf::from("C:/Program Files/Epic Games/BloonsTD6"));
+    }
+    #[cfg(not(windows))]
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        candidates.extend(unix_candidates(&home));
+    }
     candidates.into_iter().find(|p| is_btd6(p))
+}
+
+/// BTD6's Steam app and its Windows depot (the files RustTD6 reads, on every system).
+pub const BTD6_APP: u32 = 960090;
+pub const BTD6_WINDOWS_DEPOT: u32 = 960091;
+
+/// Where Linux and macOS Steam keep the Windows files: Linux installs BTD6 through Proton into
+/// steamapps/common like Windows does; on a Mac, `download_depot 960090 960091` in Steam's console
+/// saves them under steamapps/content. Steam itself may be the regular, Flatpak or Snap one.
+#[cfg_attr(windows, allow(dead_code))]
+fn unix_candidates(home: &Path) -> Vec<PathBuf> {
+    let roots = [
+        ".steam/steam", ".steam/root", ".local/share/Steam",
+        ".var/app/com.valvesoftware.Steam/.local/share/Steam", ".var/app/com.valvesoftware.Steam/data/Steam",
+        "snap/steam/common/.local/share/Steam", "Library/Application Support/Steam",
+    ];
+    let mut out = Vec::new();
+    for root in roots.iter().map(|r| home.join(r)).filter(|r| r.join("steamapps").is_dir()) {
+        for lib in steam_libraries(&root) {
+            for p in [lib.join("steamapps/common/BloonsTD6"),
+                      lib.join(format!("steamapps/content/app_{BTD6_APP}/depot_{BTD6_WINDOWS_DEPOT}"))] {
+                if !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The proxy to reach GitHub / python.org through: HTTPS_PROXY / ALL_PROXY, else the Windows
@@ -199,6 +240,44 @@ pub fn sha256_hex(bytes: &[u8]) -> Option<String> {
     }
 }
 
+/// Windows' folder picker (None: cancelled).
+pub fn pick_folder(title: &str) -> Option<PathBuf> {
+    #[cfg(windows)]
+    unsafe {
+        #[repr(C)]
+        struct BrowseInfo { owner: isize, root: isize, display: *mut u16, title: *const u16, flags: u32, callback: isize, param: isize, image: i32 }
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn SHBrowseForFolderW(info: *const BrowseInfo) -> isize;
+            fn SHGetPathFromIDListW(list: isize, path: *mut u16) -> i32;
+        }
+        #[link(name = "ole32")]
+        unsafe extern "system" {
+            fn CoInitializeEx(reserved: isize, flags: u32) -> i32;
+            fn CoTaskMemFree(p: isize);
+        }
+        CoInitializeEx(0, 0x2); // apartment-threaded, as the dialog needs
+        let mut display = [0u16; 260];
+        let t = wide(title);
+        // BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_NONEWFOLDERBUTTON
+        let info = BrowseInfo { owner: 0, root: 0, display: display.as_mut_ptr(), title: t.as_ptr(), flags: 0x1 | 0x40 | 0x200, callback: 0, param: 0, image: 0 };
+        let list = SHBrowseForFolderW(&info);
+        if list == 0 {
+            return None;
+        }
+        let mut path = [0u16; 1024];
+        let ok = SHGetPathFromIDListW(list, path.as_mut_ptr()) != 0;
+        CoTaskMemFree(list);
+        let n = path.iter().position(|&c| c == 0).unwrap_or(0);
+        (ok && n > 0).then(|| PathBuf::from(String::from_utf16_lossy(&path[..n])))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = title;
+        None
+    }
+}
+
 /// A message box with Yes / No / Cancel (6 / 7 / 2), or OK.
 pub fn ask(title: &str, text: &str, yes_no_cancel: bool) -> i32 {
     #[cfg(windows)]
@@ -230,6 +309,21 @@ mod tests {
         assert_eq!(libs[1], PathBuf::from("D:\\SteamLibrary"));
         assert_eq!(libs[2], PathBuf::from("E:\\Games\\Steam"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unix_steam_folders_include_flatpak_libraries_and_the_mac_depot() {
+        let home = std::env::temp_dir().join(format!("rrbtd6-home-{}", std::process::id()));
+        let flatpak = home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam");
+        std::fs::create_dir_all(flatpak.join("steamapps")).unwrap();
+        std::fs::write(flatpak.join("steamapps/libraryfolders.vdf"), "\"libraryfolders\"\n{\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"/mnt/games/Steam\"\n\t}\n}\n").unwrap();
+        let mac = home.join("Library/Application Support/Steam");
+        std::fs::create_dir_all(mac.join("steamapps")).unwrap();
+        let found = unix_candidates(&home);
+        assert!(found.contains(&flatpak.join("steamapps/common/BloonsTD6")));
+        assert!(found.contains(&PathBuf::from("/mnt/games/Steam").join("steamapps/common/BloonsTD6")));
+        assert!(found.contains(&mac.join("steamapps/content/app_960090/depot_960091")));
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[cfg(windows)]
