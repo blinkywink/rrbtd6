@@ -187,18 +187,18 @@ mod hidden_features_tests{
     #[test]
     fn mods_button_is_opt_in_and_visibility_roundtrips(){
         let mut settings=Advanced::default();assert!(!settings.show_mods);
-        settings.toggle(12);assert!(settings.show_mods);
+        settings.toggle(12 - ROW_OFFSET);assert!(settings.show_mods);
         assert!(Advanced::load(&serde_json::json!({"advanced":settings})).show_mods);
-        settings.toggle(12);assert!(!settings.show_mods);
+        settings.toggle(12 - ROW_OFFSET);assert!(!settings.show_mods);
     }
     #[test]
     fn fullscreen_toggle_migrates_old_preferences_and_roundtrips() {
         let mut a = Advanced::default();
-        a.toggle(11);
+        a.toggle(11 - ROW_OFFSET);
         assert!(a.fullscreen);
         let b = Advanced::load(&serde_json::json!({"advanced": a}));
         assert!(b.fullscreen);
-        a.toggle(11);
+        a.toggle(11 - ROW_OFFSET);
         assert!(!a.fullscreen);
         for mode in [1, 2] {
             assert!(Advanced::load(&serde_json::json!({"advanced": {"window_mode": mode}})).fullscreen);
