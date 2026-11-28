@@ -243,6 +243,10 @@ impl Problem {
             return Problem { heading: "Couldn't find Bloons TD 6", retry: false, pick_folder: true,
                 body: "RustTD6 needs BTD6 installed on this PC (Steam or Epic), because it reads the game's art and sounds from your own copy. Install BTD6 and press Try again, or show RustTD6 where it is." };
         }
+        if has(&["btd6 is out of date"]) {
+            return Problem { heading: "Update Bloons TD 6 first", retry: false, pick_folder: false,
+                body: "Your BTD6 is older than the version RustTD6 matches, and RustTD6 reads its stats and art from your copy. Update BTD6 (in Steam: restart Steam, or right-click Bloons TD 6 > Properties > Updates), then press Try again." };
+        }
         if has(&["not enough free disk space"]) {
             return Problem { heading: "Not enough disk space", retry: false, pick_folder: false,
                 body: "Setup needs about 15 GB free the first time (the game data is about 7 GB). Free up some space, then press Try again." };
@@ -817,12 +821,36 @@ fn check_space(dir: &Path) -> Result<()> {
 
 /// tools/extract_all.py skips finished steps and invalidates them by game fingerprint/output version.
 fn extract(dir: &Path, python: &Path, game: &Path) -> Result<()> {
+    btd6_version_gate(game)?;
     check_space(dir)?;
     ui::stage("Reading your BTD6 files");
     say!("Checking game data (the first run extracts it from your BTD6 install; this takes a while)...");
     // -X utf8: text as UTF-8 whatever the Windows code page (-I ignores PYTHONUTF8).
     check(Command::new(python).args(["-X", "utf8", "-I"]).arg(dir.join("tools/extract_all.py"))
         .arg("--game").arg(game).arg("--root").arg(dir).current_dir(dir))
+}
+
+/// Game data is read from the player's own BTD6, so it must be the version RustTD6 was matched
+/// against, or newer: an older one would bring that version's stats and be missing what was added
+/// since (and co-op would disagree with everyone else's). A newer one works; RustTD6 just doesn't
+/// have its changes yet. An unreadable version doesn't stop setup.
+fn btd6_version_gate(game: &Path) -> Result<()> {
+    let supported = compatibility::SUPPORTED_BTD6.trim();
+    let Some(installed) = compatibility::installed_btd6(game) else {
+        say!("BTD6 version: couldn't read it; continuing (RustTD6 matches {supported})");
+        return Ok(());
+    };
+    say!("BTD6 version {installed}; RustTD6 matches {supported}");
+    match compatibility::compare_btd6(&installed, supported) {
+        std::cmp::Ordering::Less => Err(format!("BTD6 is out of date: this PC has version {installed}, RustTD6 needs {supported}").into()),
+        std::cmp::Ordering::Greater if !unattended() => {
+            ui::ask("Your BTD6 is newer than RustTD6",
+                &format!("You have BTD6 {installed}; RustTD6 currently matches {supported}. Everything still works, but what that update added or changed isn't in RustTD6 yet. RustTD6 updates itself when it catches up, usually within a few days.\n\nCo-op works with players on the same RustTD6 version."),
+                &["Continue"]);
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// How long setup may go without any output, or without its progress line changing, before it
