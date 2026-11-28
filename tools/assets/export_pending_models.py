@@ -143,8 +143,18 @@ def main():
         if cand and not (L / "effects" / name / "effect.json").exists():
             todo.append(cand[0])
     print(len(todo), "pending effects to export", flush=True)
-    for i in range(0, len(todo), 40):
-        subprocess.run([sys.executable, "tools/assets/export_particles.py", GAME, str(L / "effects"), *todo[i:i + 40]], check=False)
+    # Chunks are independent (each writes its own effect folders, as the particles step's parallel
+    # jobs do): run them side by side, as many as free memory allows (~2 GB each, measured).
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from concurrent.futures import ThreadPoolExecutor
+    from model_batch import worker_count
+    chunks = [todo[i:i + 40] for i in range(0, len(todo), 40)]
+    count = max(1, min(len(chunks) or 1, worker_count(per_worker=2 << 30, max_workers=8),
+                       int(os.environ.get("RRBTD6_SETUP_WORKERS", "8"))))
+    def export(chunk):
+        subprocess.run([sys.executable, "tools/assets/export_particles.py", GAME, str(L / "effects"), *chunk], check=False)
+    with ThreadPoolExecutor(count) as pool:
+        list(pool.map(export, chunks))
     done = sum((L / "effects" / p.rsplit("/", 1)[-1].removesuffix(".prefab") / "effect.json").exists() for p in todo)
     print(done, "of", len(todo), "effects exported (a prefab without particles writes none)", flush=True)
 

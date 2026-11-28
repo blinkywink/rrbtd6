@@ -117,11 +117,15 @@ class Ctx:
             else:
                 self.py(*job, progress=(0., 0.))
 
+        took = []
+
         def run(job):
             if stopped.is_set():
                 return False
+            began = time.time()
             try:
                 call(job)
+                took.append((time.time() - began, job))
                 return True
             except Exception:
                 stopped.set()
@@ -142,6 +146,11 @@ class Ctx:
                     report()
                 else:
                     again.append(futures[future])
+        # The slowest jobs: when one dominates, more workers can't shorten the group.
+        if took:
+            slow = sorted(took, key=lambda t: -t[0])[:3]
+            print(f"{label}: slowest " + ", ".join(f"{secs:.0f}s {' '.join(os.path.basename(str(a)) for a in job[:1] + job[2:4] if not isinstance(a, dict))}"
+                                                   for secs, job in slow), flush=True)
         if again:
             print(f"{label}: retrying {len(again)} job(s) one at a time", flush=True)
         for job in again:
