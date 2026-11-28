@@ -53,11 +53,19 @@ def available_memory():
     return 0
 
 
+def cores():
+    """Physical cores: half the logical ones where they come in hyperthread pairs (most Windows and
+    Linux PCs); Apple silicon has none, so every core counts there."""
+    logical = os.cpu_count() or 1
+    return logical if sys.platform == "darwin" else max(1, logical // 2)
+
+
 def worker_count(cpu=None, free=None, per_worker=4 << 30, max_workers=4):
-    """Keep 2 GiB free; callers may use a measured budget for a known bundle family."""
-    cpu = cpu if cpu is not None else (os.cpu_count() or 1)
+    """One single-threaded exporter per physical core, keeping 2 GiB free; callers may use a
+    measured budget for a known bundle family. (cpu: a logical count, as on a hyperthreaded PC.)"""
+    physical = max(1, cpu // 2) if cpu is not None else cores()
     free = free if free is not None else available_memory()
-    return max(1, min(max_workers, max(1, cpu // 2), max(1, (free - (2 << 30)) // per_worker)))
+    return max(1, min(max_workers, physical, max(1, (free - (2 << 30)) // per_worker)))
 
 
 def run(game, jobs, size=16, workers=None, *, progress_offset=0, progress_total=None, keep_floats=False, retries=2):
@@ -81,11 +89,11 @@ def run(game, jobs, size=16, workers=None, *, progress_offset=0, progress_total=
         run(game, original, size, workers, progress_offset=progress_offset, progress_total=overall, keep_floats=keep_floats)
         run(game, generated, size, workers, progress_offset=progress_offset + len(original), progress_total=overall, keep_floats=keep_floats)
         return
-    requested = workers if workers is not None else int(os.environ.get("RRBTD6_SETUP_WORKERS", "8"))
+    requested = workers if workers is not None else int(os.environ.get("RRBTD6_SETUP_WORKERS", "12"))
     # Measured 32 mixed generated models at 1.12 GiB peak commit and 60 asset_references models
     # at 0.86 GiB (its files are mapped, not loaded). Keep ~2x headroom; a batch that still runs
     # out of memory is retried with one worker below.
-    capacity = worker_count(per_worker=2 << 30, max_workers=8)
+    capacity = worker_count(per_worker=2 << 30, max_workers=12)
     count = min(len(groups), capacity, max(1, requested))
     print(f"Model preparation: {count} parallel worker(s), {total} models (memory bounded)", flush=True)
     completed = [0] * len(groups)

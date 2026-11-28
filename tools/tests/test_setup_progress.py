@@ -64,6 +64,40 @@ class ProgressTests(unittest.TestCase):
             self.assertGreater(p.weights["tower_models"], 0)
 
 
+def serve_child(group_lines, started=None, ended=None):
+    """A fake export_animated_batch --serve process: each manifest written to stdin answers with
+    group_lines() and the group-done marker; closing stdin ends it."""
+    import queue
+
+    class Child:
+        returncode = 0
+
+        def __init__(self, *args, **kwargs):
+            lines = queue.Queue()
+            if started:
+                started()
+
+            class Input:
+                def write(self, text):
+                    for line in group_lines():
+                        lines.put(line + "\n")
+                    lines.put("@@RRBTD6_GROUP_DONE\n")
+
+                def flush(self):
+                    pass
+
+                def close(self):
+                    lines.put(None)
+            self.stdin = Input()
+            self.stdout = iter(lines.get, None)
+
+        def wait(self):
+            if ended:
+                ended()
+            return 0
+    return Child
+
+
 class BatchTests(unittest.TestCase):
     def test_grouping_is_bounded_deduplicated_by_caller_and_reuses_bundle_order(self):
         jobs = [[f"out/{i}", "bundle-b" if i % 2 else "bundle-a", "prefab"] for i in range(45)]
@@ -85,25 +119,23 @@ class BatchTests(unittest.TestCase):
     def test_parallel_batches_have_monotonic_aggregate_progress(self):
         active, peak = 0, 0
         guard = threading.Lock()
-        class Child:
-            def __init__(self, *args, **kwargs):
-                self.stdout = self.lines()
-            def __enter__(self):
-                nonlocal active, peak
-                with guard:
-                    active += 1;peak = max(peak, active)
-                return self
-            def lines(self):
-                for done in (1, 2):
-                    time.sleep(.02)
-                    yield PREFIX + json.dumps({"done": done, "total": 2})
-            def wait(self): return 0
-            def __exit__(self, *args):
-                nonlocal active
-                with guard:active -= 1
+
+        def started():
+            nonlocal active, peak
+            with guard:
+                active += 1;peak = max(peak, active)
+
+        def ended():
+            nonlocal active
+            with guard:active -= 1
+
+        def lines():
+            for done in (1, 2):
+                time.sleep(.02)
+                yield PREFIX + json.dumps({"done": done, "total": 2})
         output = io.StringIO()
         jobs = [[f"out/{i}", "bundle", "prefab"] for i in range(8)]
-        with patch("model_batch.complete", return_value=False), patch("model_batch.worker_count", return_value=2), patch("model_batch.subprocess.Popen", Child), redirect_stdout(output):
+        with patch("model_batch.complete", return_value=False), patch("model_batch.worker_count", return_value=2), patch("model_batch.subprocess.Popen", serve_child(lines, started, ended)), redirect_stdout(output):
             run_models("game", jobs, size=2)
         progress = [json.loads(line[len(PREFIX):])["done"] for line in output.getvalue().splitlines() if line.startswith(PREFIX)]
         self.assertEqual(peak, 2)
@@ -111,16 +143,11 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(progress[-1], 8)
 
     def test_mixed_bundles_run_in_two_phases_with_one_progress_total(self):
-        class Child:
-            def __init__(self,*a,**k):self.stdout=[]
-            def __enter__(self):return self
-            def __exit__(self,*a):pass
-            def wait(self):return 0
         jobs=[[f"out/{i}","generated_assets_all" if i>=2 else "asset_references_assets_all","prefab"] for i in range(6)]
         output=io.StringIO()
-        with patch("model_batch.complete",return_value=False), patch("model_batch.worker_count",return_value=2) as budget, patch("model_batch.subprocess.Popen",Child), redirect_stdout(output):
+        with patch("model_batch.complete",return_value=False), patch("model_batch.worker_count",return_value=2) as budget, patch("model_batch.subprocess.Popen",serve_child(lambda: [])), redirect_stdout(output):
             run_models("game",jobs,size=1)
-        self.assertEqual(budget.call_args_list,[unittest.mock.call(per_worker=2 << 30,max_workers=8)]*2)
+        self.assertEqual(budget.call_args_list,[unittest.mock.call(per_worker=2 << 30,max_workers=12)]*2)
         records=[json.loads(l[len(PREFIX):]) for l in output.getvalue().splitlines() if l.startswith(PREFIX)]
         self.assertEqual({r["total"] for r in records},{6})
         self.assertEqual([r["done"] for r in records],list(range(1,7)))
@@ -163,15 +190,33 @@ class BatchTests(unittest.TestCase):
             self.assertEqual((out/"anim.bin").read_bytes(),b"raw")
             convert.assert_not_called()
 
-    def test_failed_bake_removes_completion_marker_and_propagates(self):
+    def test_failed_bake_removes_completion_marker_and_the_rest_continue(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bad, good = Path(temp) / "bad", Path(temp) / "good"
+            bad.mkdir();good.mkdir()
+            exporter = types.SimpleNamespace(em=types.SimpleNamespace(OUT=None, tex_cache={}))
+
+            def main():
+                (Path(exporter.OUT) / "meta.json").write_text('{}')
+                if exporter.OUT == str(bad):
+                    raise RuntimeError("bake interrupted")
+            exporter.main = main
+            output = io.StringIO()
+            with patch.dict(sys.modules, {"export_animated": exporter, "compact_anims": types.SimpleNamespace(convert=lambda _: None)}), patch.object(sys, "argv", ["fixture"]), redirect_stdout(output):
+                batch.run("game", [[str(bad), "bundle", "bad.prefab"], [str(good), "bundle", "good.prefab"]])
+            self.assertFalse((bad / "meta.json").exists())
+            self.assertTrue((good / "meta.json").exists())
+            self.assertIn("model export failed: bad.prefab: RuntimeError: bake interrupted", output.getvalue())
+
+    def test_out_of_memory_removes_completion_marker_and_propagates(self):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp)
             def fail():
                 (out / "meta.json").write_text('{}')
-                raise RuntimeError("bake interrupted")
+                raise MemoryError("out of memory")
             exporter = types.SimpleNamespace(main=fail, em=types.SimpleNamespace(OUT=None, tex_cache={}))
             with patch.dict(sys.modules, {"export_animated": exporter, "compact_anims": types.SimpleNamespace(convert=lambda _: None)}), patch.object(sys, "argv", ["fixture"]):
-                with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                with self.assertRaises(MemoryError):
                     batch.run("game", [[str(out), "bundle", "prefab"]])
             self.assertFalse((out / "meta.json").exists())
 

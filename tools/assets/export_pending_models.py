@@ -149,8 +149,8 @@ def main():
     from concurrent.futures import ThreadPoolExecutor
     from model_batch import worker_count
     chunks = [todo[i:i + 40] for i in range(0, len(todo), 40)]
-    count = max(1, min(len(chunks) or 1, worker_count(per_worker=2 << 30, max_workers=8),
-                       int(os.environ.get("RRBTD6_SETUP_WORKERS", "8"))))
+    count = max(1, min(len(chunks) or 1, worker_count(per_worker=2 << 30, max_workers=12),
+                       int(os.environ.get("RRBTD6_SETUP_WORKERS", "12"))))
     def export(chunk):
         subprocess.run([sys.executable, "tools/assets/export_particles.py", GAME, str(L / "effects"), *chunk], check=False)
     with ThreadPoolExecutor(count) as pool:

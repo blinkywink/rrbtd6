@@ -277,7 +277,7 @@ def bundle_matches(bundle):
 def workers():
     """Processes for the independent pieces: by free memory, like the model stages."""
     from model_batch import worker_count
-    return max(1, min(worker_count(per_worker=1 << 30, max_workers=8), int(os.environ.get("RRBTD6_SETUP_WORKERS", "8"))))
+    return max(1, min(worker_count(per_worker=1 << 30, max_workers=12), int(os.environ.get("RRBTD6_SETUP_WORKERS", "12"))))
 
 
 def main():

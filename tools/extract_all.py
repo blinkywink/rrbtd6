@@ -105,8 +105,8 @@ class Ctx:
         from assets.model_batch import worker_count
         if not jobs:
             return
-        count = min(len(jobs), worker_count(per_worker=per_worker, max_workers=8),
-                    max(1, int(os.environ.get("RRBTD6_SETUP_WORKERS", "8"))))
+        count = min(len(jobs), worker_count(per_worker=per_worker, max_workers=12),
+                    max(1, int(os.environ.get("RRBTD6_SETUP_WORKERS", "12"))))
         print(f"{label}: {count} parallel worker(s), {len(jobs)} job(s)", flush=True)
         stopped = threading.Event()
 
