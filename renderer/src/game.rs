@@ -18050,7 +18050,7 @@ impl Game {
                 continue;
             }
             let now = self.steps as u64;
-            for sp in tier.supports.iter().chain(src.temp_supports.iter().filter(|x| if x.0.instant { x.2 < now && x.1 > 0.0 } else { x.2 + 1 < now && x.1 > -1.0 }).map(|(sp, _, _)| sp)) {
+            for sp in tier.supports.iter().chain(src.temp_supports.iter().filter(|x| if x.0.instant { x.2 < now && x.1 > 0.0 } else { x.2 + 1 < now && x.1 > if Some(s) == skip { -2.0 } else { -1.0 } }).map(|(sp, _, _)| sp)) {
                 if Some(s) == skip && !sp.on_self {
                     continue;
                 }
@@ -22145,8 +22145,10 @@ impl Game {
                     *f -= 1.0;
                 }
                 // (Its removal reaches the towers a frame late too: recording ninja_052, the points
-                // remade at 1922 when Sabotage ends.)
-                tw.temp_supports.retain(|(_, f, _)| *f > -1.0);
+                // remade at 1922 when Sabotage ends; and its own tower a frame later still, after its
+                // attacks that frame: recording pat_l10_mk rt 881, the punch on Rallying Roar's last
+                // frame +2, Pat's model rebuilt after it. HYPOTHESIS P-SELFBUFFEND.)
+                tw.temp_supports.retain(|(_, f, _)| *f > -2.0);
                 if let Some((d, _, _)) = &mut tw.ammo {
                     *d -= 1.0;
                 }
