@@ -440,6 +440,11 @@ def main():
                     if x["type"] == "FilterWithTagsModel":
                         tags = [t for t in (deref(x["f"].get("tags")) or []) if isinstance(t, str)]
                         (exclude_tags if x["f"].get("inclusive") else require_tags).extend(tags)
+                    # FilterMoabModel: MOAB-class only (flip: MOAB-class out); the Ninja Paragon's
+                    # sticky bomb, aimed at a DDT that pops into a Ceramic, flies on through it to
+                    # its lifespan (recording combo7_ninja_paragon_mk rt 847-875).
+                    if x["type"] == "FilterMoabModel":
+                        (exclude_tags if x["f"].get("flip") else require_tags).append("Moabs")
                     if x["type"] == "FilterGlueLevelModel":
                         glue_filter = x["f"]["glueLevel"]
                     if x["type"] == "FilterFrozenBloonsModel":
