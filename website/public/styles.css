@@ -1,20 +1,20 @@
 @font-face {
   font-family: "Comic Neue";
-  src: url("/fonts/ComicNeue-Bold.ttf") format("truetype");
+  src: url("/fonts/ComicNeue-Bold.woff2") format("woff2");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: Inter;
-  src: url("/fonts/Inter.ttf") format("truetype");
+  src: url("/fonts/Inter.woff2") format("woff2");
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "Luckiest Guy";
-  src: url("/fonts/LuckiestGuy-Regular.ttf") format("truetype");
+  src: url("/fonts/LuckiestGuy-Regular.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -139,6 +139,10 @@ code { font-size: .86em; padding: 2px 7px; border-radius: 6px; background: var(-
 .nav-desktop a:hover { color: var(--ink); }
 /* The link for the section being read (site.js) stays lit. */
 .nav-desktop a[aria-current] { color: var(--ink); }
+/* GitHub and Discord as icons at the end of the desktop nav. */
+.nav-desktop .nav-icon { display: grid; place-items: center; padding: 4px; }
+.nav-desktop .nav-icon:first-of-type { margin-left: 4px; }
+.nav-icon svg { width: 20px; height: 20px; fill: currentColor; }
 .menu nav a[aria-current] { background: #eaf2ff; }
 
 /* Mobile menu: a <details> dropdown (no JavaScript needed). */
@@ -268,6 +272,9 @@ main { width: min(var(--width), calc(100% - 40px)); margin: 0 auto; }
   border-radius: 16px;
 }
 .download svg { margin-top: -4px; }
+/* The smaller Download button inside install step 2. */
+.download.small { flex: none; min-width: 0; margin-left: auto; gap: 8px; padding: 12px 18px 9px; font-size: 18px; border-radius: 12px; box-shadow: 0 4px 0 var(--paper-shadow); }
+.download.small svg { width: 17px; height: 17px; }
 .download:focus-visible { outline-offset: 6px; }
 /* The white buttons stand on a pale edge. */
 .download { box-shadow: 0 6px 0 var(--paper-shadow); }
@@ -456,6 +463,9 @@ main .block { position: relative; }
 .todo { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .todo li { padding: 7px 14px; border-radius: 999px; background: var(--paper); color: var(--paper-ink); font-size: 14px; font-weight: 700; }
 .todo span { margin-left: 4px; color: var(--paper-muted); font-size: 12.5px; font-weight: 600; }
+/* Sections that match completely: the same chips, in the page's own blue. */
+.todo.all li { background: var(--card); color: var(--ink); box-shadow: 0 3px 0 var(--deep); }
+.todo.all span { color: var(--faint); }
 @media (max-width: 720px) { .prows { grid-template-columns: 1fr; } }
 .progress-total { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 18px; }
 .progress-total > div { padding: 20px 24px; background: var(--card); border-radius: 16px; }
@@ -480,7 +490,9 @@ main .block { position: relative; }
   .platforms { grid-template-columns: 1fr; }  .block { padding: 48px 0; }
   .block h2 { margin-bottom: 18px; }
   .list li, .platform, .mods-text { padding: 20px; }
-  .steps li { padding: 16px 18px; gap: 14px; }
+  .steps li { padding: 16px 18px; gap: 14px; flex-wrap: wrap; }
+  .steps li > span:not(.num) { flex: 1 1 0; min-width: 0; }
+  .download.small { width: 100%; margin-left: 0; font-size: 18px; padding: 12px 18px 9px; }
   footer { margin-top: 96px; }
   .progress-total > div { padding: 16px 18px; }
   .progress-total .pnum { font-size: 32px; }

@@ -4,8 +4,9 @@
 
 Replaces everything between the <!-- progress:start --> and <!-- progress:end --> markers in
 website/public/index.html. A line on what a scenario is and when the counts were updated, the
-totals with one overall bar, the rows that don't match yet, then one block per section (Towers,
-Heroes, Maps, Monkey Knowledge, Paragons & combos, Powers) with a row and bar per item (recorded
+totals with one overall bar, the rows that don't match yet, the sections that match completely as
+one line each, then a block per remaining section (Towers, Heroes, Monkey Knowledge, ...) with a row
+and bar per item (recorded
 scenarios that match the real game frame by frame; website/count_progress.py fills them), and a bar
 per area (a rough estimate out of ten of the whole area, including what no recording covers yet).
 """
@@ -54,7 +55,17 @@ def build(data):
             label = f"{name} ({title})" if name == "Heroes" else name
             out.append(f'      <li>{html.escape(label)} <span>{rt - rd} of {rt} left</span></li>')
         out.append("    </ul>")
+    full = [(title, sum(r[2] for r in rows)) for title, rows in sections
+            if rows and all(r[2] and r[1] == r[2] for r in rows)]
+    if full:
+        out.append('    <h3 class="sub">Fully matched</h3>')
+        out.append('    <ul class="todo all">')
+        for title, t in full:
+            out.append(f'      <li>{html.escape(title)} <span>all {t} match</span></li>')
+        out.append("    </ul>")
     for title, rows in sections:
+        if title in dict(full):
+            continue
         d = sum(r[1] for r in rows)
         t = sum(r[2] for r in rows)
         out.append(f'    <h3 class="sub">{html.escape(title)} <span>({d}/{t} match)</span></h3>' if t else

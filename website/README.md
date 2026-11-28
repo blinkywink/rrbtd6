@@ -3,8 +3,8 @@
 Static home page (`public/index.html`, `public/styles.css`) and a separate mod API docs site
 (`public/docs/`, its own `docs.css`), with self-hosted Luckiest Guy (headings), Inter (text) and Comic Neue (the wordmark, where Comic Sans
 isn't installed).
-Little JavaScript, none of it needed: `download.js` scrolls the home page to the install steps
-after a Download click, points the main button at the build instructions on a Mac or Linux, and
+Little JavaScript, none of it needed: `download.js` points the main button (which
+otherwise jumps to the install steps, where step 2 has the download) at the build instructions on a Mac or Linux, and
 shows the latest build under the button (from GitHub's API, the only cross-origin request; the
 CSP's `connect-src` allows just that); `site.js` marks the header link for the section being read,
 and copies the mod example; and `docs/nav.js` keeps the docs sidebar's scroll between pages (the CSP allows same-origin
@@ -13,7 +13,8 @@ analytics, and no game art apart from the hero's silhouettes (also cut up as dec
 
 The docs pages are generated from `build_docs.py` and committed as plain HTML; after editing a
 page there, run `python website/build_docs.py`. `/mods/` redirects to `/docs/`; the example
-downloads stay under `public/mods/`. Font licenses: `public/fonts/LuckiestGuy-LICENSE.txt` (Apache 2.0),
+downloads stay under `public/mods/`. The fonts are WOFF2 cut down to the characters the site uses;
+the full TTFs are in `fonts-src/` and `python website/build_fonts.py` rebuilds them. Font licenses: `public/fonts/LuckiestGuy-LICENSE.txt` (Apache 2.0),
 `public/fonts/Inter-OFL.txt` and `public/fonts/ComicNeue-OFL.txt` (SIL OFL).
 
 ## Progress section

@@ -1,20 +1,20 @@
 @font-face {
   font-family: "Comic Neue";
-  src: url("/fonts/ComicNeue-Bold.ttf") format("truetype");
+  src: url("/fonts/ComicNeue-Bold.woff2") format("woff2");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: Inter;
-  src: url("/fonts/Inter.ttf") format("truetype");
+  src: url("/fonts/Inter.woff2") format("woff2");
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "Luckiest Guy";
-  src: url("/fonts/LuckiestGuy-Regular.ttf") format("truetype");
+  src: url("/fonts/LuckiestGuy-Regular.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
@@ -152,8 +152,8 @@ tr + tr td { border-top: 1px solid var(--line); }
 
 /* Overview cards and lists */
 .cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 26px 0 8px; }
-.card { display: block; padding: 18px 20px; border-radius: 16px; background: var(--paper); color: var(--blue-text); text-decoration: none; box-shadow: 0 5px 0 var(--paper-shadow); transition: transform .12s ease, box-shadow .12s ease; }
-.card:hover { transform: translateY(-2px); box-shadow: 0 7px 0 var(--paper-shadow); }
+.card { display: block; padding: 18px 20px; border-radius: 16px; background: var(--paper); color: var(--blue-text); text-decoration: none; box-shadow: 0 5px 0 var(--paper-shadow); }
+.card:hover { background: #f3f8ff; }
 .card strong { display: block; font-size: 17px; margin-bottom: 3px; color: var(--blue-text); }
 .card span { display: block; color: #4a5f86; font-size: 14px; font-weight: 500; line-height: 1.5; }
 .flow { counter-reset: f; list-style: none; padding: 0 !important; }

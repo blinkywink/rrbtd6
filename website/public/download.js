@@ -1,5 +1,6 @@
 // On a Mac or Linux the main button leads to the build instructions instead (the installer is for
-// Windows), and the line under it offers the Windows download.
+// Windows), and the line under it offers the Windows download. The Windows button just jumps to the
+// install steps, where step 2 has the download.
 (function () {
   var hero = document.querySelector(".hero a.download"), also = document.querySelector(".hero .fine:not(.release)");
   if (!hero || !also) return;
@@ -8,26 +9,11 @@
   if (/android|iphone|ipad|ipod/.test(agent) || (/mac/.test(platform) && navigator.maxTouchPoints > 1)) return;
   var os = /mac/.test(platform) ? "macOS" : /linux/.test(platform) ? "Linux" : null;
   if (!os) return;
-  var installer = hero.href;
+  var step = document.querySelector(".steps a.download"), installer = step ? step.href : "#install";
   hero.firstChild.textContent = "Build for " + os + " ";
   hero.href = "#platforms";
   hero.classList.add("for-build");
   also.innerHTML = 'On Windows? <a href="' + installer + '">Download the installer</a>';
-})();
-
-// Download, then show how to install: the button still starts the download (its href), and a
-// moment later the page scrolls to the install steps.
-(function () {
-  var install = document.getElementById("install");
-  if (!install) return;
-  var calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  document.querySelectorAll('a.download:not(.for-build), .hero .fine a[href$=".dll"]').forEach(function (a) {
-    a.addEventListener("click", function () {
-      setTimeout(function () {
-        install.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "start" });
-      }, 400);
-    });
-  });
 })();
 
 // Under the button: the current version ("Version 0.651", the release title), its age and the
