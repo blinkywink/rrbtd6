@@ -996,7 +996,7 @@ impl Hud {
         }
 
         // Upgrade menu. (Geraldo's shop, when shown, lies over it: its buttons take no clicks.)
-        crate::uitree::block_input(self.mod_ui.modal() || self.geraldo.covers_tsm());
+        crate::uitree::block_input(self.mod_ui.modal() || self.geraldo.covers(mouse_position().into()));
         let tw = selected.and_then(|t| game.towers.get(t).map(|tw| (t, tw)));
         self.tsm.active = tw.is_some();
         // MainHudRightAlign "OpenRight" state: the round panel slides left of an open menu.

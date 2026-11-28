@@ -87,9 +87,11 @@ impl GeraldoShop {
         }
     }
 
-    /// The shop covers the upgrade menu now (its buttons don't take clicks).
-    pub fn covers_tsm(&self) -> bool {
+    /// The shop covers this point of the upgrade menu now (the menu's buttons under it take no
+    /// clicks; the theme's Shop button, outside the panel, still does).
+    pub fn covers(&self, p: Vec2) -> bool {
         self.open && self.open_for.is_some()
+            && self.node.as_ref().is_some_and(|n| n.active && n.rect(ROOT).is_some_and(|r| r.contains(p)))
     }
 }
 
@@ -141,7 +143,10 @@ impl Hud {
             img.fill_method = 0;
             img.fill_amount = frac.clamp(0.0, 1.0);
         }
-        n.set_active(&format!("{TOP}/GamepadCloseContainer/CloseButton/Jewel"), false);
+        // GeraldoShopMenuUi.Initialise (VERIFIED-DECOMP @0x180b7b7c0): gamepadCloseContainer is
+        // shown only for a gamepad player; with the mouse the theme's Shop button (outside the
+        // panel) hides it again.
+        n.set_active(&format!("{TOP}/GamepadCloseContainer"), false);
 
         // A card per item (GeraldoShopMenuUi.Populate, VERIFIED-DECOMP @0x180b7c3c0: every
         // GeraldoItemModel; the ones above Geraldo's level show Locked).
@@ -223,18 +228,19 @@ impl Hud {
             n.set_text(&format!("{INFO}/ShopItemDescription"), &d);
         }
         // (GeraldoShopMenuUi.Close: the shop alone hides; Geraldo stays selected.)
-        if self.geraldo.open && n.clicked(&format!("{TOP}/GamepadCloseContainer/CloseButton")) {
-            self.geraldo.open = false;
-            self.geraldo.changed = Some(get_time());
-        }
         let mut ctx = Ctx { sprites: &mut self.sprites, fonts: &self.fonts, scale: s, canvas_h, clip: None };
         draw_tree(n, parent, &mut ctx);
-        // The item in hand follows the cursor.
+        // The item in hand follows the cursor: GeraldoShopMenuUi.StartPlacement (VERIFIED-DECOMP
+        // @0x180b7c960) hands InGameObjects.IconStart the card's StoreIcon sprite (the "...Plus"
+        // one once upgraded).
         if let Some(i) = self.geraldo.armed {
-            let name = items[i].name.clone();
+            let plus = format!("{}Plus", items[i].name);
+            let upgraded = level_desc(&self.menus.loc, &items[i].loc, level).1 > 0 && self.sprites.get(&plus).is_some();
+            let name = if upgraded { plus } else { items[i].name.clone() };
             if let Some(sp) = self.sprites.get(&name) {
                 let (mx, my) = mouse_position();
-                let size = 180.0 * s;
+                // (InGameObjects.prefab PowerIcon: a 200 x 200 Image, not aspect-preserved.)
+                let size = 200.0 * s;
                 // InGameObjects.IconUpdate (VERIFIED-DECOMP @0x1815b7330): the powerIcon image's colour
                 // is (1, 1, 1, 1) where the item can go, (1, 0, 0, 1) where it can't.
                 let tint = if self.geraldo.armed_ok { WHITE } else { Color::new(1.0, 0.0, 0.0, 1.0) };

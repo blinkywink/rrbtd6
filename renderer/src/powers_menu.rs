@@ -220,7 +220,8 @@ impl Hud {
         let armed = menu.armed.as_ref().and_then(|id| menu.items.iter().find(|i| &i.id == id)).and_then(|i| i.icon.clone());
         if let Some(sp) = armed.and_then(|name| self.sprites.get(&name)) {
             let (mx, my) = mouse_position();
-            let size = 180.0 * s;
+            // (InGameObjects.prefab PowerIcon: a 200 x 200 Image, not aspect-preserved.)
+            let size = 200.0 * s;
             let tint = if menu.armed_ok { WHITE } else { Color::new(1.0, 0.0, 0.0, 1.0) };
             draw_texture_ex(&sp.tex, mx - size / 2.0, my - size / 2.0, tint,
                 DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });

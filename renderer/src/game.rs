@@ -7254,6 +7254,16 @@ impl Game {
         // and the spawn paths: no entry splitter, not the boss path (STAND-IN P-BOSSPATH: by
         // name).
         let mut tracks: Vec<crate::data::MapPath> = d.map.paths.iter().filter(|p| p.active && p.points.len() > 1).cloned().collect();
+        // PreGamePrep.OnMatchReady (VERIFIED-DECOMP @0x180e75480): Map.GetTrackEndPoints(distance,
+        // true, true) (VERIFIED-DECOMP @0x180f5b100) walks every path, inactive ones too, but a
+        // hidden inactive one, "PathBoss" and one with an exit router (recording
+        // map_ancientportal_dart_205_mk: inactive PathLeft gets a pile, PathBoss none; recording
+        // map_bloodypuddles_dart_205_mk: six piles, not seven). HYPOTHESIS P-PREPEND: the end is the
+        // dumped leakDist (Path.GetEndDistanceExcludeInvulnerable: the last on-map cache step not
+        // bloon-invulnerable; no exported path with an exit has invulnerable points).
+        let prep_paths: Vec<crate::data::MapPath> = d.map.paths.iter()
+            .filter(|p| p.points.len() > 1 && !(p.hidden && !p.active) && p.name != "PathBoss" && p.exit.is_empty() && p.leak.is_some_and(|l| l >= 0.0))
+            .cloned().collect();
         if tracks.is_empty() {
             tracks.push(crate::data::MapPath { name: String::new(), active: true, id: 0, entry: Vec::new(), exit: Vec::new(), exit_splitter: 0, entry_splitter: 0, points: d.map.path.clone(), dists: Vec::new(), speeds: Vec::new(), quick: Vec::new(), quick_rot: Vec::new(), quick_z: Vec::new(), no_target: Vec::new(), spawn: None, leak: None, until_leak: None, invuln: Vec::new(), moab_invuln: Vec::new(), hidden: false });
         }
@@ -7786,7 +7796,8 @@ impl Game {
         game.power_tower_defs = power_tower_names.into_iter().filter_map(|(pid, name)| Some((pid, game.tower_defs.iter().position(|(n, _)| *n == name)?))).collect();
         game.logic_init_zones();
         game.logic_start();
-        game.pre_game_prep_spikes();
+        let reverse = reversed;
+        game.pre_game_prep_spikes(if reverse { None } else { Some(&prep_paths) });
         game.mod_event("on_new_game",None);
         game
     }
@@ -7868,8 +7879,23 @@ impl Game {
         self.mk_hero_injection.filter(|x| x.0 > 0 || x.1 > 0.0)
     }
 
-    fn pre_game_prep_spikes(&mut self) {
+    fn pre_game_prep_spikes(&mut self, paths: Option<&[crate::data::MapPath]>) {
         let Some((edge, spec)) = self.pre_game_prep.clone() else { return };
+        if let Some(paths) = paths.filter(|p| !p.is_empty()) {
+            let single: Emission = match serde_json::from_value(serde_json::json!({"kind": "Single", "count": 1})) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("PreGamePrep emission: {e}");
+                    return;
+                }
+            };
+            for p in paths {
+                let t = Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick);
+                let q = t.pos(Game::end_exclude_invulnerable(p, &t) - edge);
+                self.emit(q, 0.0, &single, &spec, None, [0; 3], 0);
+            }
+            return;
+        }
         let em: Emission = match serde_json::from_value(serde_json::json!({"kind": "Single", "count": 1, "track_exit": edge})) {
             Ok(e) => e,
             Err(e) => {
@@ -7878,6 +7904,31 @@ impl Game {
             }
         };
         self.emit([0.0, 0.0], 0.0, &em, &spec, None, [0; 3], 0);
+    }
+
+    /// Path.GetEndDistanceExcludeInvulnerable (VERIFIED-DECOMP @0x180f6eb90): from the last
+    /// pointInfo back, the first one on the map (Path.IsPointOnMap) whose
+    /// DistanceToExtraPointInfoBloon isn't bloonsInvulnerable, as index x CacheDistance
+    /// (recording map_darkdungeons_dart_205_mk: the paths end in flagged dungeon doors).
+    fn end_exclude_invulnerable(p: &crate::data::MapPath, t: &Track) -> f32 {
+        let on_map = |q: [f32; 2]| (-150.0..=150.0).contains(&q[0]) && (-116.0..=116.0).contains(&q[1]);
+        let count = if p.quick.len() >= 2 { p.quick.len() / 2 } else { (t.length() / CACHE_DISTANCE) as usize + 1 };
+        let (ds, inv, _) = Game::path_inv(p);
+        for i in (0..count).rev() {
+            let d = i as i32 as f32 * CACHE_DISTANCE;
+            let q = if p.quick.len() >= 2 { [p.quick[2 * i], p.quick[2 * i + 1]] } else { t.pos(d) };
+            if !on_map(q) {
+                continue;
+            }
+            if ds.is_empty() || inv.is_empty() {
+                return d;
+            }
+            let k = quick_point(&ds, d);
+            if !(inv.get(k).copied().unwrap_or(false) && inv.get(k + 1).copied().unwrap_or(false)) {
+                return d;
+            }
+        }
+        p.leak.unwrap_or(0.0)
     }
 
     /// Rounds in this game: the mode's end round, or the whole round set in freeplay.
