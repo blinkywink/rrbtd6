@@ -33566,6 +33566,11 @@ mod tests {
         }
         g.round = meta.get("round").and_then(|r| r.parse::<usize>().ok()).unwrap_or(1) - 1;
         g.logic_round_set();
+        // (SimRecorder sets the round after placing the towers: TargetTrack.OnRoundSet generates the
+        // Necromancer's track points; recording wizard_paragon_mk rt 57, the 0-0-5's first wave.)
+        for tw in &mut g.towers {
+            tw.necro_points = true;
+        }
         // (Past the mode's last round the game plays on as freeplay: SetRound(89) on Hard.)
         if g.round >= g.end_round {
             g.freeplay = true;
