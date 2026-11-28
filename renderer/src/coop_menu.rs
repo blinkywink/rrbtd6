@@ -22,7 +22,20 @@ pub(crate) fn mode_name(difficulty:u8,mode:u8)->Option<String>{
 }
 /// game/coop_areas.json's name for the lobby's division.
 pub(crate) fn division_name(division:u8)->Option<&'static str>{DIVISIONS.get(division as usize).copied()}
-pub(super) struct Lobby {custom_modes:Vec<String>,difficulty:usize,mode:usize,open:Option<usize>,closed:[bool;4],division:usize,editable:bool,changed:bool,net_revision:u64,network_room:Option<rrbtd6_coop::Room>}
+pub(super) struct Lobby {custom_modes:Vec<String>,difficulty:usize,mode:usize,open:Option<usize>,closed:[bool;4],division:usize,editable:bool,changed:bool,net_revision:u64,network_room:Option<rrbtd6_coop::Room>,
+    /// The room refused this player for a different version: the status panel restarts RustTD6
+    /// through its launcher, which installs the update.
+    update_offer:bool}
+/// A co-op refusal for a different RustTD6 / BTD6 version (coop transport's Hello check).
+fn version_mismatch(status:&str)->bool{status.contains("extracted data differ")}
+/// Start the launcher (it checks for and installs updates, then starts the game again) and quit.
+fn update_through_launcher(){
+    let Some(dir)=std::env::current_exe().ok().and_then(|p|p.parent().map(std::path::Path::to_path_buf)) else{return};
+    for name in ["rrbtd6-launcher.exe","rrbtd6-launcher"]{
+        let launcher=dir.join(name);
+        if launcher.is_file()&&std::process::Command::new(&launcher).current_dir(&dir).spawn().is_ok(){std::process::exit(0);}
+    }
+}
 impl Lobby{
     pub fn new(node:&mut Node)->Self{
         node.hide_named(&["LoadingObject","DebugStartGame","DebugReadyPanel","CoopLobbyReconnectingPanel","BossSelectPanel","BossChallengeMapSelect","Jewel","HeroIconChangeFx","CopyCodeTick","GoldenBloon","MonkeyTeams","CollectionEventIcon","ChimpsGlintsFxGold","ChimpsSparklesFxHematite"]);
@@ -34,7 +47,7 @@ impl Lobby{
         if let Some(label)=node.find_mut(&format!("{BASE}/BgPanel/CoopGameTypeBg/Text")){
             label.rt.amin=vec2(0.5,0.5);label.rt.amax=label.rt.amin;label.rt.size=vec2(1850.0,162.0);label.rt.pos=vec2(-340.0,7.0);
         }
-        let mut lobby=Self{custom_modes:Vec::new(),difficulty:1,mode:0,open:None,closed:[false;4],division:4,editable:true,changed:false,net_revision:u64::MAX,network_room:None};
+        let mut lobby=Self{custom_modes:Vec::new(),difficulty:1,mode:0,open:None,closed:[false;4],division:4,editable:true,changed:false,net_revision:u64::MAX,network_room:None,update_offer:false};
         lobby.open=std::env::var("RRBTD6_COOP_DROPDOWN").ok().and_then(|s|s.parse::<usize>().ok()).filter(|&i|i<2);
         lobby.refresh(node);lobby
     }
@@ -100,7 +113,9 @@ impl Lobby{
         }
         let waiting=session.active()&&session.room.is_none();let failed=session.error;
         node.set_active(&format!("{BASE}/LoadingObject"),waiting||failed);
-        node.set_text(&format!("{BASE}/LoadingObject/LoadingGame/Text"),&session.status);
+        self.update_offer=failed&&version_mismatch(&session.status);
+        let status=if self.update_offer{"You and the host are on different versions. Click here to update RustTD6 (it restarts)."}else{session.status.as_str()};
+        node.set_text(&format!("{BASE}/LoadingObject/LoadingGame/Text"),status);
         node.set_active(&format!("{BASE}/BgPanel/Code"),session.invite.is_some());
         if let Some(code)=&session.invite{
             let preview=if code.len()>25{format!("{}...{}",&code[..12],&code[code.len()-6..])}else{code.clone()};
@@ -135,6 +150,7 @@ impl Lobby{
     /// Receives a release after the shared scroll controller ruled out a drag.
     pub fn click(&mut self,node:&mut Node,pointer:Vec2){
         let hit=|n:&Node,p:&str|n.rect(p).is_some_and(|r|r.contains(pointer));
+        if self.update_offer&&hit(node,&format!("{BASE}/LoadingObject")){update_through_launcher();return;}
         if let Some(which)=self.open{
             let path=format!("{SETTINGS}/{}/Template/Viewport/Content",DROPS[which]);
             let choice=(0..self.choices(which).len()).find(|i|hit(node,&format!("{path}/Option{i}")));
@@ -157,6 +173,12 @@ impl Lobby{
 mod tests{
     use super::*;
     use serde_json::json;
+    #[test]
+    fn only_a_version_refusal_offers_the_update(){
+        assert!(version_mismatch("You and the host are on different versions (game builds or extracted data differ). Close RustTD6 and open it again to update it, and keep BTD6 updated in Steam or Epic."));
+        assert!(version_mismatch("Game builds or extracted data differ"));
+        assert!(!version_mismatch("Invite is invalid"));
+    }
     #[test]
     fn lobby_has_no_room_mods_button(){
         let mut node=Node::from_json(&json!({"name":"Scene","active":true,"children":[{"name":"Canvas","active":true,"children":[
