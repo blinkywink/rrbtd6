@@ -1,0 +1,1 @@
+{"name": "power_cavemonkey_near", "map": "Tutorial", "difficulty": "Hard", "mode": "Standard", "round": 40, "frames": 3600, "seed": 699336078, "towers": [{"id": "DartMonkey-200", "x": -112.815414, "y": -30.9}], "powers": [{"id": "CaveMonkey", "frame": 120, "x": -80.8, "y": -30.9}], "quit": true, "cash": 10000000}
