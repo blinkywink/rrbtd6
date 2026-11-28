@@ -68,6 +68,7 @@
 
   <section id="about" class="block">
     <h2>So, what is RustTD6?</h2>
+    <p class="intro">Bloons TD 6, rebuilt from scratch. It uses the art and sounds from your own copy of the game, then runs on its own engine.</p>
     <ul class="list">
       <li>
         <div class="card-head"><span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 3 5 14h6l-1 7 8-11h-6l1-7z"/></svg></span><strong>Increased performance</strong></div>
@@ -87,41 +88,40 @@
   <!-- progress:start -->
   <section id="progress" class="block">
     <h2>Progress</h2>
-    <p class="intro">Each scenario is a run recorded in the real game and replayed in RustTD6, compared frame by frame. <span class="updated">Updated 27 November 2026.</span></p>
-    <div class="progress-total">
-      <div><span class="pnum">1481</span><span class="of">of 1512</span><p>recorded scenarios match</p></div>
-      <div><span class="pnum">23</span><span class="of">of 26</span><p>towers fully matched</p></div>
+    <p class="intro">Runs recorded in the real game are replayed in RustTD6 and compared frame by frame.</p>
+    <div class="psummary">
+      <div class="psummary-top"><span class="ppct">98%</span><p><strong>1481 of 1512</strong> recorded runs match<span>23 of 26 towers exact · updated 27 November 2026</span></p></div>
+      <span class="pbar"><i style="--p:98%"></i></span>
+      <p class="todo-label">Still to match</p>
+      <ul class="todo">
+        <li>Glue Gunner <span>1 left</span></li>
+        <li>Engineer Monkey <span>1 left</span></li>
+        <li>Skywarden <span>1 left</span></li>
+        <li>Obyn Greenfoot <span>2 left</span></li>
+        <li>Captain Churchill <span>1 left</span></li>
+        <li>Etienne <span>3 left</span></li>
+        <li>Corvus <span>2 left</span></li>
+        <li>Upgraded towers <span>5 left</span></li>
+        <li>Tier 5 towers <span>1 left</span></li>
+        <li>Heroes (Monkey Knowledge) <span>11 left</span></li>
+        <li>Tower combos <span>3 left</span></li>
+      </ul>
     </div>
-    <div class="poverall"><span class="pbar"><i style="--p:98%"></i></span><span class="ppct">98%</span></div>
-    <h3 class="sub">Still to match</h3>
-    <ul class="todo">
-      <li>Glue Gunner <span>1 of 35 left</span></li>
-      <li>Engineer Monkey <span>1 of 35 left</span></li>
-      <li>Skywarden <span>1 of 40 left</span></li>
-      <li>Obyn Greenfoot <span>2 of 3 left</span></li>
-      <li>Captain Churchill <span>1 of 3 left</span></li>
-      <li>Etienne <span>3 of 3 left</span></li>
-      <li>Corvus <span>2 of 3 left</span></li>
-      <li>Upgraded towers <span>5 of 98 left</span></li>
-      <li>Tier 5 towers <span>1 of 75 left</span></li>
-      <li>Heroes (Monkey Knowledge) <span>11 of 52 left</span></li>
-      <li>Tower combos <span>3 of 20 left</span></li>
-    </ul>
-    <h3 class="sub">The whole game <span>(rough estimates out of 10)</span></h3>
-    <ul class="prows">
-      <li class="prow "><span class="pname">Bloons &amp; MOABs</span><span class="pbar"><i style="--p:80%"></i></span><span class="pcount">8/10</span></li>
-      <li class="prow "><span class="pname">Rounds &amp; spawning</span><span class="pbar"><i style="--p:90%"></i></span><span class="pcount">9/10</span></li>
-      <li class="prow "><span class="pname">Targeting &amp; projectiles</span><span class="pbar"><i style="--p:80%"></i></span><span class="pcount">8/10</span></li>
-      <li class="prow "><span class="pname">Hero levels</span><span class="pbar"><i style="--p:40%"></i></span><span class="pcount">4/10</span></li>
-      <li class="prow "><span class="pname">Bosses</span><span class="pbar"><i style="--p:10%"></i></span><span class="pcount">1/10</span></li>
-      <li class="prow "><span class="pname">Map features</span><span class="pbar"><i style="--p:40%"></i></span><span class="pcount">4/10</span></li>
-      <li class="prow "><span class="pname">Game modes</span><span class="pbar"><i style="--p:40%"></i></span><span class="pcount">4/10</span></li>
-      <li class="prow "><span class="pname">Menus &amp; UI</span><span class="pbar"><i style="--p:60%"></i></span><span class="pcount">6/10</span></li>
-      <li class="prow "><span class="pname">Co-op</span><span class="pbar"><i style="--p:40%"></i></span><span class="pcount">4/10</span></li>
-      <li class="prow "><span class="pname">Visuals &amp; effects</span><span class="pbar"><i style="--p:50%"></i></span><span class="pcount">5/10</span></li>
-    </ul>
     <details class="progress-more">
-      <summary>Show every tower and hero<span class="plus" aria-hidden="true"></span></summary>
+      <summary>Show all details<span class="plus" aria-hidden="true"></span></summary>
+      <h3 class="sub">The whole game <span>(rough estimates out of 10)</span></h3>
+      <ul class="prows">
+        <li class="prow "><span class="pname">Bloons &amp; MOABs</span><span class="pbar"><i style="--p:80%"></i></span><span class="pcount">8/10</span></li>
+        <li class="prow "><span class="pname">Rounds &amp; spawning</span><span class="pbar"><i style="--p:90%"></i></span><span class="pcount">9/10</span></li>
+        <li class="prow "><span class="pname">Targeting &amp; projectiles</span><span class="pbar"><i style="--p:80%"></i></span><span class="pcount">8/10</span></li>
+        <li class="prow "><span class="pname">Hero levels</span><span class="pbar"><i style="--p:40%"></i></span><span class="pcount">4/10</span></li>
+        <li class="prow "><span class="pname">Bosses</span><span class="pbar"><i style="--p:10%"></i></span><span class="pcount">1/10</span></li>
+        <li class="prow "><span class="pname">Map features</span><span class="pbar"><i style="--p:40%"></i></span><span class="pcount">4/10</span></li>
+        <li class="prow "><span class="pname">Game modes</span><span class="pbar"><i style="--p:40%"></i></span><span class="pcount">4/10</span></li>
+        <li class="prow "><span class="pname">Menus &amp; UI</span><span class="pbar"><i style="--p:60%"></i></span><span class="pcount">6/10</span></li>
+        <li class="prow "><span class="pname">Co-op</span><span class="pbar"><i style="--p:40%"></i></span><span class="pcount">4/10</span></li>
+        <li class="prow "><span class="pname">Visuals &amp; effects</span><span class="pbar"><i style="--p:50%"></i></span><span class="pcount">5/10</span></li>
+      </ul>
       <h3 class="sub">Towers <span>(961/964 match)</span></h3>
       <ul class="prows">
         <li class="prow done"><span class="pname">Dart Monkey</span><span class="pbar"><i style="--p:100%"></i></span><span class="pcount">72/72</span></li>

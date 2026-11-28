@@ -3,10 +3,10 @@
     python website/build_progress.py
 
 Replaces everything between the <!-- progress:start --> and <!-- progress:end --> markers in
-website/public/index.html. A line on what a scenario is and when the counts were updated, the
-totals with one overall bar, the rows that don't match yet, a bar per area of the whole game, and
-behind "Show every tower and hero" a block per section (Towers, Heroes, Maps, ...) with a row and bar
-per item (recorded
+website/public/index.html. A line on how matching works, one summary card (percentage, counts, date,
+overall bar and the rows that don't match yet), and behind "Show all details" a bar per area of the
+whole game (rough estimates out of ten) and a block per section (Towers, Heroes, Maps, ...) with a row
+and bar per item (recorded
 scenarios that match the real game frame by frame; website/count_progress.py fills them), and a bar
 per area (a rough estimate out of ten of the whole area, including what no recording covers yet).
 """
@@ -38,29 +38,28 @@ def build(data):
     out.append('  <section id="progress" class="block">')
     out.append("    <h2>Progress</h2>")
     day = datetime.date.fromisoformat(data["updated"])
-    out.append('    <p class="intro">Each scenario is a run recorded in the real game and replayed in RustTD6, '
-               f'compared frame by frame. <span class="updated">Updated {day.day} {day:%B %Y}.</span></p>')
-    out.append('    <div class="progress-total">')
-    out.append(f'      <div><span class="pnum">{done}</span><span class="of">of {total}</span><p>recorded scenarios match</p></div>')
-    out.append(f'      <div><span class="pnum">{finished}</span><span class="of">of {len(towers)}</span><p>towers fully matched</p></div>')
-    out.append("    </div>")
-    out.append(f'    <div class="poverall"><span class="pbar"><i style="--p:{100 * done / total:.0f}%"></i></span>'
-               f'<span class="ppct">{100 * done / total:.0f}%</span></div>')
+    pct = f"{100 * done / total:.0f}%"
+    out.append('    <p class="intro">Runs recorded in the real game are replayed in RustTD6 and compared frame by frame.</p>')
+    out.append('    <div class="psummary">')
+    out.append(f'      <div class="psummary-top"><span class="ppct">{pct}</span><p><strong>{done} of {total}</strong> recorded runs match'
+               f'<span>{finished} of {len(towers)} towers exact · updated {day.day} {day:%B %Y}</span></p></div>')
+    out.append(f'      <span class="pbar"><i style="--p:{pct}"></i></span>')
     left = [(title, name, rd, rt) for title, rows in sections for name, rd, rt in rows if rt and rd < rt]
     if left:
-        out.append('    <h3 class="sub">Still to match</h3>')
-        out.append('    <ul class="todo">')
+        out.append('      <p class="todo-label">Still to match</p>')
+        out.append('      <ul class="todo">')
         for title, name, rd, rt in left:
             label = f"{name} ({title})" if name == "Heroes" else name
-            out.append(f'      <li>{html.escape(label)} <span>{rt - rd} of {rt} left</span></li>')
-        out.append("    </ul>")
-    out.append('    <h3 class="sub">The whole game <span>(rough estimates out of 10)</span></h3>')
-    out.append('    <ul class="prows">')
-    for name, n in data["areas"]:
-        out.append(row(name, n, 10, f"{n}/10"))
-    out.append("    </ul>")
+            out.append(f'        <li>{html.escape(label)} <span>{rt - rd} left</span></li>')
+        out.append("      </ul>")
+    out.append("    </div>")
     out.append('    <details class="progress-more">')
-    out.append('      <summary>Show every tower and hero<span class="plus" aria-hidden="true"></span></summary>')
+    out.append('      <summary>Show all details<span class="plus" aria-hidden="true"></span></summary>')
+    out.append('      <h3 class="sub">The whole game <span>(rough estimates out of 10)</span></h3>')
+    out.append('      <ul class="prows">')
+    for name, n in data["areas"]:
+        out.append("  " + row(name, n, 10, f"{n}/10"))
+    out.append("      </ul>")
     for title, rows in sections:
         d = sum(r[1] for r in rows)
         t = sum(r[2] for r in rows)
