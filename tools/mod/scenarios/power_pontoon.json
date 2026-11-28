@@ -1,0 +1,1 @@
+{"name": "power_pontoon", "map": "Logs", "difficulty": "Hard", "mode": "Standard", "round": 40, "frames": 3600, "seed": 699336078, "towers": [{"id": "MonkeySub-200", "x": -2.09, "y": -38.7}], "powers": [{"id": "Pontoon", "frame": 120, "x": -2.09, "y": -58.7}], "quit": true, "cash": 10000000}
