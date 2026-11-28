@@ -3,11 +3,13 @@
     python website/build_progress.py
 
 Replaces everything between the <!-- progress:start --> and <!-- progress:end --> markers in
-website/public/index.html. The totals with one overall bar, then one block per section (Towers, Heroes, Maps, Monkey Knowledge,
-Paragons & combos, Powers) with a row and bar per item (recorded scenarios that match the real game
-frame by frame; website/count_progress.py fills them), every scenario as a square behind "Show
-every recorded scenario", and a bar per area (a rough estimate out of ten).
+website/public/index.html. A line on what a scenario is and when the counts were updated, the
+totals with one overall bar, the rows that don't match yet, then one block per section (Towers,
+Heroes, Maps, Monkey Knowledge, Paragons & combos, Powers) with a row and bar per item (recorded
+scenarios that match the real game frame by frame; website/count_progress.py fills them), and a bar
+per area (a rough estimate out of ten of the whole area, including what no recording covers yet).
 """
+import datetime
 import html
 import json
 import os
@@ -15,10 +17,6 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "public", "index.html")
 START, END = "<!-- progress:start -->", "<!-- progress:end -->"
-
-
-def squares(done, total, cls="sq"):
-    return "".join(f'<i class="{cls}{" on" if k < done else ""}"></i>' for k in range(total))
 
 
 def row(name, done, total, count, state=""):
@@ -38,12 +36,24 @@ def build(data):
     out = []
     out.append('  <section id="progress" class="block">')
     out.append("    <h2>Progress</h2>")
+    day = datetime.date.fromisoformat(data["updated"])
+    out.append('    <p class="intro">Each scenario is a short run recorded in the real game, then replayed in RustTD6 and '
+               'compared frame by frame. These counts cover what has been recorded so far; the estimates at the bottom '
+               f'cover the rest. <span class="updated">Updated {day.day} {day:%B %Y}.</span></p>')
     out.append('    <div class="progress-total">')
     out.append(f'      <div><span class="pnum">{done}</span><span class="of">of {total}</span><p>recorded scenarios match</p></div>')
     out.append(f'      <div><span class="pnum">{finished}</span><span class="of">of {len(towers)}</span><p>towers fully matched</p></div>')
     out.append("    </div>")
     out.append(f'    <div class="poverall"><span class="pbar"><i style="--p:{100 * done / total:.0f}%"></i></span>'
                f'<span class="ppct">{100 * done / total:.0f}%</span></div>')
+    left = [(title, name, rd, rt) for title, rows in sections for name, rd, rt in rows if rt and rd < rt]
+    if left:
+        out.append('    <h3 class="sub">Still to match</h3>')
+        out.append('    <ul class="todo">')
+        for title, name, rd, rt in left:
+            label = f"{name} ({title})" if name == "Heroes" else name
+            out.append(f'      <li>{html.escape(label)} <span>{rt - rd} of {rt} left</span></li>')
+        out.append("    </ul>")
     for title, rows in sections:
         d = sum(r[1] for r in rows)
         t = sum(r[2] for r in rows)
@@ -53,17 +63,7 @@ def build(data):
         for name, rd, rt in rows:
             out.append(row(name, rd, rt, f"{rd}/{rt}" if rt else "not recorded yet", state(rd, rt)))
         out.append("    </ul>")
-    out.append('    <details class="progress-more">')
-    out.append('      <summary>Show every recorded scenario</summary>')
-    out.append('      <div class="towers-grid">')
-    for name, d, t in rows_all:
-        if not t:
-            continue
-        out.append(f'        <div class="tower-card {state(d, t)}"><div class="tower-head"><strong>{html.escape(name)}</strong><span>{d}/{t}</span></div>'
-                   f'<div class="squares">{squares(d, t)}</div></div>')
-    out.append("      </div>")
-    out.append("    </details>")
-    out.append('    <h3 class="sub">Everything else <span>(rough estimates)</span></h3>')
+    out.append('    <h3 class="sub">The whole game <span>(rough estimates out of 10)</span></h3>')
     out.append('    <ul class="prows">')
     for name, n in data["areas"]:
         out.append(row(name, n, 10, f"{n}/10"))

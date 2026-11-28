@@ -7,7 +7,7 @@ Little JavaScript, none of it needed: `download.js` scrolls the home page to the
 after a Download click, points the main button at the build instructions on a Mac or Linux, and
 shows the latest build under the button (from GitHub's API, the only cross-origin request; the
 CSP's `connect-src` allows just that); `site.js` marks the header link for the section being read,
-counts up Progress's totals as they scroll into view and copies the mod example; and `docs/nav.js` keeps the docs sidebar's scroll between pages (the CSP allows same-origin
+and copies the mod example; and `docs/nav.js` keeps the docs sidebar's scroll between pages (the CSP allows same-origin
 scripts only). Menus are CSS-only `<details>`. No
 analytics, and no game art apart from the hero's silhouettes (also cut up as decorations) and the cursor's shape (see Images).
 
@@ -18,7 +18,7 @@ downloads stay under `public/mods/`. Font licenses: `public/fonts/LuckiestGuy-LI
 
 ## Progress section
 
-The home page's Progress bars (and the per-scenario squares behind "Show every recorded scenario") come from `progress.json`: one block per section (Towers, Heroes, Maps, Monkey Knowledge,
+The home page's Progress bars (and the "Still to match" list) come from `progress.json`: one block per section (Towers, Heroes, Maps, Monkey Knowledge,
 Paragons & combos, Powers), each row recorded scenarios that match the real game / recorded, plus
 other areas as rough estimates out of 10. `python website/count_progress.py` fills the sections from
 the recording folders (counts only) and `website/regression_last.txt` (the `== set: m/n match`
