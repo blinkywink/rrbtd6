@@ -574,11 +574,14 @@ def startup(c):
 
 
 def home(c):
+    # The event panels (ui/prefabs, menu chrome) need nothing from the home world: beside it.
+    events = c.beside("tools/assets/export_home_events.py", c.game, c.out)
     c.py("tools/assets/export_model.py", c.game, c.out / "models/mainmenu", "scene", "ui_scenes_all_",
          "cab:CAB-613509f63417784aa3960cd4dc66a279")
-    for s in ["export_home_animations", "export_home_vegetation", "export_home_interactions"]:
-        c.py(f"tools/assets/{s}.py", c.game, c.out)
-    c.py("tools/assets/export_home_events.py", c.game, c.out)
+    # Each reads models/mainmenu and writes its own files under models/mainmenu_anim.
+    c.parallel("Home world", [[f"tools/assets/{s}.py", c.game, c.out]
+                              for s in ["export_home_animations", "export_home_vegetation", "export_home_interactions"]], UI_WORKER)
+    events()
 
 
 def social(c):
