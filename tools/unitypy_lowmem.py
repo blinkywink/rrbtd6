@@ -25,7 +25,9 @@ file_module = sys.modules["UnityPy.files.File"]
 if UnityPy.__version__ != "1.25.4":
     raise ImportError(f"unitypy_lowmem targets UnityPy 1.25.4, found {UnityPy.__version__}")
 
-THRESHOLD = 512 << 20
+# Bundles above this are unpacked to disk once and every later load reads them from there
+# (RRBTD6_CACHE_THRESHOLD_MB overrides it, for measuring).
+THRESHOLD = int(os.environ.get("RRBTD6_CACHE_THRESHOLD_MB", "512")) << 20
 CACHE = os.environ.get("RRBTD6_BUNDLE_CACHE")
 BlockInfo = bundle_module.BlockInfo
 DirectoryInfoFS = bundle_module.DirectoryInfoFS
