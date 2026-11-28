@@ -5533,6 +5533,18 @@ macro_rules! collide_pass {
                 $s.grid.query(at, (pr.spec.radius + $s.max_bloon_radius).max(GAME_GRID_CELL * std::f32::consts::SQRT_2) + $s.max_bloon_step, &mut $cand);
             }
         }
+        // HYPOTHESIS P-YOUNGBLOON: a projectile's first pass (the frame after it was made) doesn't meet
+        // a bloon made after it in that frame (recordings churchill_l10_r40 rt 2588 / churchill_l10_mk
+        // rt 963: the shell's Explosion, made as the shell spent itself on a Black, skips the Blue the
+        // MachineGun's pop made a moment later, then hits it a frame on; a bloon made before the
+        // projectile, mortar_025 rt 2894, is hit).
+        if !$cand.is_empty() {
+            let (pb, now) = ($s.projectiles[$p].born, $s.sim_elapsed);
+            if now == pb / 4 + 1 {
+                let bl = &$s.bloons;
+                $cand.retain(|&i| bl[i as usize].born / 4 != pb / 4 || bl[i as usize].born <= pb);
+            }
+        }
         // CollisionGrid query order: cells by orderedNeighborOffsets around the projectile's
         // cell, bloons within a cell in list order. Only bloons it can reach are kept (the hit
         // test below rejects the rest anyway), so the sort stays small.
