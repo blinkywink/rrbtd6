@@ -10111,6 +10111,26 @@ impl Game {
         self.towers[t].spirit_v = Some((range, 0.0, self.towers[t].pos, pos, self.round_clock));
     }
 
+    /// Offset.ProjectilesCreated (VERIFIED-DISASM @0x180c7fa10) for projectile `k`: angle = Next(0, 1000)
+    /// x range / 1000 + -range x 0.5 + angleOffset; its direction turned by it (Vector3Boxed.Rotate)
+    /// and its rotation + it (recording druid_000 rt 27: five thorns, five Next draws after the
+    /// fifteen of the RandomEmission).
+    fn apply_offset(&mut self, k: usize, range: f32, off: f32) {
+        let r = self.synced_range(0, 1000);
+        let ang = ((r as f32) * range) / 1000.0 + (-range) * 0.5 + off;
+        let pr = &mut self.projectiles[k];
+        if let Some(d) = pr.dir {
+            // Vector2.Rotate, game frame (dir is stored y-up).
+            let a = DEG2RAD * -ang;
+            let (sa, ca) = crt_sin_cos(a);
+            let nd = [ca * d[0] - sa * d[1], ca * d[1] + sa * d[0]];
+            let sf = if pr.speed_pf > 0.0 { pr.speed_pf } else { pr.spec.speed * FRAME_TIME };
+            pr.dir = Some(nd);
+            pr.vel = [nd[0] * sf, -nd[1] * sf];
+        }
+        pr.grot = pr.grot.map(|g| g + ang);
+    }
+
     /// SpiritOfTheForest.Process / Update (VERIFIED-DISASM @0x180d94c20 / @0x180d95240):
     /// currentRadius += round frames since last x amountPerFrame (to circleRadius); while it is
     /// over currentGeneratedRadius by more than generateRadius, the positions in the next ring
@@ -11906,13 +11926,13 @@ impl Game {
     /// (VERIFIED-DECOMP @0x180d85c60) / ApplyMovement (VERIFIED-DISASM @0x180d81400), in her tower's
     /// processing after its attacks.
     fn move_rosalia(&mut self, t: usize) {
-        let Some(rs) = self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.rosalia.clone()) else { return };
-        if self.towers[t].air.is_none() {
+        if self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.rosalia.as_ref()).is_none() || self.towers[t].air.is_none() {
             return;
         }
-        let now = self.steps as i64;
         // (Flight Boost's lifespan: FlightBoostAbility.Deactivate (VERIFIED-DECOMP @0x180e32750)
-        // toggles pursuit off, a jump home.)
+        // toggles pursuit off, a jump home; after her RosaliaMovement.Process that frame
+        // (recording rosalia_l10_mk rt 1600: one more pursuit step, -55.17 -> -56.18, then the
+        // jump from there). HYPOTHESIS P-BOOSTENDORDER.)
         let ended = {
             let a = self.towers[t].air.as_mut().unwrap();
             match a.rm_boost.as_mut() {
@@ -11923,12 +11943,18 @@ impl Game {
                 None => false,
             }
         };
+        self.move_rosalia_step(t);
         if ended {
             let a = self.towers[t].air.as_mut().unwrap();
             a.rm_boost = None;
             a.rm_emit_both = false;
             self.rosalia_toggle(t, false);
         }
+    }
+
+    fn move_rosalia_step(&mut self, t: usize) {
+        let Some(rs) = self.tier(t).and_then(|tr| tr.air.as_ref()).and_then(|a| a.rosalia.clone()) else { return };
+        let now = self.steps as i64;
         {
             let a = self.towers[t].air.as_mut().unwrap();
             if a.rm_last.is_none() {
@@ -23903,6 +23929,12 @@ impl Game {
                     // (sim_elapsed; recordings ninja_040/050/250: Sabotage's weapon at 135 for rt 120).
                     let now_t = self.sim_elapsed as i64;
                     let clock = if weapon.between_rounds { now_t } else { self.round_clock };
+                    // (A Spirit of the Forest Druid's vines grow before a throw it releases this turn:
+                    // recording druid_050_mk rt 421, the ring's fifteen NextDouble, then the thorns'
+                    // RandomEmission and Offset draws. HYPOTHESIS P-SPIRITRELEASE.)
+                    if tier.spirit.is_some() && self.towers[t].weapons.get(w).is_some_and(|st| st.anim >= 0 && st.anim + (weapon.animation_offset * 60.0) as i32 as i64 <= now_t) {
+                        self.spirit_grow(t);
+                    }
                     // Weapon.Process calls Attack.FindTarget itself when it's ready: a heli's young
                     // weapon (new at the end of the process list) looks after the bloons and the
                     // heli have moved (recording heli_upgrades_r30 rt 615: the 2-1-0's new darts take
@@ -25644,19 +25676,7 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                             // draws after the fifteen of the RandomEmission).
                             if let Some([range, off]) = weapon.offset_model {
                                 for k in start..self.projectiles.len() {
-                                    let r = self.synced_range(0, 1000);
-                                    let ang = ((r as f32) * range) / 1000.0 + (-range) * 0.5 + off;
-                                    let pr = &mut self.projectiles[k];
-                                    if let Some(d) = pr.dir {
-                                        // Vector2.Rotate, game frame (dir is stored y-up).
-                                        let a = DEG2RAD * -ang;
-                                        let (sa, ca) = crt_sin_cos(a);
-                                        let nd = [ca * d[0] - sa * d[1], ca * d[1] + sa * d[0]];
-                                        let sf = if pr.speed_pf > 0.0 { pr.speed_pf } else { pr.spec.speed * FRAME_TIME };
-                                        pr.dir = Some(nd);
-                                        pr.vel = [nd[0] * sf, -nd[1] * sf];
-                                    }
-                                    pr.grot = pr.grot.map(|g| g + ang);
+                                    self.apply_offset(k, range, off);
                                 }
                             }
                             // SubTowerFilter.ProjectilesCreated: the spawner's projectiles' objects.
