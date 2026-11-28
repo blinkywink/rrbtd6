@@ -1191,11 +1191,16 @@ impl Hud {
             // Magus Perfectus: TSMThemeMagusPerfectus.UpdateFromSimInfo (0x180b91fb0) by the graveyard's
             // state: Consuming shows DrainSetOn and the using bar; Draining DrainSetOff and the using
             // bar; Generating DrainSetOff and the draining bar; Exploding DrainSetOff and neither.
-            // STAND-IN: the graveyard isn't simulated, so it's empty and in its first state
-            // (MagusPerfectusGraveyardStateManagerModel.attackManagerStates: Consuming), and the
-            // drainingBeamCooldownFade (60 frames after a switch) never shows.
+            // The sim info is MagusPerfectusGraveyardStateManager.GetTsmThemeInfo (VERIFIED-DECOMP
+            // @0x180d36680): the counter is AvailableMana, the state graveyardManaState as 0
+            // Consuming, 1 Generating, 2 Draining (3, before its first Process, sets no name).
+            // HYPOTHESIS P-MAGUSFILL: both bars fill AvailableMana / maxManaStoredInGraveyard (the
+            // decompile drops set_fillAmount's argument). STAND-IN: the drainingBeamCooldownFade
+            // (after a player's switch, which isn't an action yet) never shows.
             if theme_id == "MagusPerfectus" {
-                let state = "Consuming";
+                let (st, pool) = (tw.magus_state, tw.magus_pool);
+                let max = game.tier(t).and_then(|x| x.magus.as_ref()).map_or(0, |m| m.max);
+                let state = match st { 0 => "Consuming", 1 => "Generating", 2 => "Draining", _ => "" };
                 // (drainingBeamSetOn, graveyardUseObject, graveyardDrainObject); drainingBeamSetOff is
                 // the opposite of the first.
                 let (on, using, draining) = match state {
@@ -1211,12 +1216,13 @@ impl Hud {
                 let bars = format!("{th}/GraveyardFillbars");
                 self.tsm.set_active(&format!("{bars}/UsingObject"), using);
                 self.tsm.set_active(&format!("{bars}/DrainingObject"), draining);
+                let frac = if max > 0 { (pool / max as f32).clamp(0.0, 1.0) } else { 0.0 };
                 for fill in ["UsingObject/UsingFill", "DrainingObject/DrainingFill"] {
                     if let Some(i) = self.tsm.find_mut(&format!("{bars}/{fill}")).and_then(|n| n.img.as_mut()) {
-                        i.fill_amount = 0.0;
+                        i.fill_amount = frac;
                     }
                 }
-                self.tsm.set_text(&format!("{th}/TSMCounterContainer/Graveyard/GraveyardText"), "0");
+                self.tsm.set_text(&format!("{th}/TSMCounterContainer/Graveyard/GraveyardText"), &(pool as i32).to_string());
             }
             // The camo priority toggle (some themes keep it in their button group): TSMThemeCamo and
             // the themes built on it show it only with "TargetCamo" sim info, which a
