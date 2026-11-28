@@ -4822,6 +4822,10 @@ pub struct Game {
     /// TargetSelectedPointOrDefault.lastSwapAt / ToggleFocusStance.lastSwapAt per tower
     /// (Simulation time; 0 at Initialise).
     pub point_swaps: HashMap<u64, i64>,
+    /// Map.GetTrackEndPoints' paths (see `prep_paths` in Game::new) and their
+    /// GetEndDistanceExcludeInvulnerable: SingleEmissionAtTrackExit and PreGamePrep place there.
+    /// Empty in Reverse mode (the old rule: every track's leak).
+    track_end_pts: Shared<Vec<(Track, f32)>>,
     /// Paragon purchases for the renderer's sacrifice effects (display only).
     pub sacrifices: Vec<Sacrifice>,
     /// Towers placed this frame: (position, placement effect prefab, scale).
@@ -7720,6 +7724,7 @@ impl Game {
             fan_leaders: Vec::new(),
             pet_moves: HashMap::new(),
             point_swaps: HashMap::new(),
+            track_end_pts: Vec::new().into(),
             sacrifices: Vec::new(),
             place_fx: Vec::new(),
             vine_fx: Vec::new(),
@@ -7800,8 +7805,14 @@ impl Game {
         game.power_tower_defs = power_tower_names.into_iter().filter_map(|(pid, name)| Some((pid, game.tower_defs.iter().position(|(n, _)| *n == name)?))).collect();
         game.logic_init_zones();
         game.logic_start();
-        let reverse = reversed;
-        game.pre_game_prep_spikes(if reverse { None } else { Some(&prep_paths) });
+        if !reversed {
+            game.track_end_pts = prep_paths.iter().map(|p| {
+                let t = Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick);
+                let e = Game::end_exclude_invulnerable(p, &t);
+                (t, e)
+            }).collect::<Vec<_>>().into();
+        }
+        game.pre_game_prep_spikes();
         game.mod_event("on_new_game",None);
         game
     }
@@ -7883,23 +7894,8 @@ impl Game {
         self.mk_hero_injection.filter(|x| x.0 > 0 || x.1 > 0.0)
     }
 
-    fn pre_game_prep_spikes(&mut self, paths: Option<&[crate::data::MapPath]>) {
+    fn pre_game_prep_spikes(&mut self) {
         let Some((edge, spec)) = self.pre_game_prep.clone() else { return };
-        if let Some(paths) = paths.filter(|p| !p.is_empty()) {
-            let single: Emission = match serde_json::from_value(serde_json::json!({"kind": "Single", "count": 1})) {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("PreGamePrep emission: {e}");
-                    return;
-                }
-            };
-            for p in paths {
-                let t = Track::with_info(p.points.clone(), &p.dists, &p.speeds, &p.quick);
-                let q = t.pos(Game::end_exclude_invulnerable(p, &t) - edge);
-                self.emit(q, 0.0, &single, &spec, None, [0; 3], 0);
-            }
-            return;
-        }
         let em: Emission = match serde_json::from_value(serde_json::json!({"kind": "Single", "count": 1, "track_exit": edge})) {
             Ok(e) => e,
             Err(e) => {
@@ -15942,6 +15938,10 @@ impl Game {
                 if a.per_round > 0 && tw.ability_round.get(&a.name).copied().unwrap_or(0) as i32 >= a.per_round {
                     continue;
                 }
+                // (IsReady: not while it's active.)
+                if self.ability_active(t, &a) {
+                    continue;
+                }
                 // The Spawner ran before the bloons in the process list: this frame's emissions are
                 // already in the factory list (recording bomb_005: the Black entering at 1190 is
                 // among the 52 the Bomb Storm pops).
@@ -16120,6 +16120,16 @@ impl Game {
         // SwordCharge.IsActive (VERIFIED-DECOMP @0x180e5b930): isPendingStart or isActive.
         if a.track_charge.is_some() && self.towers[t].charge.as_ref().is_some_and(|c| c.pending || c.active) {
             return true;
+        }
+        // CreateProjectileOnAbilityActivate.IsActive (VERIFIED-DECOMP @0x180e1f9f0): while any
+        // projectile it spawned is still alive (Process drops the destroyed ones; recording
+        // map_quad_dand_l10_r40: Magic Barrier, forced at 399, doesn't go off on the leak at 851,
+        // its 12 s barriers still up).
+        if !a.on_activate.is_empty() {
+            let id = self.towers[t].id;
+            if self.projectiles.iter().any(|p| p.owner == id && a.on_activate.iter().any(|c| c.projectile.pid == p.spec.pid)) {
+                return true;
+            }
         }
         let Some(tr) = self.tier(t) else { return false };
         let s0: usize = tr.abilities.iter().take_while(|o| o.name != a.name).flat_map(|o| o.activate.iter()).flat_map(|x| x.attacks.iter()).map(|at| at.weapons.len()).sum();
@@ -30593,7 +30603,13 @@ impl Game {
         if let Some(edge) = em.track_exit {
             let mut one = em.clone();
             one.track_exit = None;
-            let mut at: Vec<[f32; 2]> = (0..self.tracks.len()).filter_map(|i| self.track_ends.get(i).and_then(|e| e.1).map(|l| self.tracks[i].pos(l - edge))).collect();
+            // (Map.GetTrackEndPoints' paths when known: recording map_quad_dand_l10_r40 rt 1280,
+            // four Magic Barriers, none on PathBoss.)
+            let mut at: Vec<[f32; 2]> = if !self.track_end_pts.is_empty() {
+                self.track_end_pts.iter().map(|(t, e)| t.pos(e - edge)).collect()
+            } else {
+                (0..self.tracks.len()).filter_map(|i| self.track_ends.get(i).and_then(|e| e.1).map(|l| self.tracks[i].pos(l - edge))).collect()
+            };
             if at.is_empty() && !self.tracks.is_empty() {
                 at.push(self.tracks[0].pos(self.leak_dist(0) - edge));
             }
