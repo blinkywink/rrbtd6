@@ -24162,7 +24162,9 @@ Some(self.first_target_from(pos, r, &ok).and_then(|id| bloon_idx(&self.bloons, &
                         // (Segments from the exit back, each one's bloons in list order: recording
                         // benjamin_l10_r40 rt 2873, the game's 29th of 48 at distance 535.5, the three
                         // newest at the end.)
-                        cands.sort_by_key(|c| (c.0, c.1, c.2));
+                        // (Across paths by segment, then path: recording map_encrypted_benjamin_l10_r40
+                        // rt 2615, Encrypted's paths interleaved.)
+                        cands.sort_by_key(|c| (c.1, c.0, c.2));
                         // (RandomExtensions' pick, VERIFIED-DECOMP @0x1818bc470: reservoir sampling,
                         // the i-th item taken when Next(i) is 0, so the last such; recording
                         // benjamin_l10_r40 rt 2208: Next(1) .. Next(18), the 10th.)
