@@ -8,7 +8,7 @@
 @font-face {
   font-family: Inter;
   src: url("/fonts/Inter.woff2") format("woff2");
-  font-weight: 100 900;
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
@@ -37,7 +37,7 @@
   background: var(--bg);
   color-scheme: dark;
   font-family: Inter, system-ui, Arial, sans-serif;
-  font-synthesis: none;
+  font-synthesis: weight;
   -webkit-font-smoothing: antialiased;
   scroll-behavior: smooth;
 }

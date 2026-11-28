@@ -8,7 +8,7 @@ import shutil
 import sys
 
 POLICY = ("default-src 'self'; img-src 'self' data:; script-src 'self'; "
-          "connect-src 'self' https://api.github.com; style-src 'self' 'unsafe-inline'; "
+          "connect-src 'self'; style-src 'self' 'unsafe-inline'; "
           "base-uri 'self'; form-action 'none'")
 CHARSET = '<meta charset="utf-8">'
 TAGS = (f'\n<meta http-equiv="Content-Security-Policy" content="{POLICY}">'
