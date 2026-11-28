@@ -1254,9 +1254,10 @@ impl Hud {
                 }
             }
             // Corvus (TSMThemeCorvus.UpdateFromSimInfo): UnityToSimulation.GetCorvusAvailableManaString,
-            // "{0:N0}/{1:N0}" of the CorvusManager's mana and 800. STAND-IN: mana isn't simulated.
+            // "{0:N0}/{1:N0}" of the CorvusManager's mana (+0x60) and the literal 800 (VERIFIED-DECOMP
+            // @0x181587b90; Game::corvus_mana).
             if theme_id == "Corvus" {
-                self.tsm.set_text(&format!("{th}/TSMPopInfoAll/ManaCount/ManaText"), "0/800");
+                self.tsm.set_text(&format!("{th}/TSMPopInfoAll/ManaCount/ManaText"), &format!("{}/800", game.corvus_mana.max(0)));
             }
             // Beast Handler (TSMThemeBeastHandler): a move button per leashed pet whose
             // BeastHandlerPetModel.canMove (Piranha, Microraptor; not the Gyrfalcon)
