@@ -28,6 +28,8 @@ import re
 import struct
 import sys
 from collections import defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pathlib import Path
 
 import numpy as np
@@ -219,6 +221,65 @@ def pixel_key(rgba: np.ndarray, alpha: bool) -> bytes:
     return h.digest()
 
 
+def png_keys(p):
+    """(path, RGB key or None, RGBA key, size) of one exported PNG, or None (too small)."""
+    with Image.open(p) as im:
+        if im.size[0] < 64 or im.size[1] < 64:
+            return None
+        px = np.asarray(im.convert("RGBA"))
+    # (DXT1 goes up as opaque RGB, as Unity samples it: only for PNGs with no transparency.)
+    rgb = pixel_key(px, False) if (px[..., 3] == 255).all() else None
+    return p, rgb, pixel_key(px, True), (px.shape[1], px.shape[0])
+
+
+_WANT = None
+
+
+def _init(want):
+    global _WANT
+    _WANT = want
+
+
+def bundle_matches(bundle):
+    """The bundle's DXT textures whose pixels match an exported PNG: [(fmt, key, blob)] in object
+    order (main applies them in bundle order, so the result doesn't depend on which worker ran)."""
+    rgb_keys, rgba_keys, sizes = _WANT
+    try:
+        env = load_bundle(bundle)
+    except Exception as e:
+        return [], f"skip bundle {bundle.name} {type(e).__name__} {e}"
+    out = []
+    for obj in env.objects:
+        if obj.type.name != "Texture2D":
+            continue
+        try:
+            t = obj.read()
+            fmt = int(t.m_TextureFormat)
+            if fmt not in BLOCK or (t.m_Width, t.m_Height) not in sizes:
+                continue
+            lv = levels(t, fmt)
+        except Exception:
+            continue
+        if not lv:
+            continue
+        w, h, _ = lv[0]
+        flipped = [(lw, lh, flip_level(d, fmt, lw, lh)) for lw, lh, d in lv]
+        mine = decode(flipped[0][2], fmt, w, h)
+        key = pixel_key(mine, False) if fmt == DXT1 else pixel_key(mine, True)
+        if key not in (rgb_keys if fmt == DXT1 else rgba_keys):
+            continue
+        header = struct.pack("<4s5I", b"RBCT", 1, CODE[fmt], w, h, len(flipped))
+        header += b"".join(struct.pack("<3I", lw, lh, len(d)) for lw, lh, d in flipped)
+        out.append((fmt, key, header + b"".join(d for _, _, d in flipped)))
+    return out, None
+
+
+def workers():
+    """Processes for the independent pieces: by free memory, like the model stages."""
+    from model_batch import worker_count
+    return max(1, min(worker_count(per_worker=1 << 30, max_workers=8), int(os.environ.get("RRBTD6_SETUP_WORKERS", "8"))))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dirs", nargs="*", default=["models"])
@@ -229,72 +290,45 @@ def main():
     global AA
     if args.game:
         AA = Path(args.game) / "BloonsTD6_Data/StreamingAssets/aa/StandaloneWindows64"
+    from concurrent.futures import ProcessPoolExecutor
     if args.mips:
-        files = [b for d in args.dirs for b in (OUT / d).rglob("*.bct")]
-        done = sum(add_mips(b) for b in files)
+        files = sorted(b for d in args.dirs for b in (OUT / d).rglob("*.bct"))
+        with ProcessPoolExecutor(workers()) as pool:
+            done = sum(pool.map(add_mips, files, chunksize=32))
         print(f"mips added to {done} of {len(files)} compressed textures")
         return
     # Every exported texture PNG (per-model tex/ and the deduplicated shared_textures/), keyed by
     # its pixels: RGB (a DXT1 match) and RGBA (a DXT5 match). Copies of one image share a key.
     by_rgb, by_rgba, sizes = defaultdict(list), defaultdict(list), set()
+    pngs = sorted(p for d in args.dirs for p in (OUT / d).rglob("*.png")
+                  if p.parent.name in ("tex", "shared_textures") and (args.force or not p.with_suffix(".bct").exists()))
     n = 0
-    for d in args.dirs:
-        for p in (OUT / d).rglob("*.png"):
-            if p.parent.name not in ("tex", "shared_textures"):
+    with ProcessPoolExecutor(workers()) as pool:
+        for found in pool.map(png_keys, pngs, chunksize=16):
+            if found is None:
                 continue
-            if not args.force and p.with_suffix(".bct").exists():
-                continue
-            with Image.open(p) as im:
-                if im.size[0] < 64 or im.size[1] < 64:
-                    continue
-                px = np.asarray(im.convert("RGBA"))
-            # (DXT1 goes up as opaque RGB, as Unity samples it: only for PNGs with no transparency.)
-            if (px[..., 3] == 255).all():
-                by_rgb[pixel_key(px, False)].append(p)
-            by_rgba[pixel_key(px, True)].append(p)
-            sizes.add((px.shape[1], px.shape[0]))
+            p, rgb, rgba, size = found
+            if rgb is not None:
+                by_rgb[rgb].append(p)
+            by_rgba[rgba].append(p)
+            sizes.add(size)
             n += 1
     print(f"{n} PNGs to match, {len(by_rgba)} distinct images, {len(sizes)} sizes", flush=True)
     done = set()
     written = 0
-    bundles = sorted(AA.rglob("*.bundle"))
-    for bi, bundle in enumerate(bundles):
-        if "Half" in bundle.parts:
-            continue
-        try:
-            env = load_bundle(bundle)
-        except Exception as e:
-            print("skip bundle", bundle.name, type(e).__name__, e, flush=True)
-            continue
-        for obj in env.objects:
-            if obj.type.name != "Texture2D":
-                continue
-            try:
-                t = obj.read()
-                fmt = int(t.m_TextureFormat)
-                if fmt not in BLOCK or (t.m_Width, t.m_Height) not in sizes:
-                    continue
-                lv = levels(t, fmt)
-            except Exception:
-                continue
-            if not lv:
-                continue
-            w, h, _ = lv[0]
-            flipped = [(lw, lh, flip_level(d, fmt, lw, lh)) for lw, lh, d in lv]
-            mine = decode(flipped[0][2], fmt, w, h)
-            targets = by_rgb.get(pixel_key(mine, False), []) if fmt == DXT1 else by_rgba.get(pixel_key(mine, True), [])
-            targets = [p for p in targets if p not in done]
-            if not targets:
-                continue
-            header = struct.pack("<4s5I", b"RBCT", 1, CODE[fmt], w, h, len(flipped))
-            header += b"".join(struct.pack("<3I", lw, lh, len(d)) for lw, lh, d in flipped)
-            blob = header + b"".join(d for _, _, d in flipped)
-            for p in targets:
-                p.with_suffix(".bct").write_bytes(blob)
-                done.add(p)
-                written += 1
-        print(f"[{bi + 1}/{len(bundles)}] {bundle.name[:60]}: {written} written", flush=True)
-        del env
+    bundles = [b for b in sorted(AA.rglob("*.bundle")) if "Half" not in b.parts]
+    # Bundles are read in parallel; their matches are written in bundle order, as one process did.
+    with ProcessPoolExecutor(workers(), initializer=_init, initargs=((set(by_rgb), set(by_rgba), sizes),)) as pool:
+        for bi, (bundle, (matches, note)) in enumerate(zip(bundles, pool.map(bundle_matches, bundles))):
+            if note:
+                print(note, flush=True)
+            for fmt, key, blob in matches:
+                targets = by_rgb.get(key, []) if fmt == DXT1 else by_rgba.get(key, [])
+                for p in [p for p in targets if p not in done]:
+                    p.with_suffix(".bct").write_bytes(blob)
+                    done.add(p)
+                    written += 1
+            print(f"[{bi + 1}/{len(bundles)}] {bundle.name[:60]}: {written} written", flush=True)
     print(f"done: {written} compressed textures written; {n - written} PNGs without a DXT match (kept as PNG only)")
 
 
