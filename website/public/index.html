@@ -30,7 +30,7 @@
   <a class="brand" href="/"><img src="/logo.png" width="32" height="32" alt="">RustTD6</a>
   <nav class="nav-desktop" aria-label="Sections">
     <a href="#about">About</a>
-    <button type="button" class="nav-button" popovertarget="install">Install</button>
+    <a href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RustTD6Setup.exe">Download</a>
     <a href="#progress">Progress</a>
     <a href="#faq">FAQ</a>
     <a href="/docs/">Mod API</a>
@@ -41,7 +41,7 @@
     <summary aria-label="Open menu"><span class="bars" aria-hidden="true"><i></i><i></i><i></i></span></summary>
     <nav aria-label="Sections">
       <a href="#about">About</a>
-      <button type="button" class="nav-button" popovertarget="install">Install</button>
+      <a href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RustTD6Setup.exe">Download</a>
       <a href="#progress">Progress</a>
       <a href="#faq">FAQ</a>
       <a href="/docs/">Mod API</a>
@@ -58,12 +58,13 @@
     <h1>Built to Go Further.</h1>
     <p class="lede">The game you love, rebuilt for an optimized experience.</p>
     <div class="cta">
-      <button type="button" class="download" popovertarget="install">
-        Install on Windows
+      <a class="download" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RustTD6Setup.exe">
+        Download RustTD6
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
+      </a>
     </div>
-    <p class="fine">Free and open source. Needs your own copy of BTD6. Also on <button type="button" class="link" popovertarget="install">macOS &amp; Linux</button>.</p>
+    <p class="fine">For Windows. Free, and needs your own copy of BTD6. Just run it: it sets itself up.</p>
+    <p class="fine small">On macOS or Linux? <a href="https://github.com/blinkywink/rrbtd6#building-developers">Build it yourself</a> for now.</p>
   </section>
 
   <section id="about" class="block">
@@ -86,7 +87,7 @@
   </section>
 
   <!-- progress:start -->
-  <section id="progress" class="block band">
+  <section id="progress" class="block">
     <h2>Progress</h2>
     <p class="intro">Runs recorded in the real game are replayed in RustTD6 and compared frame by frame.</p>
     <div class="psummary">
@@ -220,7 +221,7 @@ mod.mode(<span class="s">"training"</span>, base=<span class="s">"Medium"</span>
     </div>
   </section>
 
-  <section id="faq" class="block band">
+  <section id="faq" class="block">
     <h2>FAQ</h2>
     <div class="faq">
       <div class="faq-col">
@@ -248,7 +249,7 @@ mod.mode(<span class="s">"training"</span>, base=<span class="s">"Medium"</span>
         </details>
         <details name="faq">
           <summary>Can I play it on a Mac or Linux?<span class="plus" aria-hidden="true"></span></summary>
-          <p>Yes, with a personal build. Set it up on Windows first, copy the extracted game data across, and run the build script for your system. The steps are in the <button type="button" class="link" popovertarget="install">install guide</button>.</p>
+          <p>Yes, with a personal build. Set it up on Windows first, copy the extracted game data across, and run the build script for your system. The steps are in the <a href="https://github.com/blinkywink/rrbtd6#building-developers">README</a>.</p>
         </details>
         <details name="faq">
           <summary>Windows or my antivirus warned me. Is it safe?<span class="plus" aria-hidden="true"></span></summary>
@@ -264,28 +265,6 @@ mod.mode(<span class="s">"training"</span>, base=<span class="s">"Medium"</span>
 
 </main>
 
-<div id="install" class="modal" popover aria-labelledby="install-title">
-  <div class="modal-head">
-    <h2 id="install-title">How to install</h2>
-    <button type="button" class="close" popovertarget="install" popovertargetaction="hide" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
-  </div>
-  <ol class="steps">
-    <li>
-      <span class="num">1</span>
-      <div><strong>Download RustTD6</strong><p>One small file. That's all you need besides BTD6.</p></div>
-      <a class="download small" href="https://github.com/blinkywink/rrbtd6/releases/latest/download/RustTD6Setup.exe">Download <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 4v11m0 0-5-5m5 5 5-5M5 20h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
-    </li>
-    <li>
-      <span class="num">2</span>
-      <div><strong>Run it</strong><p>It finds BTD6 and sets everything up. The first time takes 10 to 30 minutes. If Windows or your antivirus warns you, that's normal for a new free program: choose More info, then Run anyway.</p></div>
-    </li>
-    <li>
-      <span class="num">3</span>
-      <div><strong>Play</strong><p>From now on, start RustTD6 from its desktop or Start menu shortcut. No need to open BTD6, and it keeps itself up to date.</p></div>
-    </li>
-  </ol>
-  <p class="modal-foot">On a Mac or Linux? <a href="https://github.com/blinkywink/rrbtd6#building-developers">Build it yourself</a>.</p>
-</div>
 
 <footer>
   <div class="foot">
