@@ -33,6 +33,7 @@
 == mermonkey: 35/35 match
 == mk: 25/25 match
 == mk_ab: 21/24 match
+== mk_combo: 2/7 match
 == mk_hero: 44/52 match
 == mk_t4: 74/74 match
 == mk_t5: 74/75 match

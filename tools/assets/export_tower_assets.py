@@ -11,6 +11,8 @@ import unicodedata
 import os
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 GAME, TOWERS = sys.argv[1], sys.argv[2:]
@@ -23,10 +25,13 @@ ICON_DIRS = {"Druid": "DruidMonkey", "DartlingGunner": "DartlingMonkey", "Skywar
 
 def run(*args, span=(.65, .25)):
     lines = []
+    began = time.time()
     with subprocess.Popen([PY, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, encoding="utf-8", errors="replace", bufsize=1) as child:
         for line in child.stdout:
             if line.startswith("@@RRBTD6_PROGRESS "):
+                if span is None:
+                    continue  # a background step: the foreground one moves the bar
                 event = json.loads(line[len("@@RRBTD6_PROGRESS "):])
                 event["done"] = span[0] + span[1] * event["done"] / max(1, event["total"])
                 event["total"] = 1
@@ -35,13 +40,46 @@ def run(*args, span=(.65, .25)):
                 lines.append(line.rstrip())
                 if len(lines) > 25: lines.pop(0)
         code = child.wait()
+    try:  # Each step's wall time, beside extract_all's per-exporter times.
+        with open("local_extracted/.extract_profile.jsonl", "a", encoding="utf-8") as log:
+            log.write(json.dumps({"script": "export_tower_assets > " + args[0], "args": [str(a) for a in args[2:5]],
+                                  "seconds": round(time.time() - began, 2)}) + "\n")
+    except OSError:
+        pass
     print(args[0], "ok" if code == 0 else "FAILED", (lines or [""])[-1][:160], flush=True)
     if code:
         print("\n".join(lines), flush=True)
         raise subprocess.CalledProcessError(code, args)
 
 
+background = []
+
+
+def in_background(*args):
+    """Run a step beside the others (it neither needs nor touches their output); errors surface at
+    the end, through finish_background()."""
+    error = []
+
+    def go():
+        try:
+            run(*args, span=None)
+        except BaseException as e:
+            error.append(e)
+    thread = threading.Thread(target=go)
+    thread.start()
+    background.append((thread, error))
+
+
+def finish_background():
+    for thread, error in background:
+        thread.join()
+        if error:
+            raise error[0]
+
+
 run("tools/assets/build_display_plan.py", GAME, *TOWERS)
+# The projectile displays need only the display plans: they export while the tiers do.
+in_background("tools/assets/export_projectiles.py", GAME)
 run("tools/assets/export_tower_tiers.py", GAME, *TOWERS, span=(0., .65))
 paths = json.loads(Path("local_extracted/all_container_paths.json").read_text(encoding="utf-8"))
 art_jobs = []
@@ -81,14 +119,12 @@ for t in TOWERS:
 
 
 if art_jobs:
-    manifest = "local_extracted/.extended_art_jobs.json"
-    try:
-        with open(manifest, "w", encoding="utf-8") as stream:
-            json.dump(art_jobs, stream)
-        run("tools/assets/export_textures.py", GAME, "--jobs", manifest, span=(.65, .20))
-    finally:
-        if os.path.exists(manifest):
-            os.unlink(manifest)
+    # Upgrade icons and portraits (only the asset paths needed): beside the models below. The
+    # manifest stays until finish_background().
+    art_manifest = "local_extracted/.extended_art_jobs.json"
+    with open(art_manifest, "w", encoding="utf-8") as stream:
+        json.dump(art_jobs, stream)
+    in_background("tools/assets/export_textures.py", GAME, "--jobs", art_manifest)
 
 
 def sub_prefabs(v, out):
@@ -231,7 +267,6 @@ if model_jobs:
 for path, index in model_indices:
     Path(path).write_text(json.dumps(index, indent=1), encoding="utf-8")
 
-run("tools/assets/export_projectiles.py", GAME)
 
 # One-off Animator clips the "Generated" tier bakes lack, taken from the original prefabs
 # (export_animated.py) and grafted on (graft_clips.py): the Sun Temple opening when it
@@ -269,3 +304,8 @@ for t, target, source, only, clips, flags in GRAFTS:
         continue
     src = f"local_extracted/models/_originals/{only or source}"
     run("tools/assets/graft_clips.py", *flags, f"local_extracted/models/{t}/tiers/{target}", src, *clips)
+try:
+    finish_background()
+finally:
+    if art_jobs and os.path.exists(art_manifest):
+        os.unlink(art_manifest)

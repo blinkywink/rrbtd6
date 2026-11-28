@@ -457,7 +457,9 @@ def particles(c):
     # bundle for every tower it is given, so towers go in a few groups (one load each)
     # instead of one process per tower. Every job writes its own effect folders.
     towers = list(game["tower_tiers"])
-    groups = max(1, min(4, len(towers)))
+    # 12 groups: with big bundles read from the disk cache (unitypy_lowmem) a load is cheap, while
+    # 4 groups left one slow group running long after the others (Sniper + Ninja: 79 s on a Mac).
+    groups = max(1, min(12, len(towers)))
     jobs = [[script, c.game, effects, *paths], [script, c.game, effects, "projectiles"]]
     jobs += [[script, c.game, effects, *(f"tiers:{t}" for t in towers[i::groups])] for i in range(groups)]
     jobs += [[script, c.game, effects, f"scene:{m.parent.name}"] for m in sorted((c.out / "maps").glob("*/map.json"))]
