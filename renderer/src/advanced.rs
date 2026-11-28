@@ -12,6 +12,9 @@ pub const FPS_CAPS: [u32; 9] = [30, 60, 90, 120, 144, 165, 240, 360, 0];
 pub const MSAA: [i32; 4] = [1, 2, 4, 8];
 /// Render scale range (fraction of native); above native costs speed for little gain.
 pub const SCALE_MIN: f32 = 0.2;
+/// Rows left out at the top of the menu on this system (macOS: Show FPS, because a Mac window
+/// shows no title for it to go in), so the menu's row numbers still map to the right settings.
+const ROW_OFFSET: usize = if cfg!(target_os = "macos") { 1 } else { 0 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]
@@ -120,7 +123,7 @@ impl Advanced {
     pub fn rows(&self) -> Vec<Row> {
         let fps_i = FPS_CAPS.iter().position(|&c| c == self.fps_cap).unwrap_or(FPS_CAPS.len() - 1);
         let msaa_i = MSAA.iter().position(|&c| c == self.msaa).unwrap_or(2);
-        vec![
+        let mut rows = vec![
             Row::Toggle("Show FPS", self.show_fps, "Show the frame rate in the window's title bar."),
             Row::Slider("FPS Limit", stop_t(fps_i, FPS_CAPS.len()),
                 if self.fps_cap == 0 { "Unlimited".into() } else { self.fps_cap.to_string() }, FPS_CAPS.len(),
@@ -142,12 +145,15 @@ impl Advanced {
             Row::Toggle("Fullscreen", self.fullscreen,
                 "Fill the screen. You can also press F11 to switch fullscreen on or off."),
             Row::Toggle("Show Mods Button",self.show_mods,"Shows the local mod manager on the main menu. Hiding the button does not disable installed mods."),
-        ]
+        ];
+        // A Mac window shows no title, so there's nowhere for Show FPS to show it.
+        rows.drain(..ROW_OFFSET);
+        rows
     }
 
     /// Toggle row `i` clicked.
     pub fn toggle(&mut self, i: usize) {
-        match i {
+        match i + ROW_OFFSET {
             0 => self.show_fps = !self.show_fps,
             2 => self.vsync = !self.vsync,
             4 => self.sharpen = !self.sharpen,
@@ -165,7 +171,7 @@ impl Advanced {
 
     /// Slider row `i` moved to `t` (0..=1).
     pub fn slide(&mut self, i: usize, t: f32) {
-        match i {
+        match i + ROW_OFFSET {
             1 => self.fps_cap = FPS_CAPS[stop_of(t, FPS_CAPS.len())],
             // 5% steps.
             3 => self.render_scale = ((SCALE_MIN + t.clamp(0.0, 1.0) * (1.0 - SCALE_MIN)) * 20.0).round() / 20.0,
