@@ -31,9 +31,24 @@ def available_memory():
                 # Free RAM can exceed what Windows can still commit (a small page file):
                 # workers then fail with MemoryError although RAM looks available.
                 return min(memory.available, memory.free_page)
+        elif sys.platform == "darwin":
+            # macOS keeps most idle memory as inactive / purgeable cache, which it hands back on
+            # demand, so free pages alone read near zero (and sysconf has no SC_AVPHYS_PAGES).
+            import re
+            import subprocess
+            out = subprocess.run(["vm_stat"], capture_output=True, text=True, check=True).stdout
+            page = int(re.search(r"page size of (\d+) bytes", out).group(1))
+            pages = lambda name: int(re.search(rf"{name}:\s+(\d+)", out).group(1)) if re.search(rf"{name}:\s+(\d+)", out) else 0
+            return page * sum(pages(n) for n in ("Pages free", "Pages inactive", "Pages speculative", "Pages purgeable"))
         else:
+            # Linux: the kernel's estimate of memory available without swapping, page cache included.
+            with open("/proc/meminfo", encoding="ascii") as info:
+                for line in info:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) * 1024
             return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
-    except (OSError, ValueError, AttributeError):
+    except Exception:
+        # Unknown: callers then use one worker, which is slow but always fits.
         pass
     return 0
 
