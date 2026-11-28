@@ -3771,7 +3771,7 @@ def main():
         jump adds after it, in behaviour order; so the game's weapon list goes level-1 attacks /
         abilities, then the others (recordings corvus_l03_r20: Haunt (level 1) before Soul Harvest;
         obyn_l20_r80: Brambles and Wall of Trees before the Totem attack, all added by the jump).
-        `unlock`: 1 for those in the level-1 model, else 2."""
+        `unlock`: 1 for those in the level-1 model, else 2 (3 with EmpoweredHeroes, below)."""
         if name not in HEROES:
             return tiers
         # (Monkey Knowledge's EmpoweredHeroes, HeroXpInjection.OnTowerCreated @0x180e71a90: a placed
@@ -3779,15 +3779,22 @@ def main():
         # psi_l10_mk, Psychic Blast (level 3) listed before the second attack.)
         gm = next((o for o in objs.values() if o["type"] == "GameModel"), None)
         inj = next((x.get("levels", 0) for x in ((gm or {"f": {}})["f"].get("mkSim") or []) if x.get("type") == "HeroXpInjectionModModel"), 0)
-        start = str((1 + int(inj or 0)) * 100)
-        first = tiers.get(start) or tiers.get("100") or tiers[min(tiers, key=lambda k: int(k))]
-        a1 = {a.get("model_name") for a in first.get("attacks", [])}
-        b1 = {b.get("name") for b in first.get("abilities", []) or []}
+        # So with it there are three groups: the level-1 model's, what the injection's jump adds,
+        # what the recorder's jump adds (recording corvus_l20_mk: Haunt (level 1), Soul Harvest
+        # (level 3, the injection), then Ancestral Might / Dark Ritual / Malevolence).
+        lowest = tiers.get("100") or tiers[min(tiers, key=lambda k: int(k))]
+        start = tiers.get(str((1 + int(inj or 0)) * 100)) or lowest
+        groups = [lowest, start] if inj else [lowest]
+        def unlock(key, field):
+            for i, g in enumerate(groups):
+                if key in {x.get(field) for x in g.get("attacks" if field == "model_name" else "abilities", []) or []}:
+                    return i + 1
+            return len(groups) + 1
         for t in tiers.values():
             for a in t.get("attacks", []):
-                a["unlock"] = 1 if a.get("model_name") in a1 else 2
+                a["unlock"] = unlock(a.get("model_name"), "model_name")
             for b in t.get("abilities", []) or []:
-                b["unlock"] = 1 if b.get("name") in b1 else 2
+                b["unlock"] = unlock(b.get("name"), "name")
         return tiers
 
     def tower_tiers(name):
